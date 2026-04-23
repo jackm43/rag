@@ -1,0 +1,22 @@
+{
+  "name": "ragbot-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit",
+    "register:commands": "tsx scripts/register-commands.ts",
+    "d1:migrate:local": "wrangler d1 execute ragbot --local --file=./schema.sql"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260417.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.13.2"
+  },
+  "dependencies": {
+    "tweetnacl": "^1.0.3"
+  }
+}

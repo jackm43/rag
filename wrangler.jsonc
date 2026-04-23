@@ -1,0 +1,19 @@
+{
+  "name": "ragbot-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ragbot",
+      "database_id": "97005495-76d4-49af-ab5f-1c130e54ee2a",
+      "preview_database_id": "97005495-76d4-49af-ab5f-1c130e54ee2a"
+    }
+  ],
+  "ai": {
+    "binding": "AI"
+  }
+}
