@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import nacl from "tweetnacl";
 
-import worker, { extractAiPrefixPrompt, handleGatewayMessageCreate } from "../src/index.ts";
+import worker, { extractBotMentionPrompt, handleGatewayMessageCreate } from "../src/index.ts";
 
 const encoder = new TextEncoder();
 
@@ -27,7 +27,7 @@ const createSignedRequest = (payload: unknown, secretKey: Uint8Array) => {
 const createEnv = (publicKeyHex: string, overrides: Record<string, unknown> = {}) =>
   ({
     DISCORD_PUBLIC_KEY: publicKeyHex,
-    DISCORD_APPLICATION_ID: "app-id",
+    DISCORD_APPLICATION_ID: "application-id",
     DB: {
       prepare: () => {
         throw new Error("DB should not be used in this test");
@@ -148,11 +148,12 @@ test("stale /ai interaction returns unknown command without enqueueing", async (
   assert.deepEqual(queuedJobs, []);
 });
 
-test("AI prefix parser accepts prompts after the command name", () => {
-  assert.equal(extractAiPrefixPrompt("!ai Explain queues"), "Explain queues");
-  assert.equal(extractAiPrefixPrompt("!ai    Explain queues"), "Explain queues");
-  assert.equal(extractAiPrefixPrompt("!rag Explain queues"), null);
-  assert.equal(extractAiPrefixPrompt("!ai   "), null);
+test("bot mention parser accepts prompts after the bot mention", () => {
+  assert.equal(extractBotMentionPrompt("<@bot-user-id> Explain queues", "bot-user-id"), "Explain queues");
+  assert.equal(extractBotMentionPrompt("<@!bot-user-id>    Explain queues", "bot-user-id"), "Explain queues");
+  assert.equal(extractBotMentionPrompt("<@application-id> Explain queues", "bot-user-id"), null);
+  assert.equal(extractBotMentionPrompt("!ai Explain queues", "bot-user-id"), null);
+  assert.equal(extractBotMentionPrompt("<@bot-user-id>   ", "bot-user-id"), null);
 });
 
 test("gateway message create enqueues a channel AI response job", async () => {
@@ -169,10 +170,11 @@ test("gateway message create enqueues a channel AI response job", async () => {
     {
       id: "message-id",
       channel_id: "channel-id",
-      content: "!ai Explain queues",
+      content: "<@bot-user-id> Explain queues",
       author: { id: "1", username: "alice" },
     },
     env,
+    "bot-user-id",
   );
 
   assert.deepEqual(queuedJobs, [
@@ -184,7 +186,7 @@ test("gateway message create enqueues a channel AI response job", async () => {
   ]);
 });
 
-test("gateway message create ignores bots and empty prefix prompts", async () => {
+test("gateway message create ignores bots and empty mention prompts", async () => {
   const queuedJobs: unknown[] = [];
   const env = createEnv("unused", {
     AI_JOBS: {
@@ -198,19 +200,31 @@ test("gateway message create ignores bots and empty prefix prompts", async () =>
     {
       id: "bot-message-id",
       channel_id: "channel-id",
-      content: "!ai Explain queues",
+      content: "<@bot-user-id> Explain queues",
       author: { id: "2", username: "bot", bot: true },
     },
     env,
+    "bot-user-id",
   );
   await handleGatewayMessageCreate(
     {
       id: "empty-message-id",
       channel_id: "channel-id",
-      content: "!ai   ",
+      content: "<@bot-user-id>   ",
       author: { id: "1", username: "alice" },
     },
     env,
+    "bot-user-id",
+  );
+  await handleGatewayMessageCreate(
+    {
+      id: "legacy-prefix-message-id",
+      channel_id: "channel-id",
+      content: "!ai Explain queues",
+      author: { id: "1", username: "alice" },
+    },
+    env,
+    "bot-user-id",
   );
 
   assert.deepEqual(queuedJobs, []);

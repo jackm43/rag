@@ -15,10 +15,12 @@ type DiscordGatewayHello = {
 type DiscordGatewayReady = {
   session_id: string;
   resume_gateway_url?: string;
+  user?: {
+    id: string;
+  };
 };
 
 const DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
-const AI_PREFIX = "!ai";
 const GUILD_MESSAGES_INTENT = 1 << 9;
 const DIRECT_MESSAGES_INTENT = 1 << 12;
 const MESSAGE_CONTENT_INTENT = 1 << 15;
@@ -28,22 +30,39 @@ const encoder = new TextEncoder();
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
-export const extractAiPrefixPrompt = (content: string) => {
-  const trimmed = content.trim();
-  if (trimmed !== AI_PREFIX && !trimmed.startsWith(`${AI_PREFIX} `)) {
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export const extractBotMentionPrompt = (content: string, botUserId: string) => {
+  const mentionUserId = botUserId.trim();
+  if (!mentionUserId) {
     return null;
   }
 
-  const prompt = trimmed.slice(AI_PREFIX.length).trim();
+  const trimmed = content.trim();
+  const mentionPattern = new RegExp(`^<@!?${escapeRegExp(mentionUserId)}>(?:\\s+|$)`);
+  const match = trimmed.match(mentionPattern);
+  if (!match) {
+    return null;
+  }
+
+  const prompt = trimmed.slice(match[0].length).trim();
   return prompt.length > 0 ? prompt : null;
 };
 
-export const handleGatewayMessageCreate = async (message: DiscordGatewayMessage, env: Env) => {
+export const handleGatewayMessageCreate = async (
+  message: DiscordGatewayMessage,
+  env: Env,
+  botUserId: string | null,
+) => {
   if (message.author?.bot) {
     return;
   }
 
-  const prompt = extractAiPrefixPrompt(message.content ?? "");
+  if (!botUserId) {
+    return;
+  }
+
+  const prompt = extractBotMentionPrompt(message.content ?? "", botUserId);
   if (!prompt) {
     return;
   }
@@ -82,6 +101,7 @@ export class DiscordGateway {
   private lastSequence: number | null = null;
   private sessionId: string | null = null;
   private resumeGatewayUrl: string | null = null;
+  private botUserId: string | null = null;
   private heartbeatAcknowledged = true;
 
   constructor(
@@ -180,11 +200,12 @@ export class DiscordGateway {
       const ready = payload.d as DiscordGatewayReady;
       this.sessionId = ready.session_id;
       this.resumeGatewayUrl = ready.resume_gateway_url ?? this.resumeGatewayUrl;
+      this.botUserId = ready.user?.id ?? this.botUserId;
       return;
     }
 
     if (payload.t === "MESSAGE_CREATE" && isRecord(payload.d)) {
-      await handleGatewayMessageCreate(payload.d as DiscordGatewayMessage, this.env);
+      await handleGatewayMessageCreate(payload.d as DiscordGatewayMessage, this.env, this.botUserId);
     }
   }
 

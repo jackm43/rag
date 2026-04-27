@@ -3,7 +3,7 @@ import { handleRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
 import {
   DiscordGateway,
-  extractAiPrefixPrompt,
+  extractBotMentionPrompt,
   handleGatewayControlRequest,
   handleGatewayMessageCreate,
 } from "./discord-gateway";
@@ -16,7 +16,7 @@ import {
   type Env,
 } from "./types";
 
-export { DiscordGateway, extractAiPrefixPrompt, handleGatewayMessageCreate };
+export { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
