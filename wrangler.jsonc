@@ -19,6 +19,22 @@
   "ai": {
     "binding": "AI"
   },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DISCORD_GATEWAY",
+        "class_name": "DiscordGateway"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": [
+        "DiscordGateway"
+      ]
+    }
+  ],
   "queues": {
     "producers": [
       {

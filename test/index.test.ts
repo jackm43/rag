@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import nacl from "tweetnacl";
 
-import worker from "../src/index.ts";
+import worker, { extractAiPrefixPrompt, handleGatewayMessageCreate } from "../src/index.ts";
 
 const encoder = new TextEncoder();
 
@@ -115,7 +115,7 @@ test("unknown command returns unknown command message", async () => {
   });
 });
 
-test("/ai enqueues a job and returns deferred response", async () => {
+test("stale /ai interaction returns unknown command without enqueueing", async () => {
   const keyPair = nacl.sign.keyPair();
   const queuedJobs: unknown[] = [];
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
@@ -141,42 +141,82 @@ test("/ai enqueues a job and returns deferred response", async () => {
   const response = await worker.fetch(request, env);
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { type: 5, data: {} });
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: { content: "Unknown command." },
+  });
+  assert.deepEqual(queuedJobs, []);
+});
+
+test("AI prefix parser accepts prompts after the command name", () => {
+  assert.equal(extractAiPrefixPrompt("!ai Explain queues"), "Explain queues");
+  assert.equal(extractAiPrefixPrompt("!ai    Explain queues"), "Explain queues");
+  assert.equal(extractAiPrefixPrompt("!rag Explain queues"), null);
+  assert.equal(extractAiPrefixPrompt("!ai   "), null);
+});
+
+test("gateway message create enqueues a channel AI response job", async () => {
+  const queuedJobs: unknown[] = [];
+  const env = createEnv("unused", {
+    AI_JOBS: {
+      send: async (job: unknown) => {
+        queuedJobs.push(job);
+      },
+    },
+  });
+
+  await handleGatewayMessageCreate(
+    {
+      id: "message-id",
+      channel_id: "channel-id",
+      content: "!ai Explain queues",
+      author: { id: "1", username: "alice" },
+    },
+    env,
+  );
+
   assert.deepEqual(queuedJobs, [
     {
-      applicationId: "app-id",
-      interactionToken: "interaction-token",
+      kind: "channel",
+      channelId: "channel-id",
       prompt: "Explain queues",
     },
   ]);
 });
 
-test("/ai validates an empty prompt synchronously", async () => {
-  const keyPair = nacl.sign.keyPair();
-  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
-  const request = createSignedRequest(
-    {
-      type: 2,
-      token: "interaction-token",
-      data: {
-        name: "ai",
-        options: [{ name: "prompt", value: "   " }],
+test("gateway message create ignores bots and empty prefix prompts", async () => {
+  const queuedJobs: unknown[] = [];
+  const env = createEnv("unused", {
+    AI_JOBS: {
+      send: async (job: unknown) => {
+        queuedJobs.push(job);
       },
-      user: { id: "1", username: "alice" },
     },
-    keyPair.secretKey,
+  });
+
+  await handleGatewayMessageCreate(
+    {
+      id: "bot-message-id",
+      channel_id: "channel-id",
+      content: "!ai Explain queues",
+      author: { id: "2", username: "bot", bot: true },
+    },
+    env,
+  );
+  await handleGatewayMessageCreate(
+    {
+      id: "empty-message-id",
+      channel_id: "channel-id",
+      content: "!ai   ",
+      author: { id: "1", username: "alice" },
+    },
+    env,
   );
 
-  const response = await worker.fetch(request, env);
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    type: 4,
-    data: { content: "A prompt is required." },
-  });
+  assert.deepEqual(queuedJobs, []);
 });
 
-test("queue handler patches the deferred Discord response", async () => {
+test("queue handler posts channel AI responses for prefix commands", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   globalThis.fetch = async (url, init) => {
@@ -186,6 +226,7 @@ test("queue handler patches the deferred Discord response", async () => {
 
   try {
     const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
       AI: {
         run: async () => ({ response: "Hello <@123456789012345678> @there 123456789012345678" }),
       },
@@ -193,8 +234,8 @@ test("queue handler patches the deferred Discord response", async () => {
     const ackedMessages: unknown[] = [];
     const message = {
       body: {
-        applicationId: "app-id",
-        interactionToken: "interaction-token",
+        kind: "channel",
+        channelId: "channel-id",
         prompt: "Say hello",
       },
       ack: () => {
@@ -213,8 +254,13 @@ test("queue handler patches the deferred Discord response", async () => {
     await queueHandler({ messages: [message] }, env);
 
     assert.equal(fetchCalls.length, 1);
-    assert.equal(fetchCalls[0].url, "https://discord.com/api/v10/webhooks/app-id/interaction-token/messages/@original");
-    assert.equal(fetchCalls[0].init?.method, "PATCH");
+    assert.equal(fetchCalls[0].url, "https://discord.com/api/v10/channels/channel-id/messages");
+    assert.equal(fetchCalls[0].init?.method, "POST");
+    assert.equal(fetchCalls[0].init?.headers instanceof Headers, false);
+    assert.deepEqual(fetchCalls[0].init?.headers, {
+      authorization: "Bot bot-token",
+      "content-type": "application/json",
+    });
     assert.deepEqual(JSON.parse(String(fetchCalls[0].init?.body)), {
       content: "Hello there",
       allowed_mentions: {

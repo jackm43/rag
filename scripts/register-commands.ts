@@ -28,18 +28,6 @@ const commands = [
     name: "ragboard",
     description: "Show the rag leaderboard",
   },
-  {
-    name: "ai",
-    description: "Ask Workers AI a question",
-    options: [
-      {
-        name: "prompt",
-        description: "What you want AI to answer",
-        type: 3,
-        required: true,
-      },
-    ],
-  },
 ];
 
 const response = await fetch(`https://discord.com/api/v10/applications/${applicationId}/commands`, {
