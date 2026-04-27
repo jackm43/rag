@@ -9,9 +9,21 @@ This project expects these environment variables:
 - `CLIENT_ID`
 - `CLIENT_SECRET`
 
-`.env` is already set to 1Password secret references (`op://...`).
+`.env` is set to 1Password references (`op://...`), so run project commands through `op run`.
 
-## Commands
+## Current Runtime Shape
+
+- Cloudflare Worker entrypoint: `src/index.ts`
+- Discord interactions route: `POST /`
+- Gateway control routes: `POST /gateway/start`, `GET /gateway/health`
+- Durable Object: `DiscordGateway` (`DISCORD_GATEWAY` binding)
+- Database: D1 (`DB` binding) using `schema.sql`
+- AI model binding: `AI`
+- Queue bindings:
+  - producer: `AI_JOBS` -> `ai-jobs`
+  - consumer: `ai-jobs` with dead-letter queue `ai-jobs-dlq`
+
+## Setup and Run Commands
 
 Install dependencies:
 
@@ -25,21 +37,9 @@ Create D1 database:
 GITHUB_STAR_TOKEN= op run --env-file=.env -- npx wrangler d1 create ragbot
 ```
 
-Copy the returned `database_id` values into `wrangler.jsonc` for:
+Copy generated IDs into `wrangler.jsonc`:
 - `database_id`
 - `preview_database_id`
-
-Register slash commands:
-
-```bash
-GITHUB_STAR_TOKEN= op run --env-file=.env -- npm run register:commands
-```
-
-Run local Worker dev server:
-
-```bash
-GITHUB_STAR_TOKEN= op run --env-file=.env -- npm run dev
-```
 
 Apply D1 schema locally:
 
@@ -54,10 +54,34 @@ GITHUB_STAR_TOKEN= op run --env-file=.env -- npx wrangler queues create ai-jobs
 GITHUB_STAR_TOKEN= op run --env-file=.env -- npx wrangler queues create ai-jobs-dlq
 ```
 
-Deploy:
+Register slash commands:
+
+```bash
+GITHUB_STAR_TOKEN= op run --env-file=.env -- npm run register:commands
+```
+
+Run local Worker dev server:
+
+```bash
+GITHUB_STAR_TOKEN= op run --env-file=.env -- npm run dev
+```
+
+Deploy Worker:
 
 ```bash
 GITHUB_STAR_TOKEN= op run --env-file=.env -- npm run deploy
+```
+
+Start Gateway connection (after deploy):
+
+```bash
+GITHUB_STAR_TOKEN= op run --env-file=.env -- sh -c 'curl -X POST "https://<your-worker-domain>/gateway/start" -H "Authorization: Bearer $DISCORD_BOT_TOKEN"'
+```
+
+Or run the helper:
+
+```bash
+./deploy.sh
 ```
 
 ## Discord App Configuration
@@ -70,4 +94,4 @@ Bot permissions:
 - `Send Messages`
 - `Use Slash Commands`
 
-Use your deployed Worker URL as the Discord interactions endpoint.
+Use the deployed Worker URL as the Discord interactions endpoint.
