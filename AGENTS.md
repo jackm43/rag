@@ -47,6 +47,13 @@ Apply D1 schema locally:
 GITHUB_STAR_TOKEN= op run --env-file=.env -- npm run d1:migrate:local
 ```
 
+Create queues:
+
+```bash
+GITHUB_STAR_TOKEN= op run --env-file=.env -- npx wrangler queues create ai-jobs
+GITHUB_STAR_TOKEN= op run --env-file=.env -- npx wrangler queues create ai-jobs-dlq
+```
+
 Deploy:
 
 ```bash

@@ -5,6 +5,9 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "vars": {
+    "DISCORD_APPLICATION_ID": ""
+  },
   "d1_databases": [
     {
       "binding": "DB",
@@ -15,5 +18,22 @@
   ],
   "ai": {
     "binding": "AI"
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "AI_JOBS",
+        "queue": "ai-jobs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "ai-jobs",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 2,
+        "dead_letter_queue": "ai-jobs-dlq"
+      }
+    ]
   }
 }

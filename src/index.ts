@@ -1,12 +1,8 @@
 import nacl from "tweetnacl";
 
-interface Env {
-  DISCORD_PUBLIC_KEY: string;
-  DB: D1Database;
-  AI: Ai;
-}
-
 type DiscordInteraction = {
+  application_id?: string;
+  token?: string;
   type: number;
   data?: {
     name?: string;
@@ -49,12 +45,29 @@ type AiTextResponse = {
   response?: string;
 };
 
+type AiJob = {
+  applicationId: string;
+  interactionToken: string;
+  prompt: string;
+};
+
+interface Env {
+  DISCORD_PUBLIC_KEY: string;
+  DISCORD_APPLICATION_ID: string;
+  DB: D1Database;
+  AI: Ai;
+  AI_JOBS: Queue<AiJob>;
+}
+
 const PING = 1;
 const APPLICATION_COMMAND = 2;
 const CHANNEL_MESSAGE_WITH_SOURCE = 4;
+const DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE = 5;
 const RECENT_ROAST_LOOKBACK = 30;
 const ROAST_ATTEMPTS = 1;
 const ROAST_TIMEOUT_MS = 1200;
+const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
+const AI_RETRY_DELAY_SECONDS = 10;
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -340,6 +353,41 @@ const handleRagboardCommand = async (env: Env) => {
   });
 };
 
+const generateAiAnswer = async (env: Env, prompt: string) => {
+  const aiResult = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+    messages: [
+      {
+        role: "system",
+        content:
+          "Answer clearly and concisely in plain text. Do not include user mentions, Discord IDs, tags, or handles.",
+      },
+      {
+        role: "user",
+        content: prompt,
+      },
+    ],
+    max_tokens: 500,
+    temperature: 0.7,
+  });
+
+  const text = sanitizeAiText((aiResult as AiTextResponse).response ?? "");
+  return text.length > 0 ? text.slice(0, 1900) : "I could not generate a response.";
+};
+
+const patchDiscordOriginalResponse = async (job: AiJob, content: string) =>
+  fetch(`${DISCORD_API_BASE_URL}/webhooks/${job.applicationId}/${job.interactionToken}/messages/@original`, {
+    method: "PATCH",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      content,
+      allowed_mentions: {
+        parse: [],
+      },
+    }),
+  });
+
 const handleAiCommand = async (interaction: DiscordInteraction, env: Env) => {
   const promptValue = interaction.data?.options?.find((opt) => opt.name === "prompt")?.value;
   const prompt = typeof promptValue === "string" ? promptValue.trim() : "";
@@ -352,33 +400,20 @@ const handleAiCommand = async (interaction: DiscordInteraction, env: Env) => {
   }
 
   try {
-    const aiResult = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-      messages: [
-        {
-          role: "system",
-          content:
-            "Answer clearly and concisely in plain text. Do not include user mentions, Discord IDs, tags, or handles.",
-        },
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-      max_tokens: 500,
-      temperature: 0.7,
+    const interactionToken = interaction.token ?? "";
+    const applicationId = interaction.application_id || env.DISCORD_APPLICATION_ID;
+    if (!interactionToken || !applicationId) {
+      throw new Error("missing_interaction_webhook");
+    }
+
+    await env.AI_JOBS.send({
+      applicationId,
+      interactionToken,
+      prompt,
     });
-
-    const text = sanitizeAiText((aiResult as AiTextResponse).response ?? "");
-    const content = text.length > 0 ? text.slice(0, 1900) : "I could not generate a response.";
-
     return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
-      data: {
-        content,
-        allowed_mentions: {
-          parse: [],
-        },
-      },
+      type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {},
     });
   } catch {
     return jsonResponse({
@@ -437,6 +472,28 @@ export default {
         type: CHANNEL_MESSAGE_WITH_SOURCE,
         data: { content: "Command failed. Try again." },
       });
+    }
+  },
+  async queue(batch: MessageBatch<AiJob>, env: Env): Promise<void> {
+    for (const message of batch.messages) {
+      try {
+        const content = await generateAiAnswer(env, message.body.prompt);
+        const response = await patchDiscordOriginalResponse(message.body, content);
+
+        if (response.ok) {
+          message.ack();
+          continue;
+        }
+
+        if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+          message.ack();
+          continue;
+        }
+
+        message.retry({ delaySeconds: AI_RETRY_DELAY_SECONDS });
+      } catch {
+        message.retry({ delaySeconds: AI_RETRY_DELAY_SECONDS });
+      }
     }
   },
 };
