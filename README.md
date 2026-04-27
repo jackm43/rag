@@ -102,18 +102,4 @@ flowchart TD
 
 ## Local and Deploy Commands
 
-Run with 1Password-backed env:
-
-```bash
-GITHUB_STAR_TOKEN= op run --env-file=.env -- npm install
-GITHUB_STAR_TOKEN= op run --env-file=.env -- npm run d1:migrate:local
-GITHUB_STAR_TOKEN= op run --env-file=.env -- npm run register:commands
-GITHUB_STAR_TOKEN= op run --env-file=.env -- npm run dev
-```
-
-Deploy:
-
-```bash
-GITHUB_STAR_TOKEN= op run --env-file=.env -- npm run deploy
-GITHUB_STAR_TOKEN= op run --env-file=.env -- sh -c 'curl -X POST "https://<your-worker-domain>/gateway/start" -H "Authorization: Bearer $DISCORD_BOT_TOKEN"'
-```
+`./deploy.sh`
