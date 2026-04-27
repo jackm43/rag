@@ -28,13 +28,13 @@ This project expects these environment variables:
 Install dependencies:
 
 ```bash
-GITHUB_STAR_TOKEN= op run --env-file=.env -- npm install
+op run --env-file=.env -- npm install
 ```
 
 Create D1 database:
 
 ```bash
-GITHUB_STAR_TOKEN= op run --env-file=.env -- npx wrangler d1 create ragbot
+op run --env-file=.env -- npx wrangler d1 create ragbot
 ```
 
 Copy generated IDs into `wrangler.jsonc`:
@@ -44,38 +44,38 @@ Copy generated IDs into `wrangler.jsonc`:
 Apply D1 schema locally:
 
 ```bash
-GITHUB_STAR_TOKEN= op run --env-file=.env -- npm run d1:migrate:local
+op run --env-file=.env -- npm run d1:migrate:local
 ```
 
 Create queues:
 
 ```bash
-GITHUB_STAR_TOKEN= op run --env-file=.env -- npx wrangler queues create ai-jobs
-GITHUB_STAR_TOKEN= op run --env-file=.env -- npx wrangler queues create ai-jobs-dlq
+op run --env-file=.env -- npx wrangler queues create ai-jobs
+op run --env-file=.env -- npx wrangler queues create ai-jobs-dlq
 ```
 
 Register slash commands:
 
 ```bash
-GITHUB_STAR_TOKEN= op run --env-file=.env -- npm run register:commands
+op run --env-file=.env -- npm run register:commands
 ```
 
 Run local Worker dev server:
 
 ```bash
-GITHUB_STAR_TOKEN= op run --env-file=.env -- npm run dev
+op run --env-file=.env -- npm run dev
 ```
 
 Deploy Worker:
 
 ```bash
-GITHUB_STAR_TOKEN= op run --env-file=.env -- npm run deploy
+op run --env-file=.env -- npm run deploy
 ```
 
 Start Gateway connection (after deploy):
 
 ```bash
-GITHUB_STAR_TOKEN= op run --env-file=.env -- sh -c 'curl -X POST "https://<your-worker-domain>/gateway/start" -H "Authorization: Bearer $DISCORD_BOT_TOKEN"'
+op run --env-file=.env -- sh -c 'curl -X POST "https://<your-worker-domain>/gateway/start" -H "Authorization: Bearer $DISCORD_BOT_TOKEN"'
 ```
 
 Or run the helper:
