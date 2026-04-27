@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import nacl from "tweetnacl";
 
-import worker, { extractBotMentionPrompt, handleGatewayMessageCreate } from "../src/index.ts";
+import worker, { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate } from "../src/index.ts";
 
 const encoder = new TextEncoder();
 
@@ -186,6 +186,113 @@ test("gateway message create enqueues a channel AI response job", async () => {
   ]);
 });
 
+test("gateway message create includes replied-to message content as AI context", async () => {
+  const queuedJobs: unknown[] = [];
+  const env = createEnv("unused", {
+    AI_JOBS: {
+      send: async (job: unknown) => {
+        queuedJobs.push(job);
+      },
+    },
+  });
+
+  await handleGatewayMessageCreate(
+    {
+      id: "message-id",
+      channel_id: "channel-id",
+      content: "<@bot-user-id> Summarize this",
+      author: { id: "1", username: "alice" },
+      referenced_message: {
+        id: "referenced-message-id",
+        channel_id: "channel-id",
+        content: "Workers queues deliver AI jobs asynchronously.",
+        author: { id: "2", username: "bob" },
+      },
+    },
+    env,
+    "bot-user-id",
+  );
+
+  assert.deepEqual(queuedJobs, [
+    {
+      kind: "channel",
+      channelId: "channel-id",
+      prompt:
+        "Replied-to message from bob:\nWorkers queues deliver AI jobs asynchronously.\n\nUser message:\nSummarize this",
+    },
+  ]);
+});
+
+test("gateway message create fetches referenced messages when Discord omits inline context", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const queuedJobs: unknown[] = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    return Response.json({
+      id: "referenced-message-id",
+      channel_id: "referenced-channel-id",
+      content: "This label says approved for launch.",
+      author: { id: "2", username: "bob" },
+      attachments: [
+        {
+          id: "attachment-id",
+          filename: "label.png",
+          content_type: "image/png",
+          url: "https://cdn.discordapp.com/attachments/label.png",
+        },
+      ],
+    });
+  };
+
+  try {
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      AI_JOBS: {
+        send: async (job: unknown) => {
+          queuedJobs.push(job);
+        },
+      },
+    });
+
+    await handleGatewayMessageCreate(
+      {
+        id: "message-id",
+        channel_id: "channel-id",
+        content: "<@bot-user-id> what does this say",
+        author: { id: "1", username: "alice" },
+        message_reference: {
+          channel_id: "referenced-channel-id",
+          message_id: "referenced-message-id",
+        },
+      },
+      env,
+      "bot-user-id",
+    );
+
+    assert.deepEqual(fetchCalls, [
+      {
+        url: "https://discord.com/api/v10/channels/referenced-channel-id/messages/referenced-message-id",
+        init: {
+          headers: {
+            authorization: "Bot bot-token",
+          },
+        },
+      },
+    ]);
+    assert.deepEqual(queuedJobs, [
+      {
+        kind: "channel",
+        channelId: "channel-id",
+        prompt:
+          "Replied-to message from bob:\nThis label says approved for launch.\nAttachment: label.png (image/png) https://cdn.discordapp.com/attachments/label.png\n\nUser message:\nwhat does this say",
+      },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("gateway message create ignores bots and empty mention prompts", async () => {
   const queuedJobs: unknown[] = [];
   const env = createEnv("unused", {
@@ -228,6 +335,55 @@ test("gateway message create ignores bots and empty mention prompts", async () =
   );
 
   assert.deepEqual(queuedJobs, []);
+});
+
+test("gateway start persists enabled state and schedules an alarm", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  const storedValues = new Map<string, unknown>();
+  const alarmTimes: number[] = [];
+  class FakeWebSocket extends EventTarget {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+    readyState = FakeWebSocket.CONNECTING;
+    constructor(readonly url: string) {
+      super();
+    }
+    send() { }
+    close() {
+      this.readyState = FakeWebSocket.CLOSED;
+    }
+  }
+  globalThis.WebSocket = FakeWebSocket as never;
+
+  try {
+    const gateway = new DiscordGateway(
+      {
+        storage: {
+          get: async (key: string) => storedValues.get(key),
+          put: async (key: string, value: unknown) => {
+            storedValues.set(key, value);
+          },
+          setAlarm: async (scheduledTime: number) => {
+            alarmTimes.push(scheduledTime);
+          },
+        },
+      } as never,
+      createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" }),
+    );
+    const response = await gateway.fetch(new Request("https://example.com/gateway/start", {
+      method: "POST",
+      headers: { authorization: "Bearer bot-token" },
+    }));
+
+    assert.equal(response.status, 200);
+    assert.equal(storedValues.get("gatewayEnabled"), true);
+    assert.equal(alarmTimes.length, 1);
+    assert.ok(alarmTimes[0] > Date.now());
+  } finally {
+    globalThis.WebSocket = originalWebSocket;
+  }
 });
 
 test("queue handler posts channel AI responses for prefix commands", async () => {

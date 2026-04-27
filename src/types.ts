@@ -38,6 +38,17 @@ export type DiscordGatewayMessage = {
     username: string;
     bot?: boolean;
   };
+  attachments?: Array<{
+    id: string;
+    filename: string;
+    content_type?: string;
+    url?: string;
+  }>;
+  message_reference?: {
+    channel_id?: string;
+    message_id?: string;
+  };
+  referenced_message?: DiscordGatewayMessage | null;
 };
 
 export interface Env {

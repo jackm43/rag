@@ -21,10 +21,13 @@ type DiscordGatewayReady = {
 };
 
 const DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
+const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
 const GUILD_MESSAGES_INTENT = 1 << 9;
 const DIRECT_MESSAGES_INTENT = 1 << 12;
 const MESSAGE_CONTENT_INTENT = 1 << 15;
 const GATEWAY_INTENTS = GUILD_MESSAGES_INTENT | DIRECT_MESSAGES_INTENT | MESSAGE_CONTENT_INTENT;
+const GATEWAY_ENABLED_KEY = "gatewayEnabled";
+const GATEWAY_WATCHDOG_INTERVAL_MS = 60_000;
 const encoder = new TextEncoder();
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -49,6 +52,59 @@ export const extractBotMentionPrompt = (content: string, botUserId: string) => {
   return prompt.length > 0 ? prompt : null;
 };
 
+const formatReferencedMessage = (message: DiscordGatewayMessage) => {
+  const parts: string[] = [];
+  const referenceContent = message.content?.trim();
+  if (referenceContent) {
+    parts.push(referenceContent);
+  }
+
+  for (const attachment of message.attachments ?? []) {
+    const contentType = attachment.content_type ? ` (${attachment.content_type})` : "";
+    const url = attachment.url ? ` ${attachment.url}` : "";
+    parts.push(`Attachment: ${attachment.filename}${contentType}${url}`);
+  }
+
+  if (parts.length === 0) {
+    return null;
+  }
+
+  const referenceAuthor = message.author?.username?.trim();
+  const referenceLabel = referenceAuthor
+    ? `Replied-to message from ${referenceAuthor}:`
+    : "Replied-to message:";
+  return `${referenceLabel}\n${parts.join("\n")}`;
+};
+
+const fetchReferencedMessage = async (message: DiscordGatewayMessage, env: Env) => {
+  const messageId = message.message_reference?.message_id;
+  if (!messageId) {
+    return null;
+  }
+
+  const channelId = message.message_reference?.channel_id ?? message.channel_id;
+  const response = await fetch(`${DISCORD_API_BASE_URL}/channels/${channelId}/messages/${messageId}`, {
+    headers: {
+      authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
+    },
+  });
+  if (!response.ok) {
+    return null;
+  }
+
+  return (await response.json()) as DiscordGatewayMessage;
+};
+
+const buildAiPrompt = async (message: DiscordGatewayMessage, env: Env, prompt: string) => {
+  const inlineReference = message.referenced_message ? formatReferencedMessage(message.referenced_message) : null;
+  const reference = inlineReference ?? formatReferencedMessage((await fetchReferencedMessage(message, env)) ?? {} as DiscordGatewayMessage);
+  if (!reference) {
+    return prompt;
+  }
+
+  return `${reference}\n\nUser message:\n${prompt}`;
+};
+
 export const handleGatewayMessageCreate = async (
   message: DiscordGatewayMessage,
   env: Env,
@@ -67,7 +123,7 @@ export const handleGatewayMessageCreate = async (
     return;
   }
 
-  await enqueueAiChannelPrompt(env, message.channel_id, prompt);
+  await enqueueAiChannelPrompt(env, message.channel_id, await buildAiPrompt(message, env, prompt));
 };
 
 const hashesMatch = async (actual: string, expected: string) => {
@@ -107,7 +163,14 @@ export class DiscordGateway {
   constructor(
     private readonly state: DurableObjectState,
     private readonly env: Env,
-  ) { }
+  ) {
+    this.state.blockConcurrencyWhile?.(async () => {
+      if (await this.isGatewayEnabled()) {
+        await this.scheduleWatchdog();
+        this.connect();
+      }
+    });
+  }
 
   async fetch(request: Request) {
     const url = new URL(request.url);
@@ -124,11 +187,34 @@ export class DiscordGateway {
         return new Response("Unauthorized", { status: 401 });
       }
 
+      await this.enableGateway();
       this.connect();
       return Response.json({ ok: true });
     }
 
     return new Response("Not found", { status: 404 });
+  }
+
+  async alarm() {
+    if (!(await this.isGatewayEnabled())) {
+      return;
+    }
+
+    this.connect();
+    await this.scheduleWatchdog();
+  }
+
+  private async enableGateway() {
+    await this.state.storage.put(GATEWAY_ENABLED_KEY, true);
+    await this.scheduleWatchdog();
+  }
+
+  private async isGatewayEnabled() {
+    return (await this.state.storage.get<boolean>(GATEWAY_ENABLED_KEY)) === true;
+  }
+
+  private scheduleWatchdog() {
+    return this.state.storage.setAlarm(Date.now() + GATEWAY_WATCHDOG_INTERVAL_MS);
   }
 
   private connect() {
