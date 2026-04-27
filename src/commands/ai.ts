@@ -25,7 +25,7 @@ const generateAiAnswer = async (env: Env, prompt: string) => {
       {
         role: "system",
         content:
-          "Answer clearly and concisely in plain text. Do not include user mentions, Discord IDs, tags, or handles.",
+          "Answer clearly and concisely in plain text. You're in a heavy banter server so be playful and sarcastic.",
       },
       {
         role: "user",
