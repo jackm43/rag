@@ -1,5 +1,5 @@
 import { processAiQueueMessage } from "./commands/ai";
-import { handleRagCommand } from "./commands/rag";
+import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
 import {
   DiscordGateway,
@@ -19,7 +19,7 @@ import {
 export { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/gateway/start" || url.pathname === "/gateway/health") {
       return handleGatewayControlRequest(request, env);
@@ -52,7 +52,7 @@ export default {
     try {
       const commandName = interaction.data?.name;
       if (commandName === "rag") {
-        return handleRagCommand(interaction, env);
+        return handleDeferredRagCommand(interaction, env, ctx);
       }
 
       if (commandName === "ragboard") {

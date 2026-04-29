@@ -148,6 +148,171 @@ test("stale /ai interaction returns unknown command without enqueueing", async (
   assert.deepEqual(queuedJobs, []);
 });
 
+test("/rag interaction is deferred and edits the original response from waitUntil", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    return new Response("{}", { status: 200 });
+  };
+
+  let releaseBatch!: () => void;
+  const batchStarted = new Promise<void>((resolve) => {
+    releaseBatch = resolve;
+  });
+  const waitUntilPromises: Promise<unknown>[] = [];
+
+  try {
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      DB: {
+        batch: async () => {
+          await batchStarted;
+        },
+        prepare: (sql: string) => ({
+          bind: () => ({
+            run: async () => ({ results: sql.includes("rag_roasts") ? [] : undefined }),
+            first: async () => {
+              if (sql.includes("SELECT rag_count")) {
+                return { rag_count: 7 };
+              }
+              if (sql.includes("SELECT COUNT")) {
+                return { report_count: 3 };
+              }
+              return null;
+            },
+          }),
+        }),
+      },
+      AI: {
+        run: async () => ({ response: "Alice booked the scoreboard, and Bob keeps signing receipts." }),
+      },
+    });
+    const request = createSignedRequest(
+      {
+        application_id: "application-id",
+        token: "interaction-token",
+        type: 2,
+        data: {
+          name: "rag",
+          options: [{ name: "user", value: "2" }],
+          resolved: {
+            users: { "2": { id: "2", username: "bob", global_name: "Bob" } },
+          },
+        },
+        member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
+      },
+      keyPair.secretKey,
+    );
+    const ctx = {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise);
+      },
+    };
+
+    const response = await worker.fetch(request, env, ctx as never);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { type: 5 });
+    assert.equal(fetchCalls.length, 0);
+
+    releaseBatch();
+    await Promise.all(waitUntilPromises);
+
+    assert.equal(fetchCalls.length, 1);
+    assert.equal(
+      fetchCalls[0].url,
+      "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+    );
+    assert.equal(fetchCalls[0].init?.method, "PATCH");
+    assert.deepEqual(fetchCalls[0].init?.headers, { "content-type": "application/json" });
+    assert.deepEqual(JSON.parse(String(fetchCalls[0].init?.body)), {
+      content: "<@2> has just ragged. Total: 7\nAlice booked the scoreboard, and Bob keeps signing receipts.",
+      allowed_mentions: {
+        parse: [],
+        users: ["2"],
+      },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("/rag interaction fetches target username when Discord does not include resolved users", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalFetch = globalThis.fetch;
+  const batchStatements: Array<{ sql: string; args: unknown[] }> = [];
+  const fetchCalls: string[] = [];
+  const waitUntilPromises: Promise<unknown>[] = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push(String(url));
+    if (String(url) === "https://discord.com/api/v10/users/2") {
+      assert.deepEqual(init?.headers, { authorization: "Bot bot-token" });
+      return Response.json({ id: "2", username: "bob" });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      DISCORD_BOT_TOKEN: "bot-token",
+      DB: {
+        batch: async (statements: Array<{ sql: string; args: unknown[] }>) => {
+          batchStatements.push(...statements);
+        },
+        prepare: (sql: string) => ({
+          bind: (...args: unknown[]) => ({
+            sql,
+            args,
+            run: async () => ({ results: sql.includes("rag_roasts") ? [] : undefined }),
+            first: async () => {
+              if (sql.includes("SELECT rag_count")) {
+                return { rag_count: 1 };
+              }
+              if (sql.includes("SELECT COUNT")) {
+                return { report_count: 1 };
+              }
+              return null;
+            },
+          }),
+        }),
+      },
+      AI: {
+        run: async () => ({ response: "Alice rang the bell, and someone added another mark." }),
+      },
+    });
+    const request = createSignedRequest(
+      {
+        application_id: "application-id",
+        token: "interaction-token",
+        type: 2,
+        data: {
+          name: "rag",
+          options: [{ name: "user", value: "2" }],
+        },
+        member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
+      },
+      keyPair.secretKey,
+    );
+
+    const response = await worker.fetch(request, env, {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise);
+      },
+    } as never);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { type: 5 });
+    await Promise.all(waitUntilPromises);
+
+    assert.ok(fetchCalls.includes("https://discord.com/api/v10/users/2"));
+    assert.deepEqual(batchStatements[0].args, ["2", "bob", "1", "alice"]);
+    assert.deepEqual(batchStatements[1].args, ["2", "bob"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("bot mention parser accepts prompts after the bot mention", () => {
   assert.equal(extractBotMentionPrompt("<@bot-user-id> Explain queues", "bot-user-id"), "Explain queues");
   assert.equal(extractBotMentionPrompt("<@!bot-user-id>    Explain queues", "bot-user-id"), "Explain queues");
@@ -181,6 +346,9 @@ test("gateway message create enqueues a channel AI response job", async () => {
     {
       kind: "channel",
       channelId: "channel-id",
+      messageId: "message-id",
+      requesterUserId: "1",
+      requesterUsername: "alice",
       prompt: "Explain queues",
     },
   ]);
@@ -217,6 +385,9 @@ test("gateway message create includes replied-to message content as AI context",
     {
       kind: "channel",
       channelId: "channel-id",
+      messageId: "message-id",
+      requesterUserId: "1",
+      requesterUsername: "alice",
       prompt:
         "Replied-to message from bob:\nWorkers queues deliver AI jobs asynchronously.\n\nUser message:\nSummarize this",
     },
@@ -284,6 +455,9 @@ test("gateway message create fetches referenced messages when Discord omits inli
       {
         kind: "channel",
         channelId: "channel-id",
+        messageId: "message-id",
+        requesterUserId: "1",
+        requesterUsername: "alice",
         prompt:
           "Replied-to message from bob:\nThis label says approved for launch.\nAttachment: label.png (image/png) https://cdn.discordapp.com/attachments/label.png\n\nUser message:\nwhat does this say",
       },
@@ -438,6 +612,53 @@ test("queue handler posts channel AI responses for prefix commands", async () =>
       },
     });
     assert.deepEqual(ackedMessages, [message.body]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("queue handler uses configured AI response model when present", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("{}", { status: 200 });
+  const models: unknown[] = [];
+
+  try {
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      DB: {
+        prepare: () => ({
+          bind: () => ({
+            first: async () => ({ value: "@cf/test/custom-model" }),
+          }),
+        }),
+      },
+      AI: {
+        run: async (model: unknown) => {
+          models.push(model);
+          return { response: "configured model response" };
+        },
+      },
+    });
+    const message = {
+      body: {
+        kind: "channel",
+        channelId: "channel-id",
+        prompt: "Say hello",
+      },
+      ack: () => undefined,
+      retry: () => {
+        throw new Error("message should not be retried");
+      },
+    };
+    const queueHandler = (
+      worker as typeof worker & {
+        queue: (batch: { messages: typeof message[] }, env: never) => Promise<void>;
+      }
+    ).queue;
+
+    await queueHandler({ messages: [message] }, env);
+
+    assert.deepEqual(models, ["@cf/test/custom-model"]);
   } finally {
     globalThis.fetch = originalFetch;
   }

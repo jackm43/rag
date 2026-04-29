@@ -1,4 +1,9 @@
-import { CHANNEL_MESSAGE_WITH_SOURCE, type DiscordInteraction, type Env } from "../types";
+import {
+  CHANNEL_MESSAGE_WITH_SOURCE,
+  DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+  type DiscordInteraction,
+  type Env,
+} from "../types";
 import { jsonResponse } from "../http";
 
 type RagRow = {
@@ -15,6 +20,14 @@ type RoastHistoryRow = {
 
 type AiTextResponse = {
   response?: string;
+};
+
+type InteractionMessageData = {
+  content: string;
+  allowed_mentions?: {
+    parse?: string[];
+    users?: string[];
+  };
 };
 
 const RECENT_ROAST_LOOKBACK = 30;
@@ -51,6 +64,28 @@ const getTargetDisplayName = (interaction: DiscordInteraction, targetId: string)
     return "someone";
   }
   return user.global_name ?? user.username;
+};
+
+const getTargetUsername = async (interaction: DiscordInteraction, env: Env, targetId: string) => {
+  const targetUser = interaction.data?.resolved?.users?.[targetId] ?? interaction.resolved?.users?.[targetId];
+  if (targetUser?.username) {
+    return targetUser.username;
+  }
+
+  try {
+    const response = await fetch(`https://discord.com/api/v10/users/${targetId}`, {
+      headers: {
+        authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
+      },
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const user = (await response.json()) as { username?: string };
+    return user.username ?? null;
+  } catch {
+    return null;
+  }
 };
 
 const sanitizeDisplayName = (value: string) =>
@@ -172,20 +207,37 @@ const generateRoast = async (
   return pickFallbackRoast(reporterDisplayName, targetDisplayName, recentRoasts);
 };
 
-export const handleRagCommand = async (interaction: DiscordInteraction, env: Env) => {
+const editOriginalInteractionResponse = async (
+  interaction: DiscordInteraction,
+  data: InteractionMessageData,
+) => {
+  if (!interaction.application_id || !interaction.token) {
+    throw new Error("missing_interaction_webhook");
+  }
+
+  await fetch(
+    `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(data),
+    },
+  );
+};
+
+const buildRagCommandResponseData = async (
+  interaction: DiscordInteraction,
+  env: Env,
+): Promise<InteractionMessageData> => {
   const invoker = getInvoker(interaction);
   const targetIdValue = interaction.data?.options?.find((opt) => opt.name === "user")?.value;
   const targetId = targetIdValue ? String(targetIdValue) : "";
 
   if (!targetId) {
-    return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: "A user mention is required." },
-    });
+    return { content: "A user mention is required." };
   }
 
-  const targetUser = interaction.resolved?.users?.[targetId];
-  const targetUsername = targetUser?.username ?? null;
+  const targetUsername = await getTargetUsername(interaction, env, targetId);
   const reporterDisplayName = sanitizeDisplayName(getInvokerDisplayName(interaction));
   const targetDisplayName = sanitizeDisplayName(getTargetDisplayName(interaction, targetId));
 
@@ -226,14 +278,42 @@ export const handleRagCommand = async (interaction: DiscordInteraction, env: Env
   } catch { }
   await storeRoast(env, roastLine);
 
-  return jsonResponse({
-    type: CHANNEL_MESSAGE_WITH_SOURCE,
-    data: {
-      content: `<@${targetId}> has just ragged. Total: ${ragCount}\n${roastLine}`,
-      allowed_mentions: {
-        parse: [],
-        users: [targetId],
-      },
+  return {
+    content: `<@${targetId}> has just ragged. Total: ${ragCount}\n${roastLine}`,
+    allowed_mentions: {
+      parse: [],
+      users: [targetId],
     },
+  };
+};
+
+export const handleRagCommand = async (interaction: DiscordInteraction, env: Env) =>
+  jsonResponse({
+    type: CHANNEL_MESSAGE_WITH_SOURCE,
+    data: await buildRagCommandResponseData(interaction, env),
   });
+
+export const handleDeferredRagCommand = (
+  interaction: DiscordInteraction,
+  env: Env,
+  ctx: ExecutionContext,
+) => {
+  if (!interaction.application_id || !interaction.token) {
+    return handleRagCommand(interaction, env);
+  }
+
+  ctx.waitUntil(
+    (async () => {
+      try {
+        await editOriginalInteractionResponse(interaction, await buildRagCommandResponseData(interaction, env));
+      } catch {
+        await editOriginalInteractionResponse(interaction, {
+          content: "Command failed. Try again.",
+          allowed_mentions: { parse: [] },
+        }).catch(() => undefined);
+      }
+    })(),
+  );
+
+  return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
 };

@@ -123,7 +123,11 @@ export const handleGatewayMessageCreate = async (
     return;
   }
 
-  await enqueueAiChannelPrompt(env, message.channel_id, await buildAiPrompt(message, env, prompt));
+  await enqueueAiChannelPrompt(env, message.channel_id, await buildAiPrompt(message, env, prompt), {
+    messageId: message.id,
+    requesterUserId: message.author?.id,
+    requesterUsername: message.author?.username,
+  });
 };
 
 const hashesMatch = async (actual: string, expected: string) => {

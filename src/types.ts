@@ -24,6 +24,9 @@ export type DiscordInteraction = {
 export type AiChannelJob = {
   kind: "channel";
   channelId: string;
+  messageId?: string;
+  requesterUserId?: string;
+  requesterUsername?: string;
   prompt: string;
 };
 
