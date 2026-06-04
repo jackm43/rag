@@ -394,6 +394,84 @@ test("/rag retries the roast generation when the model repeats a recent line", a
   }
 });
 
+test("/rag uses the model's line over a canned fallback even when it repeats", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    return new Response("{}", { status: 200 });
+  };
+
+  // Every attempt returns a line that already exists in recent roasts.
+  const repeatedLine = "Bob keeps speedrunning bad decisions while Alice keeps the receipts.";
+  let aiCalls = 0;
+  const waitUntilPromises: Promise<unknown>[] = [];
+
+  try {
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      DB: {
+        batch: async () => undefined,
+        prepare: (sql: string) => ({
+          bind: () => ({
+            run: async () => ({
+              results: sql.includes("rag_roasts") ? [{ roast_text: repeatedLine }] : undefined,
+            }),
+            first: async () => {
+              if (sql.includes("SELECT rag_count")) {
+                return { rag_count: 9 };
+              }
+              if (sql.includes("SELECT COUNT")) {
+                return { report_count: 5 };
+              }
+              return null;
+            },
+          }),
+        }),
+      },
+      AI: {
+        run: async () => {
+          aiCalls += 1;
+          return { response: repeatedLine };
+        },
+      },
+    });
+    const request = createSignedRequest(
+      {
+        application_id: "application-id",
+        token: "interaction-token",
+        type: 2,
+        data: {
+          name: "rag",
+          options: [{ name: "user", value: "2" }],
+          resolved: {
+            users: { "2": { id: "2", username: "bob", global_name: "Bob" } },
+          },
+        },
+        member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
+      },
+      keyPair.secretKey,
+    );
+
+    const response = await worker.fetch(request, env, {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise);
+      },
+    } as never);
+
+    assert.equal(response.status, 200);
+    await Promise.all(waitUntilPromises);
+
+    // It exhausts its attempts trying for something fresh, then still returns
+    // the model's line rather than a canned fallback.
+    assert.equal(aiCalls, 3);
+    const body = JSON.parse(String(fetchCalls[0].init?.body));
+    assert.equal(body.content, `<@2> has just ragged. Total: 9\n${repeatedLine}`);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("bot mention parser accepts prompts after the bot mention", () => {
   assert.equal(extractBotMentionPrompt("<@bot-user-id> Explain queues", "bot-user-id"), "Explain queues");
   assert.equal(extractBotMentionPrompt("<@!bot-user-id>    Explain queues", "bot-user-id"), "Explain queues");

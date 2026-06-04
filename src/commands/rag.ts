@@ -99,7 +99,9 @@ const sanitizeDisplayName = (value: string) =>
     .replace(/\s+/g, " ")
     .trim() || "someone";
 
-const sanitizeRoastLine = (line: string, reporterDisplayName: string, targetDisplayName: string) => {
+// Returns a cleaned roast line, or null when the model output can't be made
+// safe/usable. Callers decide what to do with null (retry or fall back).
+const sanitizeRoastLine = (line: string, targetDisplayName: string): string | null => {
   const noMentions = line
     .replace(/<@!?\d+>/g, "")
     .replace(/@/g, "")
@@ -109,7 +111,7 @@ const sanitizeRoastLine = (line: string, reporterDisplayName: string, targetDisp
     .trim();
 
   if (!noMentions || /\d{6,}/.test(noMentions)) {
-    return `${reporterDisplayName} files rag reports like a full-time job, and ${targetDisplayName} keeps giving the leaderboard free content.`;
+    return null;
   }
 
   if (!noMentions.endsWith(".") && !noMentions.endsWith("!") && !noMentions.endsWith("?")) {
@@ -180,39 +182,50 @@ const generateRoast = async (
       ? recentRoastsForPrompt.map((line, index) => `${index + 1}. ${line}`).join(" ")
       : "none";
 
-  for (let attempt = 0; attempt < ROAST_ATTEMPTS; attempt += 1) {
-    const aiResult = await withTimeout(
-      env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-        messages: [
-          {
-            role: "system",
-            content:
-              "You write one short playful roast sentence for a Discord bot. Output exactly one sentence under 140 characters. Do not repeat phrases or restate the same idea twice. Use plain text only. Never include @ mentions, Discord IDs, tags, or handles. Be a little mean.",
-          },
-          {
-            role: "user",
-            content: `Reporter display name: ${reporterDisplayName}. Reporter has filed ${reporterCount} rag reports total. Reported user display name: ${targetDisplayName}. Reported user has been ragged ${targetCount} times total. Write one punchy line teasing both by display name only. Do not reuse or closely paraphrase any of these previous roast lines: ${blockedList}.`,
-          },
-        ],
-        max_tokens: 55,
-        temperature: 0.85,
-      }),
-      ROAST_TIMEOUT_MS,
-    );
+  // Hold onto the most recent usable model line so that even if every attempt
+  // collides with a recent roast we still return the LLM's words rather than a
+  // canned fallback. The fallback pool is a last resort for total model failure.
+  let lastModelLine: string | null = null;
 
-    const text = (aiResult as AiTextResponse).response?.trim();
-    if (!text) {
+  for (let attempt = 0; attempt < ROAST_ATTEMPTS; attempt += 1) {
+    let sanitized: string | null = null;
+    try {
+      const aiResult = await withTimeout(
+        env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a sharp, inventive roast writer for a Discord 'rag' bot. Write ONE original roast sentence under 140 characters teasing both people by display name. Be creative and specific: vary your imagery, reach for unexpected comparisons, and never settle for generic or formulaic phrasing. Plain text only, exactly one sentence. Never include @ mentions, Discord IDs, tags, or handles. Be playful and a little mean, never genuinely cruel.",
+            },
+            {
+              role: "user",
+              content: `Reporter display name: ${reporterDisplayName}. Reporter has filed ${reporterCount} rag reports total. Reported user display name: ${targetDisplayName}. Reported user has been ragged ${targetCount} times total. Write one punchy, original line teasing both by display name only. Do not reuse or closely paraphrase any of these previous roast lines: ${blockedList}.`,
+            },
+          ],
+          max_tokens: 64,
+          temperature: 0.95,
+        }),
+        ROAST_TIMEOUT_MS,
+      );
+
+      const text = (aiResult as AiTextResponse).response?.trim();
+      sanitized = text ? sanitizeRoastLine(text.slice(0, 180), targetDisplayName) : null;
+    } catch {
+      // Timeout or model error on this attempt; keep trying the next one.
+    }
+
+    if (!sanitized) {
       continue;
     }
 
-    const sanitized = sanitizeRoastLine(text.slice(0, 180), reporterDisplayName, targetDisplayName);
-    const normalized = normalizeRoastText(sanitized);
-    if (!recentRoasts.has(normalized)) {
+    lastModelLine = sanitized;
+    if (!recentRoasts.has(normalizeRoastText(sanitized))) {
       return sanitized;
     }
   }
 
-  return pickFallbackRoast(reporterDisplayName, targetDisplayName, recentRoasts);
+  return lastModelLine ?? pickFallbackRoast(reporterDisplayName, targetDisplayName, recentRoasts);
 };
 
 const editOriginalInteractionResponse = async (
