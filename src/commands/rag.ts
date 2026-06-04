@@ -32,8 +32,10 @@ type InteractionMessageData = {
 };
 
 const RECENT_ROAST_LOOKBACK = 30;
-const ROAST_ATTEMPTS = 1;
-const ROAST_TIMEOUT_MS = 1200;
+// The /rag response is deferred and edited in via webhook (valid ~15 min), so we
+// can afford several generous attempts rather than racing Discord's 3s deadline.
+const ROAST_ATTEMPTS = 3;
+const ROAST_TIMEOUT_MS = 6000;
 
 const getInvoker = (interaction: DiscordInteraction) => {
   const user = interaction.member?.user ?? interaction.user;
@@ -130,6 +132,11 @@ const getDefaultRoastOptions = (reporterDisplayName: string, targetDisplayName: 
   `${reporterDisplayName} files rag reports like a full-time job, and ${targetDisplayName} keeps giving the leaderboard free content.`,
   `${reporterDisplayName} called it in again, and ${targetDisplayName} is farming rag stats like a speedrun.`,
   `${reporterDisplayName} dropped another rag report while ${targetDisplayName} keeps climbing the hall of shame.`,
+  `${reporterDisplayName} hit the rag button so fast that ${targetDisplayName} barely had time to mess up.`,
+  `${targetDisplayName} earned another tally, and ${reporterDisplayName} is clearly the unofficial scorekeeper.`,
+  `${reporterDisplayName} reports, ${targetDisplayName} delivers, and the leaderboard just keeps eating.`,
+  `Somewhere a siren went off, and sure enough ${targetDisplayName} did the thing while ${reporterDisplayName} watched.`,
+  `${targetDisplayName} is collecting rags like trading cards, with ${reporterDisplayName} sponsoring the whole set.`,
 ];
 
 const pickFallbackRoast = (
@@ -188,7 +195,7 @@ const generateRoast = async (
           },
         ],
         max_tokens: 55,
-        temperature: 0.45,
+        temperature: 0.85,
       }),
       ROAST_TIMEOUT_MS,
     );
