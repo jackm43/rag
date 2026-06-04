@@ -1,5 +1,5 @@
 import { enqueueAiChannelPrompt } from "./commands/ai";
-import type { DiscordGatewayMessage, Env } from "./types";
+import { DISCORD_API_BASE_URL, type DiscordGatewayMessage, type Env } from "./types";
 
 type DiscordGatewayPayload = {
   op: number;
@@ -21,7 +21,6 @@ type DiscordGatewayReady = {
 };
 
 const DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
-const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
 const GUILD_MESSAGES_INTENT = 1 << 9;
 const DIRECT_MESSAGES_INTENT = 1 << 12;
 const MESSAGE_CONTENT_INTENT = 1 << 15;

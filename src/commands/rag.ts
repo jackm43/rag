@@ -1,6 +1,7 @@
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
   DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+  DISCORD_API_BASE_URL,
   type DiscordInteraction,
   type Env,
 } from "../types";
@@ -73,7 +74,7 @@ const getTargetUsername = async (interaction: DiscordInteraction, env: Env, targ
   }
 
   try {
-    const response = await fetch(`https://discord.com/api/v10/users/${targetId}`, {
+    const response = await fetch(`${DISCORD_API_BASE_URL}/users/${targetId}`, {
       headers: {
         authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
       },
@@ -216,7 +217,7 @@ const editOriginalInteractionResponse = async (
   }
 
   await fetch(
-    `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
+    `${DISCORD_API_BASE_URL}/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
     {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -250,18 +251,18 @@ const buildRagCommandResponseData = async (
     ).bind(targetId, targetUsername),
   ]);
 
-  const total = await env.DB.prepare("SELECT rag_count FROM rag_totals WHERE ragged_user_id = ?")
-    .bind(targetId)
-    .first<RagRow>();
+  const [total, reporterStats, recentRoastRows] = await Promise.all([
+    env.DB.prepare("SELECT rag_count FROM rag_totals WHERE ragged_user_id = ?")
+      .bind(targetId)
+      .first<RagRow>(),
+    env.DB.prepare("SELECT COUNT(*) AS report_count FROM rag_events WHERE reported_by_user_id = ?")
+      .bind(invoker.id)
+      .first<ReporterRow>(),
+    getRecentRoasts(env),
+  ]);
 
   const ragCount = total?.rag_count ?? 1;
-  const reporterStats = await env.DB.prepare(
-    "SELECT COUNT(*) AS report_count FROM rag_events WHERE reported_by_user_id = ?",
-  )
-    .bind(invoker.id)
-    .first<ReporterRow>();
   const reporterCount = reporterStats?.report_count ?? 1;
-  const recentRoastRows = await getRecentRoasts(env);
   const recentRoastSet = new Set(recentRoastRows.map((line) => normalizeRoastText(line)));
 
   let roastLine = pickFallbackRoast(reporterDisplayName, targetDisplayName, recentRoastSet);

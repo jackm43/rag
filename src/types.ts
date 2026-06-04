@@ -64,6 +64,8 @@ export interface Env {
   AI_JOBS: Queue<AiJob>;
 }
 
+export const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
+
 export const PING = 1;
 export const APPLICATION_COMMAND = 2;
 export const CHANNEL_MESSAGE_WITH_SOURCE = 4;
