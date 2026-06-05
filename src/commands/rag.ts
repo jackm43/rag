@@ -1,6 +1,7 @@
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
   DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+  DISCORD_API_BASE_URL,
   type DiscordInteraction,
   type Env,
 } from "../types";
@@ -31,8 +32,10 @@ type InteractionMessageData = {
 };
 
 const RECENT_ROAST_LOOKBACK = 30;
-const ROAST_ATTEMPTS = 1;
-const ROAST_TIMEOUT_MS = 1200;
+// The /rag response is deferred and edited in via webhook (valid ~15 min), so we
+// can afford several generous attempts rather than racing Discord's 3s deadline.
+const ROAST_ATTEMPTS = 3;
+const ROAST_TIMEOUT_MS = 6000;
 
 const getInvoker = (interaction: DiscordInteraction) => {
   const user = interaction.member?.user ?? interaction.user;
@@ -73,7 +76,7 @@ const getTargetUsername = async (interaction: DiscordInteraction, env: Env, targ
   }
 
   try {
-    const response = await fetch(`https://discord.com/api/v10/users/${targetId}`, {
+    const response = await fetch(`${DISCORD_API_BASE_URL}/users/${targetId}`, {
       headers: {
         authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
       },
@@ -96,7 +99,9 @@ const sanitizeDisplayName = (value: string) =>
     .replace(/\s+/g, " ")
     .trim() || "someone";
 
-const sanitizeRoastLine = (line: string, reporterDisplayName: string, targetDisplayName: string) => {
+// Returns a cleaned roast line, or null when the model output can't be made
+// safe/usable. Callers decide what to do with null (retry or fall back).
+const sanitizeRoastLine = (line: string, targetDisplayName: string): string | null => {
   const noMentions = line
     .replace(/<@!?\d+>/g, "")
     .replace(/@/g, "")
@@ -106,7 +111,7 @@ const sanitizeRoastLine = (line: string, reporterDisplayName: string, targetDisp
     .trim();
 
   if (!noMentions || /\d{6,}/.test(noMentions)) {
-    return `${reporterDisplayName} files rag reports like a full-time job, and ${targetDisplayName} keeps giving the leaderboard free content.`;
+    return null;
   }
 
   if (!noMentions.endsWith(".") && !noMentions.endsWith("!") && !noMentions.endsWith("?")) {
@@ -129,6 +134,11 @@ const getDefaultRoastOptions = (reporterDisplayName: string, targetDisplayName: 
   `${reporterDisplayName} files rag reports like a full-time job, and ${targetDisplayName} keeps giving the leaderboard free content.`,
   `${reporterDisplayName} called it in again, and ${targetDisplayName} is farming rag stats like a speedrun.`,
   `${reporterDisplayName} dropped another rag report while ${targetDisplayName} keeps climbing the hall of shame.`,
+  `${reporterDisplayName} hit the rag button so fast that ${targetDisplayName} barely had time to mess up.`,
+  `${targetDisplayName} earned another tally, and ${reporterDisplayName} is clearly the unofficial scorekeeper.`,
+  `${reporterDisplayName} reports, ${targetDisplayName} delivers, and the leaderboard just keeps eating.`,
+  `Somewhere a siren went off, and sure enough ${targetDisplayName} did the thing while ${reporterDisplayName} watched.`,
+  `${targetDisplayName} is collecting rags like trading cards, with ${reporterDisplayName} sponsoring the whole set.`,
 ];
 
 const pickFallbackRoast = (
@@ -172,39 +182,50 @@ const generateRoast = async (
       ? recentRoastsForPrompt.map((line, index) => `${index + 1}. ${line}`).join(" ")
       : "none";
 
-  for (let attempt = 0; attempt < ROAST_ATTEMPTS; attempt += 1) {
-    const aiResult = await withTimeout(
-      env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-        messages: [
-          {
-            role: "system",
-            content:
-              "You write one short playful roast sentence for a Discord bot. Output exactly one sentence under 140 characters. Do not repeat phrases or restate the same idea twice. Use plain text only. Never include @ mentions, Discord IDs, tags, or handles. Be a little mean.",
-          },
-          {
-            role: "user",
-            content: `Reporter display name: ${reporterDisplayName}. Reporter has filed ${reporterCount} rag reports total. Reported user display name: ${targetDisplayName}. Reported user has been ragged ${targetCount} times total. Write one punchy line teasing both by display name only. Do not reuse or closely paraphrase any of these previous roast lines: ${blockedList}.`,
-          },
-        ],
-        max_tokens: 55,
-        temperature: 0.45,
-      }),
-      ROAST_TIMEOUT_MS,
-    );
+  // Hold onto the most recent usable model line so that even if every attempt
+  // collides with a recent roast we still return the LLM's words rather than a
+  // canned fallback. The fallback pool is a last resort for total model failure.
+  let lastModelLine: string | null = null;
 
-    const text = (aiResult as AiTextResponse).response?.trim();
-    if (!text) {
+  for (let attempt = 0; attempt < ROAST_ATTEMPTS; attempt += 1) {
+    let sanitized: string | null = null;
+    try {
+      const aiResult = await withTimeout(
+        env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a sharp, inventive roast writer for a Discord 'rag' bot. Write ONE original roast sentence under 140 characters teasing both people by display name. Be creative and specific: vary your imagery, reach for unexpected comparisons, and never settle for generic or formulaic phrasing. Plain text only, exactly one sentence. Never include @ mentions, Discord IDs, tags, or handles. Be playful and a little mean, never genuinely cruel.",
+            },
+            {
+              role: "user",
+              content: `Reporter display name: ${reporterDisplayName}. Reporter has filed ${reporterCount} rag reports total. Reported user display name: ${targetDisplayName}. Reported user has been ragged ${targetCount} times total. Write one punchy, original line teasing both by display name only. Do not reuse or closely paraphrase any of these previous roast lines: ${blockedList}.`,
+            },
+          ],
+          max_tokens: 64,
+          temperature: 0.95,
+        }),
+        ROAST_TIMEOUT_MS,
+      );
+
+      const text = (aiResult as AiTextResponse).response?.trim();
+      sanitized = text ? sanitizeRoastLine(text.slice(0, 180), targetDisplayName) : null;
+    } catch {
+      // Timeout or model error on this attempt; keep trying the next one.
+    }
+
+    if (!sanitized) {
       continue;
     }
 
-    const sanitized = sanitizeRoastLine(text.slice(0, 180), reporterDisplayName, targetDisplayName);
-    const normalized = normalizeRoastText(sanitized);
-    if (!recentRoasts.has(normalized)) {
+    lastModelLine = sanitized;
+    if (!recentRoasts.has(normalizeRoastText(sanitized))) {
       return sanitized;
     }
   }
 
-  return pickFallbackRoast(reporterDisplayName, targetDisplayName, recentRoasts);
+  return lastModelLine ?? pickFallbackRoast(reporterDisplayName, targetDisplayName, recentRoasts);
 };
 
 const editOriginalInteractionResponse = async (
@@ -216,7 +237,7 @@ const editOriginalInteractionResponse = async (
   }
 
   await fetch(
-    `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
+    `${DISCORD_API_BASE_URL}/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
     {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -250,18 +271,18 @@ const buildRagCommandResponseData = async (
     ).bind(targetId, targetUsername),
   ]);
 
-  const total = await env.DB.prepare("SELECT rag_count FROM rag_totals WHERE ragged_user_id = ?")
-    .bind(targetId)
-    .first<RagRow>();
+  const [total, reporterStats, recentRoastRows] = await Promise.all([
+    env.DB.prepare("SELECT rag_count FROM rag_totals WHERE ragged_user_id = ?")
+      .bind(targetId)
+      .first<RagRow>(),
+    env.DB.prepare("SELECT COUNT(*) AS report_count FROM rag_events WHERE reported_by_user_id = ?")
+      .bind(invoker.id)
+      .first<ReporterRow>(),
+    getRecentRoasts(env),
+  ]);
 
   const ragCount = total?.rag_count ?? 1;
-  const reporterStats = await env.DB.prepare(
-    "SELECT COUNT(*) AS report_count FROM rag_events WHERE reported_by_user_id = ?",
-  )
-    .bind(invoker.id)
-    .first<ReporterRow>();
   const reporterCount = reporterStats?.report_count ?? 1;
-  const recentRoastRows = await getRecentRoasts(env);
   const recentRoastSet = new Set(recentRoastRows.map((line) => normalizeRoastText(line)));
 
   let roastLine = pickFallbackRoast(reporterDisplayName, targetDisplayName, recentRoastSet);

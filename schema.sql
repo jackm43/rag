@@ -19,3 +19,25 @@ CREATE TABLE IF NOT EXISTS rag_roasts (
   roast_text TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS rag_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rag_ai_interactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  channel_id TEXT,
+  message_id TEXT,
+  requester_user_id TEXT,
+  requester_username TEXT,
+  prompt TEXT NOT NULL,
+  response_text TEXT,
+  model TEXT NOT NULL,
+  ai_duration_ms INTEGER,
+  total_duration_ms INTEGER,
+  status TEXT NOT NULL,
+  error_message TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
