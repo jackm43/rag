@@ -15,7 +15,6 @@ type AiResponse = {
   aiDurationMs: number;
 };
 
-const AI_RETRY_DELAY_SECONDS = 10;
 const DEFAULT_AI_RESPONSE_MODEL = "@cf/meta/llama-3.1-8b-instruct";
 const AI_RESPONSE_MODEL_SETTING_KEY = "ai_response_model";
 
@@ -69,7 +68,7 @@ const recordAiInteraction = async (
       )
       .run();
   } catch {
-    // Telemetry should not affect Discord delivery or queue retry behavior.
+    // Telemetry should not affect Discord delivery.
   }
 };
 
@@ -89,7 +88,7 @@ const generateAiAnswer = async (env: Env, prompt: string): Promise<AiResponse> =
       },
     ],
     max_tokens: 500,
-    temperature: 0.7,
+    temperature: 0.9,
   });
 
   const aiDurationMs = Date.now() - startedAt;
@@ -150,16 +149,10 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
       return;
     }
 
-    if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-      await record(`discord_${response.status}`, await response.text().catch(() => null));
-      message.ack();
-      return;
-    }
-
-    await record(`retry_discord_${response.status}`, await response.text().catch(() => null));
-    message.retry({ delaySeconds: AI_RETRY_DELAY_SECONDS });
+    await record(`discord_${response.status}`, await response.text().catch(() => null));
+    message.ack();
   } catch (error) {
-    await record("retry_error", error instanceof Error ? error.message : String(error));
-    message.retry({ delaySeconds: AI_RETRY_DELAY_SECONDS });
+    await record("error", error instanceof Error ? error.message : String(error));
+    message.ack();
   }
 };
