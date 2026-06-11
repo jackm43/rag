@@ -11,6 +11,7 @@ import (
 	cmddeploy "jsmunro.me/platy/cli/cmd/deploy"
 	cmdfetch "jsmunro.me/platy/cli/cmd/fetch"
 	cmdmanage "jsmunro.me/platy/cli/cmd/manage"
+	cmddev "jsmunro.me/platy/cli/cmd/dev"
 	"jsmunro.me/platy/cli/internal/output"
 )
 
@@ -47,6 +48,8 @@ func main() {
 		cmdbootstrap.Run(ctx, rest)
 	case "manage":
 		cmdmanage.Run(ctx, rest)
+	case "dev":
+		cmddev.Run(ctx, rest)
 	default:
 		output.UsageExit()
 	}

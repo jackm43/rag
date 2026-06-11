@@ -35,6 +35,15 @@ commands:
   manage provider sync                      upload local provider config to the gateway registry
   manage organization sync [flags]          provision trust tier policies and enroll app in Cloudflare
 
+  dev generate [app...]                     regenerate protobuf client and server code
+  dev platy                                 build ./platy CLI binary
+  dev check                                 go vet, go build, and TypeScript check
+  dev test                                  npm and Go tests
+  dev install                               npm install
+  dev migrate                               apply local D1 schemas for ragbot and gateway
+  dev vet                                   go vet on CLI, SDK, and application clients
+  dev build-go                              go build on CLI, SDK, and application clients
+
 environment:
   PLATY_GATEWAY_URL                         auth gateway base URL
   CF_OAUTH_CLIENT_ID                        Cloudflare OAuth client id used for delegated tokens
