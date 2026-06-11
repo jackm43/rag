@@ -3,9 +3,11 @@ package auth
 import (
 	"context"
 
+	"jsmunro.me/platy/cli/internal/args"
 	"jsmunro.me/platy/cli/internal/display"
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/platform"
+	"jsmunro.me/platy/sdk/gateway"
 )
 
 func Login(ctx context.Context) {
@@ -13,7 +15,17 @@ func Login(ctx context.Context) {
 	if _, err := s.UserToken(ctx, true); err != nil {
 		output.Fail("login: %v", err)
 	}
-	WhoAmI(ctx)
+	response, err := s.WhoAmI(ctx)
+	if err != nil {
+		output.Fail("whoami: %v", err)
+	}
+	output.PrintJSON(map[string]any{
+		"subject":     response.Subject,
+		"email":       response.Email,
+		"token_kind":  response.TokenKind,
+		"scopes":      response.Scopes,
+		"actor_chain": response.ActorChain,
+	})
 }
 
 func Logout(ctx context.Context) {
@@ -24,7 +36,27 @@ func Logout(ctx context.Context) {
 	output.PrintJSON(map[string]any{"ok": true, "cleared": s.GatewayURL})
 }
 
-func WhoAmI(ctx context.Context) {
+func ImpersonateAuthorize(ctx context.Context, cmdArgs []string) {
+	if len(cmdArgs) != 1 {
+		output.Fail("usage: platy impersonate authorize <app>")
+	}
+	application := cmdArgs[0]
+	token, err := platform.Session().ImpersonationToken(ctx, application, true)
+	if err != nil {
+		output.Fail("impersonate authorize: %v", err)
+	}
+	output.PrintJSON(map[string]any{
+		"ok":          true,
+		"application": application,
+		"token_prefix": token[:min(12, len(token))] + "...",
+	})
+}
+
+func WhoAmI(ctx context.Context, cmdArgs []string) {
+	as, _ := args.ParseAsFlag(cmdArgs)
+	if as != "" {
+		ctx = gateway.WithImpersonate(ctx, as)
+	}
 	response, err := platform.Session().WhoAmI(ctx)
 	if err != nil {
 		output.Fail("whoami: %v", err)

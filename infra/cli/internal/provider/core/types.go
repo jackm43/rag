@@ -115,6 +115,16 @@ type IdentityProxy interface {
 	EnsureDevicePosture(ctx context.Context, boundary TrustBoundary, enabled bool, ruleName string) (PosturePolicy, error)
 	SetPostureEnabled(ctx context.Context, boundary TrustBoundary, enabled bool, ruleName string) (PosturePolicy, error)
 	CreateAccessApplication(ctx context.Context, boundary TrustBoundary, spec AccessApplicationSpec) (*AccessApplication, error)
+	ImpersonationAccessSpec(
+		ctx context.Context,
+		boundary TrustBoundary,
+		access ApplicationAccess,
+		groups map[string]AccessGroup,
+		identityProviders []IdentityProvider,
+		emailAllowlist []string,
+		posture PosturePolicy,
+	) (AccessApplicationSpec, error)
+	EnsureImpersonationAccessApplication(ctx context.Context, boundary TrustBoundary, application string, spec AccessApplicationSpec) (*AccessApplication, error)
 	EnsureWorkersDevBypassApps(ctx context.Context, boundary TrustBoundary, subdomain string) error
 	EnsureOAuthClient(ctx context.Context, boundary TrustBoundary, name string, scopesOverride string) (clientID string, scopes []string, err error)
 	EnsureOrganization(ctx context.Context, boundary TrustBoundary, input EnsureOrganizationInput) (OrganizationPolicy, error)

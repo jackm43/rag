@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"jsmunro.me/platy/cli/internal/args"
+	"jsmunro.me/platy/cli/internal/manifest"
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/platform"
 )
@@ -46,6 +47,10 @@ func Run(ctx context.Context, cmdArgs []string) {
 		vet()
 	case "build-go":
 		buildGo()
+	case "vars":
+		writeDevVars(ctx, cmdArgs[1:])
+	case "register-commands":
+		registerCommands(ctx)
 	default:
 		output.Fail("unknown dev command %q", cmdArgs[0])
 	}
@@ -64,6 +69,8 @@ func printUsage() {
 		"  migrate               apply local D1 schemas for ragbot and gateway",
 		"  vet                   go vet on CLI, SDK, and application clients",
 		"  build-go              go build on CLI, SDK, and application clients",
+		"  vars [app]            write .dev.vars from application secrets (default: ragbot)",
+		"  register-commands     register Discord slash commands using ragbot secrets",
 	)
 }
 
@@ -121,4 +128,37 @@ func npmRun(scriptArgs ...string) {
 
 func goTest(pattern string) {
 	runCommand("go", "test", pattern)
+}
+
+func writeDevVars(ctx context.Context, cmdArgs []string) {
+	appName := "ragbot"
+	if len(cmdArgs) > 0 {
+		appName = cmdArgs[0]
+	}
+	loaded := manifest.Load(root())
+	app := loaded.Application(appName)
+	manifest.WriteDevVars(root(), app.ResolveSecrets(ctx))
+}
+
+func registerCommands(ctx context.Context) {
+	loaded := manifest.Load(root())
+	app := loaded.Application("ragbot")
+	resolved := app.ResolveSecrets(ctx)
+	applicationID := resolved["DISCORD_APPLICATION_ID"]
+	botToken := resolved["DISCORD_BOT_TOKEN"]
+	if applicationID == "" || botToken == "" {
+		output.Fail("ragbot secrets must include DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN")
+	}
+	cmd := exec.Command("npx", "tsx", "scripts/register-commands.ts")
+	cmd.Dir = root()
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(),
+		"DISCORD_APPLICATION_ID="+applicationID,
+		"DISCORD_BOT_TOKEN="+botToken,
+	)
+	if err := cmd.Run(); err != nil {
+		output.Fail("register commands: %v", err)
+	}
+	output.Logger.Info("registered discord slash commands")
 }

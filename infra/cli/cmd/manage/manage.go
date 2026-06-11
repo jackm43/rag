@@ -52,9 +52,10 @@ func resolveProxy(ctx context.Context, providerName, apiToken string) (provider.
 	if err != nil {
 		output.Fail("%v", err)
 	}
-	token := secrets.ResolveValue(ctx, apiToken)
+	organization := provider.LoadOrganization(platform.RepoRoot())
+	token := secrets.ResolveCloudflareAPIToken(ctx, apiToken, organization.CloudflareAPITokenRef())
 	if token == "" {
-		output.Fail("api token is required")
+		output.Fail("api token is required; set --api-key, CLOUDFLARE_API_TOKEN, or organization.secrets.cloudflare_api_token")
 	}
 	proxy, err := provider.Resolve(ctx, name, token)
 	if err != nil {

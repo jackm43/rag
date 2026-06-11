@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,15 +10,17 @@ import (
 	"path/filepath"
 	"strings"
 
+	"jsmunro.me/platy/cli/internal/clientmetadata"
 	"jsmunro.me/platy/cli/internal/env"
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/secrets"
 	"jsmunro.me/platy/sdk/auth"
 	"jsmunro.me/platy/sdk/client"
-	"jsmunro.me/platy/sdk/cloudflare"
+	cfcloud "jsmunro.me/platy/sdk/cloudflare"
 	"jsmunro.me/platy/sdk/discovery"
 	"jsmunro.me/platy/sdk/dpop"
 	"jsmunro.me/platy/sdk/gateway"
+	"jsmunro.me/platy/sdk/httpclient"
 	sdksecrets "jsmunro.me/platy/sdk/secrets"
 )
 
@@ -28,7 +31,7 @@ const DelegatedTokenHeader = "X-Delegated-Cloudflare-Token"
 func CloudflareScopes() []string {
 	raw := env.Or("CF_OAUTH_SCOPES", "")
 	if raw == "" {
-		return nil
+		return cfcloud.PlatformScopeIDs()
 	}
 	return strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' })
 }
@@ -60,15 +63,51 @@ func deviceKey() *dpop.Key {
 	return key
 }
 
+func credentialDocument(application string) *discovery.Application {
+	if document, err := DiscoveryService().Application(application); err == nil && document.Credential != nil {
+		return document
+	}
+	path := filepath.Join(RepoRoot(), "infra", "applications", application, "metadata.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	document := &discovery.Application{}
+	if err := json.Unmarshal(data, document); err != nil || document.Credential == nil {
+		return nil
+	}
+	return document
+}
+
+func resolveServiceCredential(ctx context.Context, application string) (string, string, error) {
+	document := credentialDocument(application)
+	if document == nil {
+		return "", "", fmt.Errorf("application %s has no stored service credential", application)
+	}
+	resolved, err := secrets.Service().Application.ResolveServiceClientCredential(ctx, document.Credential)
+	if err != nil {
+		return "", "", err
+	}
+	return resolved.ClientID, resolved.ClientSecret, nil
+}
+
 func Session() *gateway.Session {
+	secretsSvc := secrets.Service()
+	user := currentUser()
+	provider := sdksecrets.FileProvider
 	s := gateway.NewSession(env.Or("PLATY_GATEWAY_URL", DefaultGatewayURL), tokenStore(), output.Logger)
 	s.Local = DiscoveryService()
+	s.RotateDeviceKey = func(ctx context.Context) (*dpop.Key, error) {
+		return dpop.Rotate(ctx, secretsSvc, user, provider)
+	}
 	s.Dpop = deviceKey()
+	s.CredentialResolver = resolveServiceCredential
 	return s
 }
 
 func Client() *client.Client {
 	c := client.New(Session())
+	c.HTTPClient = httpclient.Default()
 	c.Decorate("deploy", func(ctx context.Context, header http.Header) error {
 		token, err := DelegatedCloudflare().Token(ctx, false)
 		if err != nil {
@@ -80,12 +119,15 @@ func Client() *client.Client {
 	return c
 }
 
-func DelegatedCloudflare() *cloudflare.DelegatedTokenSource {
+func DelegatedCloudflare() *cfcloud.DelegatedTokenSource {
 	clientID := env.Or("CF_OAUTH_CLIENT_ID", "")
 	if clientID == "" {
-		output.Fail("CF_OAUTH_CLIENT_ID is not set; run platy bootstrap first and export the printed client id")
+		clientID = clientmetadata.OAuthClientID(RepoRoot())
 	}
-	return &cloudflare.DelegatedTokenSource{
+	if clientID == "" {
+		output.Fail("cloudflare oauth client id is not configured; run platy bootstrap first")
+	}
+	return &cfcloud.DelegatedTokenSource{
 		ClientID: clientID,
 		Scopes:   CloudflareScopes(),
 		Store:    tokenStore(),

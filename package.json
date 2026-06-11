@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "go run jsmunro.me/platy/cli dev vars ragbot && wrangler dev",
     "deploy": "wrangler deploy",
     "gw:dev": "wrangler dev -c infra/gateway/wrangler.jsonc",
     "gw:deploy": "wrangler deploy -c infra/gateway/wrangler.jsonc",
@@ -15,7 +15,7 @@
     "generate": "infra/scripts/generate.sh",
     "check": "tsc --noEmit",
     "test": "node --test --import tsx",
-    "register:commands": "tsx scripts/register-commands.ts",
+    "register:commands": "go run jsmunro.me/platy/cli dev register-commands",
     "d1:migrate:local": "wrangler d1 execute ragbot --local --file=./schema.sql"
   },
   "devDependencies": {

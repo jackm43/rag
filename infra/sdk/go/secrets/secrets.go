@@ -6,6 +6,7 @@ import (
 )
 
 const (
+	FieldServiceClientSecret  = "service_client_secret"
 	FieldClientSecret         = "client_secret"
 	FieldAPIKey               = "api_key"
 	FieldTLSCertificate       = "tls_certificate"
@@ -87,7 +88,7 @@ type ApplicationSecrets struct {
 }
 
 func (a *ApplicationSecrets) StoreServiceClientCredential(ctx context.Context, application, clientID, clientSecret, provider string) (*ClientCredential, error) {
-	reference, err := a.service.Store(ctx, applicationSecretName(application, FieldClientSecret), clientSecret, provider)
+	reference, err := a.service.Store(ctx, applicationSecretName(application, FieldServiceClientSecret), clientSecret, provider)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +96,7 @@ func (a *ApplicationSecrets) StoreServiceClientCredential(ctx context.Context, a
 }
 
 func (a *ApplicationSecrets) ServiceClientCredential(ctx context.Context, application, clientID, provider string) (*ClientCredential, error) {
-	secret, err := a.service.resolveName(ctx, applicationSecretName(application, FieldClientSecret), provider)
+	secret, err := a.service.resolveName(ctx, applicationSecretName(application, FieldServiceClientSecret), provider)
 	if err != nil {
 		return nil, err
 	}

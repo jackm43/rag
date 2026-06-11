@@ -8,26 +8,31 @@ import {
   type ExchangeTokenRequest,
   type ProviderConfig as ProviderConfigMessage,
 } from "../../applications/idp/server/idp/v1/idp_pb";
+import { createLocalJWKSet, jwtVerify } from "jose";
+
 import {
   accessOidcProvider,
   anyAuthenticator,
+  bearerToken,
   logger,
   oidcAuthenticator,
   protect,
   requireIdentity,
+  requireSenderConstraint,
   scopeMatches,
   stsAuthenticator,
   TOKEN_TYPE_ACCESS_TOKEN,
   TOKEN_TYPE_JWT,
   TOKEN_TYPE_SERVICE_CREDENTIAL,
   verifyDpopProof,
+  actorChainFromClaim,
   verifyOidcToken,
   verifyStsToken,
   type Authenticator,
   type Identity,
   type RequestDescriptor,
 } from "../../sdk/ts/src";
-import { signToken } from "./keys";
+import { getJwks, signToken } from "./keys";
 import {
   audit,
   createServiceClient,
@@ -63,9 +68,74 @@ const isAllowedUser = (env: Env, identity: Identity): boolean =>
   identity.kind !== "user" ||
   (identity.email !== null && allowedEmails(env).includes(identity.email.toLowerCase()));
 
+let localJwks: ReturnType<typeof createLocalJWKSet> | null = null;
+let localJwksLoadedAt = 0;
+
+const localSigningJwks = async (env: Env): Promise<ReturnType<typeof createLocalJWKSet> | null> => {
+  const now = Date.now();
+  if (!localJwks || now - localJwksLoadedAt > 60_000) {
+    const response = await getJwks(env);
+    if (!response.ok) {
+      return null;
+    }
+    const body = (await response.json()) as { keys: Record<string, unknown>[] };
+    localJwks = createLocalJWKSet(body);
+    localJwksLoadedAt = now;
+  }
+  return localJwks;
+};
+
+const identityFromStsPayload = (payload: Record<string, unknown>): Identity | null => {
+  if (typeof payload.sub !== "string") {
+    return null;
+  }
+  const kind = payload.kind === "service" ? "service" : "user";
+  const scopes = typeof payload.scope === "string" ? payload.scope.split(" ").filter(Boolean) : [];
+  const cnf = payload.cnf as { jkt?: unknown } | undefined;
+  return {
+    kind,
+    subject: payload.sub,
+    email: typeof payload.email === "string" ? payload.email : null,
+    scopes,
+    actorChain: actorChainFromClaim(payload.act),
+    cnfJkt: typeof cnf?.jkt === "string" ? cnf.jkt : null,
+    sessionId: typeof payload.sid === "string" ? payload.sid : null,
+  };
+};
+
+const verifyLocalStsToken = async (
+  env: Env,
+  token: string,
+  audience: string,
+): Promise<Identity | null> => {
+  const jwks = await localSigningJwks(env);
+  if (!jwks) {
+    return null;
+  }
+  try {
+    const { payload } = await jwtVerify(token, jwks, {
+      issuer: issuer(env),
+      audience,
+    });
+    return identityFromStsPayload(payload as Record<string, unknown>);
+  } catch {
+    return null;
+  }
+};
+
+const localGatewayStsAuthenticator = (env: Env): Authenticator => async (headers, request) => {
+  const token = bearerToken(headers);
+  if (!token) {
+    return null;
+  }
+  const identity = await verifyLocalStsToken(env, token, "idp");
+  return requireSenderConstraint(identity, headers, request);
+};
+
 const gatewayAuthenticator = (env: Env): Authenticator =>
   anyAuthenticator(
     oidcAuthenticator(oidcProvider(env)),
+    localGatewayStsAuthenticator(env),
     stsAuthenticator({ issuer: issuer(env), audience: "idp", jwksUrl: jwksUrl(env) }),
   );
 
@@ -119,6 +189,7 @@ const applicationMessage = (app: RegisteredApplication, delegations: DelegationG
     trustBoundary: trustBoundaryMessage(app.trustBoundary),
     access: accessMessage(app.access),
     trustZone: app.access.trustZone,
+    impersonationAccessClientId: app.impersonationAccessClientId,
     createdAt: BigInt(app.createdAt),
     updatedAt: BigInt(app.updatedAt),
   }) as Application;
@@ -187,11 +258,15 @@ const resolveSubject = async (
   }
 
   if (tokenType === TOKEN_TYPE_JWT) {
-    return verifyStsToken(request.subjectToken, {
-      issuer: issuer(env),
-      audience: actorApplication ?? "idp",
-      jwksUrl: jwksUrl(env),
-    });
+    const audience = actorApplication ?? "idp";
+    return (
+      (await verifyLocalStsToken(env, request.subjectToken, audience)) ??
+      verifyStsToken(request.subjectToken, {
+        issuer: issuer(env),
+        audience,
+        jwksUrl: jwksUrl(env),
+      })
+    );
   }
 
   if (tokenType === TOKEN_TYPE_SERVICE_CREDENTIAL) {
@@ -367,6 +442,45 @@ export const registerServices = (router: ConnectRouter, env: Env) => {
         }
       }
 
+      if (actorApplication) {
+        const caller = await localGatewayStsAuthenticator(env)(
+          context.requestHeader,
+          requestDescriptor(context),
+        );
+        if (caller?.cnfJkt) {
+          if (!request.impersonationToken) {
+            throw new ConnectError("impersonation authorization required", Code.PermissionDenied);
+          }
+          const actorApp = await getApplication(env, actorApplication);
+          if (!actorApp?.impersonationAccessClientId) {
+            throw new ConnectError(
+              `application ${actorApplication} has no impersonation access app configured`,
+              Code.FailedPrecondition,
+            );
+          }
+          const impersonation = await verifyOidcToken(
+            request.impersonationToken,
+            accessOidcProvider(env.ACCESS_TEAM_DOMAIN, actorApp.impersonationAccessClientId),
+          );
+          if (!impersonation) {
+            throw new ConnectError("invalid impersonation token", Code.Unauthenticated);
+          }
+          if (
+            !caller.email ||
+            !impersonation.email ||
+            impersonation.email.toLowerCase() !== caller.email.toLowerCase()
+          ) {
+            throw new ConnectError("impersonation token identity mismatch", Code.PermissionDenied);
+          }
+          await audit(
+            env,
+            caller.email ?? caller.subject,
+            "impersonation_exchange",
+            actorApplication,
+          );
+        }
+      }
+
       const subject = await resolveSubject(env, request, actorApplication);
       if (!subject) {
         throw new ConnectError("invalid subject token", Code.Unauthenticated);
@@ -446,26 +560,27 @@ export const registerServices = (router: ConnectRouter, env: Env) => {
       RegistryService,
       {
         registerApplication: async (request, context) => {
-          const identity = requireIdentity(context);
-          if (!request.name || !/^[a-z][a-z0-9-]*$/.test(request.name)) {
-            throw new ConnectError("application name must be lowercase alphanumeric", Code.InvalidArgument);
-          }
-          for (const delegation of request.delegations) {
-            if (!delegation.audience) {
-              throw new ConnectError("delegation audience is required", Code.InvalidArgument);
+          try {
+            const identity = requireIdentity(context);
+            if (!request.name || !/^[a-z][a-z0-9-]*$/.test(request.name)) {
+              throw new ConnectError("application name must be lowercase alphanumeric", Code.InvalidArgument);
             }
-            for (const scope of delegation.scopes) {
-              if (scope !== `${delegation.audience}/*` && !scope.startsWith(`${delegation.audience}/`)) {
-                throw new ConnectError(
-                  `delegation scope ${scope} is outside audience ${delegation.audience}`,
-                  Code.InvalidArgument,
-                );
+            for (const delegation of request.delegations) {
+              if (!delegation.audience) {
+                throw new ConnectError("delegation audience is required", Code.InvalidArgument);
+              }
+              for (const scope of delegation.scopes) {
+                if (scope !== `${delegation.audience}/*` && !scope.startsWith(`${delegation.audience}/`)) {
+                  throw new ConnectError(
+                    `delegation scope ${scope} is outside audience ${delegation.audience}`,
+                    Code.InvalidArgument,
+                  );
+                }
               }
             }
-          }
-          const providerConfig = await getProviderConfig(env);
-          const postureRequired =
-            request.access?.postureRequired ?? (providerConfig.posture.enabled && providerConfig.posture.ruleId !== "");
+            const providerConfig = await getProviderConfig(env);
+            const postureRequired =
+              request.access?.postureRequired ?? (providerConfig.posture.enabled && providerConfig.posture.ruleId !== "");
           const application = await upsertApplication(env, {
             name: request.name,
             endpoint: request.endpoint,
@@ -491,25 +606,36 @@ export const registerServices = (router: ConnectRouter, env: Env) => {
               postureRequired,
               trustZone: request.trustZone || "tier2",
             },
+            impersonationAccessClientId: request.impersonationAccessClientId ?? "",
           });
-          const delegations = request.delegations.map((delegation) => ({
-            audience: delegation.audience,
-            scopes: delegation.scopes,
-          }));
-          await setDelegations(env, application.name, delegations);
-          const credential = (await hasServiceClient(env, application.name))
-            ? { clientId: "", clientSecret: "" }
-            : await createServiceClient(env, application.name);
-          await audit(
-            env,
-            identity.email ?? identity.subject,
-            "register_application",
-            application.name,
-          );
-          return {
-            application: applicationMessage(application, delegations),
-            credential,
-          };
+            const delegations = request.delegations.map((delegation) => ({
+              audience: delegation.audience,
+              scopes: delegation.scopes,
+            }));
+            await setDelegations(env, application.name, delegations);
+            const credential = (await hasServiceClient(env, application.name))
+              ? { clientId: "", clientSecret: "" }
+              : await createServiceClient(env, application.name);
+            await audit(
+              env,
+              identity.email ?? identity.subject,
+              "register_application",
+              application.name,
+            );
+            return {
+              application: applicationMessage(application, delegations),
+              credential,
+            };
+          } catch (error) {
+            if (error instanceof ConnectError) {
+              throw error;
+            }
+            logger.info("register_application_failed", { error: error instanceof Error ? error.message : String(error) });
+            throw new ConnectError(
+              error instanceof Error ? error.message : "register application failed",
+              Code.Internal,
+            );
+          }
         },
         getApplication: async (request) => {
           const application = await getApplication(env, request.name);

@@ -44,14 +44,15 @@ func CredentialDocument(root, name string) *discovery.Application {
 
 func Document(app *idpv1.Application, gatewayURL string, credential *sdksecrets.ClientCredential, fullNames map[string]string) *discovery.Application {
 	document := &discovery.Application{
-		Name:        app.GetName(),
-		Audience:    app.GetAudience(),
-		Endpoint:    app.GetEndpoint(),
-		Description: app.GetDescription(),
-		CreatedAt:   app.GetCreatedAt(),
-		UpdatedAt:   app.GetUpdatedAt(),
-		GatewayURL:  gatewayURL,
-		Credential:  credential,
+		Name:                          app.GetName(),
+		Audience:                      app.GetAudience(),
+		Endpoint:                      app.GetEndpoint(),
+		Description:                   app.GetDescription(),
+		CreatedAt:                     app.GetCreatedAt(),
+		UpdatedAt:                     app.GetUpdatedAt(),
+		GatewayURL:                    gatewayURL,
+		ImpersonationAccessClientID:   app.GetImpersonationAccessClientId(),
+		Credential:                    credential,
 	}
 	for _, resource := range app.GetResources() {
 		converted := discovery.Resource{Name: resource.GetName(), FullName: fullNames[resource.GetName()]}

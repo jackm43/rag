@@ -29,7 +29,7 @@ func Run(ctx context.Context, cmdArgs []string) {
 	email := flags.String("email", "", "deprecated alias for a single --email-allowlist entry")
 	appName := flags.String("app-name", "Auth Gateway", "access application name")
 	oauthClientName := flags.String("oauth-client-name", "platy", "cloudflare oauth client name")
-	oauthScopes := flags.String("oauth-scopes", "", "comma separated oauth scope ids (default: workers, d1, account read, offline_access)")
+	oauthScopes := flags.String("oauth-scopes", "", "comma separated oauth scope ids (default: workers, d1, and access management scopes)")
 	skipOauthClient := flags.Bool("skip-oauth-client", false, "skip Cloudflare OAuth client creation (create manually in the dashboard)")
 	workersDevSubdomain := flags.String("workers-dev-subdomain", "", "workers.dev account subdomain (default: resolved team name)")
 	teamDomain := flags.String("team-domain", env.Or("ACCESS_TEAM_DOMAIN", ""), "Zero Trust team domain (https://<team>.cloudflareaccess.com)")
@@ -54,9 +54,12 @@ func Run(ctx context.Context, cmdArgs []string) {
 		output.Fail("--email-allowlist must include at least one email")
 	}
 
-	apiToken := secrets.ResolveValue(ctx, *cfAPIToken)
+	root := platform.RepoRoot()
+	organization := provider.LoadOrganization(root)
+
+	apiToken := secrets.ResolveCloudflareAPIToken(ctx, *cfAPIToken, organization.CloudflareAPITokenRef())
 	if apiToken == "" {
-		output.Fail("--cf-api-token or CLOUDFLARE_API_TOKEN is required")
+		output.Fail("--cf-api-token, CLOUDFLARE_API_TOKEN, or organization.secrets.cloudflare_api_token is required")
 	}
 
 	proxy, err := provider.Resolve(ctx, name, apiToken)
@@ -74,9 +77,6 @@ func Run(ctx context.Context, cmdArgs []string) {
 	if err != nil {
 		output.Fail("%v", err)
 	}
-
-	root := platform.RepoRoot()
-	organization := provider.LoadOrganization(root)
 
 	bootstrapResult, err := proxy.Bootstrap(ctx, boundary, provider.BootstrapOptions{
 		EmailAllowlist:      allowlist,

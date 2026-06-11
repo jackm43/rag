@@ -15,6 +15,7 @@ import (
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/provider/core"
 	"jsmunro.me/platy/sdk/auth"
+	cfcloud "jsmunro.me/platy/sdk/cloudflare"
 )
 
 type cloudflareProvider struct {
@@ -50,21 +51,12 @@ func (e *apiEnvelope) decode(target any) error {
 }
 
 type oauthClientInfo struct {
-	ClientID   string `json:"client_id"`
-	ClientName string `json:"client_name"`
+	ClientID   string   `json:"client_id"`
+	ClientName string   `json:"client_name"`
+	Scopes     []string `json:"scopes"`
 }
 
-var defaultOauthScopeIDs = []string{
-	"workers-scripts.read",
-	"workers-scripts.write",
-	"workers-routes.read",
-	"workers-routes.write",
-	"d1.read",
-	"d1.write",
-	"d1.metadata_read",
-	"account.read",
-	"offline_access",
-}
+var defaultOauthScopeIDs = cfcloud.PlatformScopeIDs()
 
 func normalizeAccessTeamDomain(raw string) string {
 	raw = strings.TrimSpace(raw)
@@ -339,14 +331,15 @@ func (p *cloudflareProvider) EnsureGroups(ctx context.Context, boundary core.Tru
 			groups[name] = core.AccessGroup{ID: id, Name: name}
 			continue
 		}
+		if len(emails) == 0 {
+			output.Logger.Info("skipping access group without static members", "name", name)
+			continue
+		}
 		include := []zero_trust.AccessRuleUnionParam{}
 		for _, email := range emails {
 			include = append(include, zero_trust.EmailRuleParam{
 				Email: cf.F(zero_trust.EmailRuleEmailParam{Email: cf.F(email)}),
 			})
-		}
-		if len(include) == 0 {
-			include = append(include, zero_trust.EveryoneRuleParam{})
 		}
 		created, err := p.client.ZeroTrust.Access.Groups.New(ctx, zero_trust.AccessGroupNewParams{
 			AccountID: cf.F(boundary.AccountID),
@@ -478,7 +471,7 @@ func (p *cloudflareProvider) ensurePostureAccessPolicy(ctx context.Context, boun
 		Decision:  cf.F(zero_trust.DecisionAllow),
 		Name:      cf.F(core.PolicyDevicePosture),
 		Include: cf.F([]zero_trust.AccessRuleUnionParam{
-			zero_trust.EveryoneRuleParam{},
+			everyoneIncludeRule(),
 		}),
 		Require: cf.F([]zero_trust.AccessRuleUnionParam{
 			zero_trust.AccessDevicePostureRuleParam{
@@ -536,6 +529,70 @@ func (p *cloudflareProvider) findAccessApp(ctx context.Context, accountID, name 
 		output.Fail("list access applications: %v", err)
 	}
 	return "", ""
+}
+
+func impersonationAccessAppName(application string) string {
+	return "platy-impersonate-" + application
+}
+
+func (p *cloudflareProvider) ImpersonationAccessSpec(
+	ctx context.Context,
+	boundary core.TrustBoundary,
+	access core.ApplicationAccess,
+	groups map[string]core.AccessGroup,
+	identityProviders []core.IdentityProvider,
+	emailAllowlist []string,
+	posture core.PosturePolicy,
+) (core.AccessApplicationSpec, error) {
+	groupIDs := []string{}
+	for _, groupName := range access.AllowedGroups {
+		if group, ok := groups[groupName]; ok {
+			groupIDs = append(groupIDs, group.ID)
+		}
+	}
+	if len(groupIDs) == 0 {
+		if admins, ok := groups[core.GroupAdmins]; ok {
+			groupIDs = append(groupIDs, admins.ID)
+		}
+	}
+	policyID, err := p.EnsureEmailAllowlistPolicy(ctx, boundary, emailAllowlist, groupIDs)
+	if err != nil {
+		return core.AccessApplicationSpec{}, err
+	}
+	policyIDs := []string{policyID}
+	if access.PostureRequired != nil && *access.PostureRequired && posture.Enabled && posture.RuleID != "" {
+		posturePolicyID, err := p.ensurePostureAccessPolicy(ctx, boundary, posture.RuleID)
+		if err != nil {
+			return core.AccessApplicationSpec{}, err
+		}
+		policyIDs = append(policyIDs, posturePolicyID)
+	}
+	return core.AccessApplicationSpec{
+		AllowedIdPIDs:   resolveIdentityProviderIDs(identityProviders, access.AllowedIdPs),
+		PolicyIDs:       policyIDs,
+		PostureRequired: access.PostureRequired != nil && *access.PostureRequired,
+	}, nil
+}
+
+func (p *cloudflareProvider) EnsureImpersonationAccessApplication(
+	ctx context.Context,
+	boundary core.TrustBoundary,
+	application string,
+	spec core.AccessApplicationSpec,
+) (*core.AccessApplication, error) {
+	name := impersonationAccessAppName(application)
+	_, clientID := p.findAccessApp(ctx, boundary.AccountID, name)
+	if clientID != "" {
+		output.Logger.Info("reusing impersonation access application", "application", application, "client_id", clientID)
+		return &core.AccessApplication{ClientID: clientID}, nil
+	}
+	spec.Name = name
+	created, err := p.CreateAccessApplication(ctx, boundary, spec)
+	if err != nil {
+		return nil, err
+	}
+	output.Logger.Info("created impersonation access application", "application", application, "client_id", created.ClientID)
+	return created, nil
 }
 
 func (p *cloudflareProvider) CreateAccessApplication(ctx context.Context, boundary core.TrustBoundary, spec core.AccessApplicationSpec) (*core.AccessApplication, error) {
@@ -624,7 +681,7 @@ func (p *cloudflareProvider) findBypassPolicy(ctx context.Context, accountID str
 		Decision:  cf.F(zero_trust.DecisionBypass),
 		Name:      cf.F(core.PolicyWorkersDevBypass),
 		Include: cf.F([]zero_trust.AccessRuleUnionParam{
-			zero_trust.EveryoneRuleParam{},
+			everyoneIncludeRule(),
 		}),
 	})
 	if err != nil {
@@ -715,17 +772,41 @@ func (p *cloudflareProvider) selectOauthScopes(ctx context.Context, override str
 	for _, scope := range scopes {
 		available[strings.ToLower(scope.ID)] = scope.ID
 	}
-	selected := []string{}
-	for _, wanted := range defaultOauthScopeIDs {
-		if id, ok := available[strings.ToLower(wanted)]; ok {
-			selected = append(selected, id)
-		}
-	}
+	selected := cfcloud.FilterAvailableScopeIDs(available, defaultOauthScopeIDs)
 	if len(selected) == 0 {
 		output.Fail("no default oauth scopes are available; pass --oauth-scopes explicitly")
 	}
 	output.Logger.Info("selected oauth scopes", "scopes", strings.Join(selected, ","))
 	return selected
+}
+
+func oauthScopesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]struct{}{}
+	for _, scope := range a {
+		seen[strings.ToLower(scope)] = struct{}{}
+	}
+	for _, scope := range b {
+		if _, ok := seen[strings.ToLower(scope)]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *cloudflareProvider) updateOAuthClientScopes(ctx context.Context, accountID, clientID string, scopes []string) error {
+	path := fmt.Sprintf("accounts/%s/oauth_clients/%s", accountID, clientID)
+	envelope := &apiEnvelope{}
+	if err := p.client.Patch(ctx, path, map[string]any{"scopes": scopes}, envelope); err != nil {
+		return fmt.Errorf("update oauth client scopes: %w", err)
+	}
+	if err := envelope.decode(&struct{}{}); err != nil {
+		return err
+	}
+	output.Logger.Info("updated oauth client scopes", "client_id", clientID, "scopes", strings.Join(scopes, ","))
+	return nil
 }
 
 func (p *cloudflareProvider) EnsureOAuthClient(ctx context.Context, boundary core.TrustBoundary, name string, scopesOverride string) (string, []string, error) {
@@ -737,7 +818,13 @@ func (p *cloudflareProvider) EnsureOAuthClient(ctx context.Context, boundary cor
 		if err := listEnvelope.decode(&existing); err == nil {
 			for _, candidate := range existing {
 				if candidate.ClientName == name {
-					output.Logger.Info("reusing oauth client", "client_id", candidate.ClientID)
+					if !oauthScopesEqual(candidate.Scopes, scopes) {
+						if err := p.updateOAuthClientScopes(ctx, boundary.AccountID, candidate.ClientID, scopes); err != nil {
+							return "", nil, err
+						}
+					} else {
+						output.Logger.Info("reusing oauth client", "client_id", candidate.ClientID)
+					}
 					return candidate.ClientID, scopes, nil
 				}
 			}
@@ -780,9 +867,7 @@ func (p *cloudflareProvider) Bootstrap(ctx context.Context, boundary core.TrustB
 
 	adminEmails := opts.EmailAllowlist
 	groupSpecs := map[string][]string{
-		core.GroupAdmins:   adminEmails,
-		core.GroupUsers:    nil,
-		core.GroupEnrolled: nil,
+		core.GroupAdmins: adminEmails,
 	}
 	groups, err := p.EnsureGroups(ctx, boundary, groupSpecs)
 	if err != nil {

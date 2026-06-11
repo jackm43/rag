@@ -17,6 +17,7 @@ import (
 	"jsmunro.me/platy/sdk/auth"
 	"jsmunro.me/platy/sdk/discovery"
 	"jsmunro.me/platy/sdk/dpop"
+	"jsmunro.me/platy/sdk/httpclient"
 )
 
 const (
@@ -27,13 +28,17 @@ const (
 	identityServicePath = "/idp.v1.IdentityService/"
 )
 
+type CredentialResolver func(ctx context.Context, application string) (clientID, clientSecret string, err error)
+
 type Session struct {
-	GatewayURL string
-	Store      auth.TokenStore
-	Local      *discovery.ApplicationDiscoveryService
-	Dpop       *dpop.Key
-	HTTPClient *http.Client
-	Logger     *slog.Logger
+	GatewayURL         string
+	Store              auth.TokenStore
+	Local              *discovery.ApplicationDiscoveryService
+	Dpop               *dpop.Key
+	HTTPClient         *http.Client
+	Logger             *slog.Logger
+	RotateDeviceKey    func(context.Context) (*dpop.Key, error)
+	CredentialResolver CredentialResolver
 
 	mu        sync.Mutex
 	discovery *discovery.Document
@@ -44,7 +49,7 @@ func NewSession(gatewayURL string, store auth.TokenStore, logger *slog.Logger) *
 	return &Session{
 		GatewayURL: strings.TrimRight(gatewayURL, "/"),
 		Store:      store,
-		HTTPClient: http.DefaultClient,
+		HTTPClient: httpclient.Default(),
 		Logger:     logger,
 		appTokens:  map[string]*auth.TokenSet{},
 	}
@@ -93,7 +98,8 @@ func (s *Session) oidcFlow(ctx context.Context) (*auth.BrowserFlow, error) {
 			},
 			Scopes: []string{"openid", "email", "profile"},
 		},
-		Logger: s.logger(),
+		Logger:     s.logger(),
+		HTTPClient: s.HTTPClient,
 	}, nil
 }
 
@@ -160,7 +166,33 @@ func (s *Session) refreshSession(ctx context.Context, refreshToken string) (*aut
 	return tokenSetFromSession(response.Msg.Tokens), nil
 }
 
+func (s *Session) revokeCachedSession(ctx context.Context) {
+	cached := s.Store.Get(ctx, s.userTokenKey())
+	if cached != nil && cached.RefreshToken != "" {
+		request := connect.NewRequest(&idpv1.RevokeSessionRequest{RefreshToken: cached.RefreshToken})
+		if _, err := s.IdentityClient().RevokeSession(ctx, request); err != nil {
+			s.logger().Debug("session revocation failed", "error", err)
+		} else {
+			s.logger().Info("revoked previous gateway session")
+		}
+	}
+	if err := s.Store.Delete(ctx, s.userTokenKey()); err != nil {
+		s.logger().Debug("clear cached session tokens failed", "error", err)
+	}
+	s.mu.Lock()
+	s.appTokens = map[string]*auth.TokenSet{}
+	s.mu.Unlock()
+}
+
 func (s *Session) login(ctx context.Context) (*auth.TokenSet, error) {
+	s.revokeCachedSession(ctx)
+	if s.RotateDeviceKey != nil {
+		key, err := s.RotateDeviceKey(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("rotate device key: %w", err)
+		}
+		s.Dpop = key
+	}
 	flow, err := s.oidcFlow(ctx)
 	if err != nil {
 		return nil, err
@@ -204,14 +236,8 @@ func (s *Session) UserToken(ctx context.Context, forceLogin bool) (string, error
 }
 
 func (s *Session) Logout(ctx context.Context) error {
-	cached := s.Store.Get(ctx, s.userTokenKey())
-	if cached != nil && cached.RefreshToken != "" {
-		request := connect.NewRequest(&idpv1.RevokeSessionRequest{RefreshToken: cached.RefreshToken})
-		if _, err := s.IdentityClient().RevokeSession(ctx, request); err != nil {
-			s.logger().Debug("session revocation failed", "error", err)
-		}
-	}
-	return s.Store.Delete(ctx, s.userTokenKey())
+	s.revokeCachedSession(ctx)
+	return nil
 }
 
 func (s *Session) IdentityClient() idpv1connect.IdentityServiceClient {
@@ -219,10 +245,18 @@ func (s *Session) IdentityClient() idpv1connect.IdentityServiceClient {
 }
 
 func (s *Session) WhoAmI(ctx context.Context) (*idpv1.WhoAmIResponse, error) {
+	var interceptor connect.Interceptor
+	if actor := impersonate(ctx); actor != "" {
+		interceptor = &tokenInterceptor{token: func(ctx context.Context) (string, error) {
+			return s.ChainedAppToken(ctx, actor, "idp", nil)
+		}}
+	} else {
+		interceptor = s.UserAuthInterceptor()
+	}
 	client := idpv1connect.NewIdentityServiceClient(
 		s.HTTPClient,
 		s.GatewayURL,
-		connect.WithInterceptors(s.UserAuthInterceptor()),
+		connect.WithInterceptors(interceptor),
 	)
 	response, err := client.WhoAmI(ctx, connect.NewRequest(&idpv1.WhoAmIRequest{}))
 	if err != nil {
@@ -236,8 +270,16 @@ func (s *Session) RegistryClient() idpv1connect.RegistryServiceClient {
 }
 
 func (s *Session) AppToken(ctx context.Context, audience string) (string, error) {
+	if service := impersonate(ctx); service != "" {
+		return s.ChainedAppToken(ctx, service, audience, nil)
+	}
+	return s.directAppToken(ctx, audience)
+}
+
+func (s *Session) directAppToken(ctx context.Context, audience string) (string, error) {
+	cacheKey := audience
 	s.mu.Lock()
-	cached := s.appTokens[audience]
+	cached := s.appTokens[cacheKey]
 	s.mu.Unlock()
 	if cached.Valid(15 * time.Second) {
 		return cached.AccessToken, nil
@@ -247,29 +289,157 @@ func (s *Session) AppToken(ctx context.Context, audience string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	request := connect.NewRequest(&idpv1.ExchangeTokenRequest{
-		SubjectToken:       subjectToken,
-		SubjectTokenType:   TokenTypeJwt,
-		Audience:           audience,
-		RequestedTokenType: TokenTypeJwt,
-	})
-	if err := s.attachDpop(request.Header(), identityServicePath+"ExchangeToken"); err != nil {
-		return "", err
-	}
-	response, err := s.IdentityClient().ExchangeToken(ctx, request)
+	token, err := s.exchangeToken(ctx, subjectToken, TokenTypeJwt, "", "", audience, nil, "", false)
 	if err != nil {
 		return "", fmt.Errorf("token exchange for %s: %w", audience, err)
 	}
+	s.mu.Lock()
+	s.appTokens[cacheKey] = token
+	s.mu.Unlock()
+	s.logger().Debug("exchanged app token", "audience", audience, "expires_in", token.ExpiresAt-time.Now().Unix())
+	return token.AccessToken, nil
+}
 
-	token := &auth.TokenSet{
-		AccessToken: response.Msg.AccessToken,
-		ExpiresAt:   time.Now().Unix() + response.Msg.ExpiresIn,
+func (s *Session) ChainedAppToken(ctx context.Context, serviceApp, audience string, scopes []string) (string, error) {
+	if s.CredentialResolver == nil {
+		return "", fmt.Errorf("service impersonation requires a credential resolver")
+	}
+	cacheKey := "chain:" + serviceApp + ":" + audience
+	s.mu.Lock()
+	cached := s.appTokens[cacheKey]
+	s.mu.Unlock()
+	if cached.Valid(15 * time.Second) {
+		return cached.AccessToken, nil
+	}
+	impersonationToken, err := s.ImpersonationToken(ctx, serviceApp, false)
+	if err != nil {
+		return "", err
+	}
+	actor, err := s.Application(ctx, serviceApp)
+	if err != nil {
+		return "", err
+	}
+	subjectAudience := actor.Audience
+	if subjectAudience == "" {
+		subjectAudience = serviceApp
+	}
+	subjectToken, err := s.directAppToken(ctx, subjectAudience)
+	if err != nil {
+		return "", fmt.Errorf("subject token for %s: %w", serviceApp, err)
+	}
+	clientID, clientSecret, err := s.CredentialResolver(ctx, serviceApp)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s service credential: %w", serviceApp, err)
+	}
+	token, err := s.exchangeToken(
+		ctx,
+		subjectToken,
+		TokenTypeJwt,
+		clientID+":"+clientSecret,
+		TokenTypeServiceCredential,
+		audience,
+		scopes,
+		impersonationToken,
+		true,
+	)
+	if err != nil {
+		return "", fmt.Errorf("chained token exchange as %s for %s: %w", serviceApp, audience, err)
 	}
 	s.mu.Lock()
-	s.appTokens[audience] = token
+	s.appTokens[cacheKey] = token
 	s.mu.Unlock()
-	s.logger().Debug("exchanged app token", "audience", audience, "expires_in", response.Msg.ExpiresIn)
+	s.logger().Debug("exchanged chained app token", "service", serviceApp, "audience", audience)
 	return token.AccessToken, nil
+}
+
+func (s *Session) ServiceAppToken(ctx context.Context, serviceApp, audience string, scopes []string) (string, error) {
+	if s.CredentialResolver == nil {
+		return "", fmt.Errorf("service authentication requires a credential resolver")
+	}
+	cacheKey := "svc:" + serviceApp + ":" + audience
+	s.mu.Lock()
+	cached := s.appTokens[cacheKey]
+	s.mu.Unlock()
+	if cached.Valid(15 * time.Second) {
+		return cached.AccessToken, nil
+	}
+	clientID, clientSecret, err := s.CredentialResolver(ctx, serviceApp)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s service credential: %w", serviceApp, err)
+	}
+	token, err := s.exchangeToken(
+		ctx,
+		clientID+":"+clientSecret,
+		TokenTypeServiceCredential,
+		"",
+		"",
+		audience,
+		scopes,
+		"",
+		false,
+	)
+	if err != nil {
+		return "", fmt.Errorf("service token exchange for %s as %s: %w", audience, serviceApp, err)
+	}
+	s.mu.Lock()
+	s.appTokens[cacheKey] = token
+	s.mu.Unlock()
+	s.logger().Debug("exchanged service app token", "service", serviceApp, "audience", audience)
+	return token.AccessToken, nil
+}
+
+func (s *Session) authenticatedIdentityClient() idpv1connect.IdentityServiceClient {
+	return idpv1connect.NewIdentityServiceClient(
+		s.HTTPClient,
+		s.GatewayURL,
+		connect.WithInterceptors(s.UserAuthInterceptor()),
+	)
+}
+
+func (s *Session) exchangeToken(
+	ctx context.Context,
+	subjectToken, subjectTokenType, actorToken, actorTokenType, audience string,
+	scopes []string,
+	impersonationToken string,
+	authenticated bool,
+) (*auth.TokenSet, error) {
+	request := connect.NewRequest(&idpv1.ExchangeTokenRequest{
+		SubjectToken:          subjectToken,
+		SubjectTokenType:      subjectTokenType,
+		ActorToken:            actorToken,
+		ActorTokenType:        actorTokenType,
+		Audience:              audience,
+		Scopes:                scopes,
+		RequestedTokenType:    TokenTypeJwt,
+		ImpersonationToken:    impersonationToken,
+		ImpersonationTokenType: TokenTypeAccessToken,
+	})
+	if authenticated {
+		if err := s.attachDpop(request.Header(), identityServicePath+"ExchangeToken"); err != nil {
+			return nil, err
+		}
+		userToken, err := s.UserToken(ctx, false)
+		if err != nil {
+			return nil, err
+		}
+		request.Header().Set("Authorization", "Bearer "+userToken)
+	} else if subjectTokenType == TokenTypeJwt && actorToken == "" {
+		if err := s.attachDpop(request.Header(), identityServicePath+"ExchangeToken"); err != nil {
+			return nil, err
+		}
+	}
+	client := s.IdentityClient()
+	if authenticated {
+		client = s.authenticatedIdentityClient()
+	}
+	response, err := client.ExchangeToken(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return &auth.TokenSet{
+		AccessToken: response.Msg.AccessToken,
+		ExpiresAt:   time.Now().Unix() + response.Msg.ExpiresIn,
+	}, nil
 }
 
 type gatewayInterceptor struct {

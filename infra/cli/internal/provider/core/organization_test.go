@@ -32,8 +32,8 @@ func TestLoadOrganization(t *testing.T) {
 	if !policy.PostureRequiredForZone(Tier1) {
 		t.Fatal("tier1 should require posture")
 	}
-	if !policy.ZeroTrust.Gateway.TLSDecrypt {
-		t.Fatal("gateway tls_decrypt should be enabled")
+	if policy.ZeroTrust.Gateway.TLSDecrypt {
+		t.Fatal("gateway tls_decrypt should be disabled")
 	}
 	if !policy.ZeroTrust.Devices.GatewayProxyEnabled {
 		t.Fatal("device gateway_proxy_enabled should be enabled")

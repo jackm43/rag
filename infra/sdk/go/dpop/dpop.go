@@ -58,6 +58,10 @@ func LoadOrCreate(ctx context.Context, service *secrets.Service, user, provider 
 			return key, nil
 		}
 	}
+	return Rotate(ctx, service, user, provider)
+}
+
+func Rotate(ctx context.Context, service *secrets.Service, user, provider string) (*Key, error) {
 	key, err := Generate()
 	if err != nil {
 		return nil, err

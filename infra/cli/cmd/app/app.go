@@ -16,6 +16,7 @@ import (
 	idpv1 "jsmunro.me/platy/applications/idp/client/idp/v1"
 	"jsmunro.me/platy/cli/cmd/bootstrap"
 	"jsmunro.me/platy/cli/internal/applications"
+	"jsmunro.me/platy/cli/internal/cfauth"
 	"jsmunro.me/platy/cli/internal/display"
 	"jsmunro.me/platy/cli/internal/manifest"
 	"jsmunro.me/platy/cli/internal/output"
@@ -245,17 +246,19 @@ func registerApplication(
 
 	resources, fullNames := protoResources(root, name)
 	providerConfig := loadProviderConfig(root)
+	impersonationClientID := provisionImpersonationAccessClientID(ctx, name, app, providerConfig)
 	s := platform.Session()
 	response, err := s.RegistryClient().RegisterApplication(ctx, connect.NewRequest(&idpv1.RegisterApplicationRequest{
-		Name:          name,
-		Endpoint:      endpoint,
-		Description:   description,
-		Resources:     resources,
-		Delegations:   manifestDelegations(app),
-		Provider:      app.ProxyProvider(),
-		TrustBoundary: manifestTrustBoundary(app, providerConfig),
-		Access:        manifestAccess(app, providerConfig),
-		TrustZone:     app.ResolvedTrustZone(),
+		Name:                        name,
+		Endpoint:                    endpoint,
+		Description:                 description,
+		Resources:                   resources,
+		Delegations:                 manifestDelegations(app),
+		Provider:                    app.ProxyProvider(),
+		TrustBoundary:               manifestTrustBoundary(app, providerConfig),
+		Access:                      manifestAccess(app, providerConfig),
+		TrustZone:                   app.ResolvedTrustZone(),
+		ImpersonationAccessClientId: impersonationClientID,
 	}))
 	if err != nil {
 		output.Fail("register application: %v", err)
@@ -300,6 +303,7 @@ func Sync(ctx context.Context, cmdArgs []string) {
 		}
 	}
 	root := platform.RepoRoot()
+	ctx = cfauth.EnsurePlatform(ctx)
 	loaded := manifest.Load(root)
 	results := map[string]any{}
 	for _, name := range loaded.Names() {

@@ -21,10 +21,16 @@ applications:
     provider: cloudflare
     secret_provider: 1password
     trust_zone: tier2
+    secrets:
+      DISCORD_APPLICATION_ID: op://mqrwrig24fxs3ssywmf3pxwqgy/ragbot/ApplicationId
+      DISCORD_PUBLIC_KEY: op://mqrwrig24fxs3ssywmf3pxwqgy/ragbot/PublicKey
+      DISCORD_BOT_TOKEN: op://mqrwrig24fxs3ssywmf3pxwqgy/ragbot/bot_token
     access:
       allowed_groups: [admins]
       allowed_idps: [github]
-    delegations: []
+    delegations:
+      - audience: idp
+      - audience: deploy
     webhooks:
       - name: discord
         type: ed25519

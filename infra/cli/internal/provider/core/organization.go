@@ -43,11 +43,11 @@ type AccessPolicyMFAConfig struct {
 }
 
 type AccessPolicySpec struct {
-	ApprovalRequired             bool                 `json:"approvalRequired,omitempty" yaml:"approval_required,omitempty"`
-	PurposeJustificationRequired bool                 `json:"purposeJustificationRequired,omitempty" yaml:"purpose_justification_required,omitempty"`
-	SessionDuration              string               `json:"sessionDuration,omitempty" yaml:"session_duration,omitempty"`
-	IsolationRequired            bool                 `json:"isolationRequired,omitempty" yaml:"isolation_required,omitempty"`
-	RequirePosture               bool                 `json:"requirePosture,omitempty" yaml:"require_posture,omitempty"`
+	ApprovalRequired             bool                   `json:"approvalRequired,omitempty" yaml:"approval_required,omitempty"`
+	PurposeJustificationRequired bool                   `json:"purposeJustificationRequired,omitempty" yaml:"purpose_justification_required,omitempty"`
+	SessionDuration              string                 `json:"sessionDuration,omitempty" yaml:"session_duration,omitempty"`
+	IsolationRequired            bool                   `json:"isolationRequired,omitempty" yaml:"isolation_required,omitempty"`
+	RequirePosture               bool                   `json:"requirePosture,omitempty" yaml:"require_posture,omitempty"`
 	MFAConfig                    *AccessPolicyMFAConfig `json:"mfaConfig,omitempty" yaml:"mfa_config,omitempty"`
 }
 
@@ -84,18 +84,19 @@ type TrustZoneProvisioned struct {
 }
 
 type TrustZoneSpec struct {
-	Role          string               `json:"role,omitempty" yaml:"role,omitempty"`
-	Description   string               `json:"description,omitempty" yaml:"description,omitempty"`
-	TeamLabel     string               `json:"teamLabel,omitempty" yaml:"team_label,omitempty"`
-	Groups        []string             `json:"groups,omitempty" yaml:"groups,omitempty"`
-	AccessPolicy  AccessPolicySpec     `json:"accessPolicy,omitempty" yaml:"access_policy,omitempty"`
-	Enroll        EnrollPolicy         `json:"enroll,omitempty" yaml:"enroll,omitempty"`
-	Provisioned   TrustZoneProvisioned `json:"provisioned,omitempty"`
+	Role         string               `json:"role,omitempty" yaml:"role,omitempty"`
+	Description  string               `json:"description,omitempty" yaml:"description,omitempty"`
+	TeamLabel    string               `json:"teamLabel,omitempty" yaml:"team_label,omitempty"`
+	Groups       []string             `json:"groups,omitempty" yaml:"groups,omitempty"`
+	AccessPolicy AccessPolicySpec     `json:"accessPolicy,omitempty" yaml:"access_policy,omitempty"`
+	Enroll       EnrollPolicy         `json:"enroll,omitempty" yaml:"enroll,omitempty"`
+	Provisioned  TrustZoneProvisioned `json:"provisioned,omitempty"`
 }
 
 type OrganizationSpec struct {
-	Name     string `json:"name,omitempty" yaml:"name,omitempty"`
-	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Name     string            `json:"name,omitempty" yaml:"name,omitempty"`
+	Provider string            `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Secrets  map[string]string `json:"secrets,omitempty" yaml:"secrets,omitempty"`
 }
 
 type OrganizationDocument struct {
@@ -205,6 +206,13 @@ func (p *OrganizationPolicy) PrimaryPostureCheckName() string {
 		}
 	}
 	return PolicyPostureRuleName
+}
+
+func (p *OrganizationPolicy) CloudflareAPITokenRef() string {
+	if p.Organization.Secrets == nil {
+		return ""
+	}
+	return strings.TrimSpace(p.Organization.Secrets["cloudflare_api_token"])
 }
 
 func (p *OrganizationPolicy) GroupSpecs() map[string][]string {

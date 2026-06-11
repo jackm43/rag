@@ -4,6 +4,8 @@ dist
 *.log
 /platy
 infra/cli/cli
+.env
+.dev.vars
 
 # Generated protobuf and Connect code (regenerate with infra/scripts/generate.sh)
 infra/applications/*/client/

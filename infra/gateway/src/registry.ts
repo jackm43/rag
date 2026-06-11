@@ -34,6 +34,7 @@ export type RegisteredApplication = {
   provider: string;
   trustBoundary: TrustBoundary;
   access: ApplicationAccess;
+  impersonationAccessClientId: string;
   createdAt: number;
   updatedAt: number;
 };
@@ -128,6 +129,7 @@ type ApplicationRow = {
   provider: string;
   trust_boundary: string;
   access: string;
+  impersonation_access_client_id: string;
   created_at: number;
   updated_at: number;
 };
@@ -191,6 +193,7 @@ const fromRow = (row: ApplicationRow): RegisteredApplication => ({
   provider: row.provider ?? "",
   trustBoundary: parseTrustBoundary(row.trust_boundary ?? ""),
   access: parseAccess(row.access ?? ""),
+  impersonationAccessClientId: row.impersonation_access_client_id ?? "",
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -221,12 +224,19 @@ export const upsertApplication = async (
   env: Env,
   app: Pick<
     RegisteredApplication,
-    "name" | "endpoint" | "description" | "resources" | "provider" | "trustBoundary" | "access"
+    | "name"
+    | "endpoint"
+    | "description"
+    | "resources"
+    | "provider"
+    | "trustBoundary"
+    | "access"
+    | "impersonationAccessClientId"
   >,
 ): Promise<RegisteredApplication> => {
   await env.DB.prepare(
-    `INSERT INTO idp_applications (name, audience, endpoint, description, resources, provider, trust_boundary, access)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO idp_applications (name, audience, endpoint, description, resources, provider, trust_boundary, access, impersonation_access_client_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(name) DO UPDATE SET
        endpoint = excluded.endpoint,
        description = excluded.description,
@@ -234,6 +244,10 @@ export const upsertApplication = async (
        provider = excluded.provider,
        trust_boundary = excluded.trust_boundary,
        access = excluded.access,
+       impersonation_access_client_id = CASE
+         WHEN excluded.impersonation_access_client_id != '' THEN excluded.impersonation_access_client_id
+         ELSE idp_applications.impersonation_access_client_id
+       END,
        updated_at = unixepoch()`,
   )
     .bind(
@@ -245,6 +259,7 @@ export const upsertApplication = async (
       app.provider,
       JSON.stringify(app.trustBoundary),
       JSON.stringify(app.access),
+      app.impersonationAccessClientId ?? "",
     )
     .run();
   const stored = await getApplication(env, app.name);

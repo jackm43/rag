@@ -10,9 +10,12 @@ import (
 	"net"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
+
+	"jsmunro.me/platy/sdk/httpclient"
 )
 
 const (
@@ -23,8 +26,9 @@ const (
 var RedirectURL = fmt.Sprintf("http://127.0.0.1:%d/callback", CallbackPort)
 
 type BrowserFlow struct {
-	Config oauth2.Config
-	Logger *slog.Logger
+	Config     oauth2.Config
+	Logger     *slog.Logger
+	HTTPClient *http.Client
 }
 
 func randomState() string {
@@ -120,6 +124,28 @@ func (f *BrowserFlow) logger() *slog.Logger {
 	return slog.Default()
 }
 
+func (f *BrowserFlow) httpClient() *http.Client {
+	if f.HTTPClient != nil {
+		return f.HTTPClient
+	}
+	return httpclient.Default()
+}
+
+func (f *BrowserFlow) oauthContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, oauth2.HTTPClient, f.httpClient())
+}
+
+func tlsHint(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := err.Error()
+	if !strings.Contains(message, "x509:") && !strings.Contains(message, "tls:") {
+		return ""
+	}
+	return "; if TLS inspection is in use, export the inspecting CA and set SSL_CERT_FILE or PLATY_CA_BUNDLE"
+}
+
 func (f *BrowserFlow) Login(ctx context.Context) (*TokenSet, error) {
 	config := f.Config
 	config.RedirectURL = RedirectURL
@@ -147,9 +173,9 @@ func (f *BrowserFlow) Login(ctx context.Context) (*TokenSet, error) {
 		return nil, res.err
 	}
 
-	token, err := config.Exchange(ctx, res.code, oauth2.VerifierOption(verifier))
+	token, err := config.Exchange(f.oauthContext(ctx), res.code, oauth2.VerifierOption(verifier))
 	if err != nil {
-		return nil, fmt.Errorf("authorization code exchange: %w", err)
+		return nil, fmt.Errorf("authorization code exchange: %w%s", err, tlsHint(err))
 	}
 	return tokenSet(token), nil
 }
@@ -157,7 +183,7 @@ func (f *BrowserFlow) Login(ctx context.Context) (*TokenSet, error) {
 func (f *BrowserFlow) Refresh(ctx context.Context, refreshToken string) (*TokenSet, error) {
 	config := f.Config
 	config.RedirectURL = RedirectURL
-	source := config.TokenSource(ctx, &oauth2.Token{RefreshToken: refreshToken})
+	source := config.TokenSource(f.oauthContext(ctx), &oauth2.Token{RefreshToken: refreshToken})
 	token, err := source.Token()
 	if err != nil {
 		return nil, fmt.Errorf("token refresh: %w", err)

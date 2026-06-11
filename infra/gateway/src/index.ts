@@ -54,6 +54,7 @@ const handleDiscovery = async (env: Env): Promise<Response> => {
       provider: app.provider,
       trust_boundary: app.trustBoundary,
       access: app.access,
+      impersonation_access_client_id: app.impersonationAccessClientId,
       created_at: Number(app.createdAt),
       updated_at: Number(app.updatedAt),
     })),

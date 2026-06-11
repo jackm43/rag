@@ -187,8 +187,9 @@ type Application struct {
 	Access        ApplicationAccess         `json:"access,omitempty"`
 	CreatedAt     int64                     `json:"created_at"`
 	UpdatedAt     int64                     `json:"updated_at"`
-	GatewayURL    string                    `json:"gateway_url,omitempty"`
-	Credential    *secrets.ClientCredential `json:"credential,omitempty"`
+	GatewayURL                  string                    `json:"gateway_url,omitempty"`
+	ImpersonationAccessClientID string                    `json:"impersonation_access_client_id,omitempty"`
+	Credential                    *secrets.ClientCredential `json:"credential,omitempty"`
 }
 
 type Document struct {
@@ -265,6 +266,12 @@ func Fetch(ctx context.Context, client *http.Client, gatewayURL string) (*Docume
 		detail := strings.TrimSpace(string(body))
 		if detail == "" {
 			return nil, fmt.Errorf("gateway discovery failed with status %d", response.StatusCode)
+		}
+		if response.StatusCode == http.StatusNotFound && strings.Contains(detail, "1042") {
+			return nil, fmt.Errorf(
+				"gateway worker is not deployed at %s; run platy deploy idp",
+				gatewayURL,
+			)
 		}
 		if response.StatusCode == http.StatusForbidden && strings.Contains(detail, "1050") {
 			return nil, fmt.Errorf(

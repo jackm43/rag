@@ -33,6 +33,13 @@ func ResolveValue(ctx context.Context, value string) string {
 	return resolved
 }
 
+func ResolveCloudflareAPIToken(ctx context.Context, override, organizationRef string) string {
+	if token := ResolveValue(ctx, override); token != "" {
+		return token
+	}
+	return ResolveValue(ctx, organizationRef)
+}
+
 func StoreServiceCredential(ctx context.Context, app, clientID, clientSecret, provider string) *sdksecrets.ClientCredential {
 	if provider == "" {
 		provider = sdksecrets.OnePasswordProvider

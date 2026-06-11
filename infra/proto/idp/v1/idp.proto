@@ -159,6 +159,7 @@ message Application {
   TrustBoundary trust_boundary = 10;
   ApplicationAccess access = 11;
   string trust_zone = 12;
+  string impersonation_access_client_id = 13;
 }
 
 message ServiceCredential {
@@ -184,6 +185,8 @@ message ExchangeTokenRequest {
   string audience = 5;
   repeated string scopes = 6;
   string requested_token_type = 7;
+  string impersonation_token = 8;
+  string impersonation_token_type = 9;
 }
 
 message ExchangeTokenResponse {
@@ -245,6 +248,7 @@ message RegisterApplicationRequest {
   TrustBoundary trust_boundary = 7;
   ApplicationAccess access = 8;
   string trust_zone = 9;
+  string impersonation_access_client_id = 10;
 }
 
 message RegisterApplicationResponse {

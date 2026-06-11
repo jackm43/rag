@@ -2,14 +2,16 @@
 
 ## Required Secrets
 
-This project expects these environment variables:
-- `DISCORD_APPLICATION_ID`
-- `DISCORD_PUBLIC_KEY`
-- `DISCORD_BOT_TOKEN`
-- `CLOUDFLARE_API_TOKEN` (bootstrap only)
-- `CLOUDFLARE_ACCOUNT_ID`
+Application and organization secrets live as `op://` references in the
+manifests, not in a root `.env`. The CLI resolves them through the secret
+service (`infra/cli/internal/secrets`) using the 1Password provider
+(`OP_SERVICE_ACCOUNT_TOKEN` or desktop app via `OP_ACCOUNT`).
 
-`.env` is set to 1Password references (`op://...`), so run project commands through `op run`.
+- `infra/applications/applications.yaml` — per-application worker secrets (e.g. ragbot Discord tokens)
+- `infra/applications/organization.yaml` — organization secrets (e.g. `cloudflare_api_token` for bootstrap and deploy)
+
+Local wrangler dev writes resolved values to `.dev.vars` via `platy dev vars`.
+Deploy pushes resolved worker secrets with `wrangler secret bulk`.
 
 ## Current Runtime Shape
 
@@ -111,19 +113,21 @@ on unprotected workers.dev hostnames). `ragbot-worker` already had a bypass app;
 the gateway and deploy workers need the same treatment.
 
 ```bash
-op run --env-file=.env -- ./platy bootstrap
+./platy bootstrap
 ```
 
-This finds the GitHub identity provider, creates the `Auth Gateway` Access
-for SaaS OIDC application (PKCE public client, refresh tokens, policy allowing
-only `jack@jsmunro.me`), creates the `platy` Cloudflare OAuth client, and
-prints the values for `infra/gateway/wrangler.jsonc` vars
-(`ACCESS_TEAM_DOMAIN`, `ACCESS_OIDC_CLIENT_ID`) and the
-`CF_OAUTH_CLIENT_ID` environment variable, and writes the same JSON to
-`infra/applications/client_metadata.json`. Pass `--team-id`, `--team-name`, and/or
-`--team-domain` when the token can access multiple Zero Trust organizations; when
-only one identifier is given, bootstrap resolves the rest from the Cloudflare API.
-Account id is resolved from the token automatically.
+Bootstrap resolves the Cloudflare API token from `--cf-api-token`,
+`CLOUDFLARE_API_TOKEN`, or `organization.secrets.cloudflare_api_token`. It
+finds the GitHub identity provider, creates the `Auth Gateway` Access for SaaS
+OIDC application (PKCE public client, refresh tokens, policy allowing only
+`jack@jsmunro.me`), creates the `platy` Cloudflare OAuth client, and prints the
+values for `infra/gateway/wrangler.jsonc` vars (`ACCESS_TEAM_DOMAIN`,
+`ACCESS_OIDC_CLIENT_ID`) and the `CF_OAUTH_CLIENT_ID` environment variable,
+and writes the same JSON to `infra/applications/client_metadata.json`. Pass
+`--team-id`, `--team-name`, and/or `--team-domain` when the token can access
+multiple Zero Trust organizations; when only one identifier is given, bootstrap
+resolves the rest from the Cloudflare API. Account id is resolved from the
+token automatically.
 
 ## Application Registration and Codegen
 
@@ -182,42 +186,42 @@ perform delegated identity chaining with `chainedTokenSource`/`chainExchange`.
 Install dependencies:
 
 ```bash
-op run --env-file=.env -- npm install
+npm install
 ```
 
 Create D1 databases (copy the generated ids into the wrangler configs):
 
 ```bash
-op run --env-file=.env -- npx wrangler d1 create ragbot
-op run --env-file=.env -- npx wrangler d1 create rag-auth-gateway
+npx wrangler d1 create ragbot
+npx wrangler d1 create rag-auth-gateway
 ```
 
 Apply D1 schemas locally:
 
 ```bash
-op run --env-file=.env -- npm run d1:migrate:local
-op run --env-file=.env -- npm run gw:d1:migrate:local
+npm run d1:migrate:local
+npm run gw:d1:migrate:local
 ```
 
 Create queues:
 
 ```bash
-op run --env-file=.env -- npx wrangler queues create ai-jobs
-op run --env-file=.env -- npx wrangler queues create ai-jobs-dlq
+npx wrangler queues create ai-jobs
+npx wrangler queues create ai-jobs-dlq
 ```
 
 Register slash commands:
 
 ```bash
-op run --env-file=.env -- npm run register:commands
+npm run register:commands
 ```
 
 Run local dev servers:
 
 ```bash
-op run --env-file=.env -- npm run dev
-op run --env-file=.env -- npm run gw:dev
-op run --env-file=.env -- npm run deploysvc:dev
+npm run dev
+npm run gw:dev
+npm run deploysvc:dev
 ```
 
 Typecheck and test:
@@ -229,7 +233,7 @@ go vet jsmunro.me/platy/cli/... jsmunro.me/platy/sdk/... jsmunro.me/platy/applic
 go build jsmunro.me/platy/cli/... jsmunro.me/platy/sdk/... jsmunro.me/platy/applications/...
 ```
 
-Deploy workers (resolves `.env` `op://` references through the 1Password SDK,
+Deploy workers (resolves manifest `op://` references through the 1Password SDK,
 syncs bootstrap metadata into the gateway wrangler vars, deploys every worker
 in `infra/applications/applications.yaml`, pushes service credentials as
 worker secrets, and runs post-deploy hooks such as starting the Discord

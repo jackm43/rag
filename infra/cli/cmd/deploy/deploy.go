@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"jsmunro.me/platy/cli/internal/applications"
@@ -12,6 +13,7 @@ import (
 	"jsmunro.me/platy/cli/internal/manifest"
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/platform"
+	"jsmunro.me/platy/cli/internal/provider"
 	"jsmunro.me/platy/cli/internal/secrets"
 	"jsmunro.me/platy/cli/internal/wrangler"
 )
@@ -22,8 +24,8 @@ func Run(ctx context.Context, cmdArgs []string) {
 			"usage: platy deploy [app...]",
 			"",
 			"Deploys the workers declared in "+manifest.RelativePath+" (all when no app is named).",
-			"Secrets referenced from .env are resolved through 1Password and injected into",
-			"wrangler; bootstrap metadata is synced into the gateway config before deploying.",
+			"Application secrets declared in the manifest are resolved through 1Password and",
+			"pushed to each worker; bootstrap metadata is synced into the gateway config.",
 		)
 		return
 	}
@@ -33,9 +35,8 @@ func Run(ctx context.Context, cmdArgs []string) {
 	if len(names) == 0 {
 		names = loaded.Names()
 	}
-	envValues := manifest.ResolveDotenv(ctx, root)
+	wranglerEnv := wranglerDeployEnv(ctx, root)
 	wrangler.InjectBootstrapVars(root, loaded)
-	env := wrangler.Env(envValues)
 
 	for _, name := range names {
 		app := loaded.Application(name)
@@ -43,21 +44,47 @@ func Run(ctx context.Context, cmdArgs []string) {
 			output.Fail("application %s has no wrangler config in %s", name, manifest.RelativePath)
 		}
 		output.Logger.Info("deploying worker", "app", name, "worker", app.Worker, "config", app.Config)
-		if err := wrangler.Run(root, env, "", "deploy", "-c", app.Config); err != nil {
+		if err := wrangler.Run(root, wranglerEnv, "", "deploy", "-c", app.Config); err != nil {
 			output.Fail("deploy %s: %v", name, err)
 		}
+		pushWorkerSecrets(ctx, root, name, app, wranglerEnv)
 		if !app.Internal {
-			pushServiceCredential(ctx, root, name, app, env)
+			pushServiceCredential(ctx, root, name, app, wranglerEnv)
 		}
 	}
 
 	for _, name := range names {
 		app := loaded.Application(name)
 		for _, hook := range app.PostDeploy {
-			runPostDeploy(ctx, name, app, hook, envValues)
+			runPostDeploy(ctx, name, app, hook)
 		}
 	}
 	output.PrintJSON(map[string]any{"deployed": names})
+}
+
+func wranglerDeployEnv(ctx context.Context, root string) []string {
+	env := os.Environ()
+	organization := provider.LoadOrganization(root)
+	token := secrets.ResolveCloudflareAPIToken(ctx, "", organization.CloudflareAPITokenRef())
+	if token != "" {
+		env = append(env, "CLOUDFLARE_API_TOKEN="+token)
+	}
+	return env
+}
+
+func pushWorkerSecrets(ctx context.Context, root, name string, app *manifest.Application, env []string) {
+	resolved := app.ResolveSecrets(ctx)
+	if len(resolved) == 0 {
+		return
+	}
+	payload, err := json.Marshal(resolved)
+	if err != nil {
+		output.Fail("encode worker secrets for %s: %v", name, err)
+	}
+	output.Logger.Info("pushing worker secrets", "app", name, "worker", app.Worker, "keys", len(resolved))
+	if err := wrangler.Run(root, env, string(payload), "secret", "bulk", "-c", app.Config); err != nil {
+		output.Fail("push worker secrets for %s: %v", name, err)
+	}
 }
 
 func pushServiceCredential(ctx context.Context, root, name string, app *manifest.Application, env []string) {
@@ -83,12 +110,13 @@ func pushServiceCredential(ctx context.Context, root, name string, app *manifest
 	}
 }
 
-func runPostDeploy(ctx context.Context, name string, app *manifest.Application, hook string, env map[string]string) {
+func runPostDeploy(ctx context.Context, name string, app *manifest.Application, hook string) {
 	switch hook {
 	case "gateway-start":
-		token := env["DISCORD_BOT_TOKEN"]
+		resolved := app.ResolveSecrets(ctx)
+		token := resolved["DISCORD_BOT_TOKEN"]
 		if token == "" {
-			output.Fail("post-deploy %s for %s requires DISCORD_BOT_TOKEN in .env", hook, name)
+			output.Fail("post-deploy %s for %s requires DISCORD_BOT_TOKEN in application secrets", hook, name)
 		}
 		url := strings.TrimRight(app.Endpoint, "/") + "/gateway/start"
 		request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)

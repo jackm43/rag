@@ -10,9 +10,10 @@ import (
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/platform"
 	"jsmunro.me/platy/sdk/client"
+	"jsmunro.me/platy/sdk/gateway"
 )
 
-const usage = `usage: platy fetch <app>.<Service>.<Method> [-d <json>|@file|@-]
+const usage = `usage: platy fetch <app>.<Service>.<Method> [-d <json>|@file|@-] [--as <service-app>]
 
 The request message is sent as Connect JSON; -d defaults to {}.
 Run "platy fetch <app> --help" to list the callable methods of an application.`
@@ -22,7 +23,11 @@ func Run(ctx context.Context, cmdArgs []string) {
 		output.PrintLines(usage)
 		return
 	}
-	target, data := parseArgs(args.StripHelpFlag(cmdArgs))
+	as, remaining := args.ParseAsFlag(args.StripHelpFlag(cmdArgs))
+	target, data := parseArgs(remaining)
+	if as != "" {
+		ctx = gateway.WithImpersonate(ctx, as)
+	}
 	parsed, err := client.ParseTarget(target)
 	if err != nil {
 		output.Fail("%v", err)

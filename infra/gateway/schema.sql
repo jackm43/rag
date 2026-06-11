@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS idp_applications (
   provider TEXT NOT NULL DEFAULT '',
   trust_boundary TEXT NOT NULL DEFAULT '{}',
   access TEXT NOT NULL DEFAULT '{}',
+  impersonation_access_client_id TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );

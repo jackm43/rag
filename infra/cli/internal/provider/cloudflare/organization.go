@@ -20,10 +20,12 @@ func (p *cloudflareProvider) EnsureOrganization(ctx context.Context, boundary co
 		subdomain = boundary.TeamName
 	}
 
-	if organization.ZeroTrust.Gateway.TLSDecrypt {
-		if err := p.ensureGatewaySettings(ctx, boundary.AccountID, organization.ZeroTrust.Gateway); err != nil {
-			return organization, err
-		}
+	if err := p.ensureOrganizationMFA(ctx, boundary, organization); err != nil {
+		return organization, err
+	}
+
+	if err := p.ensureGatewaySettings(ctx, boundary.AccountID, organization.ZeroTrust.Gateway); err != nil {
+		return organization, err
 	}
 	if organization.ZeroTrust.Devices.GatewayProxyEnabled {
 		if err := p.ensureDeviceSettings(ctx, boundary.AccountID, organization.ZeroTrust.Devices); err != nil {
@@ -64,23 +66,27 @@ func (p *cloudflareProvider) EnsureOrganization(ctx context.Context, boundary co
 }
 
 func (p *cloudflareProvider) ensureGatewaySettings(ctx context.Context, accountID string, settings core.ZeroTrustGatewaySettings) error {
-	mode := zero_trust.GatewayConfigurationSettingsInspectionModeDynamic
-	if strings.EqualFold(settings.InspectionMode, "static") {
-		mode = zero_trust.GatewayConfigurationSettingsInspectionModeStatic
+	mode := zero_trust.GatewayConfigurationSettingsInspectionModeStatic
+	if settings.TLSDecrypt && strings.EqualFold(settings.InspectionMode, "dynamic") {
+		mode = zero_trust.GatewayConfigurationSettingsInspectionModeDynamic
 	}
+	dynamicInspection := settings.TLSDecrypt && mode == zero_trust.GatewayConfigurationSettingsInspectionModeDynamic
 	_, err := p.client.ZeroTrust.Gateway.Configurations.Edit(ctx, zero_trust.GatewayConfigurationEditParams{
 		AccountID: cf.F(accountID),
 		Settings: cf.F(zero_trust.GatewayConfigurationSettingsParam{
-			TLSDecrypt: cf.F(zero_trust.TLSSettingsParam{Enabled: cf.F(true)}),
+			TLSDecrypt: cf.F(zero_trust.TLSSettingsParam{Enabled: cf.F(settings.TLSDecrypt)}),
 			Inspection: cf.F(zero_trust.GatewayConfigurationSettingsInspectionParam{
 				Mode: cf.F(mode),
+			}),
+			ProtocolDetection: cf.F(zero_trust.ProtocolDetectionParam{
+				Enabled: cf.F(dynamicInspection),
 			}),
 		}),
 	})
 	if err != nil {
 		return fmt.Errorf("configure gateway tls inspection: %w", err)
 	}
-	output.Logger.Info("configured gateway traffic inspection", "account_id", accountID, "inspection_mode", mode)
+	output.Logger.Info("configured gateway traffic inspection", "account_id", accountID, "tls_decrypt", settings.TLSDecrypt, "inspection_mode", mode)
 	return nil
 }
 
@@ -140,9 +146,15 @@ func groupIncludeRules(groups map[string]core.AccessGroup, names ...string) []ze
 		})
 	}
 	if len(rules) == 0 {
-		rules = append(rules, zero_trust.EveryoneRuleParam{})
+		rules = append(rules, everyoneIncludeRule())
 	}
 	return rules
+}
+
+func everyoneIncludeRule() zero_trust.AccessRuleUnionParam {
+	return zero_trust.EveryoneRuleParam{
+		Everyone: cf.F(zero_trust.EveryoneRuleEveryoneParam{}),
+	}
 }
 
 func postureRequireRules(postureRuleID string) []zero_trust.AccessRuleUnionParam {
@@ -238,6 +250,74 @@ func (p *cloudflareProvider) ensureTierAccessPolicy(
 	return p.ensureAccessPolicy(ctx, boundary.AccountID, params)
 }
 
+func (p *cloudflareProvider) ensureOrganizationMFA(ctx context.Context, boundary core.TrustBoundary, organization core.OrganizationPolicy) error {
+	needsMFA := false
+	for _, tier := range core.TrustZones {
+		zone, ok := organization.TrustZones[tier]
+		if ok && zone.AccessPolicy.MFAConfig != nil {
+			needsMFA = true
+			break
+		}
+	}
+	if !needsMFA {
+		return nil
+	}
+	authDomain := authDomainFromBoundary(boundary)
+	if authDomain == "" {
+		return fmt.Errorf("configure organization mfa: zero trust auth_domain is unavailable")
+	}
+	sessionDuration := organizationMFAConfigSessionDuration(organization)
+	mfaConfig := zero_trust.OrganizationUpdateParamsMfaConfig{
+		AllowedAuthenticators: cf.F([]zero_trust.OrganizationUpdateParamsMfaConfigAllowedAuthenticator{
+			zero_trust.OrganizationUpdateParamsMfaConfigAllowedAuthenticatorTotp,
+			zero_trust.OrganizationUpdateParamsMfaConfigAllowedAuthenticatorBiometrics,
+			zero_trust.OrganizationUpdateParamsMfaConfigAllowedAuthenticatorSecurityKey,
+		}),
+	}
+	if sessionDuration != "" {
+		mfaConfig.SessionDuration = cf.F(sessionDuration)
+	}
+	_, err := p.client.ZeroTrust.Organizations.Update(ctx, zero_trust.OrganizationUpdateParams{
+		AccountID:  cf.F(boundary.AccountID),
+		AuthDomain: cf.F(authDomain),
+		MfaConfig:  cf.F(mfaConfig),
+	})
+	if err != nil {
+		return fmt.Errorf("configure organization mfa: %w", err)
+	}
+	output.Logger.Info("configured organization mfa authenticators", "account_id", boundary.AccountID)
+	return nil
+}
+
+func authDomainFromBoundary(boundary core.TrustBoundary) string {
+	if authDomain, ok := boundary.Organization["auth_domain"].(string); ok {
+		authDomain = strings.TrimSpace(authDomain)
+		authDomain = strings.TrimPrefix(authDomain, "https://")
+		authDomain = strings.TrimPrefix(authDomain, "http://")
+		authDomain = strings.TrimRight(authDomain, "/")
+		if authDomain != "" {
+			return authDomain
+		}
+	}
+	if boundary.TeamName != "" {
+		return boundary.TeamName + ".cloudflareaccess.com"
+	}
+	return ""
+}
+
+func organizationMFAConfigSessionDuration(organization core.OrganizationPolicy) string {
+	for _, tier := range core.TrustZones {
+		zone, ok := organization.TrustZones[tier]
+		if !ok || zone.AccessPolicy.MFAConfig == nil {
+			continue
+		}
+		if duration := strings.TrimSpace(zone.AccessPolicy.MFAConfig.SessionDuration); duration != "" {
+			return duration
+		}
+	}
+	return "24h"
+}
+
 func (p *cloudflareProvider) ensureEnrollAccessApp(
 	ctx context.Context,
 	boundary core.TrustBoundary,
@@ -309,7 +389,7 @@ func (p *cloudflareProvider) ensureEnrollStaffPolicy(ctx context.Context, bounda
 		AccountID: cf.F(boundary.AccountID),
 		Decision:  cf.F(zero_trust.DecisionAllow),
 		Name:      cf.F(core.PolicyEnrollStaff),
-		Include:   cf.F([]zero_trust.AccessRuleUnionParam{zero_trust.EveryoneRuleParam{}}),
+		Include:   cf.F([]zero_trust.AccessRuleUnionParam{everyoneIncludeRule()}),
 	}
 	if enroll.Staff.RequirePosture {
 		params.Require = cf.F(postureRequireRules(postureRuleID))
@@ -326,7 +406,7 @@ func (p *cloudflareProvider) ensureEnrollContractorPolicies(ctx context.Context,
 		AccountID:         cf.F(boundary.AccountID),
 		Decision:          cf.F(zero_trust.DecisionAllow),
 		Name:              cf.F(core.PolicyEnrollContractorRBI),
-		Include:           cf.F([]zero_trust.AccessRuleUnionParam{zero_trust.EveryoneRuleParam{}}),
+		Include:           cf.F([]zero_trust.AccessRuleUnionParam{everyoneIncludeRule()}),
 		IsolationRequired: cf.F(true),
 	}
 	rbiID, err := p.ensureAccessPolicy(ctx, boundary.AccountID, rbiParams)
@@ -339,7 +419,7 @@ func (p *cloudflareProvider) ensureEnrollContractorPolicies(ctx context.Context,
 			AccountID: cf.F(boundary.AccountID),
 			Decision:  cf.F(zero_trust.DecisionAllow),
 			Name:      cf.F(core.PolicyEnrollContractorWarp),
-			Include:   cf.F([]zero_trust.AccessRuleUnionParam{zero_trust.EveryoneRuleParam{}}),
+			Include:   cf.F([]zero_trust.AccessRuleUnionParam{everyoneIncludeRule()}),
 			Require:   cf.F(postureRequireRules(postureRuleID)),
 		}
 		warpID, err := p.ensureAccessPolicy(ctx, boundary.AccountID, warpParams)

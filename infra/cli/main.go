@@ -9,9 +9,9 @@ import (
 	cmdauth "jsmunro.me/platy/cli/cmd/auth"
 	cmdbootstrap "jsmunro.me/platy/cli/cmd/bootstrap"
 	cmddeploy "jsmunro.me/platy/cli/cmd/deploy"
+	cmddev "jsmunro.me/platy/cli/cmd/dev"
 	cmdfetch "jsmunro.me/platy/cli/cmd/fetch"
 	cmdmanage "jsmunro.me/platy/cli/cmd/manage"
-	cmddev "jsmunro.me/platy/cli/cmd/dev"
 	"jsmunro.me/platy/cli/internal/output"
 )
 
@@ -31,7 +31,17 @@ func main() {
 	case "logout":
 		cmdauth.Logout(ctx)
 	case "whoami":
-		cmdauth.WhoAmI(ctx)
+		cmdauth.WhoAmI(ctx, rest)
+	case "impersonate":
+		if len(rest) == 0 {
+			output.UsageExit()
+		}
+		switch rest[0] {
+		case "authorize":
+			cmdauth.ImpersonateAuthorize(ctx, rest[1:])
+		default:
+			output.UsageExit()
+		}
 	case "discover":
 		cmdauth.Discover(ctx)
 	case "metadata":

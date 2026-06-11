@@ -1,11 +1,12 @@
 organization:
   name: jsmunro
   provider: cloudflare
+  secrets:
+    cloudflare_api_token: op://Services/Cloudflare User API Token/password
 
 zero_trust:
   gateway:
-    tls_decrypt: true
-    inspection_mode: dynamic
+    tls_decrypt: false
   devices:
     gateway_proxy_enabled: true
     gateway_udp_proxy_enabled: true

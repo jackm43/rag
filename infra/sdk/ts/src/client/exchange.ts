@@ -7,6 +7,8 @@ export type ExchangeRequest = {
   actorTokenType?: string;
   audience: string;
   scopes?: string[];
+  impersonationToken?: string;
+  impersonationTokenType?: string;
 };
 
 export type ExchangedToken = {
@@ -66,6 +68,10 @@ export const exchangeToken = async (
         audience: request.audience,
         scopes: request.scopes ?? [],
         requestedTokenType: TOKEN_TYPE_JWT,
+        impersonationToken: request.impersonationToken ?? "",
+        impersonationTokenType: request.impersonationToken
+          ? request.impersonationTokenType ?? TOKEN_TYPE_ACCESS_TOKEN
+          : "",
       }),
     },
   );
