@@ -921,30 +921,33 @@ test("queue handler uses a configured partner model and parses the OpenAI respon
   }
 });
 
-// OIDC tests use a fake Access for SaaS issuer: a real RS256 keypair whose
-// public JWKS is served from the per-application endpoint via a mocked fetch.
-const TEAM_DOMAIN = "https://team.cloudflareaccess.com";
-const OIDC_CLIENT_ID = "oidc-client-id";
+// Admin RPC tests use a fake auth gateway issuer: a real ES256 keypair whose
+// public JWKS is served from the well-known endpoint via a mocked fetch.
+const GATEWAY_ISSUER = "https://auth-gateway.example.com";
 
-const oidcIssuer = await (async () => {
-  const { publicKey, privateKey } = await generateKeyPair("RS256");
+const stsIssuer = await (async () => {
+  const { publicKey, privateKey } = await generateKeyPair("ES256");
   const jwk = await exportJWK(publicKey);
-  jwk.kid = "test-kid";
-  jwk.alg = "RS256";
+  jwk.kid = "sts-test-kid";
+  jwk.alg = "ES256";
   jwk.use = "sig";
 
-  const signToken = (audience = OIDC_CLIENT_ID) =>
-    new SignJWT({ email: "admin@example.com" })
-      .setProtectedHeader({ alg: "RS256", kid: "test-kid" })
-      .setIssuer(TEAM_DOMAIN)
-      .setAudience(audience)
+  const signToken = (options: { audience?: string; scope?: string } = {}) =>
+    new SignJWT({
+      email: "jack@jsmunro.me",
+      scope: options.scope ?? "ragbot/*",
+      kind: "user",
+    })
+      .setProtectedHeader({ alg: "ES256", kid: "sts-test-kid" })
+      .setIssuer(GATEWAY_ISSUER)
+      .setAudience(options.audience ?? "ragbot")
       .setSubject("access-user-sub")
       .setIssuedAt()
       .setExpirationTime("5m")
       .sign(privateKey);
 
   const fetchMock = async (url: unknown): Promise<Response> => {
-    if (String(url) === `${TEAM_DOMAIN}/cdn-cgi/access/sso/oidc/${OIDC_CLIENT_ID}/jwks`) {
+    if (String(url) === `${GATEWAY_ISSUER}/.well-known/jwks.json`) {
       return Response.json({ keys: [jwk] });
     }
     return new Response("{}", { status: 200 });
@@ -953,77 +956,58 @@ const oidcIssuer = await (async () => {
   return { signToken, fetchMock };
 })();
 
-const createOidcEnv = (overrides: Record<string, unknown> = {}) =>
+const createStsEnv = (overrides: Record<string, unknown> = {}) =>
   createEnv("unused", {
-    ACCESS_TEAM_DOMAIN: TEAM_DOMAIN,
-    ACCESS_OIDC_CLIENT_ID: OIDC_CLIENT_ID,
+    AUTH_GATEWAY_URL: GATEWAY_ISSUER,
     ...overrides,
   });
 
-test("oauth config endpoint publishes client metadata and fails closed when unset", async () => {
-  const configured = await worker.fetch(
-    new Request("https://example.com/oauth/config", { method: "GET" }),
-    createOidcEnv(),
-    {} as never,
-  );
-  assert.equal(configured.status, 200);
-  assert.deepEqual(await configured.json(), {
-    issuer: TEAM_DOMAIN,
-    client_id: OIDC_CLIENT_ID,
-    authorization_endpoint: `${TEAM_DOMAIN}/cdn-cgi/access/sso/oidc/${OIDC_CLIENT_ID}/authorization`,
-    token_endpoint: `${TEAM_DOMAIN}/cdn-cgi/access/sso/oidc/${OIDC_CLIENT_ID}/token`,
+const rpcRequest = (path: string, body: unknown, token?: string) =>
+  new Request(`https://example.com${path}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
   });
 
-  const unconfigured = await worker.fetch(
-    new Request("https://example.com/oauth/config", { method: "GET" }),
-    createEnv("unused"),
-    {} as never,
-  );
-  assert.equal(unconfigured.status, 503);
-});
-
-test("admin API rejects requests when OIDC is not configured", async () => {
-  const env = createEnv("unused");
+test("admin RPCs reject requests when the auth gateway is not configured", async () => {
   const response = await worker.fetch(
-    new Request("https://example.com/admin/config", {
-      method: "GET",
-      headers: { authorization: `Bearer ${await oidcIssuer.signToken()}` },
-    }),
-    env,
+    rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}, await stsIssuer.signToken()),
+    createEnv("unused", { DB: createDbMock({}) }),
     {} as never,
   );
   assert.equal(response.status, 401);
 });
 
-test("admin API rejects requests without a valid bearer token", async () => {
+test("admin RPCs reject missing, invalid, and wrong-audience tokens", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = oidcIssuer.fetchMock as never;
+  globalThis.fetch = stsIssuer.fetchMock as never;
 
   try {
-    const env = createOidcEnv();
+    const env = createStsEnv({ DB: createDbMock({}) });
 
     const missingToken = await worker.fetch(
-      new Request("https://example.com/admin/config", { method: "GET" }),
+      rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}),
       env,
       {} as never,
     );
     assert.equal(missingToken.status, 401);
 
     const invalidBearer = await worker.fetch(
-      new Request("https://example.com/admin/config", {
-        method: "GET",
-        headers: { authorization: "Bearer not-a-jwt" },
-      }),
+      rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}, "not-a-jwt"),
       env,
       {} as never,
     );
     assert.equal(invalidBearer.status, 401);
 
     const wrongAudience = await worker.fetch(
-      new Request("https://example.com/admin/config", {
-        method: "GET",
-        headers: { authorization: `Bearer ${await oidcIssuer.signToken("another-app")}` },
-      }),
+      rpcRequest(
+        "/ragbot.v1.ConfigService/ListConfig",
+        {},
+        await stsIssuer.signToken({ audience: "another-app" }),
+      ),
       env,
       {} as never,
     );
@@ -1033,28 +1017,98 @@ test("admin API rejects requests without a valid bearer token", async () => {
   }
 });
 
-test("admin API accepts an Access-issued OIDC token and reports identity", async () => {
+test("config list RPC returns entries with a valid gateway token", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = oidcIssuer.fetchMock as never;
+  globalThis.fetch = stsIssuer.fetchMock as never;
 
   try {
-    const env = createOidcEnv();
-    const whoami = await worker.fetch(
-      new Request("https://example.com/admin/whoami", {
-        method: "GET",
-        headers: { authorization: `Bearer ${await oidcIssuer.signToken()}` },
-      }),
+    const env = createStsEnv({
+      DB: createDbMock({ settings: [{ key: "ai_response_model", value: "xai/grok-4.3" }] }),
+    });
+    const response = await worker.fetch(
+      rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}, await stsIssuer.signToken()),
       env,
       {} as never,
     );
 
-    assert.equal(whoami.status, 200);
-    assert.deepEqual(await whoami.json(), {
-      identity: {
-        sub: "access-user-sub",
-        email: "admin@example.com",
-      },
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as {
+      entries: Array<{ key: string; value: string; overridden?: boolean }>;
+    };
+    const overridden = body.entries.find((entry) => entry.key === "ai_response_model");
+    assert.equal(overridden?.value, "xai/grok-4.3");
+    assert.equal(overridden?.overridden, true);
+    assert.ok(body.entries.find((entry) => entry.key === "ai_temperature"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("admin RPCs enforce per-method scopes from the token", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = stsIssuer.fetchMock as never;
+
+  try {
+    const env = createStsEnv({ DB: createDbMock({}) });
+    const narrowToken = await stsIssuer.signToken({ scope: "ragbot/ConfigService.ListConfig" });
+
+    const allowed = await worker.fetch(
+      rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}, narrowToken),
+      env,
+      {} as never,
+    );
+    assert.equal(allowed.status, 200);
+
+    const denied = await worker.fetch(
+      rpcRequest(
+        "/ragbot.v1.ConfigService/UpdateConfig",
+        { key: "ai_temperature", value: "0.5" },
+        narrowToken,
+      ),
+      env,
+      {} as never,
+    );
+    assert.equal(denied.status, 403);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("config update RPC writes the setting and reports the new entry", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = stsIssuer.fetchMock as never;
+
+  try {
+    const env = createStsEnv({
+      DB: createDbMock({ settings: [{ key: "ai_temperature", value: "0.5" }] }),
     });
+    const response = await worker.fetch(
+      rpcRequest(
+        "/ragbot.v1.ConfigService/UpdateConfig",
+        { key: "ai_temperature", value: "0.5" },
+        await stsIssuer.signToken(),
+      ),
+      env,
+      {} as never,
+    );
+
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as {
+      entry: { key: string; value: string; overridden?: boolean };
+    };
+    assert.equal(body.entry.key, "ai_temperature");
+    assert.equal(body.entry.value, "0.5");
+
+    const unknownKey = await worker.fetch(
+      rpcRequest(
+        "/ragbot.v1.ConfigService/UpdateConfig",
+        { key: "not_a_key", value: "x" },
+        await stsIssuer.signToken(),
+      ),
+      env,
+      {} as never,
+    );
+    assert.equal(unknownKey.status, 400);
   } finally {
     globalThis.fetch = originalFetch;
   }

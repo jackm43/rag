@@ -16,6 +16,10 @@
   },
   "include": [
     "src/**/*.ts",
-    "scripts/**/*.ts"
+    "scripts/**/*.ts",
+    "infra/sdk/ts/src/**/*.ts",
+    "infra/gateway/src/**/*.ts",
+    "infra/deploy/src/**/*.ts",
+    "infra/applications/**/server/**/*.ts"
   ]
 }

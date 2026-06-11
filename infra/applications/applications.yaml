@@ -1,0 +1,44 @@
+applications:
+  idp:
+    description: "Authentication gateway: identity, token exchange, registry, discovery"
+    endpoint: https://auth-gateway.jsmunro.workers.dev
+    worker: auth-gateway
+    config: infra/gateway/wrangler.jsonc
+    language: typescript
+    provider: cloudflare
+    secret_provider: 1password
+    trust_zone: tier2
+    internal: true
+    access:
+      allowed_groups: [admins]
+      allowed_idps: [github]
+  ragbot:
+    description: Discord bot admin services
+    endpoint: https://ragbot-worker.jsmunro.workers.dev
+    worker: ragbot-worker
+    config: wrangler.jsonc
+    language: typescript
+    provider: cloudflare
+    secret_provider: 1password
+    trust_zone: tier2
+    access:
+      allowed_groups: [admins]
+      allowed_idps: [github]
+    delegations: []
+    webhooks:
+      - name: discord
+        type: ed25519
+    post_deploy:
+      - gateway-start
+  deploy:
+    description: Worker deployment service using delegated Cloudflare tokens
+    endpoint: https://deploy.jsmunro.workers.dev
+    worker: deploy
+    config: infra/deploy/wrangler.jsonc
+    language: typescript
+    provider: cloudflare
+    secret_provider: 1password
+    trust_zone: tier2
+    access:
+      allowed_groups: [admins]
+      allowed_idps: [github]

@@ -61,8 +61,7 @@ export interface Env {
   DISCORD_PUBLIC_KEY: string;
   DISCORD_APPLICATION_ID: string;
   DISCORD_BOT_TOKEN: string;
-  ACCESS_TEAM_DOMAIN?: string;
-  ACCESS_OIDC_CLIENT_ID?: string;
+  AUTH_GATEWAY_URL?: string;
   DISCORD_GATEWAY: DurableObjectNamespace;
   DB: D1Database;
   AI: Ai;

@@ -1,0 +1,18 @@
+{
+  "name": "deploy",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "vars": {
+    "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.workers.dev",
+    "CLOUDFLARE_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271"
+  },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  }
+}

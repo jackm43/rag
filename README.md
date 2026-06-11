@@ -10,8 +10,9 @@ Cloudflare Worker Discord bot for rag tracking and mention-triggered AI replies.
 - AI: Workers AI binding (`AI`); model is runtime-configurable (`@cf/...` Workers AI models or partner models such as `xai/grok-4.3`), optionally routed through AI Gateway
 - Queue: Cloudflare Queues (`AI_JOBS`, `ai-jobs`, `ai-jobs-dlq`)
 - Stateful connection: Durable Objects (`DiscordGateway`)
-- Admin auth: Cloudflare Access for SaaS as OIDC identity provider (authorization code + PKCE, Cloudflare-managed refresh tokens)
-- Infrastructure: Terraform for the Access OIDC application and policy (`terraform/`)
+- Admin auth: central auth gateway worker (`infra/gateway`) that exchanges Cloudflare Access OIDC logins (GitHub IdP, authorization code + PKCE) for device-bound gateway sessions (DPoP, RFC 9449) and short-lived audience-scoped STS tokens (RFC 8693), with delegation-controlled identity chaining for service-to-service calls
+- Service APIs: protobuf-first Connect-RPC services (`infra/proto`, generated code in `infra/applications`)
+- Infrastructure: `platy bootstrap` (Go CLI + cloudflare-go) creates the Access OIDC application, policy, and Cloudflare OAuth client directly via the Cloudflare API
 - Discord integration:
   - Interactions webhook
   - REST API for command registration, message posting, and channel history
@@ -27,9 +28,8 @@ Cloudflare Worker Discord bot for rag tracking and mention-triggered AI replies.
   - `POST /` Discord interactions
   - `POST /gateway/start` start gateway connection (bot token auth)
   - `GET /gateway/health` gateway status
-  - `GET /oauth/config` public OIDC client metadata for the CLI
-  - `/admin/*` admin API (config, db, interactions, gateway, whoami); requires an Access-issued OIDC bearer token
-- CLI (`npm run cli`): config management, db queries, interaction logs, gateway control; authenticates with OIDC authorization code + PKCE against Cloudflare Access
+  - `POST /ragbot.v1.<Service>/<Method>` Connect-RPC admin services (config, db, interactions, leaderboard, gateway control); requires a gateway-issued STS bearer token with audience `ragbot`
+- CLI (`go run jsmunro.me/platy/cli`, binary `platy`): login, discovery, app registration, config management, db queries, interaction logs, gateway control, worker deploys
 
 ## End-to-End Flow Diagram
 
@@ -52,10 +52,14 @@ flowchart TD
   CB --> DB2
   CB --> DResp2[Discord Interaction Response]
 
-  Admin[Operator CLI] -->|authorization code + PKCE| CFA[Cloudflare Access OIDC]
-  CFA -->|access + refresh tokens| Admin
-  Admin -->|Bearer access token| AA[/admin API/]
-  AA -->|verify via app JWKS| CFA
+  Admin[platy CLI] -->|authorization code + PKCE via GitHub IdP| CFA[Cloudflare Access OIDC]
+  CFA -->|access token| Admin
+  Admin -->|"CreateSession + DPoP proof"| GW[auth gateway worker]
+  GW -->|device-bound session + rotating refresh token| Admin
+  Admin -->|"ExchangeToken (RFC 8693) + DPoP"| GW
+  GW -->|STS token aud=ragbot| Admin
+  Admin -->|Connect-RPC + Bearer| AA[ragbot.v1 services]
+  AA -->|verify via gateway JWKS| GW
   AA --> W
   AA --> DB4[(D1: rag_settings)]
 
@@ -111,12 +115,30 @@ flowchart TD
 - Delivery:
   - posts message with Discord REST API
 
+## Auth Platform Layout
+
+- `infra/proto` protobuf definitions (`idp.v1`, `ragbot.v1`, `deploy.v1`), buf workspace
+- `infra/applications/<app>/client|server` generated connect-go clients and protobuf-es servers
+- `infra/gateway` auth gateway worker: STS issuer (ES256, rotated keys in a Durable Object), application registry (D1), `GET /api/discovery`, `GET /.well-known/jwks.json`
+- `infra/sdk/ts` worker-side SDK grouped into `verify/` (token, proof, and webhook verifiers), `auth/` (authenticators and the `protect` policy middleware), and `client/` (standardized fetch client with token sources and identity chaining)
+- `infra/sdk/go` client SDK: Access PKCE login, device-bound DPoP sessions with automatic refresh, token cache, automatic STS exchange, discovery, standardized request client (`sdk/client`), Cloudflare delegated OAuth
+- `infra/cli` the `platy` CLI
+- `infra/deploy` deploy service worker: deploys workers with the caller's delegated Cloudflare OAuth token
+
 ## Configuration
 
 Runtime config is stored in the D1 `rag_settings` table with code defaults in
-`src/config.ts`, and managed through the admin API or CLI. See `AGENTS.md` for
-the key list, Cloudflare Access setup, and CLI usage.
+`src/config.ts`, and managed through the `ragbot.v1.ConfigService` RPCs or the
+`platy` CLI. See `AGENTS.md` for the key list, bootstrap steps, and CLI usage.
 
 ## Local and Deploy Commands
 
-`./deploy.sh`
+```bash
+go build -o platy jsmunro.me/platy/cli
+./platy deploy
+```
+
+Workers, registrations, and delegations are declared in
+`infra/applications/applications.yaml`; `platy deploy` resolves secrets through
+the 1Password SDK and injects them into wrangler, and `platy app sync`
+reconciles the gateway registry with the manifest.

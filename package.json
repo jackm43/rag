@@ -6,13 +6,20 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "tsc --noEmit && tsc --noEmit -p cli",
+    "gw:dev": "wrangler dev -c infra/gateway/wrangler.jsonc",
+    "gw:deploy": "wrangler deploy -c infra/gateway/wrangler.jsonc",
+    "gw:d1:migrate:local": "wrangler d1 execute rag-auth-gateway --local -c infra/gateway/wrangler.jsonc --file=./infra/gateway/schema.sql",
+    "gw:d1:migrate:remote": "wrangler d1 execute rag-auth-gateway --remote -c infra/gateway/wrangler.jsonc --file=./infra/gateway/schema.sql",
+    "deploysvc:dev": "wrangler dev -c infra/deploy/wrangler.jsonc",
+    "deploysvc:deploy": "wrangler deploy -c infra/deploy/wrangler.jsonc",
+    "generate": "infra/scripts/generate.sh",
+    "check": "tsc --noEmit",
     "test": "node --test --import tsx",
     "register:commands": "tsx scripts/register-commands.ts",
-    "cli": "tsx cli/ragbot.ts",
     "d1:migrate:local": "wrangler d1 execute ragbot --local --file=./schema.sql"
   },
   "devDependencies": {
+    "@bufbuild/protoc-gen-es": "^2.12.0",
     "@cloudflare/workers-types": "^4.20260417.0",
     "@types/node": "^25.6.0",
     "tsx": "^4.20.6",
@@ -20,6 +27,8 @@
     "wrangler": "^4.13.2"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "^2.12.0",
+    "@connectrpc/connect": "^2.1.1",
     "jose": "^6.0.13",
     "tweetnacl": "^1.0.3"
   }

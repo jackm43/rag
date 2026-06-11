@@ -1,0 +1,44 @@
+{
+  "name": "auth-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "vars": {
+    "ACCESS_TEAM_DOMAIN": "https://jsmunro.cloudflareaccess.com",
+    "ACCESS_OIDC_CLIENT_ID": "ac54e29071a4290c456817550ba97163740dcca388330f33e6a77660c0bbc4ee",
+    "CF_OAUTH_CLIENT_ID": "5a511acecd7de0aabedc23e224084932",
+    "GATEWAY_ISSUER": "https://auth-gateway.jsmunro.workers.dev",
+    "ALLOWED_EMAILS": "jack@jsmunro.me"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "rag-auth-gateway",
+      "database_id": "a9f82149-e5d2-446a-b559-e5eeaf612ddb"
+    }
+  ],
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SIGNING_KEYS",
+        "class_name": "SigningKeys"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "SigningKeys"
+      ]
+    }
+  ]
+}

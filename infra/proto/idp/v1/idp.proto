@@ -1,0 +1,340 @@
+syntax = "proto3";
+
+package idp.v1;
+
+message ResourceMethod {
+  string name = 1;
+  string scope = 2;
+}
+
+message Resource {
+  string name = 1;
+  repeated ResourceMethod methods = 2;
+}
+
+message Delegation {
+  string audience = 1;
+  repeated string scopes = 2;
+}
+
+message TrustBoundary {
+  string provider = 1;
+  string account_id = 2;
+  string team_id = 3;
+  string team_name = 4;
+  string team_domain = 5;
+}
+
+message IdentityProvider {
+  string id = 1;
+  string name = 2;
+  string type = 3;
+}
+
+message AccessGroup {
+  string id = 1;
+  string name = 2;
+}
+
+message PostureCheck {
+  string type = 1;
+}
+
+message PosturePolicy {
+  bool enabled = 1;
+  string rule_id = 2;
+  repeated PostureCheck checks = 3;
+}
+
+message ApplicationAccess {
+  repeated string allowed_groups = 1;
+  repeated string allowed_idps = 2;
+  bool posture_required = 3;
+}
+
+message ZeroTrustGatewaySettings {
+  bool tls_decrypt = 1;
+  string inspection_mode = 2;
+}
+
+message ZeroTrustDeviceSettings {
+  bool gateway_proxy_enabled = 1;
+  bool gateway_udp_proxy_enabled = 2;
+}
+
+message PostureCheckSpec {
+  string type = 1;
+  string name = 2;
+}
+
+message ZeroTrustPostureSpec {
+  repeated PostureCheckSpec checks = 1;
+}
+
+message ZeroTrustSettings {
+  ZeroTrustGatewaySettings gateway = 1;
+  ZeroTrustDeviceSettings devices = 2;
+  ZeroTrustPostureSpec posture = 3;
+}
+
+message AccessPolicyMFAConfig {
+  string session_duration = 1;
+}
+
+message AccessPolicySpec {
+  bool approval_required = 1;
+  bool purpose_justification_required = 2;
+  string session_duration = 3;
+  bool isolation_required = 4;
+  bool require_posture = 5;
+  AccessPolicyMFAConfig mfa_config = 6;
+}
+
+message EnrollStaffPolicy {
+  repeated string idp_types = 1;
+  bool require_posture = 2;
+}
+
+message EnrollContractorPolicy {
+  repeated string idp_types = 1;
+  bool require_warp_or_rbi = 2;
+}
+
+message EnrollOnSuccess {
+  string grant_group = 1;
+  bool gateway_session = 2;
+}
+
+message EnrollOnRevoke {
+  bool require_reenroll = 1;
+}
+
+message EnrollPolicy {
+  EnrollStaffPolicy staff = 1;
+  EnrollContractorPolicy contractor = 2;
+  EnrollOnSuccess on_success = 3;
+  EnrollOnRevoke on_revoke = 4;
+}
+
+message TrustZoneSpec {
+  string name = 1;
+  string description = 2;
+  string team_label = 3;
+  repeated string groups = 4;
+  AccessPolicySpec access_policy = 5;
+  EnrollPolicy enroll = 6;
+  string role = 7;
+}
+
+message OrganizationSpec {
+  string name = 1;
+  string provider = 2;
+}
+
+message OrganizationPolicy {
+  OrganizationSpec organization = 1;
+  repeated TrustZoneSpec trust_zones = 2;
+  ZeroTrustSettings zero_trust = 3;
+}
+
+message ProviderConfig {
+  TrustBoundary boundary = 1;
+  repeated IdentityProvider identity_providers = 2;
+  repeated AccessGroup groups = 3;
+  repeated string email_allowlist = 4;
+  PosturePolicy posture = 5;
+  OrganizationPolicy organization = 6;
+}
+
+message Application {
+  string name = 1;
+  string audience = 2;
+  string endpoint = 3;
+  string description = 4;
+  repeated Resource resources = 5;
+  int64 created_at = 6;
+  int64 updated_at = 7;
+  repeated Delegation delegations = 8;
+  string provider = 9;
+  TrustBoundary trust_boundary = 10;
+  ApplicationAccess access = 11;
+  string trust_zone = 12;
+}
+
+message ServiceCredential {
+  string client_id = 1;
+  string client_secret = 2;
+}
+
+message WhoAmIRequest {}
+
+message WhoAmIResponse {
+  string subject = 1;
+  string email = 2;
+  string token_kind = 3;
+  repeated string scopes = 4;
+  repeated string actor_chain = 5;
+}
+
+message ExchangeTokenRequest {
+  string subject_token = 1;
+  string subject_token_type = 2;
+  string actor_token = 3;
+  string actor_token_type = 4;
+  string audience = 5;
+  repeated string scopes = 6;
+  string requested_token_type = 7;
+}
+
+message ExchangeTokenResponse {
+  string access_token = 1;
+  string issued_token_type = 2;
+  string token_type = 3;
+  int64 expires_in = 4;
+  repeated string scopes = 5;
+}
+
+message SessionTokens {
+  string access_token = 1;
+  int64 expires_in = 2;
+  string refresh_token = 3;
+  int64 refresh_expires_in = 4;
+  string token_type = 5;
+}
+
+message CreateSessionRequest {
+  string subject_token = 1;
+  string subject_token_type = 2;
+}
+
+message CreateSessionResponse {
+  SessionTokens tokens = 1;
+}
+
+message RefreshSessionRequest {
+  string refresh_token = 1;
+}
+
+message RefreshSessionResponse {
+  SessionTokens tokens = 1;
+}
+
+message RevokeSessionRequest {
+  string refresh_token = 1;
+}
+
+message RevokeSessionResponse {
+  bool revoked = 1;
+}
+
+service IdentityService {
+  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
+  rpc ExchangeToken(ExchangeTokenRequest) returns (ExchangeTokenResponse);
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  rpc RefreshSession(RefreshSessionRequest) returns (RefreshSessionResponse);
+  rpc RevokeSession(RevokeSessionRequest) returns (RevokeSessionResponse);
+}
+
+message RegisterApplicationRequest {
+  string name = 1;
+  string endpoint = 2;
+  string description = 3;
+  repeated Resource resources = 4;
+  repeated Delegation delegations = 5;
+  string provider = 6;
+  TrustBoundary trust_boundary = 7;
+  ApplicationAccess access = 8;
+  string trust_zone = 9;
+}
+
+message RegisterApplicationResponse {
+  Application application = 1;
+  ServiceCredential credential = 2;
+}
+
+message GetApplicationRequest {
+  string name = 1;
+}
+
+message GetApplicationResponse {
+  Application application = 1;
+}
+
+message ListApplicationsRequest {}
+
+message ListApplicationsResponse {
+  repeated Application applications = 1;
+}
+
+message DeleteApplicationRequest {
+  string name = 1;
+}
+
+message DeleteApplicationResponse {
+  bool deleted = 1;
+}
+
+message RegisterClientRequest {
+  string application = 1;
+}
+
+message RegisterClientResponse {
+  ServiceCredential credential = 1;
+}
+
+message UpsertProviderConfigRequest {
+  string config_json = 1;
+}
+
+message UpsertProviderConfigResponse {
+  ProviderConfig config = 1;
+}
+
+message GetProviderConfigRequest {}
+
+message GetProviderConfigResponse {
+  ProviderConfig config = 1;
+}
+
+service RegistryService {
+  rpc RegisterApplication(RegisterApplicationRequest) returns (RegisterApplicationResponse);
+  rpc GetApplication(GetApplicationRequest) returns (GetApplicationResponse);
+  rpc ListApplications(ListApplicationsRequest) returns (ListApplicationsResponse);
+  rpc DeleteApplication(DeleteApplicationRequest) returns (DeleteApplicationResponse);
+  rpc RegisterClient(RegisterClientRequest) returns (RegisterClientResponse);
+  rpc UpsertProviderConfig(UpsertProviderConfigRequest) returns (UpsertProviderConfigResponse);
+  rpc GetProviderConfig(GetProviderConfigRequest) returns (GetProviderConfigResponse);
+}
+
+message OidcProvider {
+  string issuer = 1;
+  string client_id = 2;
+  string authorization_endpoint = 3;
+  string token_endpoint = 4;
+  string jwks_endpoint = 5;
+}
+
+message DiscoverRequest {}
+
+message Endpoints {
+  string token_exchange = 1;
+  string session_create = 2;
+  string session_refresh = 3;
+  string session_revoke = 4;
+  string who_am_i = 5;
+  string discovery = 6;
+  string jwks = 7;
+}
+
+message DiscoverResponse {
+  string issuer = 1;
+  string jwks_uri = 2;
+  OidcProvider oidc = 3;
+  repeated Application applications = 4;
+  Endpoints endpoints = 5;
+  ProviderConfig provider = 6;
+}
+
+service DiscoveryService {
+  rpc Discover(DiscoverRequest) returns (DiscoverResponse);
+}

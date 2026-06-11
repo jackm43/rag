@@ -1,0 +1,57 @@
+organization:
+  name: jsmunro
+  provider: cloudflare
+
+zero_trust:
+  gateway:
+    tls_decrypt: true
+    inspection_mode: dynamic
+  devices:
+    gateway_proxy_enabled: true
+    gateway_udp_proxy_enabled: true
+  posture:
+    checks:
+      - type: warp
+        name: Platform WARP connected
+
+trust_zones:
+  tier0:
+    description: Privileged operations; no standing access
+    groups: [admins]
+    access_policy:
+      approval_required: true
+      purpose_justification_required: true
+      session_duration: 5m
+      isolation_required: true
+      require_posture: true
+      mfa_config:
+        session_duration: 0m
+
+  tier1:
+    description: Databases, financial systems, and other high-sensitivity workloads
+    groups: [enrolled, admins]
+    access_policy:
+      session_duration: 24h
+      isolation_required: true
+      require_posture: true
+
+  tier2:
+    description: Platform applications and normal registration
+    team_label: internal
+    groups: [admins, users, enrolled]
+    access_policy:
+      session_duration: 24h
+
+  tier3:
+    description: Public enrollment and user trust establishment before gateway sessions
+    enroll:
+      staff:
+        idp_types: [github]
+        require_posture: true
+      contractor:
+        require_warp_or_rbi: true
+      on_success:
+        grant_group: enrolled
+        gateway_session: true
+      on_revoke:
+        require_reenroll: true

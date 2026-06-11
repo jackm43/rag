@@ -1,11 +1,11 @@
-import { getOidcConfig } from "./access";
-import { handleAdminRequest } from "./admin";
+import { createRpcHandler, type RpcHandler } from "../infra/sdk/ts/src";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
 import { DiscordGateway, forwardToGateway } from "./gateway";
 import { jsonResponse, secretsMatch, verifyDiscordRequest } from "./http";
 import { errorMessage, logger } from "./logger";
 import { extractBotMentionPrompt, handleGatewayMessageCreate, processAiQueueMessage } from "./mention";
+import { registerRagbotServices } from "./services";
 import {
   APPLICATION_COMMAND,
   CHANNEL_MESSAGE_WITH_SOURCE,
@@ -15,6 +15,15 @@ import {
 } from "./types";
 
 export { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
+
+let cachedRpc: { env: Env; rpc: RpcHandler } | null = null;
+
+const rpcHandler = (env: Env): RpcHandler => {
+  if (cachedRpc?.env !== env) {
+    cachedRpc = { env, rpc: createRpcHandler((router) => registerRagbotServices(router, env)) };
+  }
+  return cachedRpc.rpc;
+};
 
 const handleGatewayControlRequest = async (request: Request, env: Env): Promise<Response> => {
   const url = new URL(request.url);
@@ -82,23 +91,12 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    // Public OIDC client metadata so the CLI only needs the worker URL. The
-    // client id of a PKCE public client is not a secret.
-    if (url.pathname === "/oauth/config" && request.method === "GET") {
-      const oidc = getOidcConfig(env);
-      if (!oidc) {
-        return jsonResponse({ error: "oidc is not configured" }, 503);
+    if (url.pathname.startsWith("/ragbot.v1.")) {
+      const rpcResponse = await rpcHandler(env)(request);
+      if (rpcResponse) {
+        return rpcResponse;
       }
-      return jsonResponse({
-        issuer: oidc.issuer,
-        client_id: oidc.clientId,
-        authorization_endpoint: oidc.authorizationEndpoint,
-        token_endpoint: oidc.tokenEndpoint,
-      });
-    }
-
-    if (url.pathname.startsWith("/admin")) {
-      return handleAdminRequest(request, env);
+      return jsonResponse({ error: "not found" }, 404);
     }
 
     if (url.pathname.startsWith("/gateway/")) {

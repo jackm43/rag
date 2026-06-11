@@ -7,12 +7,9 @@
   ],
   "vars": {
     "DISCORD_APPLICATION_ID": "",
-    // Cloudflare Access for SaaS (OIDC) application that issues admin API
-    // tokens. ACCESS_TEAM_DOMAIN is https://<team>.cloudflareaccess.com and
-    // ACCESS_OIDC_CLIENT_ID is the oidc_client_id Terraform output. The admin
-    // API rejects all requests until both are set.
-    "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_OIDC_CLIENT_ID": ""
+    // Issuer of the STS tokens accepted by the ragbot.v1 admin services. The
+    // admin RPCs reject all requests until this points at the auth gateway.
+    "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.workers.dev"
   },
   "d1_databases": [
     {
