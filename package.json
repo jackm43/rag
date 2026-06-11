@@ -6,9 +6,10 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && tsc --noEmit -p cli",
     "test": "node --test --import tsx",
     "register:commands": "tsx scripts/register-commands.ts",
+    "cli": "tsx cli/ragbot.ts",
     "d1:migrate:local": "wrangler d1 execute ragbot --local --file=./schema.sql"
   },
   "devDependencies": {
@@ -19,6 +20,7 @@
     "wrangler": "^4.13.2"
   },
   "dependencies": {
+    "jose": "^6.0.13",
     "tweetnacl": "^1.0.3"
   }
 }

@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS rag_events (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX IF NOT EXISTS idx_rag_events_reporter ON rag_events(reported_by_user_id);
+
 CREATE TABLE IF NOT EXISTS rag_totals (
   ragged_user_id TEXT PRIMARY KEY,
   ragged_username TEXT,
@@ -24,6 +26,8 @@ CREATE TABLE IF NOT EXISTS rag_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+DROP TABLE IF EXISTS oauth_refresh_tokens;
 
 CREATE TABLE IF NOT EXISTS rag_ai_interactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

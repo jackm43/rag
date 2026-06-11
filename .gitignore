@@ -2,3 +2,7 @@ node_modules
 .wrangler
 dist
 *.log
+.terraform
+*.tfstate
+*.tfstate.*
+terraform.tfvars

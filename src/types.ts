@@ -25,14 +25,17 @@ export type AiChannelJob = {
   kind: "channel";
   channelId: string;
   messageId?: string;
+  botUserId?: string;
   requesterUserId?: string;
   requesterUsername?: string;
   prompt: string;
+  replyMessageId?: string;
+  replyContext?: string;
 };
 
 export type AiJob = AiChannelJob;
 
-export type DiscordGatewayMessage = {
+export type DiscordMessage = {
   id: string;
   channel_id: string;
   content?: string;
@@ -51,13 +54,15 @@ export type DiscordGatewayMessage = {
     channel_id?: string;
     message_id?: string;
   };
-  referenced_message?: DiscordGatewayMessage | null;
+  referenced_message?: DiscordMessage | null;
 };
 
 export interface Env {
   DISCORD_PUBLIC_KEY: string;
   DISCORD_APPLICATION_ID: string;
   DISCORD_BOT_TOKEN: string;
+  ACCESS_TEAM_DOMAIN?: string;
+  ACCESS_OIDC_CLIENT_ID?: string;
   DISCORD_GATEWAY: DurableObjectNamespace;
   DB: D1Database;
   AI: Ai;

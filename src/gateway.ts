@@ -1,5 +1,6 @@
-import { enqueueAiChannelPrompt } from "./commands/ai";
-import { DISCORD_API_BASE_URL, type DiscordGatewayMessage, type Env } from "./types";
+import { errorMessage, logger } from "./logger";
+import { handleGatewayMessageCreate } from "./mention";
+import type { DiscordMessage, Env } from "./types";
 
 type DiscordGatewayPayload = {
   op: number;
@@ -27,130 +28,17 @@ const MESSAGE_CONTENT_INTENT = 1 << 15;
 const GATEWAY_INTENTS = GUILD_MESSAGES_INTENT | DIRECT_MESSAGES_INTENT | MESSAGE_CONTENT_INTENT;
 const GATEWAY_ENABLED_KEY = "gatewayEnabled";
 const GATEWAY_WATCHDOG_INTERVAL_MS = 60_000;
-const encoder = new TextEncoder();
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
-const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-export const extractBotMentionPrompt = (content: string, botUserId: string) => {
-  const mentionUserId = botUserId.trim();
-  if (!mentionUserId) {
-    return null;
-  }
-
-  const trimmed = content.trim();
-  const mentionPattern = new RegExp(`^<@!?${escapeRegExp(mentionUserId)}>(?:\\s+|$)`);
-  const match = trimmed.match(mentionPattern);
-  if (!match) {
-    return null;
-  }
-
-  const prompt = trimmed.slice(match[0].length).trim();
-  return prompt.length > 0 ? prompt : null;
-};
-
-const formatReferencedMessage = (message: DiscordGatewayMessage) => {
-  const parts: string[] = [];
-  const referenceContent = message.content?.trim();
-  if (referenceContent) {
-    parts.push(referenceContent);
-  }
-
-  for (const attachment of message.attachments ?? []) {
-    const contentType = attachment.content_type ? ` (${attachment.content_type})` : "";
-    const url = attachment.url ? ` ${attachment.url}` : "";
-    parts.push(`Attachment: ${attachment.filename}${contentType}${url}`);
-  }
-
-  if (parts.length === 0) {
-    return null;
-  }
-
-  const referenceAuthor = message.author?.username?.trim();
-  const referenceLabel = referenceAuthor
-    ? `Replied-to message from ${referenceAuthor}:`
-    : "Replied-to message:";
-  return `${referenceLabel}\n${parts.join("\n")}`;
-};
-
-const fetchReferencedMessage = async (message: DiscordGatewayMessage, env: Env) => {
-  const messageId = message.message_reference?.message_id;
-  if (!messageId) {
-    return null;
-  }
-
-  const channelId = message.message_reference?.channel_id ?? message.channel_id;
-  const response = await fetch(`${DISCORD_API_BASE_URL}/channels/${channelId}/messages/${messageId}`, {
-    headers: {
-      authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
-    },
-  });
-  if (!response.ok) {
-    return null;
-  }
-
-  return (await response.json()) as DiscordGatewayMessage;
-};
-
-const buildAiPrompt = async (message: DiscordGatewayMessage, env: Env, prompt: string) => {
-  const inlineReference = message.referenced_message ? formatReferencedMessage(message.referenced_message) : null;
-  const reference = inlineReference ?? formatReferencedMessage((await fetchReferencedMessage(message, env)) ?? {} as DiscordGatewayMessage);
-  if (!reference) {
-    return prompt;
-  }
-
-  return `${reference}\n\nUser message:\n${prompt}`;
-};
-
-export const handleGatewayMessageCreate = async (
-  message: DiscordGatewayMessage,
-  env: Env,
-  botUserId: string | null,
-) => {
-  if (message.author?.bot) {
-    return;
-  }
-
-  if (!botUserId) {
-    return;
-  }
-
-  const prompt = extractBotMentionPrompt(message.content ?? "", botUserId);
-  if (!prompt) {
-    return;
-  }
-
-  await enqueueAiChannelPrompt(env, message.channel_id, await buildAiPrompt(message, env, prompt), {
-    messageId: message.id,
-    requesterUserId: message.author?.id,
-    requesterUsername: message.author?.username,
-  });
-};
-
-const hashesMatch = async (actual: string, expected: string) => {
-  const actualBytes = encoder.encode(actual);
-  const expectedBytes = encoder.encode(expected);
-  const [actualHash, expectedHash] = await Promise.all([
-    crypto.subtle.digest("SHA-256", actualBytes),
-    crypto.subtle.digest("SHA-256", expectedBytes),
-  ]);
-  const actualDigest = new Uint8Array(actualHash);
-  const expectedDigest = new Uint8Array(expectedHash);
-  let difference = actualBytes.length ^ expectedBytes.length;
-  for (let index = 0; index < actualDigest.length; index += 1) {
-    difference |= actualDigest[index] ^ expectedDigest[index];
-  }
-  return difference === 0;
-};
-
-const hasGatewayAuthorization = (request: Request, env: Env) =>
-  hashesMatch(request.headers.get("authorization") ?? "", `Bearer ${env.DISCORD_BOT_TOKEN}`);
-
-export const handleGatewayControlRequest = (request: Request, env: Env) => {
+// Auth for these routes is enforced by the Worker before it forwards to the
+// Durable Object, which is only reachable through its binding.
+export const forwardToGateway = (request: Request, env: Env, path: string) => {
   const id = env.DISCORD_GATEWAY.idFromName("discord-gateway");
-  return env.DISCORD_GATEWAY.get(id).fetch(request);
+  const url = new URL(request.url);
+  url.pathname = path;
+  return env.DISCORD_GATEWAY.get(id).fetch(new Request(url, request));
 };
 
 export class DiscordGateway {
@@ -186,10 +74,6 @@ export class DiscordGateway {
     }
 
     if (url.pathname === "/gateway/start" && request.method === "POST") {
-      if (!(await hasGatewayAuthorization(request, this.env))) {
-        return new Response("Unauthorized", { status: 401 });
-      }
-
       await this.enableGateway();
       this.connect();
       return Response.json({ ok: true });
@@ -290,11 +174,16 @@ export class DiscordGateway {
       this.sessionId = ready.session_id;
       this.resumeGatewayUrl = ready.resume_gateway_url ?? this.resumeGatewayUrl;
       this.botUserId = ready.user?.id ?? this.botUserId;
+      logger.info("gateway_ready", { resumable: Boolean(this.resumeGatewayUrl) });
       return;
     }
 
     if (payload.t === "MESSAGE_CREATE" && isRecord(payload.d)) {
-      await handleGatewayMessageCreate(payload.d as DiscordGatewayMessage, this.env, this.botUserId);
+      try {
+        await handleGatewayMessageCreate(payload.d as DiscordMessage, this.env, this.botUserId);
+      } catch (error) {
+        logger.error("gateway_message_create_failed", { error: errorMessage(error) });
+      }
     }
   }
 

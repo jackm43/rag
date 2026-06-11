@@ -1,11 +1,18 @@
+import { runChatModel, withTimeout } from "../ai";
+import { loadConfig, type BotConfig } from "../config";
+import {
+  editOriginalInteractionResponse,
+  fetchUsername,
+  type InteractionMessageData,
+} from "../discord";
+import { jsonResponse } from "../http";
+import { errorMessage, logger } from "../logger";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
   DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
-  DISCORD_API_BASE_URL,
   type DiscordInteraction,
   type Env,
 } from "../types";
-import { jsonResponse } from "../http";
 
 type RagRow = {
   rag_count: number;
@@ -17,18 +24,6 @@ type ReporterRow = {
 
 type RoastHistoryRow = {
   roast_text: string;
-};
-
-type AiTextResponse = {
-  response?: string;
-};
-
-type InteractionMessageData = {
-  content: string;
-  allowed_mentions?: {
-    parse?: string[];
-    users?: string[];
-  };
 };
 
 const RECENT_ROAST_LOOKBACK = 30;
@@ -70,25 +65,12 @@ const getTargetDisplayName = (interaction: DiscordInteraction, targetId: string)
 };
 
 const getTargetUsername = async (interaction: DiscordInteraction, env: Env, targetId: string) => {
-  const targetUser = interaction.data?.resolved?.users?.[targetId] ?? interaction.resolved?.users?.[targetId];
+  const targetUser =
+    interaction.data?.resolved?.users?.[targetId] ?? interaction.resolved?.users?.[targetId];
   if (targetUser?.username) {
     return targetUser.username;
   }
-
-  try {
-    const response = await fetch(`${DISCORD_API_BASE_URL}/users/${targetId}`, {
-      headers: {
-        authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
-      },
-    });
-    if (!response.ok) {
-      return null;
-    }
-    const user = (await response.json()) as { username?: string };
-    return user.username ?? null;
-  } catch {
-    return null;
-  }
+  return fetchUsername(env, targetId);
 };
 
 const sanitizeDisplayName = (value: string) =>
@@ -119,13 +101,6 @@ const sanitizeRoastLine = (line: string, targetDisplayName: string): string | nu
   }
 
   return noMentions;
-};
-
-const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error("timeout")), timeoutMs);
-  });
-  return Promise.race([promise, timeoutPromise]);
 };
 
 const normalizeRoastText = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
@@ -165,11 +140,14 @@ const getRecentRoasts = async (env: Env) => {
 };
 
 const storeRoast = async (env: Env, roastText: string) => {
-  await env.DB.prepare("INSERT OR IGNORE INTO rag_roasts (roast_text) VALUES (?)").bind(roastText).run();
+  await env.DB.prepare("INSERT OR IGNORE INTO rag_roasts (roast_text) VALUES (?)")
+    .bind(roastText)
+    .run();
 };
 
 const generateRoast = async (
   env: Env,
+  config: BotConfig,
   reporterDisplayName: string,
   targetDisplayName: string,
   reporterCount: number,
@@ -190,29 +168,29 @@ const generateRoast = async (
   for (let attempt = 0; attempt < ROAST_ATTEMPTS; attempt += 1) {
     let sanitized: string | null = null;
     try {
-      const aiResult = await withTimeout(
-        env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-          messages: [
+      const text = await withTimeout(
+        runChatModel(
+          env,
+          config,
+          [
             {
               role: "system",
-              content:
-                "You are a sharp, inventive roast writer for a Discord 'rag' bot. Write ONE original roast sentence under 140 characters teasing both people by display name. Be creative and specific: vary your imagery, reach for unexpected comparisons, and never settle for generic or formulaic phrasing. Plain text only, exactly one sentence. Never include @ mentions, Discord IDs, tags, or handles. Be playful and a little mean, never genuinely cruel.",
+              content: config.roastSystemPrompt,
             },
             {
               role: "user",
               content: `Reporter display name: ${reporterDisplayName}. Reporter has filed ${reporterCount} rag reports total. Reported user display name: ${targetDisplayName}. Reported user has been ragged ${targetCount} times total. Write one punchy, original line teasing both by display name only. Do not reuse or closely paraphrase any of these previous roast lines: ${blockedList}.`,
             },
           ],
-          max_tokens: 64,
-          temperature: 0.95,
-        }),
+          { model: config.roastModel, maxTokens: 64, temperature: 0.95 },
+        ),
         ROAST_TIMEOUT_MS,
       );
 
-      const text = (aiResult as AiTextResponse).response?.trim();
-      sanitized = text ? sanitizeRoastLine(text.slice(0, 180), targetDisplayName) : null;
-    } catch {
-      // Timeout or model error on this attempt; keep trying the next one.
+      const trimmed = text.trim();
+      sanitized = trimmed ? sanitizeRoastLine(trimmed.slice(0, 180), targetDisplayName) : null;
+    } catch (error) {
+      logger.debug("roast_attempt_failed", { attempt, error: errorMessage(error) });
     }
 
     if (!sanitized) {
@@ -226,24 +204,6 @@ const generateRoast = async (
   }
 
   return lastModelLine ?? pickFallbackRoast(reporterDisplayName, targetDisplayName, recentRoasts);
-};
-
-const editOriginalInteractionResponse = async (
-  interaction: DiscordInteraction,
-  data: InteractionMessageData,
-) => {
-  if (!interaction.application_id || !interaction.token) {
-    throw new Error("missing_interaction_webhook");
-  }
-
-  await fetch(
-    `${DISCORD_API_BASE_URL}/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
-    {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(data),
-    },
-  );
 };
 
 const buildRagCommandResponseData = async (
@@ -271,7 +231,7 @@ const buildRagCommandResponseData = async (
     ).bind(targetId, targetUsername),
   ]);
 
-  const [total, reporterStats, recentRoastRows] = await Promise.all([
+  const [total, reporterStats, recentRoastRows, config] = await Promise.all([
     env.DB.prepare("SELECT rag_count FROM rag_totals WHERE ragged_user_id = ?")
       .bind(targetId)
       .first<RagRow>(),
@@ -279,6 +239,7 @@ const buildRagCommandResponseData = async (
       .bind(invoker.id)
       .first<ReporterRow>(),
     getRecentRoasts(env),
+    loadConfig(env),
   ]);
 
   const ragCount = total?.rag_count ?? 1;
@@ -289,6 +250,7 @@ const buildRagCommandResponseData = async (
   try {
     roastLine = await generateRoast(
       env,
+      config,
       reporterDisplayName,
       targetDisplayName,
       reporterCount,
@@ -296,7 +258,9 @@ const buildRagCommandResponseData = async (
       recentRoastSet,
       recentRoastRows.slice(0, 12),
     );
-  } catch { }
+  } catch (error) {
+    logger.warn("roast_generation_failed", { error: errorMessage(error) });
+  }
   await storeRoast(env, roastLine);
 
   return {
@@ -319,16 +283,23 @@ export const handleDeferredRagCommand = (
   env: Env,
   ctx: ExecutionContext,
 ) => {
-  if (!interaction.application_id || !interaction.token) {
+  const applicationId = interaction.application_id;
+  const interactionToken = interaction.token;
+  if (!applicationId || !interactionToken) {
     return handleRagCommand(interaction, env);
   }
 
   ctx.waitUntil(
     (async () => {
       try {
-        await editOriginalInteractionResponse(interaction, await buildRagCommandResponseData(interaction, env));
-      } catch {
-        await editOriginalInteractionResponse(interaction, {
+        await editOriginalInteractionResponse(
+          applicationId,
+          interactionToken,
+          await buildRagCommandResponseData(interaction, env),
+        );
+      } catch (error) {
+        logger.error("rag_command_failed", { error: errorMessage(error) });
+        await editOriginalInteractionResponse(applicationId, interactionToken, {
           content: "Command failed. Try again.",
           allowed_mentions: { parse: [] },
         }).catch(() => undefined);
