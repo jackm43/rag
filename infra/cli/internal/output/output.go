@@ -117,3 +117,12 @@ func PrintLines(lines ...string) {
 		fmt.Fprintln(os.Stdout, line)
 	}
 }
+
+func PrintStreamText(text string) {
+	if text == "" {
+		return
+	}
+	if _, err := os.Stdout.WriteString(text); err != nil {
+		Fail("write output: %v", err)
+	}
+}

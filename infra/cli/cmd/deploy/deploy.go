@@ -3,10 +3,7 @@ package deploy
 import (
 	"context"
 	"encoding/json"
-	"io"
-	"net/http"
 	"os"
-	"strings"
 
 	"jsmunro.me/platy/cli/internal/applications"
 	"jsmunro.me/platy/cli/internal/args"
@@ -113,27 +110,11 @@ func pushServiceCredential(ctx context.Context, root, name string, app *manifest
 func runPostDeploy(ctx context.Context, name string, app *manifest.Application, hook string) {
 	switch hook {
 	case "gateway-start":
-		resolved := app.ResolveSecrets(ctx)
-		token := resolved["DISCORD_BOT_TOKEN"]
-		if token == "" {
-			output.Fail("post-deploy %s for %s requires DISCORD_BOT_TOKEN in application secrets", hook, name)
-		}
-		url := strings.TrimRight(app.Endpoint, "/") + "/gateway/start"
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+		_, err := platform.Client().Invoke(ctx, name+".GatewayControlService.StartGateway", "{}")
 		if err != nil {
 			output.Fail("post-deploy %s: %v", hook, err)
 		}
-		request.Header.Set("Authorization", "Bearer "+token)
-		response, err := http.DefaultClient.Do(request)
-		if err != nil {
-			output.Fail("post-deploy %s: %v", hook, err)
-		}
-		defer response.Body.Close()
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		if response.StatusCode != http.StatusOK {
-			output.Fail("post-deploy %s failed with status %d: %s", hook, response.StatusCode, strings.TrimSpace(string(body)))
-		}
-		output.Logger.Info("post-deploy hook completed", "app", name, "hook", hook, "response", strings.TrimSpace(string(body)))
+		output.Logger.Info("post-deploy hook completed", "app", name, "hook", hook)
 	default:
 		output.Fail("unknown post-deploy hook %s for application %s", hook, name)
 	}

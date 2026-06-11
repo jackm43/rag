@@ -11,6 +11,7 @@ export type StsVerifierConfig = {
   issuer: string;
   audience: string;
   jwksUrl?: string;
+  jwksFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
 type ActClaim = { sub?: string; act?: ActClaim };
@@ -34,10 +35,14 @@ export const verifyStsToken = async (
   config: StsVerifierConfig,
 ): Promise<Identity | null> => {
   try {
-    const { payload } = await jwtVerify(token, remoteJwks(config.jwksUrl ?? stsJwksUrl(config.issuer)), {
-      issuer: config.issuer,
-      audience: config.audience,
-    });
+    const { payload } = await jwtVerify(
+      token,
+      remoteJwks(config.jwksUrl ?? stsJwksUrl(config.issuer), config.jwksFetch),
+      {
+        issuer: config.issuer,
+        audience: config.audience,
+      },
+    );
     if (!payload.sub) {
       return null;
     }

@@ -1,6 +1,7 @@
-import { runChatModel, sanitizeAiText, type ChatMessage } from "./ai";
+import { runChatModel, sanitizeAiText, streamChatModel, type ChatMessage } from "./ai";
 import { loadConfig, type BotConfig } from "./config";
 import { fetchChannelMessages, fetchMessage, postChannelMessage } from "./discord";
+import { rejectDisallowedGuild } from "./guild";
 import { errorMessage, logger } from "./logger";
 import type { AiChannelJob, AiJob, DiscordMessage, Env } from "./types";
 
@@ -57,6 +58,10 @@ export const handleGatewayMessageCreate = async (
     return;
   }
 
+  if (rejectDisallowedGuild(env, message.guild_id)) {
+    return;
+  }
+
   const prompt = extractBotMentionPrompt(message.content ?? "", botUserId);
   if (!prompt) {
     return;
@@ -97,14 +102,18 @@ const buildConversation = async (env: Env, config: BotConfig, job: AiChannelJob)
   const messages: ChatMessage[] = [{ role: "system", content: config.systemPrompt }];
 
   let history: DiscordMessage[] = [];
-  if (job.messageId) {
-    history = await fetchChannelMessages(env, job.channelId, {
-      before: job.messageId,
-      limit: config.historyLimit,
-    }).catch((error) => {
-      logger.warn("history_fetch_failed", { error: errorMessage(error) });
-      return [];
-    });
+  if (job.channelId) {
+    const options = job.messageId
+      ? { before: job.messageId, limit: config.historyLimit }
+      : job.kind === "rpc"
+        ? { limit: config.historyLimit }
+        : null;
+    if (options) {
+      history = await fetchChannelMessages(env, job.channelId, options).catch((error) => {
+        logger.warn("history_fetch_failed", { error: errorMessage(error) });
+        return [];
+      });
+    }
   }
 
   const historyIds = new Set(history.map((message) => message.id));
@@ -130,6 +139,148 @@ const buildConversation = async (env: Env, config: BotConfig, job: AiChannelJob)
   messages.push({ role: "user", content: promptParts.join("\n\n") });
 
   return messages;
+};
+
+export type ChannelChatInput = {
+  kind?: "channel" | "rpc";
+  channelId?: string;
+  messageId?: string;
+  botUserId?: string;
+  requesterUserId?: string;
+  requesterUsername?: string;
+  prompt: string;
+  replyMessageId?: string;
+  replyContext?: string;
+};
+
+export type ChannelChatResult = {
+  responseText: string;
+  model: string;
+  aiDurationMs: number;
+  totalDurationMs: number;
+};
+
+export type ChannelChatStreamChunk = {
+  delta: string;
+  done?: boolean;
+  responseText?: string;
+  model?: string;
+  aiDurationMs?: number;
+  totalDurationMs?: number;
+};
+
+export async function* streamChannelChat(
+  env: Env,
+  input: ChannelChatInput,
+): AsyncGenerator<ChannelChatStreamChunk> {
+  const startedAt = Date.now();
+  const prompt = input.prompt.trim();
+  if (!prompt) {
+    throw new Error("prompt is required");
+  }
+
+  const config = await loadConfig(env);
+  const job: AiChannelJob = {
+    kind: input.kind ?? "rpc",
+    channelId: input.channelId ?? "",
+    messageId: input.messageId,
+    botUserId: input.botUserId,
+    requesterUserId: input.requesterUserId,
+    requesterUsername: input.requesterUsername,
+    prompt,
+    replyMessageId: input.replyMessageId,
+    replyContext: input.replyContext,
+  };
+
+  const conversation = await buildConversation(env, config, job);
+  const aiStartedAt = Date.now();
+  let rawText = "";
+  for await (const delta of streamChatModel(env, config, conversation)) {
+    rawText += delta;
+    if (delta) {
+      yield { delta };
+    }
+  }
+
+  const aiDurationMs = Date.now() - aiStartedAt;
+  const text = sanitizeAiText(rawText);
+  const responseText =
+    text.length > 0 ? text.slice(0, MAX_DISCORD_MESSAGE_LENGTH) : "I could not generate a response.";
+
+  yield {
+    delta: "",
+    done: true,
+    responseText,
+    model: config.responseModel,
+    aiDurationMs,
+    totalDurationMs: Date.now() - startedAt,
+  };
+}
+
+export const runChannelChat = async (env: Env, input: ChannelChatInput): Promise<ChannelChatResult> => {
+  const startedAt = Date.now();
+  const prompt = input.prompt.trim();
+  if (!prompt) {
+    throw new Error("prompt is required");
+  }
+
+  const config = await loadConfig(env);
+  const job: AiChannelJob = {
+    kind: input.kind ?? "rpc",
+    channelId: input.channelId ?? "",
+    messageId: input.messageId,
+    botUserId: input.botUserId,
+    requesterUserId: input.requesterUserId,
+    requesterUsername: input.requesterUsername,
+    prompt,
+    replyMessageId: input.replyMessageId,
+    replyContext: input.replyContext,
+  };
+
+  const conversation = await buildConversation(env, config, job);
+  const aiStartedAt = Date.now();
+  const rawText = await runChatModel(env, config, conversation);
+  const aiDurationMs = Date.now() - aiStartedAt;
+  const text = sanitizeAiText(rawText);
+  const responseText =
+    text.length > 0 ? text.slice(0, MAX_DISCORD_MESSAGE_LENGTH) : "I could not generate a response.";
+
+  return {
+    responseText,
+    model: config.responseModel,
+    aiDurationMs,
+    totalDurationMs: Date.now() - startedAt,
+  };
+};
+
+export const recordChannelChatInteraction = async (
+  env: Env,
+  input: ChannelChatInput,
+  result: Pick<ChannelChatResult, "model" | "responseText" | "aiDurationMs" | "totalDurationMs">,
+  status: string,
+  errorText: string | null,
+) => {
+  const job: AiChannelJob = {
+    kind: input.kind ?? "rpc",
+    channelId: input.channelId ?? "",
+    messageId: input.messageId,
+    botUserId: input.botUserId,
+    requesterUserId: input.requesterUserId,
+    requesterUsername: input.requesterUsername,
+    prompt: input.prompt,
+    replyMessageId: input.replyMessageId,
+    replyContext: input.replyContext,
+  };
+  await recordAiInteraction(
+    env,
+    job,
+    result.model,
+    result.totalDurationMs,
+    status,
+    result.responseText,
+    result.aiDurationMs,
+    errorText,
+  );
 };
 
 const recordAiInteraction = async (
@@ -176,17 +327,10 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
     recordAiInteraction(env, job, model, Date.now() - startedAt, status, content, aiDurationMs, errorText);
 
   try {
-    const config = await loadConfig(env);
-    model = config.responseModel;
-    const conversation = await buildConversation(env, config, job);
-
-    const aiStartedAt = Date.now();
-    const rawText = await runChatModel(env, config, conversation);
-    aiDurationMs = Date.now() - aiStartedAt;
-
-    const text = sanitizeAiText(rawText);
-    content =
-      text.length > 0 ? text.slice(0, MAX_DISCORD_MESSAGE_LENGTH) : "I could not generate a response.";
+    const result = await runChannelChat(env, job);
+    model = result.model;
+    aiDurationMs = result.aiDurationMs;
+    content = result.responseText;
 
     const response = await postChannelMessage(env, job.channelId, content);
     if (response.ok) {

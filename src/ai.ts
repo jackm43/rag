@@ -41,26 +41,93 @@ export type ChatOptions = {
   temperature?: number;
 };
 
+const chatInput = (
+  config: BotConfig,
+  messages: ChatMessage[],
+  options: ChatOptions,
+  stream: boolean,
+) => {
+  const model = options.model ?? config.responseModel;
+  const maxTokens = options.maxTokens ?? config.maxTokens;
+  const temperature = options.temperature ?? config.temperature;
+  if (isWorkersAiModel(model)) {
+    return { model, input: { messages, max_tokens: maxTokens, temperature, stream } };
+  }
+  return { model, input: { messages, max_completion_tokens: maxTokens, temperature } };
+};
+
+const aiRunOptions = (config: BotConfig) =>
+  config.gatewayId ? { gateway: { id: config.gatewayId } } : undefined;
+
+export async function* parseWorkersAiStream(stream: ReadableStream): AsyncGenerator<string> {
+  const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) {
+        buffer += value;
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) {
+            continue;
+          }
+          const payload = trimmed.slice(5).trim();
+          if (payload === "[DONE]") {
+            return;
+          }
+          try {
+            const parsed = JSON.parse(payload) as { response?: string };
+            if (typeof parsed.response === "string" && parsed.response.length > 0) {
+              yield parsed.response;
+            }
+          } catch {
+            continue;
+          }
+        }
+      }
+      if (done) {
+        break;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export const runChatModel = async (
   env: Env,
   config: BotConfig,
   messages: ChatMessage[],
   options: ChatOptions = {},
 ): Promise<string> => {
-  const model = options.model ?? config.responseModel;
-  const maxTokens = options.maxTokens ?? config.maxTokens;
-  const temperature = options.temperature ?? config.temperature;
-
-  // Workers AI models use max_tokens; partner models (xai/, openai/, ...)
-  // expose the OpenAI-compatible max_completion_tokens parameter.
-  const input = isWorkersAiModel(model)
-    ? { messages, max_tokens: maxTokens, temperature }
-    : { messages, max_completion_tokens: maxTokens, temperature };
-
-  const runOptions = config.gatewayId ? { gateway: { id: config.gatewayId } } : undefined;
-  const result = await env.AI.run(model as never, input as never, runOptions as never);
+  const { model, input } = chatInput(config, messages, options, false);
+  const result = await env.AI.run(model as never, input as never, aiRunOptions(config) as never);
   return extractText(result);
 };
+
+export async function* streamChatModel(
+  env: Env,
+  config: BotConfig,
+  messages: ChatMessage[],
+  options: ChatOptions = {},
+): AsyncGenerator<string> {
+  const { model, input } = chatInput(config, messages, options, true);
+  if (!isWorkersAiModel(model)) {
+    yield await runChatModel(env, config, messages, options);
+    return;
+  }
+
+  const result = await env.AI.run(model as never, input as never, aiRunOptions(config) as never);
+  const stream = result as unknown;
+  if (stream && typeof stream === "object" && "getReader" in stream) {
+    yield* parseWorkersAiStream(stream as ReadableStream);
+    return;
+  }
+  yield extractText(result);
+}
 
 export const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
   const timeoutPromise = new Promise<never>((_, reject) => {

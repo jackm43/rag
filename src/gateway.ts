@@ -32,8 +32,8 @@ const GATEWAY_WATCHDOG_INTERVAL_MS = 60_000;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
-// Auth for these routes is enforced by the Worker before it forwards to the
-// Durable Object, which is only reachable through its binding.
+// Gateway control routes on the Durable Object are only reachable through the
+// worker binding after Connect RPC authentication in GatewayControlService.
 export const forwardToGateway = (request: Request, env: Env, path: string) => {
   const id = env.DISCORD_GATEWAY.idFromName("discord-gateway");
   const url = new URL(request.url);

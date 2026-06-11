@@ -2,6 +2,7 @@ package fetch
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 
@@ -13,9 +14,11 @@ import (
 	"jsmunro.me/platy/sdk/gateway"
 )
 
-const usage = `usage: platy fetch <app>.<Service>.<Method> [-d <json>|@file|@-] [--as <service-app>]
+const usage = `usage: platy fetch <app>.<Service>.<Method> [-d <json>|@file|@-] [--stream] [--stream-json] [--as <service-app>]
 
 The request message is sent as Connect JSON; -d defaults to {}.
+Use --stream for server-streaming RPCs such as ragbot.ChatService.StreamChat.
+Streaming chat prints token text to stdout; use --stream-json for one JSON object per chunk.
 Run "platy fetch <app> --help" to list the callable methods of an application.`
 
 func Run(ctx context.Context, cmdArgs []string) {
@@ -24,7 +27,7 @@ func Run(ctx context.Context, cmdArgs []string) {
 		return
 	}
 	as, remaining := args.ParseAsFlag(args.StripHelpFlag(cmdArgs))
-	target, data := parseArgs(remaining)
+	target, data, stream, streamJSON := parseArgs(remaining)
 	if as != "" {
 		ctx = gateway.WithImpersonate(ctx, as)
 	}
@@ -49,6 +52,15 @@ func Run(ctx context.Context, cmdArgs []string) {
 	body, err := client.ReadRequestBody(data, os.Stdin)
 	if err != nil {
 		output.Fail("%v", err)
+	}
+	if stream {
+		err = c.StreamInvoke(ctx, target, body, func(chunk any) error {
+			return printStreamChunk(chunk, streamJSON)
+		})
+		if err != nil {
+			output.Fail("%v; run: platy fetch %s --help", err, parsed.Application)
+		}
+		return
 	}
 	decoded, err := c.Invoke(ctx, target, body)
 	if err != nil {
@@ -96,7 +108,7 @@ func Metadata(ctx context.Context, cmdArgs []string) {
 	}
 }
 
-func parseArgs(cmdArgs []string) (target, data string) {
+func parseArgs(cmdArgs []string) (target, data string, stream, streamJSON bool) {
 	data = "{}"
 	positionals := []string{}
 	for index := 0; index < len(cmdArgs); index++ {
@@ -108,6 +120,11 @@ func parseArgs(cmdArgs []string) (target, data string) {
 			}
 			index++
 			data = cmdArgs[index]
+		case "--stream":
+			stream = true
+		case "--stream-json":
+			stream = true
+			streamJSON = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				output.Fail("unknown flag %s", arg)
@@ -119,5 +136,50 @@ func parseArgs(cmdArgs []string) (target, data string) {
 		output.PrintLines(usage)
 		os.Exit(2)
 	}
-	return positionals[0], data
+	return positionals[0], data, stream, streamJSON
+}
+
+func printStreamChunk(chunk any, streamJSON bool) error {
+	if streamJSON {
+		output.PrintJSON(chunk)
+		return nil
+	}
+
+	record, ok := chunk.(map[string]any)
+	if !ok {
+		output.PrintJSON(chunk)
+		return nil
+	}
+
+	done, _ := record["done"].(bool)
+	if done {
+		fmt.Fprintln(os.Stdout)
+		if model, ok := record["model"].(string); ok && model != "" {
+			output.Logger.Info(
+				"stream complete",
+				"model", model,
+				"ai_duration_ms", streamField(record, "aiDurationMs", "ai_duration_ms"),
+				"total_duration_ms", streamField(record, "totalDurationMs", "total_duration_ms"),
+			)
+		}
+		return nil
+	}
+
+	delta, _ := record["delta"].(string)
+	if delta != "" {
+		output.PrintStreamText(delta)
+		return nil
+	}
+
+	output.PrintJSON(chunk)
+	return nil
+}
+
+func streamField(record map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if value, ok := record[key]; ok && value != nil {
+			return value
+		}
+	}
+	return nil
 }

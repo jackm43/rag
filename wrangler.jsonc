@@ -6,8 +6,15 @@
     "nodejs_compat"
   ],
   "vars": {
-    "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.workers.dev"
+    "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.workers.dev",
+    "ALLOWED_GUILD_IDS": "457689460096630794"
   },
+  "services": [
+    {
+      "binding": "AUTH_GATEWAY",
+      "service": "auth-gateway"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

@@ -37,7 +37,7 @@ export const protect = <S extends DescService>(
       continue;
     }
     const scope = policy.scope ? policy.scope(method.name) : defaultScope(service, method.name);
-    wrapped[method.localName] = async (request: unknown, context: HandlerContext) => {
+    const authorize = async (context: HandlerContext) => {
       const identity = await policy.authenticate(context.requestHeader, {
         method: context.requestMethod,
         url: context.url,
@@ -52,6 +52,19 @@ export const protect = <S extends DescService>(
         throw new ConnectError(`missing required scope ${scope}`, Code.PermissionDenied);
       }
       context.values.set(identityKey, identity);
+    };
+    if (method.methodKind === "server_streaming") {
+      wrapped[method.localName] = async function* (request: unknown, context: HandlerContext) {
+        await authorize(context);
+        yield* (handler as (request: unknown, context: HandlerContext) => AsyncIterable<unknown>)(
+          request,
+          context,
+        );
+      };
+      continue;
+    }
+    wrapped[method.localName] = async (request: unknown, context: HandlerContext) => {
+      await authorize(context);
       return (handler as (request: unknown, context: HandlerContext) => unknown)(request, context);
     };
   }

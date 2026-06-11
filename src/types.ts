@@ -2,6 +2,7 @@ export type DiscordInteraction = {
   application_id?: string;
   token?: string;
   type: number;
+  guild_id?: string | null;
   data?: {
     name?: string;
     options?: Array<{ name: string; value: string | number | boolean }>;
@@ -22,7 +23,7 @@ export type DiscordInteraction = {
 };
 
 export type AiChannelJob = {
-  kind: "channel";
+  kind: "channel" | "rpc";
   channelId: string;
   messageId?: string;
   botUserId?: string;
@@ -38,6 +39,7 @@ export type AiJob = AiChannelJob;
 export type DiscordMessage = {
   id: string;
   channel_id: string;
+  guild_id?: string | null;
   content?: string;
   author?: {
     id: string;
@@ -62,6 +64,8 @@ export interface Env {
   DISCORD_APPLICATION_ID: string;
   DISCORD_BOT_TOKEN: string;
   AUTH_GATEWAY_URL?: string;
+  AUTH_GATEWAY?: Fetcher;
+  ALLOWED_GUILD_IDS?: string;
   DISCORD_GATEWAY: DurableObjectNamespace;
   DB: D1Database;
   AI: Ai;

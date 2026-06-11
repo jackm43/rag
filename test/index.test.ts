@@ -443,6 +443,54 @@ test("bot mention parser accepts prompts after the bot mention", () => {
   assert.equal(extractBotMentionPrompt("<@bot-user-id>   ", "bot-user-id"), null);
 });
 
+test("interactions reject guilds outside the allowlist", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    ALLOWED_GUILD_IDS: "allowed-guild",
+  });
+  const request = createSignedRequest(
+    {
+      type: 2,
+      guild_id: "other-guild",
+      data: { name: "ragboard" },
+      user: { id: "1", username: "alice" },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+  const body = (await response.json()) as { data: { content: string } };
+
+  assert.equal(response.status, 200);
+  assert.match(body.data.content, /not enabled for this server/i);
+});
+
+test("gateway message create ignores guilds outside the allowlist", async () => {
+  const queuedJobs: unknown[] = [];
+  const env = createEnv("unused", {
+    ALLOWED_GUILD_IDS: "allowed-guild",
+    AI_JOBS: {
+      send: async (job: unknown) => {
+        queuedJobs.push(job);
+      },
+    },
+  });
+
+  await handleGatewayMessageCreate(
+    {
+      id: "message-id",
+      channel_id: "channel-id",
+      guild_id: "other-guild",
+      content: "<@bot-user-id> Explain queues",
+      author: { id: "1", username: "alice" },
+    },
+    env,
+    "bot-user-id",
+  );
+
+  assert.deepEqual(queuedJobs, []);
+});
+
 test("gateway message create enqueues a raw channel AI job", async () => {
   const queuedJobs: unknown[] = [];
   const env = createEnv("unused", {
@@ -641,7 +689,7 @@ test("gateway message create ignores bots and empty mention prompts", async () =
   assert.deepEqual(queuedJobs, []);
 });
 
-test("worker rejects /gateway/start without bot token auth", async () => {
+test("public gateway HTTP routes are disabled", async () => {
   let doFetchCalls = 0;
   const env = createEnv("unused", {
     DISCORD_BOT_TOKEN: "bot-token",
@@ -656,15 +704,7 @@ test("worker rejects /gateway/start without bot token auth", async () => {
     },
   });
 
-  const unauthorized = await worker.fetch(
-    new Request("https://example.com/gateway/start", { method: "POST" }),
-    env,
-    {} as never,
-  );
-  assert.equal(unauthorized.status, 401);
-  assert.equal(doFetchCalls, 0);
-
-  const authorized = await worker.fetch(
+  const start = await worker.fetch(
     new Request("https://example.com/gateway/start", {
       method: "POST",
       headers: { authorization: "Bearer bot-token" },
@@ -672,8 +712,16 @@ test("worker rejects /gateway/start without bot token auth", async () => {
     env,
     {} as never,
   );
-  assert.equal(authorized.status, 200);
-  assert.equal(doFetchCalls, 1);
+  assert.equal(start.status, 404);
+  assert.equal(doFetchCalls, 0);
+
+  const health = await worker.fetch(
+    new Request("https://example.com/gateway/health", { method: "GET" }),
+    env,
+    {} as never,
+  );
+  assert.equal(health.status, 404);
+  assert.equal(doFetchCalls, 0);
 });
 
 test("gateway durable object persists enabled state and schedules an alarm", async () => {
@@ -972,6 +1020,71 @@ const rpcRequest = (path: string, body: unknown, token?: string) =>
     body: JSON.stringify(body),
   });
 
+const envelopConnectJSON = (payload: string) => {
+  const body = new TextEncoder().encode(payload);
+  const frame = new Uint8Array(5 + body.length);
+  frame[0] = 0;
+  new DataView(frame.buffer).setUint32(1, body.length, false);
+  frame.set(body, 5);
+  return frame;
+};
+
+const readConnectStream = async (response: Response) => {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("missing response body");
+  }
+  const chunks: Array<Record<string, unknown>> = [];
+  let buffer = new Uint8Array(0);
+  const append = (value: Uint8Array) => {
+    const next = new Uint8Array(buffer.length + value.length);
+    next.set(buffer);
+    next.set(value, buffer.length);
+    buffer = next;
+  };
+  while (true) {
+    const { done, value } = await reader.read();
+    if (value) {
+      append(value);
+    }
+    while (buffer.length >= 5) {
+      const flags = buffer[0];
+      const length = new DataView(buffer.buffer, buffer.byteOffset + 1, 4).getUint32(0, false);
+      if (buffer.length < 5 + length) {
+        break;
+      }
+      const payload = buffer.slice(5, 5 + length);
+      buffer = buffer.slice(5 + length);
+      if (flags & 0x2) {
+        if (length > 0) {
+          const end = JSON.parse(new TextDecoder().decode(payload)) as { error?: { code?: string } };
+          if (end.error?.code) {
+            throw new Error(end.error.code);
+          }
+        }
+        return chunks;
+      }
+      chunks.push(JSON.parse(new TextDecoder().decode(payload)) as Record<string, unknown>);
+    }
+    if (done) {
+      return chunks;
+    }
+  }
+};
+
+const streamingRpcRequest = (path: string, body: unknown, token?: string) =>
+  new Request(`https://example.com${path}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/connect+json",
+      "connect-protocol-version": "1",
+      "connect-content-encoding": "identity",
+      "connect-accept-encoding": "identity",
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: envelopConnectJSON(JSON.stringify(body)),
+  });
+
 test("admin RPCs reject requests when the auth gateway is not configured", async () => {
   const response = await worker.fetch(
     rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}, await stsIssuer.signToken()),
@@ -1039,6 +1152,129 @@ test("config list RPC returns entries with a valid gateway token", async () => {
     assert.equal(overridden?.value, "xai/grok-4.3");
     assert.equal(overridden?.overridden, true);
     assert.ok(body.entries.find((entry) => entry.key === "ai_temperature"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("chat RPC returns a model response for a mention-style prompt", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = stsIssuer.fetchMock as never;
+  const aiCalls: Array<{ model: unknown; input: Record<string, unknown> }> = [];
+
+  try {
+    const env = createStsEnv({
+      DB: createDbMock({}),
+      AI: {
+        run: async (model: unknown, input: unknown) => {
+          aiCalls.push({ model, input: input as Record<string, unknown> });
+          return { response: "Short answer." };
+        },
+      },
+    });
+    const response = await worker.fetch(
+      rpcRequest(
+        "/ragbot.v1.ChatService/Chat",
+        { prompt: "anyone know how queues work" },
+        await stsIssuer.signToken(),
+      ),
+      env,
+      {} as never,
+    );
+
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as {
+      responseText: string;
+      model: string;
+      aiDurationMs: string;
+      totalDurationMs: string;
+    };
+    assert.equal(body.responseText, "Short answer.");
+    assert.equal(aiCalls.length, 1);
+    const messages = aiCalls[0].input.messages as Array<{ role: string; content: string }>;
+    assert.equal(messages.at(-1)?.content, "jack: anyone know how queues work");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("stream chat RPC streams model deltas and a final chunk", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = stsIssuer.fetchMock as never;
+
+  try {
+    const env = createStsEnv({
+      DB: createDbMock({}),
+      AI: {
+        run: async () =>
+          new ReadableStream({
+            start(controller) {
+              const encoder = new TextEncoder();
+              controller.enqueue(encoder.encode('data: {"response":"Hel"}\n\n'));
+              controller.enqueue(encoder.encode('data: {"response":"lo"}\n\n'));
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+            },
+          }),
+      },
+    });
+    const response = await worker.fetch(
+      streamingRpcRequest(
+        "/ragbot.v1.ChatService/StreamChat",
+        { prompt: "stream this please" },
+        await stsIssuer.signToken(),
+      ),
+      env,
+      {} as never,
+    );
+
+    assert.equal(response.status, 200);
+    const chunks = await readConnectStream(response);
+    assert.deepEqual(
+      chunks.filter((chunk) => !chunk.done).map((chunk) => chunk.delta),
+      ["Hel", "lo"],
+    );
+    assert.equal(chunks.at(-1)?.done, true);
+    assert.equal(chunks.at(-1)?.responseText, "Hello");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("gateway start RPC requires STS auth and forwards to the durable object", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = stsIssuer.fetchMock as never;
+  let doFetchCalls = 0;
+
+  try {
+    const env = createStsEnv({
+      DB: createDbMock({}),
+      DISCORD_GATEWAY: {
+        idFromName: () => "id",
+        get: () => ({
+          fetch: async () => {
+            doFetchCalls += 1;
+            return Response.json({ ok: true });
+          },
+        }),
+      },
+    });
+
+    const unauthorized = await worker.fetch(
+      rpcRequest("/ragbot.v1.GatewayControlService/StartGateway", {}),
+      env,
+      {} as never,
+    );
+    assert.equal(unauthorized.status, 401);
+    assert.equal(doFetchCalls, 0);
+
+    const authorized = await worker.fetch(
+      rpcRequest("/ragbot.v1.GatewayControlService/StartGateway", {}, await stsIssuer.signToken()),
+      env,
+      {} as never,
+    );
+    assert.equal(authorized.status, 200);
+    assert.equal(doFetchCalls, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

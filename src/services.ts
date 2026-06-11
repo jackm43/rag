@@ -3,6 +3,7 @@ import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import { Code, ConnectError, type ConnectRouter } from "@connectrpc/connect";
 
 import {
+  ChatService,
   ConfigService,
   DatabaseService,
   GatewayControlService,
@@ -18,6 +19,8 @@ import {
   type AuthPolicy,
 } from "../infra/sdk/ts/src";
 import { CONFIG_DEFAULTS, deleteSetting, getSettings, isConfigKey, setSetting } from "./config";
+import { postChannelMessage } from "./discord";
+import { recordChannelChatInteraction, runChannelChat, streamChannelChat, type ChannelChatInput } from "./mention";
 import type { Env } from "./types";
 
 const configEntry = async (env: Env, key: keyof typeof CONFIG_DEFAULTS) => {
@@ -49,10 +52,15 @@ const callGatewayControl = async (env: Env, path: string, method: string) => {
 };
 
 export const registerRagbotServices = (router: ConnectRouter, env: Env) => {
+  const issuer = (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, "");
   const policy: AuthPolicy = {
     authenticate: stsAuthenticator({
-      issuer: (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, ""),
+      issuer,
       audience: "ragbot",
+      jwksUrl: `${issuer}/.well-known/jwks.json`,
+      jwksFetch: env.AUTH_GATEWAY
+        ? (input, init) => env.AUTH_GATEWAY!.fetch(input, init)
+        : undefined,
     }),
   };
 
@@ -152,6 +160,172 @@ export const registerRagbotServices = (router: ConnectRouter, env: Env) => {
               createdAt: String(row.created_at ?? ""),
             })),
           };
+        },
+      },
+      policy,
+    ),
+  );
+
+  router.service(
+    ChatService,
+    protect(
+      ChatService,
+      {
+        chat: async (request, context) => {
+          const identity = requireIdentity(context);
+          const prompt = request.prompt.trim();
+          if (!prompt) {
+            throw new ConnectError("prompt is required", Code.InvalidArgument);
+          }
+
+          const requesterUsername =
+            request.requesterUsername.trim() ||
+            identity.email?.split("@")[0] ||
+            "operator";
+
+          logger.info("chat_requested", {
+            actor: identity.email ?? identity.subject,
+            channelId: request.channelId || undefined,
+            postToChannel: request.postToChannel,
+          });
+
+          const chatInput: ChannelChatInput = {
+            kind: request.postToChannel ? "channel" : "rpc",
+            channelId: request.channelId,
+            messageId: request.messageId,
+            requesterUserId: identity.subject,
+            requesterUsername,
+            prompt,
+            replyContext: request.replyContext,
+          };
+
+          try {
+            const result = await runChannelChat(env, chatInput);
+
+            if (request.postToChannel) {
+              if (!request.channelId) {
+                throw new ConnectError("channel_id is required when post_to_channel is true", Code.InvalidArgument);
+              }
+              const response = await postChannelMessage(env, request.channelId, result.responseText);
+              if (!response.ok) {
+                await recordChannelChatInteraction(
+                  env,
+                  chatInput,
+                  result,
+                  `discord_${response.status}`,
+                  await response.text().catch(() => null),
+                );
+                throw new ConnectError(
+                  `discord post failed with status ${response.status}`,
+                  Code.Unavailable,
+                );
+              }
+            }
+
+            await recordChannelChatInteraction(env, chatInput, result, "ok", null);
+
+            return {
+              responseText: result.responseText,
+              model: result.model,
+              aiDurationMs: BigInt(result.aiDurationMs),
+              totalDurationMs: BigInt(result.totalDurationMs),
+            };
+          } catch (error) {
+            if (error instanceof ConnectError) {
+              throw error;
+            }
+            throw new ConnectError(errorMessage(error), Code.Internal);
+          }
+        },
+        streamChat: async function* (request, context) {
+          const identity = requireIdentity(context);
+          const prompt = request.prompt.trim();
+          if (!prompt) {
+            throw new ConnectError("prompt is required", Code.InvalidArgument);
+          }
+
+          const requesterUsername =
+            request.requesterUsername.trim() ||
+            identity.email?.split("@")[0] ||
+            "operator";
+
+          logger.info("stream_chat_requested", {
+            actor: identity.email ?? identity.subject,
+            channelId: request.channelId || undefined,
+            postToChannel: request.postToChannel,
+          });
+
+          const chatInput: ChannelChatInput = {
+            kind: request.postToChannel ? "channel" : "rpc",
+            channelId: request.channelId,
+            messageId: request.messageId,
+            requesterUserId: identity.subject,
+            requesterUsername,
+            prompt,
+            replyContext: request.replyContext,
+          };
+
+          try {
+            let finalChunk: {
+              responseText: string;
+              model: string;
+              aiDurationMs: number;
+              totalDurationMs: number;
+            } | null = null;
+
+            for await (const chunk of streamChannelChat(env, chatInput)) {
+              if (chunk.done) {
+                finalChunk = {
+                  responseText: chunk.responseText ?? "",
+                  model: chunk.model ?? "",
+                  aiDurationMs: chunk.aiDurationMs ?? 0,
+                  totalDurationMs: chunk.totalDurationMs ?? 0,
+                };
+                break;
+              }
+              yield { delta: chunk.delta, done: false };
+            }
+
+            if (!finalChunk) {
+              throw new ConnectError("stream ended without a final chunk", Code.Internal);
+            }
+
+            if (request.postToChannel) {
+              if (!request.channelId) {
+                throw new ConnectError("channel_id is required when post_to_channel is true", Code.InvalidArgument);
+              }
+              const response = await postChannelMessage(env, request.channelId, finalChunk.responseText);
+              if (!response.ok) {
+                await recordChannelChatInteraction(
+                  env,
+                  chatInput,
+                  finalChunk,
+                  `discord_${response.status}`,
+                  await response.text().catch(() => null),
+                );
+                throw new ConnectError(
+                  `discord post failed with status ${response.status}`,
+                  Code.Unavailable,
+                );
+              }
+            }
+
+            await recordChannelChatInteraction(env, chatInput, finalChunk, "ok", null);
+
+            yield {
+              delta: "",
+              done: true,
+              responseText: finalChunk.responseText,
+              model: finalChunk.model,
+              aiDurationMs: BigInt(finalChunk.aiDurationMs),
+              totalDurationMs: BigInt(finalChunk.totalDurationMs),
+            };
+          } catch (error) {
+            if (error instanceof ConnectError) {
+              throw error;
+            }
+            throw new ConnectError(errorMessage(error), Code.Internal);
+          }
         },
       },
       policy,

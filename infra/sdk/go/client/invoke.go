@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -86,4 +87,25 @@ func (c *Client) Invoke(ctx context.Context, target, body string) (any, error) {
 		return nil, &ClientError{Target: target, Status: response.StatusCode, Body: decoded}
 	}
 	return decoded, nil
+}
+
+func (c *Client) StreamInvoke(
+	ctx context.Context,
+	target, body string,
+	onMessage func(any) error,
+) error {
+	parsed, err := ParseTarget(target)
+	if err != nil {
+		return err
+	}
+	if !parsed.Complete() {
+		return fmt.Errorf("target must be <app>.<Service>.<Method>")
+	}
+	return c.StreamCall(ctx, parsed.Application, parsed.Service, parsed.Method, body, func(payload []byte) error {
+		decoded := any(nil)
+		if len(payload) > 0 && json.Unmarshal(payload, &decoded) != nil {
+			decoded = strings.TrimSpace(string(payload))
+		}
+		return onMessage(decoded)
+	})
 }

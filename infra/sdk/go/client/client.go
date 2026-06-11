@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -133,6 +134,48 @@ func (c *Client) Call(ctx context.Context, application, service, method, body st
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	return &Response{StatusCode: response.StatusCode, Body: payload}, nil
+}
+
+func (c *Client) StreamCall(
+	ctx context.Context,
+	application, service, method, body string,
+	onMessage func([]byte) error,
+) error {
+	app, err := c.Session.Application(ctx, application)
+	if err != nil {
+		return err
+	}
+	path, err := app.MethodPath(service, method)
+	if err != nil {
+		return err
+	}
+	if body == "" {
+		body = "{}"
+	}
+	requestBody := envelopConnectJSON([]byte(body))
+
+	header := http.Header{}
+	header.Set("Content-Type", "application/connect+json")
+	header.Set("Connect-Protocol-Version", "1")
+	header.Set("Connect-Content-Encoding", "identity")
+	header.Set("Connect-Accept-Encoding", "identity")
+	response, err := c.Fetch(ctx, application, http.MethodPost, path, bytes.NewReader(requestBody), header)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		payload, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
+		if readErr != nil {
+			return fmt.Errorf("stream request failed with status %d", response.StatusCode)
+		}
+		return &ClientError{
+			Target: fmt.Sprintf("%s.%s.%s", application, service, method),
+			Status: response.StatusCode,
+			Body:   (&Response{StatusCode: response.StatusCode, Body: payload}).Decoded(),
+		}
+	}
+	return readConnectStream(response.Body, onMessage)
 }
 
 func (c *Client) httpClient() *http.Client {

@@ -1,8 +1,9 @@
 import { createRpcHandler, type RpcHandler } from "../infra/sdk/ts/src";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
-import { DiscordGateway, forwardToGateway } from "./gateway";
-import { jsonResponse, secretsMatch, verifyDiscordRequest } from "./http";
+import { DiscordGateway } from "./gateway";
+import { rejectDisallowedGuild } from "./guild";
+import { jsonResponse, verifyDiscordRequest } from "./http";
 import { errorMessage, logger } from "./logger";
 import { extractBotMentionPrompt, handleGatewayMessageCreate, processAiQueueMessage } from "./mention";
 import { registerRagbotServices } from "./services";
@@ -16,31 +17,18 @@ import {
 
 export { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
 
-let cachedRpc: { env: Env; rpc: RpcHandler } | null = null;
+let cachedRpc: { env: Env; gatewayUrl: string; rpc: RpcHandler } | null = null;
 
 const rpcHandler = (env: Env): RpcHandler => {
-  if (cachedRpc?.env !== env) {
-    cachedRpc = { env, rpc: createRpcHandler((router) => registerRagbotServices(router, env)) };
+  const gatewayUrl = (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, "");
+  if (cachedRpc?.env !== env || cachedRpc.gatewayUrl !== gatewayUrl) {
+    cachedRpc = {
+      env,
+      gatewayUrl,
+      rpc: createRpcHandler((router) => registerRagbotServices(router, env)),
+    };
   }
   return cachedRpc.rpc;
-};
-
-const handleGatewayControlRequest = async (request: Request, env: Env): Promise<Response> => {
-  const url = new URL(request.url);
-
-  if (url.pathname === "/gateway/health" && request.method === "GET") {
-    return forwardToGateway(request, env, "/gateway/health");
-  }
-
-  if (url.pathname === "/gateway/start" && request.method === "POST") {
-    const authorization = request.headers.get("authorization") ?? "";
-    if (!(await secretsMatch(authorization, `Bearer ${env.DISCORD_BOT_TOKEN}`))) {
-      return new Response("Unauthorized", { status: 401 });
-    }
-    return forwardToGateway(request, env, "/gateway/start");
-  }
-
-  return new Response("Not found", { status: 404 });
 };
 
 const handleInteractionRequest = async (
@@ -61,6 +49,13 @@ const handleInteractionRequest = async (
     return jsonResponse({
       type: CHANNEL_MESSAGE_WITH_SOURCE,
       data: { content: "Unsupported interaction." },
+    });
+  }
+
+  if (rejectDisallowedGuild(env, interaction.guild_id)) {
+    return jsonResponse({
+      type: CHANNEL_MESSAGE_WITH_SOURCE,
+      data: { content: "This bot is not enabled for this server." },
     });
   }
 
@@ -100,7 +95,7 @@ export default {
     }
 
     if (url.pathname.startsWith("/gateway/")) {
-      return handleGatewayControlRequest(request, env);
+      return new Response("Not found", { status: 404 });
     }
 
     if (request.method === "GET") {
