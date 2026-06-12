@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 
 	cmdapp "jsmunro.me/platy/cli/cmd/app"
-	cmdbootstrap "jsmunro.me/platy/cli/cmd/bootstrap"
 	cmddeploy "jsmunro.me/platy/cli/cmd/deploy"
 	cmddev "jsmunro.me/platy/cli/cmd/dev"
 	cmdmanage "jsmunro.me/platy/cli/cmd/manage"
@@ -19,12 +18,11 @@ func main() {
 	slog.SetDefault(output.Logger)
 	root := &cobra.Command{
 		Use:           "platy",
-		Short:         "Platform management CLI for the application registry, deploys, and bootstrap",
+		Short:         "Platform management CLI for the application registry and deploys",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
 	root.AddCommand(
-		cmdbootstrap.Command(),
 		cmdmanage.Command(),
 		cmdapp.Command(),
 		cmddeploy.Command(),

@@ -99,7 +99,7 @@ func RotateProviderOAuth(ctx context.Context, name string) {
 	if existing == nil || existing.ClientID == "" {
 		output.Fail("no provider oauth client for %s; run: platy app register %s", name, name)
 	}
-	config := loadProviderConfig(root)
+	config := provider.LoadConfig(root)
 	apiToken := secrets.ResolveCloudflareAPIToken(ctx, "", config.Organization.Organization.Secrets["cloudflare_api_token"])
 	proxy, err := provider.Resolve(ctx, provider.Cloudflare, apiToken)
 	if err != nil {

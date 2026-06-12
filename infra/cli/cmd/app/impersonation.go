@@ -1,42 +1,17 @@
 package app
 
 import (
-	"context"
-
-	"jsmunro.me/platy/cli/internal/cfauth"
-	"jsmunro.me/platy/cli/internal/manifest"
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/provider"
 )
 
-func provisionImpersonationAccessClientID(
-	ctx context.Context,
-	name string,
-	app *manifest.Application,
-	config provider.ProviderConfig,
-) string {
-	proxy := cfauth.ProxyForAccess(ctx)
-	access := manifestAccess(app, config)
-	postureRequired := access.GetPostureRequired()
-	spec, err := proxy.ImpersonationAccessSpec(
-		ctx,
-		config.Boundary,
-		provider.ApplicationAccess{
-			AllowedGroups:   access.GetAllowedGroups(),
-			AllowedIdPs:     access.GetAllowedIdps(),
-			PostureRequired: &postureRequired,
-		},
-		config.Groups,
-		config.IdentityProviders,
-		config.EmailAllowlist,
-		config.Posture,
-	)
-	if err != nil {
-		output.Fail("impersonation access spec: %v", err)
+func impersonationAccessClientID(name string, config provider.ProviderConfig) string {
+	clientID := config.ImpersonationClients[name]
+	if clientID == "" {
+		output.Fail(
+			"no impersonation access client for %s in %s; the impersonation Access application is managed by infra/terraform - run terraform -chdir=infra/terraform apply",
+			name, provider.ConfigRelativePath,
+		)
 	}
-	created, err := proxy.EnsureImpersonationAccessApplication(ctx, config.Boundary, name, spec)
-	if err != nil {
-		output.Fail("impersonation access app: %v", err)
-	}
-	return created.ClientID
+	return clientID
 }
