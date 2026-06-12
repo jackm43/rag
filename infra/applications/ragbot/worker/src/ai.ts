@@ -24,14 +24,33 @@ const extractText = (result: unknown): string => {
   return chat?.choices?.[0]?.message?.content ?? "";
 };
 
-// Strips Discord mention syntax and raw snowflake IDs so the model output can
-// never ping anyone, while preserving line breaks for readability.
+const looksLikeSpeakerLine = (line: string) => {
+  const colon = line.indexOf(":");
+  if (colon <= 0 || colon > 32) {
+    return false;
+  }
+  return line.slice(colon + 1).trimStart().length > 0;
+};
+
+const stripLeadingSpeakerLines = (value: string) => {
+  const lines = value.split("\n");
+  let start = 0;
+  while (start < lines.length) {
+    const trimmed = lines[start].trim();
+    if (!trimmed || looksLikeSpeakerLine(trimmed)) {
+      start += 1;
+      continue;
+    }
+    break;
+  }
+  return lines.slice(start).join("\n");
+};
+
 export const sanitizeAiText = (value: string) =>
-  value
-    .replace(/<@[!&]?\d+>/g, "")
-    .replace(/\b\d{17,20}\b/g, "")
-    .replace(/@(everyone|here)/g, "$1")
-    .replace(/[ \t]+/g, " ")
+  stripLeadingSpeakerLines(value)
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 

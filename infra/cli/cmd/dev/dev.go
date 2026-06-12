@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 
 	"github.com/spf13/cobra"
 
@@ -247,9 +248,27 @@ func registerCommands(ctx context.Context) error {
 		"DISCORD_APPLICATION_ID="+applicationID,
 		"DISCORD_BOT_TOKEN="+botToken,
 	)
+	if guildIDs := wranglerVar(app.Config, "ALLOWED_GUILD_IDS"); guildIDs != "" {
+		cmd.Env = append(cmd.Env, "ALLOWED_GUILD_IDS="+guildIDs)
+	}
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("register commands: %w", err)
 	}
 	output.Logger.Info("registered discord slash commands")
 	return nil
+}
+
+func wranglerVar(configPath, key string) string {
+	if configPath == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(root(), filepath.FromSlash(configPath)))
+	if err != nil {
+		return ""
+	}
+	match := regexp.MustCompile(`"` + regexp.QuoteMeta(key) + `"\s*:\s*"([^"]*)"`).FindSubmatch(data)
+	if match == nil {
+		return ""
+	}
+	return string(match[1])
 }

@@ -46,6 +46,11 @@ export type DiscordMessage = {
     username: string;
     bot?: boolean;
   };
+  mentions?: Array<{
+    id: string;
+    username?: string;
+  }>;
+  mention_roles?: string[];
   attachments?: Array<{
     id: string;
     filename: string;

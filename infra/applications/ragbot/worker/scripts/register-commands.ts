@@ -30,18 +30,39 @@ const commands = [
   },
 ];
 
-const response = await fetch(`https://discord.com/api/v10/applications/${applicationId}/commands`, {
-  method: "PUT",
-  headers: {
-    Authorization: `Bot ${botToken}`,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify(commands),
-});
+const headers = {
+  Authorization: `Bot ${botToken}`,
+  "Content-Type": "application/json",
+};
 
-if (!response.ok) {
-  const text = await response.text();
-  throw new Error(`Command registration failed: ${response.status} ${text}`);
+const registerCommands = async (url: string, label: string) => {
+  const response = await fetch(url, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify(commands),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`${label} command registration failed: ${response.status} ${text}`);
+  }
+  const registered = (await response.json()) as Array<{ name: string }>;
+  console.info(`${label}: ${registered.map((command) => `/${command.name}`).join(", ") || "(none)"}`);
+};
+
+const parseGuildIds = () =>
+  (process.env.ALLOWED_GUILD_IDS ?? "")
+    .split(/[,;\s]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+await registerCommands(
+  `https://discord.com/api/v10/applications/${applicationId}/commands`,
+  "global",
+);
+
+for (const guildId of parseGuildIds()) {
+  await registerCommands(
+    `https://discord.com/api/v10/applications/${applicationId}/guilds/${guildId}/commands`,
+    `guild ${guildId}`,
+  );
 }
-
-await response.json();

@@ -6,8 +6,11 @@ import nacl from "tweetnacl";
 import worker, {
   DiscordGateway,
   extractBotMentionPrompt,
+  extractReplyToBotPrompt,
   handleGatewayMessageCreate,
+  resolveChannelPrompt,
 } from "../src/index.ts";
+import { sanitizeAiText } from "../src/ai.ts";
 
 const encoder = new TextEncoder();
 
@@ -438,9 +441,267 @@ test("/rag uses the model's line over a canned fallback even when it repeats", a
 test("bot mention parser accepts prompts after the bot mention", () => {
   assert.equal(extractBotMentionPrompt("<@bot-user-id> Explain queues", "bot-user-id"), "Explain queues");
   assert.equal(extractBotMentionPrompt("<@!bot-user-id>    Explain queues", "bot-user-id"), "Explain queues");
+  assert.equal(extractBotMentionPrompt("hey <@bot-user-id> what's up", "bot-user-id"), "hey what's up");
+  assert.equal(extractBotMentionPrompt("what do you think <@bot-user-id>", "bot-user-id"), "what do you think");
   assert.equal(extractBotMentionPrompt("<@application-id> Explain queues", "bot-user-id"), null);
   assert.equal(extractBotMentionPrompt("!ai Explain queues", "bot-user-id"), null);
   assert.equal(extractBotMentionPrompt("<@bot-user-id>   ", "bot-user-id"), null);
+  assert.equal(extractBotMentionPrompt("hey <@bot-user-id>", "bot-user-id"), "hey");
+});
+
+test("bot mention parser accepts leading mentions from Discord metadata alone", () => {
+  assert.equal(
+    resolveChannelPrompt(
+      { content: "hey", mentions: [{ id: "bot-user-id" }] },
+      "bot-user-id",
+    ),
+    "hey",
+  );
+  assert.equal(
+    resolveChannelPrompt(
+      { content: "<@other-id> hey", mentions: [{ id: "bot-user-id" }] },
+      "bot-user-id",
+    ),
+    "hey",
+  );
+});
+
+test("reply-to-bot parser accepts prompts without a leading mention", () => {
+  assert.equal(extractReplyToBotPrompt("keep going", "bot-user-id", "bot-user-id"), "keep going");
+  assert.equal(extractReplyToBotPrompt("<@bot-user-id> keep going", "bot-user-id", "bot-user-id"), "keep going");
+  assert.equal(extractReplyToBotPrompt("keep going", "other-user-id", "bot-user-id"), null);
+  assert.equal(extractReplyToBotPrompt("   ", "bot-user-id", "bot-user-id"), null);
+});
+
+test("channel prompt resolver prefers a leading mention over a reply", () => {
+  assert.equal(
+    resolveChannelPrompt({ content: "<@bot-user-id> hi" }, "bot-user-id", "bot-user-id"),
+    "hi",
+  );
+  assert.equal(
+    resolveChannelPrompt({ content: "just a reply" }, "bot-user-id", "bot-user-id"),
+    "just a reply",
+  );
+  assert.equal(
+    resolveChannelPrompt({ content: "just a reply" }, "bot-user-id", "other-user-id"),
+    null,
+  );
+});
+
+test("channel prompt resolver accepts application id mentions", () => {
+  assert.equal(
+    resolveChannelPrompt({ content: "<@app-id> hey" }, "bot-user-id", undefined, "app-id"),
+    "hey",
+  );
+});
+
+test("channel prompt resolver accepts numeric mention ids from Discord metadata", () => {
+  const id = "1234567890123456";
+  assert.equal(
+    resolveChannelPrompt(
+      { content: "hey", mentions: [{ id: Number(id) as unknown as string }] },
+      id,
+    ),
+    "hey",
+  );
+});
+
+test("channel prompt resolver accepts mentions of a role the bot holds", () => {
+  assert.equal(
+    resolveChannelPrompt(
+      { content: "<@&bot-role-id> how u doin", mention_roles: ["bot-role-id"] },
+      "bot-user-id",
+      undefined,
+      undefined,
+      ["bot-role-id"],
+    ),
+    "how u doin",
+  );
+  assert.equal(
+    resolveChannelPrompt(
+      { content: "<@&bot-role-id> how u doin", mention_roles: ["bot-role-id"] },
+      "bot-user-id",
+      undefined,
+      undefined,
+      ["other-role-id"],
+    ),
+    null,
+  );
+  assert.equal(
+    resolveChannelPrompt({ content: "<@&bot-role-id> how u doin" }, "bot-user-id", undefined, undefined, [
+      "bot-role-id",
+    ]),
+    "how u doin",
+  );
+});
+
+test("gateway message create enqueues jobs for a leading mention", async () => {
+  const queuedJobs: unknown[] = [];
+  const env = createEnv("unused", {
+    AI_JOBS: {
+      send: async (job: unknown) => {
+        queuedJobs.push(job);
+      },
+    },
+  });
+
+  await handleGatewayMessageCreate(
+    {
+      id: "message-id",
+      channel_id: "channel-id",
+      content: "<@bot-user-id> hey",
+      mentions: [{ id: "bot-user-id" }],
+      author: { id: "1", username: "alice" },
+    },
+    env,
+    "bot-user-id",
+  );
+
+  assert.deepEqual(queuedJobs, [
+    {
+      kind: "channel",
+      channelId: "channel-id",
+      messageId: "message-id",
+      botUserId: "bot-user-id",
+      requesterUserId: "1",
+      requesterUsername: "alice",
+      prompt: "hey",
+      replyMessageId: undefined,
+      replyContext: undefined,
+    },
+  ]);
+});
+
+test("gateway message create enqueues jobs when the bot is mentioned mid-message", async () => {
+  const queuedJobs: unknown[] = [];
+  const env = createEnv("unused", {
+    AI_JOBS: {
+      send: async (job: unknown) => {
+        queuedJobs.push(job);
+      },
+    },
+  });
+
+  await handleGatewayMessageCreate(
+    {
+      id: "message-id",
+      channel_id: "channel-id",
+      content: "hey <@bot-user-id> what's up",
+      mentions: [{ id: "bot-user-id" }],
+      author: { id: "1", username: "alice" },
+    },
+    env,
+    "bot-user-id",
+  );
+
+  assert.deepEqual(queuedJobs, [
+    {
+      kind: "channel",
+      channelId: "channel-id",
+      messageId: "message-id",
+      botUserId: "bot-user-id",
+      requesterUserId: "1",
+      requesterUsername: "alice",
+      prompt: "hey what's up",
+      replyMessageId: undefined,
+      replyContext: undefined,
+    },
+  ]);
+});
+
+test("gateway message create enqueues jobs when the bot's role is mentioned", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: string[] = [];
+  const queuedJobs: unknown[] = [];
+  globalThis.fetch = async (url) => {
+    fetchCalls.push(String(url));
+    return Response.json({ roles: ["bot-role-id"] });
+  };
+
+  try {
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      AI_JOBS: {
+        send: async (job: unknown) => {
+          queuedJobs.push(job);
+        },
+      },
+    });
+
+    await handleGatewayMessageCreate(
+      {
+        id: "message-id",
+        channel_id: "channel-id",
+        guild_id: "role-mention-guild",
+        content: "<@&bot-role-id> how u doin",
+        mention_roles: ["bot-role-id"],
+        author: { id: "1", username: "alice" },
+      },
+      env,
+      "bot-user-id",
+    );
+
+    assert.deepEqual(fetchCalls, [
+      "https://discord.com/api/v10/guilds/role-mention-guild/members/bot-user-id",
+    ]);
+    assert.deepEqual(queuedJobs, [
+      {
+        kind: "channel",
+        channelId: "channel-id",
+        messageId: "message-id",
+        botUserId: "bot-user-id",
+        requesterUserId: "1",
+        requesterUsername: "alice",
+        prompt: "how u doin",
+        replyMessageId: undefined,
+        replyContext: undefined,
+      },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("gateway message create enqueues reply-to-bot jobs without a mention", async () => {
+  const queuedJobs: unknown[] = [];
+  const env = createEnv("unused", {
+    AI_JOBS: {
+      send: async (job: unknown) => {
+        queuedJobs.push(job);
+      },
+    },
+  });
+
+  await handleGatewayMessageCreate(
+    {
+      id: "message-id",
+      channel_id: "channel-id",
+      content: "keep the banter going",
+      author: { id: "1", username: "._jak" },
+      referenced_message: {
+        id: "bot-message-id",
+        channel_id: "channel-id",
+        content: "previous bot reply",
+        author: { id: "bot-user-id", username: "ragbot" },
+      },
+    },
+    env,
+    "bot-user-id",
+  );
+
+  assert.deepEqual(queuedJobs, [
+    {
+      kind: "channel",
+      channelId: "channel-id",
+      messageId: "message-id",
+      botUserId: "bot-user-id",
+      requesterUserId: "1",
+      requesterUsername: "._jak",
+      prompt: "keep the banter going",
+      replyMessageId: "bot-message-id",
+      replyContext: "Replied-to message from ragbot:\nprevious bot reply",
+    },
+  ]);
 });
 
 test("interactions reject guilds outside the allowlist", async () => {
@@ -848,10 +1109,10 @@ test("queue handler builds a conversation from channel history and posts the rep
     const input = aiInputs[0] as { messages: Array<{ role: string; content: string }> };
     assert.equal(input.messages[0].role, "system");
     assert.deepEqual(input.messages.slice(1), [
-      { role: "user", content: "bob: hello" },
+      { role: "user", content: "[bob] hello" },
       { role: "assistant", content: "Queues deliver messages asynchronously." },
-      { role: "user", content: "alice: anyone know how queues work" },
-      { role: "user", content: "alice: and what about retries" },
+      { role: "user", content: "[alice] anyone know how queues work" },
+      { role: "user", content: "[alice] and what about retries" },
     ]);
 
     const postCall = fetchCalls.find(
@@ -860,9 +1121,6 @@ test("queue handler builds a conversation from channel history and posts the rep
     assert.ok(postCall);
     assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
       content: "Short answer.",
-      allowed_mentions: {
-        parse: [],
-      },
     });
     assert.deepEqual(ackedMessages, [message.body]);
   } finally {
@@ -870,7 +1128,77 @@ test("queue handler builds a conversation from channel history and posts the rep
   }
 });
 
-test("queue handler sanitizes mentions and IDs from the model output", async () => {
+test("queue handler omits /rag announcement lines from channel history", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("/messages?")) {
+      return Response.json([
+        {
+          id: "m2",
+          channel_id: "channel-id",
+          content: "target has just ragged. Total: 3\nYour mom is a hamplanet.",
+          author: { id: "bot-user-id", username: "ragbot", bot: true },
+        },
+        {
+          id: "m1",
+          channel_id: "channel-id",
+          content: "gm everyone",
+          author: { id: "1", username: "alice" },
+        },
+      ]);
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  const aiInputs: unknown[] = [];
+
+  try {
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      DB: createDbMock({}),
+      AI: {
+        run: async (_model: unknown, input: unknown) => {
+          aiInputs.push(input);
+          return { response: "Hey." };
+        },
+      },
+    });
+    const message = {
+      body: {
+        kind: "channel",
+        channelId: "channel-id",
+        messageId: "trigger-id",
+        botUserId: "bot-user-id",
+        requesterUserId: "1",
+        requesterUsername: "alice",
+        prompt: "hey",
+      },
+      ack: () => undefined,
+      retry: () => {
+        throw new Error("message should not be retried");
+      },
+    };
+
+    await worker.queue({ messages: [message] } as never, env);
+
+    assert.equal(aiInputs.length, 1);
+    const input = aiInputs[0] as { messages: Array<{ role: string; content: string }> };
+    assert.deepEqual(input.messages.slice(1), [
+      { role: "user", content: "[alice] gm everyone" },
+      {
+        role: "user",
+        content:
+          "[alice] hey\n\n(They only greeted you — reply warmly and briefly, no insults or roasts.)",
+      },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("queue handler posts model output without stripping mentions", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   globalThis.fetch = async (url, init) => {
@@ -903,14 +1231,20 @@ test("queue handler sanitizes mentions and IDs from the model output", async () 
     assert.equal(fetchCalls.length, 1);
     assert.equal(fetchCalls[0].url, "https://discord.com/api/v10/channels/channel-id/messages");
     assert.deepEqual(JSON.parse(String(fetchCalls[0].init?.body)), {
-      content: "Hello there",
-      allowed_mentions: {
-        parse: [],
-      },
+      content: "Hello <@123456789012345678> there 123456789012345678",
     });
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("sanitizeAiText strips leading fake speaker-colon lines from model output", () => {
+  const raw =
+    "_.jak: hey guy\n\n.jak. : hey buddy\n .jak: :)\n._jak : howdy\n\nHey, your grammar is more broken than your audio quality.";
+  assert.equal(
+    sanitizeAiText(raw),
+    "Hey, your grammar is more broken than your audio quality.",
+  );
 });
 
 test("queue handler uses a configured partner model and parses the OpenAI response shape", async () => {
@@ -955,14 +1289,11 @@ test("queue handler uses a configured partner model and parses the OpenAI respon
 
     assert.equal(aiCalls.length, 1);
     assert.equal(aiCalls[0].model, "xai/grok-4.3");
-    assert.equal(aiCalls[0].input.max_completion_tokens, 256);
+    assert.equal(aiCalls[0].input.max_completion_tokens, 96);
     assert.equal(aiCalls[0].input.max_tokens, undefined);
 
     assert.deepEqual(JSON.parse(String(fetchCalls[0].init?.body)), {
       content: "grok response",
-      allowed_mentions: {
-        parse: [],
-      },
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -1192,7 +1523,7 @@ test("chat RPC returns a model response for a mention-style prompt", async () =>
     assert.equal(body.responseText, "Short answer.");
     assert.equal(aiCalls.length, 1);
     const messages = aiCalls[0].input.messages as Array<{ role: string; content: string }>;
-    assert.equal(messages.at(-1)?.content, "jack: anyone know how queues work");
+    assert.equal(messages.at(-1)?.content, "[jack] anyone know how queues work");
   } finally {
     globalThis.fetch = originalFetch;
   }

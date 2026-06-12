@@ -1,6 +1,6 @@
 import { runChatModel, sanitizeAiText, streamChatModel, type ChatMessage } from "./ai";
 import { loadConfig, type BotConfig } from "./config";
-import { fetchChannelMessages, fetchMessage, postChannelMessage } from "./discord";
+import { fetchBotRoleIds, fetchChannelMessages, fetchMessage, postChannelMessage } from "./discord";
 import { rejectDisallowedGuild } from "./guild";
 import { errorMessage, logger } from "../../../../sdk/ts/src";
 import type { AiChannelJob, AiJob, DiscordMessage, Env } from "./types";
@@ -8,23 +8,70 @@ import type { AiChannelJob, AiJob, DiscordMessage, Env } from "./types";
 const MAX_DISCORD_MESSAGE_LENGTH = 1900;
 const MAX_HISTORY_ENTRY_LENGTH = 600;
 
-const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export type ChannelPromptMessage = Pick<DiscordMessage, "content" | "mentions" | "mention_roles">;
 
-export const extractBotMentionPrompt = (content: string, botUserId: string) => {
-  const mentionUserId = botUserId.trim();
-  if (!mentionUserId) {
+const mentionTokens = (content: string) => [...content.matchAll(/<@([!&]?)([^>\s]+)>/g)];
+
+const stripMentionTokens = (content: string) =>
+  content
+    .replace(/<@[!&]?[^>\s]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const messageMentionsBot = (
+  message: ChannelPromptMessage,
+  botUserId: string,
+  applicationId?: string,
+  botRoleIds?: readonly string[],
+) => {
+  const content = message.content ?? "";
+  const userIds = new Set((message.mentions ?? []).map((mention) => String(mention.id)));
+  const roleIds = new Set((message.mention_roles ?? []).map(String));
+  for (const [, marker, id] of mentionTokens(content)) {
+    (marker === "&" ? roleIds : userIds).add(id);
+  }
+  if (userIds.has(botUserId) || (applicationId !== undefined && userIds.has(applicationId))) {
+    return true;
+  }
+  return (botRoleIds ?? []).some((id) => roleIds.has(id));
+};
+
+export const extractBotMentionPrompt = (
+  content: string,
+  botUserId: string,
+  applicationId?: string,
+) => {
+  if (!messageMentionsBot({ content }, botUserId, applicationId)) {
     return null;
   }
-
-  const trimmed = content.trim();
-  const mentionPattern = new RegExp(`^<@!?${escapeRegExp(mentionUserId)}>(?:\\s+|$)`);
-  const match = trimmed.match(mentionPattern);
-  if (!match) {
-    return null;
-  }
-
-  const prompt = trimmed.slice(match[0].length).trim();
+  const prompt = stripMentionTokens(content);
   return prompt.length > 0 ? prompt : null;
+};
+
+export const extractReplyToBotPrompt = (
+  content: string,
+  referencedAuthorId: string | undefined,
+  botUserId: string,
+) => {
+  if (!referencedAuthorId || referencedAuthorId !== botUserId) {
+    return null;
+  }
+  const prompt = stripMentionTokens(content);
+  return prompt.length > 0 ? prompt : null;
+};
+
+export const resolveChannelPrompt = (
+  message: ChannelPromptMessage,
+  botUserId: string,
+  referencedAuthorId?: string,
+  applicationId?: string,
+  botRoleIds?: readonly string[],
+) => {
+  if (messageMentionsBot(message, botUserId, applicationId, botRoleIds)) {
+    const prompt = stripMentionTokens(message.content ?? "");
+    return prompt.length > 0 ? prompt : null;
+  }
+  return extractReplyToBotPrompt(message.content ?? "", referencedAuthorId, botUserId);
 };
 
 const formatReplyContext = (message: DiscordMessage) => {
@@ -62,20 +109,44 @@ export const handleGatewayMessageCreate = async (
     return;
   }
 
-  const prompt = extractBotMentionPrompt(message.content ?? "", botUserId);
+  let referencedMessage = message.referenced_message ?? null;
+  let replyMessageId = message.message_reference?.message_id;
+  if (!referencedMessage && replyMessageId) {
+    const channelId = message.message_reference?.channel_id ?? message.channel_id;
+    referencedMessage = await fetchMessage(env, channelId, replyMessageId).catch(() => null);
+  }
+
+  let botRoleIds: string[] = [];
+  if (message.mention_roles?.length && message.guild_id) {
+    botRoleIds = await fetchBotRoleIds(env, message.guild_id, botUserId);
+  }
+
+  const prompt = resolveChannelPrompt(
+    message,
+    botUserId,
+    referencedMessage?.author?.id,
+    env.DISCORD_APPLICATION_ID,
+    botRoleIds,
+  );
   if (!prompt) {
+    logger.info("channel_prompt_ignored", {
+      channelId: message.channel_id,
+      messageId: message.id,
+      requesterUserId: message.author?.id,
+      requesterUsername: message.author?.username,
+      contentLength: message.content?.length ?? 0,
+      contentPrefix: message.content?.slice(0, 80),
+      mentionIds: message.mentions?.map((mention) => String(mention.id)),
+      mentionRoleIds: message.mention_roles,
+      botUserId,
+    });
     return;
   }
 
   let replyContext: string | undefined;
-  let replyMessageId = message.message_reference?.message_id;
-  if (message.referenced_message) {
-    replyContext = formatReplyContext(message.referenced_message) ?? undefined;
-    replyMessageId = message.referenced_message.id;
-  } else if (replyMessageId) {
-    const channelId = message.message_reference?.channel_id ?? message.channel_id;
-    const referenced = await fetchMessage(env, channelId, replyMessageId).catch(() => null);
-    replyContext = referenced ? formatReplyContext(referenced) ?? undefined : undefined;
+  if (referencedMessage) {
+    replyContext = formatReplyContext(referencedMessage) ?? undefined;
+    replyMessageId = referencedMessage.id;
   }
 
   await env.AI_JOBS.send({
@@ -89,14 +160,22 @@ export const handleGatewayMessageCreate = async (
     replyMessageId,
     replyContext,
   });
+  logger.info("ai_job_enqueued", {
+    channelId: message.channel_id,
+    messageId: message.id,
+    requesterUsername: message.author?.username,
+  });
 };
 
 const cleanHistoryContent = (content: string) =>
-  content
-    .replace(/<@[!&]?\d+>/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, MAX_HISTORY_ENTRY_LENGTH);
+  stripMentionTokens(content).slice(0, MAX_HISTORY_ENTRY_LENGTH);
+
+const isRagAnnouncement = (content: string) => /\bhas just ragged\b/i.test(content);
+
+const isCasualGreeting = (prompt: string) =>
+  /^(?:hey|hi|hello|sup|yo|howdy|hiya|heya|what'?s up|gm|morning|evening|night)\s*[!.?]*$/i.test(
+    prompt.trim(),
+  );
 
 const buildConversation = async (env: Env, config: BotConfig, job: AiChannelJob): Promise<ChatMessage[]> => {
   const messages: ChatMessage[] = [{ role: "system", content: config.systemPrompt }];
@@ -123,11 +202,14 @@ const buildConversation = async (env: Env, config: BotConfig, job: AiChannelJob)
       continue;
     }
     if (job.botUserId && message.author?.id === job.botUserId) {
+      if (isRagAnnouncement(content)) {
+        continue;
+      }
       messages.push({ role: "assistant", content });
       continue;
     }
     const username = message.author?.username ?? "user";
-    messages.push({ role: "user", content: `${username}: ${content}` });
+    messages.push({ role: "user", content: `[${username}] ${content}` });
   }
 
   const promptParts: string[] = [];
@@ -135,8 +217,12 @@ const buildConversation = async (env: Env, config: BotConfig, job: AiChannelJob)
     promptParts.push(job.replyContext);
   }
   const username = job.requesterUsername ?? "user";
-  promptParts.push(`${username}: ${job.prompt}`);
-  messages.push({ role: "user", content: promptParts.join("\n\n") });
+  promptParts.push(`[${username}] ${job.prompt}`);
+  let userContent = promptParts.join("\n\n");
+  if (isCasualGreeting(job.prompt)) {
+    userContent += "\n\n(They only greeted you — reply warmly and briefly, no insults or roasts.)";
+  }
+  messages.push({ role: "user", content: userContent });
 
   return messages;
 };

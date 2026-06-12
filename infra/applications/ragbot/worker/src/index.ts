@@ -12,7 +12,7 @@ import { handleRagboardCommand } from "./commands/ragboard";
 import { DiscordGateway } from "./gateway";
 import { rejectDisallowedGuild } from "./guild";
 import { jsonResponse, verifyDiscordRequest } from "./http";
-import { extractBotMentionPrompt, handleGatewayMessageCreate, processAiQueueMessage } from "./mention";
+import { extractBotMentionPrompt, extractReplyToBotPrompt, handleGatewayMessageCreate, processAiQueueMessage, resolveChannelPrompt } from "./mention";
 import { registerRagbotServices } from "./services";
 import {
   APPLICATION_COMMAND,
@@ -22,7 +22,7 @@ import {
   type Env,
 } from "./types";
 
-export { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
+export { DiscordGateway, extractBotMentionPrompt, extractReplyToBotPrompt, handleGatewayMessageCreate, resolveChannelPrompt };
 
 type TracedRpc = (request: Request, ctx?: ExecutionContext) => Promise<Response | null>;
 

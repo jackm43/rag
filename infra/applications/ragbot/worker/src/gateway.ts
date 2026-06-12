@@ -1,4 +1,5 @@
 import { errorMessage, logger } from "../../../../sdk/ts/src";
+import { fetchBotUserId } from "./discord";
 import { handleGatewayMessageCreate } from "./mention";
 import type { DiscordMessage, Env } from "./types";
 
@@ -27,6 +28,7 @@ const DIRECT_MESSAGES_INTENT = 1 << 12;
 const MESSAGE_CONTENT_INTENT = 1 << 15;
 const GATEWAY_INTENTS = GUILD_MESSAGES_INTENT | DIRECT_MESSAGES_INTENT | MESSAGE_CONTENT_INTENT;
 const GATEWAY_ENABLED_KEY = "gatewayEnabled";
+const BOT_USER_ID_KEY = "botUserId";
 const GATEWAY_WATCHDOG_INTERVAL_MS = 60_000;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -56,9 +58,10 @@ export class DiscordGateway {
     private readonly env: Env,
   ) {
     this.state.blockConcurrencyWhile?.(async () => {
+      this.botUserId = (await this.state.storage.get<string>(BOT_USER_ID_KEY)) ?? null;
       if (await this.isGatewayEnabled()) {
         await this.scheduleWatchdog();
-        this.connect();
+        this.resetConnection();
       }
     });
   }
@@ -70,12 +73,14 @@ export class DiscordGateway {
       return Response.json({
         connected: this.webSocket?.readyState === WebSocket.OPEN,
         resumable: Boolean(this.sessionId && this.resumeGatewayUrl),
+        botUserId: this.botUserId,
       });
     }
 
     if (url.pathname === "/gateway/start" && request.method === "POST") {
       await this.enableGateway();
-      this.connect();
+      await this.ensureBotUserId();
+      this.resetConnection();
       return Response.json({ ok: true });
     }
 
@@ -87,7 +92,10 @@ export class DiscordGateway {
       return;
     }
 
-    this.connect();
+    this.reconnectTimer = undefined;
+    if (this.webSocket?.readyState !== WebSocket.OPEN || !this.heartbeatAcknowledged) {
+      this.resetConnection();
+    }
     await this.scheduleWatchdog();
   }
 
@@ -102,6 +110,28 @@ export class DiscordGateway {
 
   private scheduleWatchdog() {
     return this.state.storage.setAlarm(Date.now() + GATEWAY_WATCHDOG_INTERVAL_MS);
+  }
+
+  private async ensureBotUserId() {
+    if (this.botUserId) {
+      return this.botUserId;
+    }
+
+    const storedId = await this.state.storage.get<string>(BOT_USER_ID_KEY);
+    if (storedId) {
+      this.botUserId = storedId;
+      return storedId;
+    }
+
+    const resolved = await fetchBotUserId(this.env);
+    if (!resolved) {
+      logger.warn("bot_user_id_unavailable");
+      return null;
+    }
+
+    this.botUserId = resolved;
+    await this.state.storage.put(BOT_USER_ID_KEY, resolved);
+    return resolved;
   }
 
   private connect() {
@@ -121,11 +151,25 @@ export class DiscordGateway {
     });
     webSocket.addEventListener("close", () => {
       this.clearHeartbeat();
+      this.webSocket = null;
       this.scheduleReconnect();
     });
     webSocket.addEventListener("error", () => {
       this.scheduleReconnect();
     });
+  }
+
+  private resetConnection() {
+    this.clearHeartbeat();
+    if (this.reconnectTimer !== undefined) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+    if (this.webSocket?.readyState === WebSocket.OPEN || this.webSocket?.readyState === WebSocket.CONNECTING) {
+      this.webSocket.close(4000, "reconnect");
+    }
+    this.webSocket = null;
+    this.connect();
   }
 
   private async handleMessage(event: MessageEvent) {
@@ -151,7 +195,7 @@ export class DiscordGateway {
     }
 
     if (payload.op === 7) {
-      this.reconnect();
+      this.resetConnection();
       return;
     }
 
@@ -161,7 +205,7 @@ export class DiscordGateway {
         this.resumeGatewayUrl = null;
         this.lastSequence = null;
       }
-      this.reconnect();
+      this.resetConnection();
       return;
     }
 
@@ -173,14 +217,21 @@ export class DiscordGateway {
       const ready = payload.d as DiscordGatewayReady;
       this.sessionId = ready.session_id;
       this.resumeGatewayUrl = ready.resume_gateway_url ?? this.resumeGatewayUrl;
-      this.botUserId = ready.user?.id ?? this.botUserId;
+      if (ready.user?.id) {
+        this.botUserId = ready.user.id;
+        await this.state.storage.put(BOT_USER_ID_KEY, ready.user.id);
+      }
       logger.info("gateway_ready", { resumable: Boolean(this.resumeGatewayUrl) });
       return;
     }
 
     if (payload.t === "MESSAGE_CREATE" && isRecord(payload.d)) {
       try {
-        await handleGatewayMessageCreate(payload.d as DiscordMessage, this.env, this.botUserId);
+        const botUserId = await this.ensureBotUserId();
+        if (!botUserId) {
+          return;
+        }
+        await handleGatewayMessageCreate(payload.d as DiscordMessage, this.env, botUserId);
       } catch (error) {
         logger.error("gateway_message_create_failed", { error: errorMessage(error) });
       }
@@ -220,7 +271,7 @@ export class DiscordGateway {
     this.sendHeartbeat();
     this.heartbeatTimer = setInterval(() => {
       if (!this.heartbeatAcknowledged) {
-        this.reconnect();
+        this.resetConnection();
         return;
       }
       this.sendHeartbeat();
@@ -238,15 +289,6 @@ export class DiscordGateway {
     }
   }
 
-  private reconnect() {
-    this.clearHeartbeat();
-    if (this.webSocket?.readyState === WebSocket.OPEN || this.webSocket?.readyState === WebSocket.CONNECTING) {
-      this.webSocket.close(4000, "reconnect");
-    }
-    this.webSocket = null;
-    this.scheduleReconnect();
-  }
-
   private scheduleReconnect() {
     if (this.reconnectTimer !== undefined) {
       return;
@@ -254,7 +296,7 @@ export class DiscordGateway {
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
-      this.connect();
+      this.resetConnection();
     }, 5_000);
   }
 
