@@ -1,6 +1,10 @@
+import { actorToken, type ServiceCredential } from "../credential";
 import { identityExchanged, identityExchangeRefused } from "../identity";
 import { traceHeaders } from "../otel";
 import { TOKEN_TYPE_ACCESS_TOKEN, TOKEN_TYPE_JWT, TOKEN_TYPE_SERVICE_CREDENTIAL } from "../verify/sts";
+
+export type { ServiceCredential } from "../credential";
+export { serviceCredentialFromEnv } from "../credential";
 
 export type ExchangeRequest = {
   subjectToken: string;
@@ -19,19 +23,6 @@ export type ExchangedToken = {
   scopes: string[];
 };
 
-export type ServiceCredential = {
-  clientId: string;
-  clientSecret: string;
-};
-
-export const serviceCredentialFromEnv = (env: {
-  SERVICE_CLIENT_ID?: string;
-  SERVICE_CLIENT_SECRET?: string;
-}): ServiceCredential | null =>
-  env.SERVICE_CLIENT_ID && env.SERVICE_CLIENT_SECRET
-    ? { clientId: env.SERVICE_CLIENT_ID, clientSecret: env.SERVICE_CLIENT_SECRET }
-    : null;
-
 export const chainExchange = (
   gatewayUrl: string,
   callerToken: string,
@@ -45,7 +36,7 @@ export const chainExchange = (
     {
       subjectToken: callerToken,
       subjectTokenType: TOKEN_TYPE_JWT,
-      actorToken: `${credential.clientId}:${credential.clientSecret}`,
+      actorToken: actorToken(credential),
       actorTokenType: TOKEN_TYPE_SERVICE_CREDENTIAL,
       audience,
       scopes,

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { createDiscoveryServiceClient } from "../../discovery/web";
+import { DiscoveryService } from "../../discovery/server/discovery/v1/discovery_service_pb";
+import { client } from "../../discovery/web";
 import type { TrustZoneWebAuth } from "../../../sdk/web/src";
 
 import { Applications } from "./Applications";
@@ -29,7 +30,7 @@ export function App({ auth, signedIn: initialSignedIn }: { auth: TrustZoneWebAut
   // the session transport, so it only needs the initialized auth.
   const discovery = useMemo(() => {
     try {
-      return createDiscoveryServiceClient(auth);
+      return client(auth, DiscoveryService);
     } catch {
       return null;
     }
@@ -65,7 +66,7 @@ export function App({ auth, signedIn: initialSignedIn }: { auth: TrustZoneWebAut
               Sign out
             </button>
           ) : (
-            <button onClick={() => auth.login()}>Sign in</button>
+            <button onClick={() => void auth.promptSignIn()}>Sign in</button>
           )}
         </div>
       </header>

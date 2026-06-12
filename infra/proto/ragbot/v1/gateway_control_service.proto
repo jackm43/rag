@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package ragbot.v1;
+
+import "google/protobuf/struct.proto";
+
+message GetHealthRequest {}
+
+message GetHealthResponse {
+  google.protobuf.Struct state = 1;
+}
+
+message StartGatewayRequest {}
+
+message StartGatewayResponse {
+  google.protobuf.Struct state = 1;
+}
+
+service GatewayControlService {
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+  rpc StartGateway(StartGatewayRequest) returns (StartGatewayResponse);
+}

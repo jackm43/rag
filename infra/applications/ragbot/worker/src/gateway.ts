@@ -1,4 +1,4 @@
-import { errorMessage, logger } from "./logger";
+import { errorMessage, logger } from "../../../../sdk/ts/src";
 import { handleGatewayMessageCreate } from "./mention";
 import type { DiscordMessage, Env } from "./types";
 

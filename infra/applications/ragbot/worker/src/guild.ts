@@ -1,4 +1,4 @@
-import { logger } from "./logger";
+import { logger } from "../../../../sdk/ts/src";
 import type { Env } from "./types";
 
 export const parseAllowedGuildIds = (raw: string | undefined): Set<string> | null => {

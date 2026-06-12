@@ -14,6 +14,8 @@ import (
 
 var errInvalidEndpoint = errors.New("invalid endpoint")
 
+const authGatewayAccessAppName = "Auth Gateway"
+
 func provisionWebClientBypassAccess(
 	ctx context.Context,
 	name string,
@@ -28,6 +30,10 @@ func provisionWebClientBypassAccess(
 	proxy := cfauth.ProxyForAccess(ctx)
 	if err := proxy.EnsureWebClientBypassAccess(ctx, config.Boundary, name, domain); err != nil {
 		output.Logger.Warn("web client access bypass", "application", name, "domain", domain, "error", err)
+	}
+	callbackURI := strings.TrimRight(strings.TrimSpace(endpoint), "/") + "/callback"
+	if err := proxy.EnsureAuthGatewayOIDCRedirectURIs(ctx, config.Boundary, authGatewayAccessAppName, []string{callbackURI}); err != nil {
+		output.Logger.Warn("auth gateway oidc redirect uri", "application", name, "callback", callbackURI, "error", err)
 	}
 }
 

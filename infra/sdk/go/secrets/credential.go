@@ -2,12 +2,29 @@ package secrets
 
 import (
 	"context"
+	"strings"
 )
 
 type ClientCredential struct {
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
 	Provider     string `json:"provider,omitempty"`
+}
+
+func (c *ClientCredential) ActorToken() string {
+	if c == nil {
+		return ""
+	}
+	return c.ClientID + ":" + c.ClientSecret
+}
+
+func ServiceClientCredential(clientID, clientSecret string) (*ClientCredential, bool) {
+	clientID = strings.TrimSpace(clientID)
+	clientSecret = strings.TrimSpace(clientSecret)
+	if clientID == "" || clientSecret == "" {
+		return nil, false
+	}
+	return &ClientCredential{ClientID: clientID, ClientSecret: clientSecret}, true
 }
 
 type TLSClientCertificate struct {

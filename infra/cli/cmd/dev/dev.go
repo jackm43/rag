@@ -12,7 +12,6 @@ import (
 	"jsmunro.me/platy/cli/internal/manifest"
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/platform"
-	"jsmunro.me/platy/cli/internal/webgen"
 )
 
 // protoApps lists every application with a proto package, matching
@@ -24,7 +23,7 @@ func protoApps() ([]string, error) {
 	}
 	var apps []string
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() && entry.Name() != "platy" {
 			apps = append(apps, entry.Name())
 		}
 	}
@@ -45,7 +44,7 @@ func Command() *cobra.Command {
 	cmd.AddCommand(
 		&cobra.Command{
 			Use:   "generate [app...]",
-			Short: "Regenerate protobuf code and web clients (default: all proto packages)",
+			Short: "Regenerate protobuf code and typed client bindings (default: all proto packages)",
 			RunE: func(cmd *cobra.Command, args []string) error {
 				return generate(args)
 			},
@@ -171,7 +170,6 @@ func generate(apps []string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("generate: %w", err)
 	}
-	webgen.Generate(root(), apps)
 	output.Logger.Info("generated protobuf code", "apps", apps)
 	return nil
 }

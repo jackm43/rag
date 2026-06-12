@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Client } from "@connectrpc/connect";
 
-import { createChatServiceClient } from "../../aigateway/web";
-import type { ChatService } from "../../aigateway/server/aigateway/v1/aigateway_pb";
+import { ChatService } from "../../aigateway/server/aigateway/v1/chat_service_pb";
+import { client as aigatewayClient } from "../../aigateway/web";
 import {
   CLIENT_INSTANCE_HEADER,
   registerChatInstance,
@@ -54,7 +54,7 @@ export function App({ auth, signedIn: initialSignedIn }: { auth: TrustZoneWebAut
     let client = clients.current.get(chatId);
     if (!client) {
       const headers = instances.current.get(chatId)?.headers ?? { [CLIENT_INSTANCE_HEADER]: chatId };
-      client = createChatServiceClient(auth, { headers });
+      client = aigatewayClient(auth, ChatService, { headers });
       clients.current.set(chatId, client);
     }
     return client;
@@ -199,109 +199,109 @@ export function App({ auth, signedIn: initialSignedIn }: { auth: TrustZoneWebAut
               Sign out
             </button>
           ) : (
-            <button onClick={() => auth.login()}>Sign in</button>
+            <button onClick={() => void auth.promptSignIn()}>Sign in</button>
           )}
         </div>
       </header>
 
       <main className="layout">
         <div className="workspace">
-        <div className="chat-column">
-        <div className="chat-tabs">
-          {chats.map((chat) => (
-            <button
-              key={chat.id}
-              className={`chat-tab${chat.id === activeId ? " active" : ""}`}
-              title={`instance ${chat.id}`}
-              onClick={() => setActiveId(chat.id)}
-            >
-              {chat.title}
-            </button>
-          ))}
-          <button className="chat-tab new" disabled={!signedIn} onClick={() => void newChat()}>
-            + New chat
-          </button>
-        </div>
-
-        <div className="controls">
-          <label>Model</label>
-          <div className="model-picker">
-            <button
-              type="button"
-              className="model-current"
-              disabled={!signedIn}
-              onClick={() => setPickerOpen((open) => !open)}
-            >
-              <span className="model-id">{model}</span>
-              <span className="model-caret">▾</span>
-            </button>
-            {pickerOpen ? (
-              <div className="model-menu">
-                <div className="model-menu-controls">
-                  <input
-                    autoFocus
-                    placeholder="filter models…"
-                    value={search}
-                    onChange={(e) => onSearch(e.target.value)}
-                    spellCheck={false}
-                  />
-                  <select value={sortBy} onChange={(e) => setSortBy(e.target.value as ModelSort)}>
-                    <option value="name">sort: name</option>
-                    <option value="costIn">sort: $/M in</option>
-                    <option value="costOut">sort: $/M out</option>
-                  </select>
-                </div>
-                <div className="model-options">
-                  {sortedModels.map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      className={`model-option${m.id === model ? " active" : ""}`}
-                      onClick={() => {
-                        setModel(m.id);
-                        setPickerOpen(false);
-                      }}
-                    >
-                      <span className="model-id">{m.id}</span>
-                      <span className="model-cost">{costLabel(m)}</span>
-                    </button>
-                  ))}
-                  {total > models.length ? (
-                    <span className="model-more">
-                      showing {models.length} of {total} — filter to narrow
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-          </div>
-          <span className="hint">{note}</span>
-        </div>
-
-        <section className="messages" ref={scroller} aria-live="polite">
-          {(active?.messages ?? []).map((m, i) => (
-            <div key={i} className={`message ${m.role}${m.error ? " error" : ""}`}>
-              {m.content || (m.pending ? "…" : "")}
+          <div className="chat-column">
+            <div className="chat-tabs">
+              {chats.map((chat) => (
+                <button
+                  key={chat.id}
+                  className={`chat-tab${chat.id === activeId ? " active" : ""}`}
+                  title={`instance ${chat.id}`}
+                  onClick={() => setActiveId(chat.id)}
+                >
+                  {chat.title}
+                </button>
+              ))}
+              <button className="chat-tab new" disabled={!signedIn} onClick={() => void newChat()}>
+                + New chat
+              </button>
             </div>
-          ))}
-        </section>
 
-        <form className="composer" onSubmit={send}>
-          <textarea
-            rows={2}
-            placeholder={signedIn ? "Ask the AI Gateway…" : "Sign in to chat"}
-            value={input}
-            disabled={!signedIn || busy}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(e); }
-            }}
-          />
-          <button type="submit" disabled={!signedIn || busy}>Send</button>
-        </form>
-        </div>
+            <div className="controls">
+              <label>Model</label>
+              <div className="model-picker">
+                <button
+                  type="button"
+                  className="model-current"
+                  disabled={!signedIn}
+                  onClick={() => setPickerOpen((open) => !open)}
+                >
+                  <span className="model-id">{model}</span>
+                  <span className="model-caret">▾</span>
+                </button>
+                {pickerOpen ? (
+                  <div className="model-menu">
+                    <div className="model-menu-controls">
+                      <input
+                        autoFocus
+                        placeholder="filter models…"
+                        value={search}
+                        onChange={(e) => onSearch(e.target.value)}
+                        spellCheck={false}
+                      />
+                      <select value={sortBy} onChange={(e) => setSortBy(e.target.value as ModelSort)}>
+                        <option value="name">sort: name</option>
+                        <option value="costIn">sort: $/M in</option>
+                        <option value="costOut">sort: $/M out</option>
+                      </select>
+                    </div>
+                    <div className="model-options">
+                      {sortedModels.map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          className={`model-option${m.id === model ? " active" : ""}`}
+                          onClick={() => {
+                            setModel(m.id);
+                            setPickerOpen(false);
+                          }}
+                        >
+                          <span className="model-id">{m.id}</span>
+                          <span className="model-cost">{costLabel(m)}</span>
+                        </button>
+                      ))}
+                      {total > models.length ? (
+                        <span className="model-more">
+                          showing {models.length} of {total} — filter to narrow
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              <span className="hint">{note}</span>
+            </div>
 
-        <LiveTraces auth={auth} signedIn={signedIn} />
+            <section className="messages" ref={scroller} aria-live="polite">
+              {(active?.messages ?? []).map((m, i) => (
+                <div key={i} className={`message ${m.role}${m.error ? " error" : ""}`}>
+                  {m.content || (m.pending ? "…" : "")}
+                </div>
+              ))}
+            </section>
+
+            <form className="composer" onSubmit={send}>
+              <textarea
+                rows={2}
+                placeholder={signedIn ? "Ask the AI Gateway…" : "Sign in to chat"}
+                value={input}
+                disabled={!signedIn || busy}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(e); }
+                }}
+              />
+              <button type="submit" disabled={!signedIn || busy}>Send</button>
+            </form>
+          </div>
+
+          <LiveTraces auth={auth} signedIn={signedIn} />
         </div>
 
         <DataPanel auth={auth} signedIn={signedIn} wide />

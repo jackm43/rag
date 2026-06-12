@@ -8,7 +8,7 @@ import {
   DevicePolicySummarySchema,
   DeviceUserSummarySchema,
   type Device,
-} from "../../server/cloudflare/v1/cloudflare_pb";
+} from "../../server/cloudflare/v1/device_service_pb";
 import { appendQuery, apiRequest } from "./api";
 
 type ApiDevicePolicy = {

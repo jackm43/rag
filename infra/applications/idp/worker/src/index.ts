@@ -1,7 +1,7 @@
 import { createRpcHandler, traceRpc, tracerFromEnv } from "../../../../sdk/ts/src";
 import { getJwks } from "./keys";
 import { completeProviderOAuthCallback } from "./provider-oauth";
-import { buildDiscovery, registerServices } from "./services";
+import { buildBootstrapDiscovery, buildDiscovery, registerServices } from "./services";
 import { handleTraceIngest, localSpanSink } from "./traces";
 import { SigningKeys } from "./keys";
 import type { Env } from "./types";
@@ -65,6 +65,28 @@ const withCors = (response: Response, cors: Record<string, string>): Response =>
   return new Response(response.body, { status: response.status, headers });
 };
 
+const handleBootstrapDiscovery = (env: Env): Response => {
+  const discovered = buildBootstrapDiscovery(env);
+  return jsonResponse({
+    endpoints: {
+      token_exchange: discovered.endpoints.tokenExchange,
+      session_create: discovered.endpoints.sessionCreate,
+      session_refresh: discovered.endpoints.sessionRefresh,
+      session_revoke: discovered.endpoints.sessionRevoke,
+      introspect: discovered.endpoints.introspect,
+      discovery: discovered.endpoints.discovery,
+      jwks: discovered.endpoints.jwks,
+    },
+    oidc: {
+      issuer: discovered.oidc.issuer,
+      client_id: discovered.oidc.clientId,
+      authorization_endpoint: discovered.oidc.authorizationEndpoint,
+      token_endpoint: discovered.oidc.tokenEndpoint,
+      jwks_endpoint: discovered.oidc.jwksEndpoint,
+    },
+  });
+};
+
 const handleDiscovery = async (env: Env): Promise<Response> => {
   const discovered = await buildDiscovery(env);
   return jsonResponse({
@@ -118,6 +140,9 @@ export default {
     }
 
     if (url.pathname === "/api/discovery" && request.method === "GET") {
+      if (url.searchParams.get("view") === "bootstrap") {
+        return withCors(handleBootstrapDiscovery(env), cors);
+      }
       return withCors(await handleDiscovery(env), cors);
     }
 

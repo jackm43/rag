@@ -217,7 +217,16 @@ export class TrustZoneWebAuth {
 
   onSessionChange(callback: (state: SessionState) => void): () => void {
     this.listeners.add(callback);
+    callback(this.state());
     return () => this.listeners.delete(callback);
+  }
+
+  // Interactive sign-in for a user gesture: clears a stale login guard from a
+  // prior abandoned redirect, reuses an existing session when present, and only
+  // starts a new OIDC redirect when needed.
+  async promptSignIn(): Promise<EnsureResult> {
+    sessionStorage.removeItem(LOGIN_GUARD);
+    return this.ensureAuthenticated({ interactive: true });
   }
 
   private emit(state: SessionState): void {
@@ -225,17 +234,14 @@ export class TrustZoneWebAuth {
   }
 
   async init(): Promise<SessionState> {
-    const response = await fetch(this.discoveryUrl, { headers: { accept: "application/json" } });
+    const url = new URL(this.discoveryUrl, location.origin);
+    url.searchParams.set("view", "bootstrap");
+    const response = await fetch(url, { headers: { accept: "application/json" } });
     if (!response.ok) throw new Error(`discovery failed (${response.status})`);
     this.config = (await response.json()) as DiscoveryConfig;
     if (this.sameOrigin.includes("gateway")) {
       for (const key of Object.keys(this.config.endpoints ?? {})) {
         this.config.endpoints[key] = this.rewrite(this.config.endpoints[key]);
-      }
-    }
-    for (const app of this.config.applications ?? []) {
-      if (this.sameOrigin.includes(app.name)) {
-        app.endpoint = location.origin;
       }
     }
     this.key = await ensureDeviceKey();
@@ -390,8 +396,21 @@ export class TrustZoneWebAuth {
     return this.sessionToken!.accessToken;
   }
 
+  applicationEndpoint(name: string): string | null {
+    if (this.sameOrigin.includes(name)) {
+      return location.origin;
+    }
+    const registered = (this.config?.applications ?? []).find((app) => app.name === name);
+    return registered?.endpoint ?? null;
+  }
+
   application(name: string): DiscoveryApplication | null {
-    return (this.config?.applications ?? []).find((app) => app.name === name) ?? null;
+    const endpoint = this.applicationEndpoint(name);
+    if (!endpoint) {
+      return null;
+    }
+    const registered = (this.config?.applications ?? []).find((app) => app.name === name);
+    return { name, audience: registered?.audience ?? name, endpoint };
   }
 
   // Authorization headers for a request to any trust zone application: the

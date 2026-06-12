@@ -9,8 +9,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"jsmunro.me/platy/roo/internal/output"
-	sdkauth "jsmunro.me/platy/sdk/auth"
 	"jsmunro.me/platy/sdk/client"
+	oauthclient "jsmunro.me/platy/sdk/oauth2/client"
 )
 
 func FetchCommand() *cobra.Command {
@@ -95,7 +95,7 @@ func invokeWithProviderAuth(ctx context.Context, c *client.Client, application, 
 		return nil, fmt.Errorf("gateway authentication: %w", err)
 	}
 	output.Logger.Info("provider authorization required", "application", application, "url", url)
-	sdkauth.OpenBrowser(output.Logger, url)
+	oauthclient.OpenBrowser(output.Logger, url)
 	output.Logger.Info("complete authorization in the browser; waiting for provider grant")
 	const attempts = 90
 	for attempt := 1; attempt <= attempts; attempt++ {

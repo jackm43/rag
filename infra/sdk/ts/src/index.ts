@@ -3,7 +3,9 @@ export {
   bearerToken,
   CLIENT_INSTANCE_HEADER,
   clientInstance,
+  createWebBffWorker,
   oidcAuthenticator,
+  proxyTargetFor,
   sessionChainAuthenticator,
   sessionProxy,
   stsAuthenticator,
@@ -13,6 +15,9 @@ export {
   type SessionChainConfig,
   type SessionProxy,
   type SessionProxyConfig,
+  type WebBffConfig,
+  type WebBffEnv,
+  type WebBffTarget,
 } from "./auth";
 export {
   actorChainRefusal,
@@ -39,7 +44,6 @@ export {
   createClient,
   exchangeToken,
   serviceConnection,
-  serviceCredentialFromEnv,
   ttlCache,
   type ClientConfig,
   type ConnectorConfig,
@@ -48,10 +52,14 @@ export {
   type PlatformClient,
   type ServiceConnectionEnv,
   type ServiceConnectionTarget,
-  type ServiceCredential,
   type TokenSource,
   type TtlCache,
 } from "./client";
+export {
+  actorToken,
+  serviceCredentialFromEnv,
+  type ServiceCredential,
+} from "./credential";
 export {
   identityExchanged,
   identityExchangeRefused,

@@ -7,7 +7,7 @@ import (
 
 	idpv1 "jsmunro.me/platy/applications/idp/client/idp/v1"
 	"jsmunro.me/platy/cli/internal/output"
-	"jsmunro.me/platy/sdk/discovery"
+	"jsmunro.me/platy/sdk/apps/discovery"
 	sdksecrets "jsmunro.me/platy/sdk/secrets"
 )
 

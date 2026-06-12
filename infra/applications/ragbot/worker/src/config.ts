@@ -1,4 +1,4 @@
-import { errorMessage, logger } from "./logger";
+import { errorMessage, logger } from "../../../../sdk/ts/src";
 import type { Env } from "./types";
 
 export const CONFIG_DEFAULTS = {

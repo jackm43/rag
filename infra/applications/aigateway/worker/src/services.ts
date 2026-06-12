@@ -1,6 +1,6 @@
 import { Code, ConnectError, type ConnectRouter } from "@connectrpc/connect";
 
-import { ChatService } from "../../server/aigateway/v1/aigateway_pb";
+import { ChatService } from "../../server/aigateway/v1/chat_service_pb";
 import {
   anyAuthenticator,
   errorMessage,

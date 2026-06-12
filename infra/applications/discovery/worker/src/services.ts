@@ -1,6 +1,6 @@
 import { Code, ConnectError, type ConnectRouter } from "@connectrpc/connect";
 
-import { DiscoveryService } from "../../server/discovery/v1/discovery_pb";
+import { DiscoveryService } from "../../server/discovery/v1/discovery_service_pb";
 import {
   logger,
   protect,

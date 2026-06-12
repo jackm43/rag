@@ -2,40 +2,28 @@
   "name": "chat",
   "main": "src/worker.ts",
   "compatibility_date": "2026-04-23",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
-  "routes": [
-    {
-      "pattern": "chat.jsmunro.me",
-      "custom_domain": true
-    }
-  ],
-  // The worker is the confidential web client (BFF): run_worker_first routes
-  // only the API prefixes it proxies; every other path is served straight
-  // from assets (security headers via public/_headers, SPA fallback for
-  // /callback). The worker never fetches its own URLs — proxied requests go
-  // out over service bindings — so the run_worker_first loop (CF error 1042)
-  // cannot occur. Add a pattern here for each new proxied application.
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [{"pattern": "chat.jsmunro.me", "custom_domain": true}],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "run_worker_first": [
       "/client/*",
-      "/aigateway.v1.ChatService/*",
-      "/ragbot.v1.LeaderboardService/*",
+      "/aigateway.v1.*",
       "/ragbot.v1.ConfigService/*",
+      "/ragbot.v1.GatewayControlService/*",
       "/ragbot.v1.InteractionService/*",
-      "/ragbot.v1.GatewayControlService/*"
+      "/ragbot.v1.LeaderboardService/*"
     ]
   },
   "vars": {
-    "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.me",
-    "AIGATEWAY_ENDPOINT": "https://aigateway.jsmunro.me",
-    "RAGBOT_ENDPOINT": "https://ragbot.jsmunro.me",
-    "OTEL_SERVICE_NAME": "chat"
-  },
+      "AIGATEWAY_ENDPOINT": "https://aigateway.jsmunro.me",
+      "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.me",
+      "OTEL_SERVICE_NAME": "chat",
+      "RAGBOT_ENDPOINT": "https://ragbot.jsmunro.me"
+    },
   "services": [
     {
       "binding": "AUTH_GATEWAY",
@@ -51,9 +39,6 @@
     }
   ],
   "observability": {
-    "logs": {
-      "enabled": true,
-      "invocation_logs": true
-    }
+    "logs": {"enabled": true, "invocation_logs": true}
   }
 }

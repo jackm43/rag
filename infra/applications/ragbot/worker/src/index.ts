@@ -1,6 +1,8 @@
 import {
   createRpcHandler,
+  errorMessage,
   gatewayTraceExporter,
+  logger,
   serviceCredentialFromEnv,
   traceRpc,
   tracerFromEnv,
@@ -10,7 +12,6 @@ import { handleRagboardCommand } from "./commands/ragboard";
 import { DiscordGateway } from "./gateway";
 import { rejectDisallowedGuild } from "./guild";
 import { jsonResponse, verifyDiscordRequest } from "./http";
-import { errorMessage, logger } from "./logger";
 import { extractBotMentionPrompt, handleGatewayMessageCreate, processAiQueueMessage } from "./mention";
 import { registerRagbotServices } from "./services";
 import {
@@ -34,10 +35,10 @@ const rpcHandler = (env: Env): TracedRpc => {
     const exporter =
       credential && env.AUTH_GATEWAY
         ? gatewayTraceExporter({
-            gatewayUrl,
-            credential,
-            fetch: (input: RequestInfo | URL, init?: RequestInit) => env.AUTH_GATEWAY!.fetch(input, init),
-          })
+          gatewayUrl,
+          credential,
+          fetch: (input: RequestInfo | URL, init?: RequestInit) => env.AUTH_GATEWAY!.fetch(input, init),
+        })
         : undefined;
     cachedRpc = {
       env,

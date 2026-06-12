@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { TraceService } from "../../idp/server/idp/v1/idp_pb";
+import { TraceService } from "../../idp/server/idp/v1/trace_service_pb";
 import {
   gatewayClient,
   registerChatInstance,

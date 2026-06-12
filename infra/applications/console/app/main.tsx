@@ -26,6 +26,8 @@ const mount = (auth: TrustZoneWebAuth, signedIn: boolean) => {
     if (location.pathname === "/callback") {
       await auth.handleRedirect();
       history.replaceState(null, "", "/");
+      mount(auth, auth.isAuthenticated());
+      return;
     }
   } catch (err) {
     document.getElementById("root")!.textContent = `startup error: ${(err as Error).message}`;
@@ -40,5 +42,5 @@ const mount = (auth: TrustZoneWebAuth, signedIn: boolean) => {
     return;
   }
 
-  mount(auth, status === "active");
+  mount(auth, auth.isAuthenticated());
 })();

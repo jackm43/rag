@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -53,11 +54,11 @@ type Application struct {
 	// the actor, which also lets them register without the interactive
 	// Cloudflare OAuth step.
 	Impersonatable *bool `yaml:"impersonatable"`
-	// WebClient makes `platy dev generate` emit a typed browser client for
+	// WebClient makes buf generate emit a typed browser client for
 	// this application (infra/applications/<name>/web) that binds the
 	// generated Connect services to the trust zone web auth SDK.
 	WebClient bool `yaml:"web_client"`
-	// ServiceClient emits a typed worker-to-worker client
+	// ServiceClient makes buf generate emit a typed worker-to-worker client
 	// (infra/applications/<name>/service): each factory wraps the SDK
 	// connector (validate caller, chain identity, attach token) so callers
 	// only configure the connection; also exports the session-proxy target.
@@ -161,6 +162,32 @@ func (m *Manifest) Application(name string) *Application {
 		output.Fail("application %s is not declared in %s", name, RelativePath)
 	}
 	return &app
+}
+
+func HasProtoPackage(root, name string) bool {
+	_, err := os.Stat(filepath.Join(root, "infra", "proto", name))
+	return err == nil
+}
+
+func (m *Manifest) WebClientCallbackURIs(root string) []string {
+	uris := []string{}
+	seen := map[string]bool{}
+	for name, app := range m.Applications {
+		if app.Internal || app.AllowsImpersonation() || strings.TrimSpace(app.Endpoint) == "" {
+			continue
+		}
+		if HasProtoPackage(root, name) {
+			continue
+		}
+		uri := strings.TrimRight(strings.TrimSpace(app.Endpoint), "/") + "/callback"
+		if seen[uri] {
+			continue
+		}
+		seen[uri] = true
+		uris = append(uris, uri)
+	}
+	sort.Strings(uris)
+	return uris
 }
 
 func (m *Manifest) Names() []string {

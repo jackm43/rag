@@ -1,4 +1,5 @@
-import { createLeaderboardServiceClient } from "../../../ragbot/service";
+import { LeaderboardService } from "../../../ragbot/server/ragbot/v1/leaderboard_service_pb";
+import { serviceClient } from "../../../ragbot/service";
 import {
   errorMessage,
   logger,
@@ -62,7 +63,7 @@ export const buildConnectors = (env: Env, tracer: Tracer): Connectors => {
       },
     });
     handlers.set("ragbot_leaderboard", (identity, args) =>
-      createLeaderboardServiceClient(ragbot, identity).listTotals({
+      serviceClient(ragbot, identity, LeaderboardService).listTotals({
         limit: boundedInt(args.limit, 10, 50),
       }),
     );

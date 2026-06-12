@@ -14,8 +14,8 @@ import (
 
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/provider/core"
-	"jsmunro.me/platy/sdk/auth"
-	cfcloud "jsmunro.me/platy/sdk/cloudflare"
+	cfcloud "jsmunro.me/platy/sdk/extensions/cloudflare"
+	oauthclient "jsmunro.me/platy/sdk/oauth2/client"
 )
 
 type cloudflareProvider struct {
@@ -538,6 +538,63 @@ func impersonationAccessAppName(application string) string {
 	return "platy-impersonate-" + application
 }
 
+func accessOIDCRedirectURIs(webClientCallbacks []string) []string {
+	redirects := []string{
+		oauthclient.RedirectURL,
+		fmt.Sprintf("http://localhost:%d/callback", oauthclient.CallbackPort),
+	}
+	seen := map[string]bool{}
+	for _, uri := range redirects {
+		seen[uri] = true
+	}
+	for _, callback := range webClientCallbacks {
+		callback = strings.TrimRight(strings.TrimSpace(callback), "/")
+		if callback == "" || seen[callback] {
+			continue
+		}
+		seen[callback] = true
+		redirects = append(redirects, callback)
+	}
+	return redirects
+}
+
+func authGatewayOIDCSaaSAppParam(webClientCallbacks []string) zero_trust.OIDCSaaSAppParam {
+	return zero_trust.OIDCSaaSAppParam{
+		AuthType: cf.F(zero_trust.OIDCSaaSAppAuthTypeOIDC),
+		GrantTypes: cf.F([]zero_trust.OIDCSaaSAppGrantType{
+			zero_trust.OIDCSaaSAppGrantTypeAuthorizationCodeWithPKCE,
+			zero_trust.OIDCSaaSAppGrantTypeRefreshTokens,
+		}),
+		RedirectURIs: cf.F(accessOIDCRedirectURIs(webClientCallbacks)),
+		Scopes: cf.F([]zero_trust.OIDCSaaSAppScope{
+			zero_trust.OIDCSaaSAppScopeOpenid,
+			zero_trust.OIDCSaaSAppScopeEmail,
+			zero_trust.OIDCSaaSAppScopeProfile,
+		}),
+		AllowPKCEWithoutClientSecret: cf.F(true),
+		AccessTokenLifetime:          cf.F("5m"),
+		RefreshTokenOptions: cf.F(zero_trust.OIDCSaaSAppRefreshTokenOptionsParam{
+			Lifetime: cf.F("30d"),
+		}),
+	}
+}
+
+func redirectURIsEqual(wanted, current []string) bool {
+	if len(wanted) != len(current) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, uri := range current {
+		seen[uri] = true
+	}
+	for _, uri := range wanted {
+		if !seen[uri] {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *cloudflareProvider) ImpersonationAccessSpec(
 	ctx context.Context,
 	boundary core.TrustBoundary,
@@ -598,6 +655,61 @@ func (p *cloudflareProvider) EnsureImpersonationAccessApplication(
 	return created, nil
 }
 
+func (p *cloudflareProvider) EnsureAuthGatewayOIDCRedirectURIs(
+	ctx context.Context,
+	boundary core.TrustBoundary,
+	accessAppName string,
+	webClientCallbackURIs []string,
+) error {
+	appID, _ := p.findAccessApp(ctx, boundary.AccountID, accessAppName)
+	if appID == "" {
+		return fmt.Errorf("access application %q not found", accessAppName)
+	}
+	wanted := accessOIDCRedirectURIs(webClientCallbackURIs)
+	response, err := p.client.ZeroTrust.Access.Applications.Get(ctx, zero_trust.AppIDParam(appID), zero_trust.AccessApplicationGetParams{
+		AccountID: cf.F(boundary.AccountID),
+	})
+	if err != nil {
+		return fmt.Errorf("get access application: %w", err)
+	}
+	var decoded struct {
+		Name    string `json:"name"`
+		SaaSApp struct {
+			RedirectURIs                 []string `json:"redirect_uris"`
+			GrantTypes                   []string `json:"grant_types"`
+			AllowPKCEWithoutClientSecret *bool    `json:"allow_pkce_without_client_secret"`
+		} `json:"saas_app"`
+	}
+	if err := json.Unmarshal([]byte(response.JSON.RawJSON()), &decoded); err != nil {
+		return fmt.Errorf("decode access application: %w", err)
+	}
+	pkceWithoutSecret := decoded.SaaSApp.AllowPKCEWithoutClientSecret != nil && *decoded.SaaSApp.AllowPKCEWithoutClientSecret
+	if redirectURIsEqual(wanted, decoded.SaaSApp.RedirectURIs) && pkceWithoutSecret {
+		output.Logger.Info("auth gateway oidc config already current", "redirect_uris", strings.Join(wanted, ","))
+		return nil
+	}
+	name := decoded.Name
+	if name == "" {
+		name = accessAppName
+	}
+	saasApp := authGatewayOIDCSaaSAppParam(webClientCallbackURIs)
+	_, err = p.client.ZeroTrust.Access.Applications.Update(ctx, zero_trust.AppIDParam(appID), zero_trust.AccessApplicationUpdateParams{
+		AccountID: cf.F(boundary.AccountID),
+		Body: zero_trust.AccessApplicationUpdateParamsBodySaaSApplication{
+			Type: cf.F(zero_trust.ApplicationTypeSaaS),
+			Name: cf.F(name),
+			SaaSApp: cf.F[zero_trust.AccessApplicationUpdateParamsBodySaaSApplicationSaaSAppUnion](
+				saasApp,
+			),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("update auth gateway oidc config: %w", err)
+	}
+	output.Logger.Info("updated auth gateway oidc config", "redirect_uris", strings.Join(wanted, ","))
+	return nil
+}
+
 func (p *cloudflareProvider) CreateAccessApplication(ctx context.Context, boundary core.TrustBoundary, spec core.AccessApplicationSpec) (*core.AccessApplication, error) {
 	allowed := make([]zero_trust.AllowedIdPsParam, len(spec.AllowedIdPIDs))
 	copy(allowed, spec.AllowedIdPIDs)
@@ -618,27 +730,7 @@ func (p *cloudflareProvider) CreateAccessApplication(ctx context.Context, bounda
 			AutoRedirectToIdentity: cf.F(true),
 			Policies:               cf.F(policyLinks),
 			SaaSApp: cf.F[zero_trust.AccessApplicationNewParamsBodySaaSApplicationSaaSAppUnion](
-				zero_trust.OIDCSaaSAppParam{
-					AuthType: cf.F(zero_trust.OIDCSaaSAppAuthTypeOIDC),
-					GrantTypes: cf.F([]zero_trust.OIDCSaaSAppGrantType{
-						zero_trust.OIDCSaaSAppGrantTypeAuthorizationCodeWithPKCE,
-						zero_trust.OIDCSaaSAppGrantTypeRefreshTokens,
-					}),
-					RedirectURIs: cf.F([]string{
-						auth.RedirectURL,
-						fmt.Sprintf("http://localhost:%d/callback", auth.CallbackPort),
-					}),
-					Scopes: cf.F([]zero_trust.OIDCSaaSAppScope{
-						zero_trust.OIDCSaaSAppScopeOpenid,
-						zero_trust.OIDCSaaSAppScopeEmail,
-						zero_trust.OIDCSaaSAppScopeProfile,
-					}),
-					AllowPKCEWithoutClientSecret: cf.F(true),
-					AccessTokenLifetime:          cf.F("5m"),
-					RefreshTokenOptions: cf.F(zero_trust.OIDCSaaSAppRefreshTokenOptionsParam{
-						Lifetime: cf.F("30d"),
-					}),
-				},
+				authGatewayOIDCSaaSAppParam(spec.WebClientCallbackURIs),
 			),
 		},
 	})
@@ -925,8 +1017,8 @@ func (p *cloudflareProvider) EnsureApplicationOAuthClient(
 	}
 	redirects := []string{
 		strings.TrimRight(callbackURL, "/") + "/provider/oauth/callback",
-		auth.RedirectURL,
-		fmt.Sprintf("http://localhost:%d/callback", auth.CallbackPort),
+		oauthclient.RedirectURL,
+		fmt.Sprintf("http://localhost:%d/callback", oauthclient.CallbackPort),
 	}
 	body := map[string]any{
 		"client_name":                name,
@@ -1014,9 +1106,10 @@ func (p *cloudflareProvider) Bootstrap(ctx context.Context, boundary core.TrustB
 	_, accessClientID := p.findAccessApp(ctx, boundary.AccountID, opts.AccessAppName)
 	if accessClientID == "" {
 		created, err := p.CreateAccessApplication(ctx, boundary, core.AccessApplicationSpec{
-			Name:          opts.AccessAppName,
-			AllowedIdPIDs: idpIDs,
-			PolicyIDs:     policyIDs,
+			Name:                  opts.AccessAppName,
+			AllowedIdPIDs:         idpIDs,
+			PolicyIDs:             policyIDs,
+			WebClientCallbackURIs: opts.WebClientCallbackURIs,
 		})
 		if err != nil {
 			return nil, err
@@ -1024,6 +1117,9 @@ func (p *cloudflareProvider) Bootstrap(ctx context.Context, boundary core.TrustB
 		accessClientID = created.ClientID
 	} else {
 		output.Logger.Info("reusing access application", "client_id", accessClientID)
+		if err := p.EnsureAuthGatewayOIDCRedirectURIs(ctx, boundary, opts.AccessAppName, opts.WebClientCallbackURIs); err != nil {
+			return nil, err
+		}
 	}
 
 	subdomain := opts.WorkersDevSubdomain

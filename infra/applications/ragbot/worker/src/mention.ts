@@ -2,7 +2,7 @@ import { runChatModel, sanitizeAiText, streamChatModel, type ChatMessage } from 
 import { loadConfig, type BotConfig } from "./config";
 import { fetchChannelMessages, fetchMessage, postChannelMessage } from "./discord";
 import { rejectDisallowedGuild } from "./guild";
-import { errorMessage, logger } from "./logger";
+import { errorMessage, logger } from "../../../../sdk/ts/src";
 import type { AiChannelJob, AiJob, DiscordMessage, Env } from "./types";
 
 const MAX_DISCORD_MESSAGE_LENGTH = 1900;

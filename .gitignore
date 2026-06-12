@@ -5,10 +5,12 @@ dist
 /platy
 /roo
 infra/cli/cli
+infra/tools/protoc-gen-platy-clients
 .env
 .dev.vars
 .platy/
-
+*.pb.go
+*_pb.ts
 # Generated protobuf and Connect code (regenerate with infra/scripts/generate.sh)
 infra/applications/*/client/
 infra/applications/*/server/

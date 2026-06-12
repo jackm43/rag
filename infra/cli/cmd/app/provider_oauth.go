@@ -14,7 +14,7 @@ import (
 	"jsmunro.me/platy/cli/internal/platform"
 	"jsmunro.me/platy/cli/internal/provider"
 	"jsmunro.me/platy/cli/internal/secrets"
-	"jsmunro.me/platy/sdk/discovery"
+	"jsmunro.me/platy/sdk/apps/discovery"
 	sdksecrets "jsmunro.me/platy/sdk/secrets"
 )
 

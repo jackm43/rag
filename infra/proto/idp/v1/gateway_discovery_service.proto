@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package idp.v1;
+
+import "idp/v1/types.proto";
+
+message OidcProvider {
+  string issuer = 1;
+  string client_id = 2;
+  string authorization_endpoint = 3;
+  string token_endpoint = 4;
+  string jwks_endpoint = 5;
+}
+
+message DiscoverRequest {}
+
+message Endpoints {
+  string token_exchange = 1;
+  string session_create = 2;
+  string session_refresh = 3;
+  string session_revoke = 4;
+  string introspect = 5;
+  string discovery = 6;
+  string jwks = 7;
+}
+
+message DiscoverResponse {
+  string issuer = 1;
+  string jwks_uri = 2;
+  OidcProvider oidc = 3;
+  repeated Application applications = 4;
+  Endpoints endpoints = 5;
+  ProviderConfig provider = 6;
+}
+
+service DiscoveryService {
+  rpc Discover(DiscoverRequest) returns (DiscoverResponse);
+}

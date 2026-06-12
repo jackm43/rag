@@ -5,7 +5,7 @@ import type { PlatformClient } from "../../../../sdk/ts/src/client/fetch";
 import type {
   DeployWorkerRequest,
   ListWorkersRequest,
-} from "../../server/cloudflare/v1/cloudflare_pb";
+} from "../../server/cloudflare/v1/worker_service_pb";
 import { apiRequest } from "./api";
 
 export const deployWorker = async (

@@ -100,13 +100,15 @@ func run(ctx context.Context, opts options) error {
 		return err
 	}
 
+	loaded := manifest.Load(root)
 	bootstrapResult, err := proxy.Bootstrap(ctx, boundary, provider.BootstrapOptions{
-		EmailAllowlist:      allowlist,
-		DefaultIdPType:      opts.defaultIdP,
-		AccessAppName:       opts.appName,
-		WorkersDevSubdomain: opts.workersDevSubdomain,
-		PostureEnabled:      organization.NeedsPosture(),
-		PostureCheckName:    organization.PrimaryPostureCheckName(),
+		EmailAllowlist:        allowlist,
+		DefaultIdPType:        opts.defaultIdP,
+		AccessAppName:         opts.appName,
+		WorkersDevSubdomain:   opts.workersDevSubdomain,
+		PostureEnabled:        organization.NeedsPosture(),
+		PostureCheckName:      organization.PrimaryPostureCheckName(),
+		WebClientCallbackURIs: loaded.WebClientCallbackURIs(root),
 	})
 	if err != nil {
 		return fmt.Errorf("bootstrap: %w", err)
@@ -171,7 +173,7 @@ func run(ctx context.Context, opts options) error {
 	}
 	output.Logger.Info("wrote bootstrap metadata", "path", metadataPath)
 
-	wrangler.InjectBootstrapVars(root, manifest.Load(root))
+	wrangler.InjectBootstrapVars(root, loaded)
 	output.PrintJSON(result)
 	return nil
 }

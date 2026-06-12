@@ -19,6 +19,7 @@
     "infra/applications/*/worker/src/**/*.ts",
     "infra/applications/ragbot/worker/scripts/**/*.ts",
     "infra/applications/**/server/**/*.ts",
-    "infra/applications/**/service/**/*.ts"
+    "infra/applications/**/service/**/*.ts",
+    "infra/applications/discovery/graphql/**/*.ts"
   ]
 }

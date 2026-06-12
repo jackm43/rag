@@ -17,13 +17,13 @@ import (
 	idpv1 "jsmunro.me/platy/applications/idp/client/idp/v1"
 	"jsmunro.me/platy/cli/cmd/bootstrap"
 	"jsmunro.me/platy/cli/internal/applications"
+	"jsmunro.me/platy/cli/internal/bffgen"
 	"jsmunro.me/platy/cli/internal/display"
 	"jsmunro.me/platy/cli/internal/manifest"
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/platform"
 	"jsmunro.me/platy/cli/internal/provider"
 	"jsmunro.me/platy/cli/internal/secrets"
-	"jsmunro.me/platy/cli/internal/webgen"
 	sdksecrets "jsmunro.me/platy/sdk/secrets"
 )
 
@@ -209,7 +209,6 @@ func generateCode(root, name string) {
 	if err := command.Run(); err != nil {
 		output.Fail("code generation for %s: %v", name, err)
 	}
-	webgen.Generate(root, []string{name})
 	output.Logger.Info("generated client and server code", "app", name, "dir", filepath.Join("infra", "applications", name))
 }
 
@@ -339,8 +338,12 @@ func registerApplication(
 		output.Fail("register application: %v", err)
 	}
 
-	if !skipCodegen && hasProto {
-		generateCode(root, name)
+	if !skipCodegen {
+		if hasProto {
+			generateCode(root, name)
+		} else if err := bffgen.Generate(root, name); err != nil {
+			output.Fail("generate bff worker for %s: %v", name, err)
+		}
 	}
 
 	var credential *sdksecrets.ClientCredential

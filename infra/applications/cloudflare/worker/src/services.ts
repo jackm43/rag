@@ -1,9 +1,7 @@
 import { Code, ConnectError, type ConnectRouter } from "@connectrpc/connect";
 
-import {
-  DeviceService,
-  WorkerService,
-} from "../../server/cloudflare/v1/cloudflare_pb";
+import { DeviceService } from "../../server/cloudflare/v1/device_service_pb";
+import { WorkerService } from "../../server/cloudflare/v1/worker_service_pb";
 import { logger, protect, requireIdentity, stsAuthenticator, type AuthPolicy } from "../../../../sdk/ts/src";
 import { cloudflareApiClient } from "./api";
 import { deleteDevice, getDevice, listDevices, revokeDevice } from "./devices";

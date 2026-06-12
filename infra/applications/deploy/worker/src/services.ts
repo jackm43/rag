@@ -1,6 +1,6 @@
 import type { ConnectRouter } from "@connectrpc/connect";
 
-import { DeployService } from "../../server/deploy/v1/deploy_pb";
+import { DeployService } from "../../server/deploy/v1/deploy_service_pb";
 import { logger, protect, requireIdentity, stsAuthenticator, type AuthPolicy } from "../../../../sdk/ts/src";
 import { workerServiceClient } from "./connector";
 import type { Env } from "./types";

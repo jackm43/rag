@@ -6,7 +6,7 @@ import {
   type InteractionMessageData,
 } from "../discord";
 import { jsonResponse } from "../http";
-import { errorMessage, logger } from "../logger";
+import { errorMessage, logger } from "../../../../../sdk/ts/src";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
   DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,

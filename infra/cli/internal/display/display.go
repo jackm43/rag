@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"jsmunro.me/platy/cli/internal/output"
-	"jsmunro.me/platy/sdk/discovery"
+	"jsmunro.me/platy/sdk/apps/discovery"
 )
 
 func PrintApplicationMethods(app *discovery.Application, indent string) {

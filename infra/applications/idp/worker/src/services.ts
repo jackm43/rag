@@ -1,15 +1,15 @@
 import { Code, ConnectError, type ConnectRouter, type HandlerContext } from "@connectrpc/connect";
 
+import { ClientIdentityService } from "../../server/idp/v1/client_identity_service_pb";
+import { DiscoveryService } from "../../server/idp/v1/gateway_discovery_service_pb";
+import { IdentityService } from "../../server/idp/v1/identity_service_pb";
+import { RegistryService } from "../../server/idp/v1/registry_service_pb";
+import { TraceService } from "../../server/idp/v1/trace_service_pb";
 import {
-  ClientIdentityService,
-  DiscoveryService,
-  IdentityService,
-  RegistryService,
-  TraceService,
   type Application,
-  type ExchangeTokenRequest,
   type ProviderConfig as ProviderConfigMessage,
-} from "../../server/idp/v1/idp_pb";
+} from "../../server/idp/v1/types_pb";
+import { type TokenExchangeRequest } from "../../server/platy/oauth/v1/token_pb";
 import { calculateJwkThumbprint, type JWK } from "jose";
 
 import {
@@ -95,6 +95,7 @@ const exchangeAuthorizationCode = async (
   const response = await fetch(provider.tokenEndpoint, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
+    redirect: "manual",
     body: new URLSearchParams({
       grant_type: "authorization_code",
       code: request.authorizationCode,
@@ -103,13 +104,25 @@ const exchangeAuthorizationCode = async (
       code_verifier: request.codeVerifier,
     }).toString(),
   });
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get("location") ?? "";
+    throw new ConnectError(
+      `upstream token exchange redirect (${response.status}): ${location}`,
+      Code.Unauthenticated,
+    );
+  }
   if (!response.ok) {
     throw new ConnectError(
       `upstream token exchange failed (${response.status})`,
       Code.Unauthenticated,
     );
   }
-  const body = (await response.json()) as { access_token?: string };
+  let body: { access_token?: string };
+  try {
+    body = (await response.json()) as { access_token?: string };
+  } catch {
+    throw new ConnectError("upstream token response was not JSON", Code.Unauthenticated);
+  }
   if (!body.access_token) {
     throw new ConnectError("upstream token response had no access_token", Code.Unauthenticated);
   }
@@ -312,7 +325,7 @@ type ResolvedSubject = {
 
 const resolveSubject = async (
   env: Env,
-  request: ExchangeTokenRequest,
+  request: TokenExchangeRequest,
   actorApplication: string | null,
 ): Promise<ResolvedSubject | null> => {
   if (!request.subjectToken) {
@@ -1050,11 +1063,9 @@ export const registerServices = (router: ConnectRouter, env: Env) => {
   });
 };
 
-export const buildDiscovery = async (env: Env) => {
+export const buildBootstrapDiscovery = (env: Env) => {
   const oidc = oidcProvider(env);
   return {
-    issuer: issuer(env),
-    jwksUri: jwksUrl(env),
     oidc: {
       issuer: oidc.issuer,
       clientId: oidc.clientId,
@@ -1063,6 +1074,15 @@ export const buildDiscovery = async (env: Env) => {
       jwksEndpoint: oidc.jwksEndpoint,
     },
     endpoints: gatewayEndpoints(env),
+  };
+};
+
+export const buildDiscovery = async (env: Env) => {
+  const bootstrap = buildBootstrapDiscovery(env);
+  return {
+    issuer: issuer(env),
+    jwksUri: jwksUrl(env),
+    ...bootstrap,
     applications: await Promise.all(
       (await listApplications(env)).map(async (app) =>
         applicationMessage(app, await listDelegations(env, app.name)),

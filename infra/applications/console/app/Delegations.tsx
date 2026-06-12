@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Client } from "@connectrpc/connect";
 
-import type { DiscoveryService } from "../../discovery/server/discovery/v1/discovery_pb";
+import type { DiscoveryService } from "../../discovery/server/discovery/v1/discovery_service_pb";
 
-import { DELEGATION_GRAPH_QUERY, queryDiscovery, type DelegationEdge } from "./discovery";
+import { delegationGraphQuery, queryDiscovery, type DelegationEdge } from "../../discovery/web";
 
 // Delegation graph view: a bipartite SVG rendering of the registry's
 // delegation edges (acting application on the left, target audience on the
@@ -33,7 +33,7 @@ export function Delegations({
       return;
     }
     setNote("loading");
-    queryDiscovery<{ delegationGraph: DelegationEdge[] }>(discovery, DELEGATION_GRAPH_QUERY)
+    queryDiscovery<{ delegationGraph: DelegationEdge[] }>(discovery, delegationGraphQuery)
       .then((data) => {
         setEdges(data.delegationGraph ?? []);
         setNote("");

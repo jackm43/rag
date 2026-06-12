@@ -1,15 +1,15 @@
 import { useEffect, useState } from "react";
 import type { Client } from "@connectrpc/connect";
 
-import type { DiscoveryService } from "../../discovery/server/discovery/v1/discovery_pb";
-import type { TrustZoneWebAuth } from "../../../sdk/web/src";
-
+import type { DiscoveryService } from "../../discovery/server/discovery/v1/discovery_service_pb";
 import {
-  APPLICATIONS_QUERY,
+  applicationDetailQuery,
+  applicationsListQuery,
   queryDiscovery,
   type ApplicationInfo,
   type SyncState,
-} from "./discovery";
+} from "../../discovery/web";
+import type { TrustZoneWebAuth } from "../../../sdk/web/src";
 
 // Application registry view: browse from the discovery GraphQL read model,
 // mutate through the gateway's RegistryService (same-origin zone routes), and
@@ -43,6 +43,7 @@ export function Applications({
   discovery: Client<typeof DiscoveryService> | null;
 }) {
   const [apps, setApps] = useState<ApplicationInfo[]>([]);
+  const [detail, setDetail] = useState<ApplicationInfo | null>(null);
   const [sync, setSync] = useState<SyncState | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [note, setNote] = useState("");
@@ -61,10 +62,17 @@ export function Applications({
     try {
       const data = await queryDiscovery<{ applications: ApplicationInfo[]; syncState: SyncState | null }>(
         discovery,
-        APPLICATIONS_QUERY,
+        applicationsListQuery,
       );
       setApps(data.applications ?? []);
       setSync(data.syncState ?? null);
+      if (selected) {
+        const row = (data.applications ?? []).find((app) => app.name === selected);
+        if (!row) {
+          setSelected(null);
+          setDetail(null);
+        }
+      }
       setNote("");
     } catch (err) {
       setNote((err as Error).message);
@@ -132,7 +140,10 @@ export function Applications({
     try {
       const result = await callRegistry("/idp.v1.RegistryService/DeleteApplication", { name });
       setActionResult(result);
-      if (selected === name) setSelected(null);
+      if (selected === name) {
+        setSelected(null);
+        setDetail(null);
+      }
       await load();
     } catch (err) {
       setActionResult((err as Error).message);
@@ -141,7 +152,33 @@ export function Applications({
     }
   };
 
-  const detail = apps.find((app) => app.name === selected) ?? null;
+  useEffect(() => {
+    if (!signedIn || !discovery || !selected) {
+      setDetail(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await queryDiscovery<{ application: ApplicationInfo | null }>(
+          discovery,
+          applicationDetailQuery,
+          { name: selected },
+        );
+        if (!cancelled) {
+          setDetail(data.application ?? null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setNote((err as Error).message);
+          setDetail(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [signedIn, discovery, selected]);
 
   return (
     <div className="view">
@@ -259,7 +296,7 @@ export function Applications({
             </dl>
 
             <h3>Resources and scopes</h3>
-            {detail.resources.length === 0 ? (
+            {!detail.resources || detail.resources.length === 0 ? (
               <p className="hint">no RPC surface (client-only application)</p>
             ) : (
               detail.resources.map((resource) => (
@@ -278,7 +315,7 @@ export function Applications({
             )}
 
             <h3>Delegations</h3>
-            {detail.delegations.length === 0 ? (
+            {!detail.delegations || detail.delegations.length === 0 ? (
               <p className="hint">no outbound delegations</p>
             ) : (
               <ul className="delegation-list">

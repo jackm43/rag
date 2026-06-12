@@ -63,12 +63,12 @@ export const webTransport = (
   application: string,
   options: WebClientOptions = {},
 ): Transport => {
-  const app = auth.application(application);
-  if (!app?.endpoint) {
-    throw new Error(`application ${application} is not in discovery`);
+  const endpoint = auth.applicationEndpoint(application);
+  if (!endpoint) {
+    throw new Error(`application ${application} is not available`);
   }
   return createConnectTransport({
-    baseUrl: app.endpoint.replace(/\/$/, ""),
+    baseUrl: endpoint.replace(/\/$/, ""),
     interceptors: [authInterceptor(auth, options)],
   });
 };

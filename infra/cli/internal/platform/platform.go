@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"jsmunro.me/platy/cli/internal/output"
+	"jsmunro.me/platy/sdk/apps/discovery"
 	"jsmunro.me/platy/sdk/client"
-	"jsmunro.me/platy/sdk/discovery"
 	"jsmunro.me/platy/sdk/gateway"
 	sdkplatform "jsmunro.me/platy/sdk/platform"
 )

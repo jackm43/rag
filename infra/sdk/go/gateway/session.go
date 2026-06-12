@@ -14,26 +14,23 @@ import (
 
 	idpv1 "jsmunro.me/platy/applications/idp/client/idp/v1"
 	"jsmunro.me/platy/applications/idp/client/idp/v1/idpv1connect"
-	"jsmunro.me/platy/sdk/auth"
-	"jsmunro.me/platy/sdk/discovery"
-	"jsmunro.me/platy/sdk/dpop"
+	oauthv1 "jsmunro.me/platy/applications/idp/client/platy/oauth/v1"
+	"jsmunro.me/platy/sdk/apps/discovery"
 	"jsmunro.me/platy/sdk/httpclient"
 	"jsmunro.me/platy/sdk/identity"
+	oauthclient "jsmunro.me/platy/sdk/oauth2/client"
+	"jsmunro.me/platy/sdk/oauth2/client/dpop"
+	"jsmunro.me/platy/sdk/oauth2/token"
+	"jsmunro.me/platy/sdk/secrets"
 )
 
-const (
-	TokenTypeAccessToken       = "urn:ietf:params:oauth:token-type:access_token"
-	TokenTypeJwt               = "urn:ietf:params:oauth:token-type:jwt"
-	TokenTypeServiceCredential = "urn:platy:params:oauth:token-type:service-credential"
+const identityServicePath = "/idp.v1.IdentityService/"
 
-	identityServicePath = "/idp.v1.IdentityService/"
-)
-
-type CredentialResolver func(ctx context.Context, application string) (clientID, clientSecret string, err error)
+type CredentialResolver func(ctx context.Context, application string) (*secrets.ClientCredential, error)
 
 type Session struct {
 	GatewayURL         string
-	Store              auth.TokenStore
+	Store              oauthclient.TokenStore
 	Dpop               *dpop.Key
 	HTTPClient         *http.Client
 	Logger             *slog.Logger
@@ -43,16 +40,16 @@ type Session struct {
 	mu              sync.Mutex
 	discovery       *discovery.Document
 	discoveryClient *discovery.Client
-	appTokens       map[string]*auth.TokenSet
+	appTokens       map[string]*oauthclient.TokenSet
 }
 
-func NewSession(gatewayURL string, store auth.TokenStore, logger *slog.Logger) *Session {
+func NewSession(gatewayURL string, store oauthclient.TokenStore, logger *slog.Logger) *Session {
 	return &Session{
 		GatewayURL: strings.TrimRight(gatewayURL, "/"),
 		Store:      store,
 		HTTPClient: httpclient.Default(),
 		Logger:     logger,
-		appTokens:  map[string]*auth.TokenSet{},
+		appTokens:  map[string]*oauthclient.TokenSet{},
 	}
 }
 
@@ -86,7 +83,7 @@ func (s *Session) InvalidateDiscovery() {
 	s.mu.Unlock()
 }
 
-func (s *Session) oidcFlow(ctx context.Context) (*auth.BrowserFlow, error) {
+func (s *Session) oidcFlow(ctx context.Context) (*oauthclient.BrowserFlow, error) {
 	discovered, err := s.Discovery(ctx)
 	if err != nil {
 		return nil, err
@@ -94,7 +91,7 @@ func (s *Session) oidcFlow(ctx context.Context) (*auth.BrowserFlow, error) {
 	if discovered.Oidc.ClientID == "" {
 		return nil, fmt.Errorf("gateway has no OIDC provider configured")
 	}
-	return &auth.BrowserFlow{
+	return &oauthclient.BrowserFlow{
 		Config: oauth2.Config{
 			ClientID: discovered.Oidc.ClientID,
 			Endpoint: oauth2.Endpoint{
@@ -128,9 +125,9 @@ func (s *Session) attachDpop(header http.Header, procedure string) error {
 	return nil
 }
 
-func tokenSetFromSession(tokens *idpv1.SessionTokens) *auth.TokenSet {
+func tokenSetFromSession(tokens *oauthv1.SessionTokens) *oauthclient.TokenSet {
 	now := time.Now().Unix()
-	return &auth.TokenSet{
+	return &oauthclient.TokenSet{
 		AccessToken:      tokens.AccessToken,
 		RefreshToken:     tokens.RefreshToken,
 		ExpiresAt:        now + tokens.ExpiresIn,
@@ -138,10 +135,10 @@ func tokenSetFromSession(tokens *idpv1.SessionTokens) *auth.TokenSet {
 	}
 }
 
-func (s *Session) createSession(ctx context.Context, subjectToken string) (*auth.TokenSet, error) {
-	request := connect.NewRequest(&idpv1.CreateSessionRequest{
+func (s *Session) createSession(ctx context.Context, subjectToken string) (*oauthclient.TokenSet, error) {
+	request := connect.NewRequest(&oauthv1.CreateSessionRequest{
 		SubjectToken:     subjectToken,
-		SubjectTokenType: TokenTypeAccessToken,
+		SubjectTokenType: token.TypeAccessToken,
 	})
 	if err := s.attachDpop(request.Header(), identityServicePath+"CreateSession"); err != nil {
 		return nil, err
@@ -156,8 +153,8 @@ func (s *Session) createSession(ctx context.Context, subjectToken string) (*auth
 	return tokenSetFromSession(response.Msg.Tokens), nil
 }
 
-func (s *Session) refreshSession(ctx context.Context, refreshToken string) (*auth.TokenSet, error) {
-	request := connect.NewRequest(&idpv1.RefreshSessionRequest{RefreshToken: refreshToken})
+func (s *Session) refreshSession(ctx context.Context, refreshToken string) (*oauthclient.TokenSet, error) {
+	request := connect.NewRequest(&oauthv1.RefreshSessionRequest{RefreshToken: refreshToken})
 	if err := s.attachDpop(request.Header(), identityServicePath+"RefreshSession"); err != nil {
 		return nil, err
 	}
@@ -174,7 +171,7 @@ func (s *Session) refreshSession(ctx context.Context, refreshToken string) (*aut
 func (s *Session) revokeCachedSession(ctx context.Context) {
 	cached := s.Store.Get(ctx, s.userTokenKey())
 	if cached != nil && cached.RefreshToken != "" {
-		request := connect.NewRequest(&idpv1.RevokeSessionRequest{RefreshToken: cached.RefreshToken})
+		request := connect.NewRequest(&oauthv1.RevokeSessionRequest{RefreshToken: cached.RefreshToken})
 		if _, err := s.IdentityClient().RevokeSession(ctx, request); err != nil {
 			s.logger().Debug("session revocation failed", "error", err)
 		} else {
@@ -185,11 +182,11 @@ func (s *Session) revokeCachedSession(ctx context.Context) {
 		s.logger().Debug("clear cached session tokens failed", "error", err)
 	}
 	s.mu.Lock()
-	s.appTokens = map[string]*auth.TokenSet{}
+	s.appTokens = map[string]*oauthclient.TokenSet{}
 	s.mu.Unlock()
 }
 
-func (s *Session) login(ctx context.Context) (*auth.TokenSet, error) {
+func (s *Session) login(ctx context.Context) (*oauthclient.TokenSet, error) {
 	s.revokeCachedSession(ctx)
 	if s.RotateDeviceKey != nil {
 		key, err := s.RotateDeviceKey(ctx)
@@ -294,7 +291,7 @@ func (s *Session) directAppToken(ctx context.Context, audience string) (string, 
 	if err != nil {
 		return "", err
 	}
-	token, err := s.exchangeToken(ctx, subjectToken, TokenTypeJwt, "", "", audience, nil, "", false)
+	token, err := s.exchangeToken(ctx, subjectToken, token.TypeJWT, "", "", audience, nil, "", false)
 	if err != nil {
 		return "", fmt.Errorf("token exchange for %s: %w", audience, err)
 	}
@@ -332,16 +329,16 @@ func (s *Session) ChainedAppToken(ctx context.Context, serviceApp, audience stri
 	if err != nil {
 		return "", fmt.Errorf("subject token for %s: %w", serviceApp, err)
 	}
-	clientID, clientSecret, err := s.CredentialResolver(ctx, serviceApp)
+	credential, err := s.CredentialResolver(ctx, serviceApp)
 	if err != nil {
 		return "", fmt.Errorf("resolve %s service credential: %w", serviceApp, err)
 	}
 	token, err := s.exchangeToken(
 		ctx,
 		subjectToken,
-		TokenTypeJwt,
-		clientID+":"+clientSecret,
-		TokenTypeServiceCredential,
+		token.TypeJWT,
+		credential.ActorToken(),
+		token.TypeServiceCredential,
 		audience,
 		scopes,
 		impersonationToken,
@@ -368,14 +365,14 @@ func (s *Session) ServiceAppToken(ctx context.Context, serviceApp, audience stri
 	if cached.Valid(15 * time.Second) {
 		return cached.AccessToken, nil
 	}
-	clientID, clientSecret, err := s.CredentialResolver(ctx, serviceApp)
+	credential, err := s.CredentialResolver(ctx, serviceApp)
 	if err != nil {
 		return "", fmt.Errorf("resolve %s service credential: %w", serviceApp, err)
 	}
 	token, err := s.exchangeToken(
 		ctx,
-		clientID+":"+clientSecret,
-		TokenTypeServiceCredential,
+		credential.ActorToken(),
+		token.TypeServiceCredential,
 		"",
 		"",
 		audience,
@@ -407,17 +404,17 @@ func (s *Session) exchangeToken(
 	scopes []string,
 	impersonationToken string,
 	authenticated bool,
-) (*auth.TokenSet, error) {
-	request := connect.NewRequest(&idpv1.ExchangeTokenRequest{
+) (*oauthclient.TokenSet, error) {
+	request := connect.NewRequest(&oauthv1.TokenExchangeRequest{
 		SubjectToken:           subjectToken,
 		SubjectTokenType:       subjectTokenType,
 		ActorToken:             actorToken,
 		ActorTokenType:         actorTokenType,
 		Audience:               audience,
 		Scopes:                 scopes,
-		RequestedTokenType:     TokenTypeJwt,
+		RequestedTokenType:     token.TypeJWT,
 		ImpersonationToken:     impersonationToken,
-		ImpersonationTokenType: TokenTypeAccessToken,
+		ImpersonationTokenType: token.TypeAccessToken,
 	})
 	if authenticated {
 		if err := s.attachDpop(request.Header(), identityServicePath+"ExchangeToken"); err != nil {
@@ -428,7 +425,7 @@ func (s *Session) exchangeToken(
 			return nil, err
 		}
 		request.Header().Set("Authorization", "Bearer "+userToken)
-	} else if subjectTokenType == TokenTypeJwt && actorToken == "" {
+	} else if subjectTokenType == token.TypeJWT && actorToken == "" {
 		if err := s.attachDpop(request.Header(), identityServicePath+"ExchangeToken"); err != nil {
 			return nil, err
 		}
@@ -447,7 +444,7 @@ func (s *Session) exchangeToken(
 	impersonation := impersonationToken != ""
 	logActorTokenType := actorTokenType
 	if actorToken != "" && logActorTokenType == "" {
-		logActorTokenType = TokenTypeServiceCredential
+		logActorTokenType = token.TypeServiceCredential
 	}
 	response, err := client.ExchangeToken(ctx, request)
 	if err != nil {
@@ -463,7 +460,7 @@ func (s *Session) exchangeToken(
 			audience, subjectTokenType, logActorTokenType, actorClientID, impersonation, nil, response.Msg.Scopes,
 		)...,
 	)
-	return &auth.TokenSet{
+	return &oauthclient.TokenSet{
 		AccessToken: response.Msg.AccessToken,
 		ExpiresAt:   time.Now().Unix() + response.Msg.ExpiresIn,
 	}, nil

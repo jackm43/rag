@@ -52,11 +52,12 @@ type ApplicationAccess struct {
 }
 
 type AccessApplicationSpec struct {
-	Name            string
-	AllowedIdPIDs   []string
-	AllowedGroupIDs []string
-	PolicyIDs       []string
-	PostureRequired bool
+	Name                  string
+	AllowedIdPIDs         []string
+	AllowedGroupIDs       []string
+	PolicyIDs             []string
+	PostureRequired       bool
+	WebClientCallbackURIs []string
 }
 
 type AccessApplication struct {
@@ -65,12 +66,13 @@ type AccessApplication struct {
 }
 
 type BootstrapOptions struct {
-	EmailAllowlist      []string
-	DefaultIdPType      string
-	AccessAppName       string
-	WorkersDevSubdomain string
-	PostureEnabled      bool
-	PostureCheckName    string
+	EmailAllowlist        []string
+	DefaultIdPType        string
+	AccessAppName         string
+	WorkersDevSubdomain   string
+	PostureEnabled        bool
+	PostureCheckName      string
+	WebClientCallbackURIs []string
 }
 
 type BootstrapResult struct {
@@ -110,6 +112,12 @@ type IdentityProxy interface {
 	EnsureDevicePosture(ctx context.Context, boundary TrustBoundary, enabled bool, ruleName string) (PosturePolicy, error)
 	SetPostureEnabled(ctx context.Context, boundary TrustBoundary, enabled bool, ruleName string) (PosturePolicy, error)
 	CreateAccessApplication(ctx context.Context, boundary TrustBoundary, spec AccessApplicationSpec) (*AccessApplication, error)
+	EnsureAuthGatewayOIDCRedirectURIs(
+		ctx context.Context,
+		boundary TrustBoundary,
+		accessAppName string,
+		webClientCallbackURIs []string,
+	) error
 	ImpersonationAccessSpec(
 		ctx context.Context,
 		boundary TrustBoundary,

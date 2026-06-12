@@ -2,14 +2,12 @@ import { toJson, type JsonObject } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import { Code, ConnectError, type ConnectRouter } from "@connectrpc/connect";
 
-import {
-  ChatService,
-  ConfigService,
-  DatabaseService,
-  GatewayControlService,
-  InteractionService,
-  LeaderboardService,
-} from "../../server/ragbot/v1/ragbot_pb";
+import { ChatService } from "../../server/ragbot/v1/chat_service_pb";
+import { ConfigService } from "../../server/ragbot/v1/config_service_pb";
+import { DatabaseService } from "../../server/ragbot/v1/database_service_pb";
+import { GatewayControlService } from "../../server/ragbot/v1/gateway_control_service_pb";
+import { InteractionService } from "../../server/ragbot/v1/interaction_service_pb";
+import { LeaderboardService } from "../../server/ragbot/v1/leaderboard_service_pb";
 import {
   errorMessage,
   logger,

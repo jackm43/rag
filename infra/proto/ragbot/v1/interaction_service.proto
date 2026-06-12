@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package ragbot.v1;
+
+message Interaction {
+  int64 id = 1;
+  string kind = 2;
+  string channel_id = 3;
+  string requester_username = 4;
+  string prompt = 5;
+  string response_text = 6;
+  string model = 7;
+  int64 ai_duration_ms = 8;
+  int64 total_duration_ms = 9;
+  string status = 10;
+  string error_message = 11;
+  string created_at = 12;
+}
+
+message ListInteractionsRequest {
+  int32 limit = 1;
+}
+
+message ListInteractionsResponse {
+  repeated Interaction interactions = 1;
+}
+
+service InteractionService {
+  rpc ListInteractions(ListInteractionsRequest) returns (ListInteractionsResponse);
+}

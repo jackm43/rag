@@ -1,6 +1,7 @@
 import { Code, ConnectError } from "@connectrpc/connect";
 
-import { createWorkerServiceClient } from "../../../cloudflare/service";
+import { WorkerService } from "../../../cloudflare/server/cloudflare/v1/worker_service_pb";
+import { serviceClient } from "../../../cloudflare/service";
 import { serviceConnection, type Identity } from "../../../../sdk/ts/src";
 import type { Env } from "./types";
 
@@ -18,5 +19,5 @@ export const workerServiceClient = (env: Env, identity: Identity) => {
   if (!connection) {
     throw new ConnectError("cloudflare connector is not configured", Code.FailedPrecondition);
   }
-  return createWorkerServiceClient(connection, identity);
+  return serviceClient(connection, identity, WorkerService);
 };

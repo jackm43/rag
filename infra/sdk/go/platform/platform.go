@@ -12,12 +12,12 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"jsmunro.me/platy/sdk/auth"
+	"jsmunro.me/platy/sdk/apps/discovery"
 	"jsmunro.me/platy/sdk/client"
-	"jsmunro.me/platy/sdk/discovery"
-	"jsmunro.me/platy/sdk/dpop"
 	"jsmunro.me/platy/sdk/gateway"
 	"jsmunro.me/platy/sdk/httpclient"
+	oauthclient "jsmunro.me/platy/sdk/oauth2/client"
+	"jsmunro.me/platy/sdk/oauth2/client/dpop"
 	"jsmunro.me/platy/sdk/secrets"
 )
 
@@ -138,7 +138,7 @@ func NewSession(ctx context.Context, logger *slog.Logger) (*gateway.Session, err
 		return nil, err
 	}
 	username := CurrentUser()
-	store := &auth.SecretStore{Secrets: service, User: username, Provider: secrets.FileProvider}
+	store := &oauthclient.SecretStore{Secrets: service, User: username, Provider: secrets.FileProvider}
 	key, err := dpop.LoadOrCreate(ctx, service, username, secrets.FileProvider)
 	if err != nil {
 		return nil, fmt.Errorf("device key: %w", err)
@@ -152,16 +152,8 @@ func NewSession(ctx context.Context, logger *slog.Logger) (*gateway.Session, err
 	session.RotateDeviceKey = func(ctx context.Context) (*dpop.Key, error) {
 		return dpop.Rotate(ctx, service, username, secrets.FileProvider)
 	}
-	session.CredentialResolver = func(ctx context.Context, application string) (string, string, error) {
-		document := CredentialDocument(root, application)
-		if document == nil {
-			return "", "", fmt.Errorf("application %s has no stored service credential", application)
-		}
-		resolved, err := service.Application.ResolveServiceClientCredential(ctx, document.Credential)
-		if err != nil {
-			return "", "", err
-		}
-		return resolved.ClientID, resolved.ClientSecret, nil
+	session.CredentialResolver = func(ctx context.Context, application string) (*secrets.ClientCredential, error) {
+		return ResolveApplicationServiceCredential(ctx, service, root, application)
 	}
 	return session, nil
 }
