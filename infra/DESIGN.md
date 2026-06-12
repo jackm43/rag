@@ -265,7 +265,7 @@ Properties the gateway enforces (client must tolerate all of them):
 - If the session is expired, revoked, or the device key is missing, any
   command fails with a single actionable line: "session expired, run: cli
   login" - never a stack trace, never a partial operation.
-- `cli whoami` prints the resolved identity, session expiry, key thumbprint,
+- `cli introspect` prints the resolved identity, session expiry, key thumbprint,
   and the audiences with currently cached STS tokens.
 - `cli logout` revokes the session at the gateway (best effort), then
   deletes local tokens and optionally the device key (`--purge-key`).
@@ -2036,5 +2036,4 @@ possession, explicit delegation, references over values, audit everything -
 do not change as these land. Each item strengthens an existing principle
 rather than introducing a new kind of trust, which is the test every future
 addition must pass.
-
 

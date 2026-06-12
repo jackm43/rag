@@ -75,7 +75,7 @@ const handleDiscovery = async (env: Env): Promise<Response> => {
       session_create: discovered.endpoints.sessionCreate,
       session_refresh: discovered.endpoints.sessionRefresh,
       session_revoke: discovered.endpoints.sessionRevoke,
-      who_am_i: discovered.endpoints.whoAmI,
+      introspect: discovered.endpoints.introspect,
       discovery: discovered.endpoints.discovery,
       jwks: discovered.endpoints.jwks,
     },

@@ -244,7 +244,7 @@ func (s *Session) IdentityClient() idpv1connect.IdentityServiceClient {
 	return idpv1connect.NewIdentityServiceClient(s.HTTPClient, s.GatewayURL)
 }
 
-func (s *Session) WhoAmI(ctx context.Context) (*idpv1.WhoAmIResponse, error) {
+func (s *Session) Introspect(ctx context.Context) (*idpv1.IntrospectResponse, error) {
 	var interceptor connect.Interceptor
 	if actor := impersonate(ctx); actor != "" {
 		interceptor = &tokenInterceptor{token: func(ctx context.Context) (string, error) {
@@ -258,7 +258,7 @@ func (s *Session) WhoAmI(ctx context.Context) (*idpv1.WhoAmIResponse, error) {
 		s.GatewayURL,
 		connect.WithInterceptors(interceptor),
 	)
-	response, err := client.WhoAmI(ctx, connect.NewRequest(&idpv1.WhoAmIRequest{}))
+	response, err := client.Introspect(ctx, connect.NewRequest(&idpv1.IntrospectRequest{}))
 	if err != nil {
 		return nil, err
 	}

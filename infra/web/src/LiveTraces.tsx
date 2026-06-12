@@ -209,8 +209,6 @@ export function LiveTraces({ auth, signedIn }: { auth: TrustZoneWebAuth; signedI
                 <div className="waterfall">
                   {trace.spans.map((span) => {
                     const depth = spanDepth(span, byId);
-                    const left = ((span.startMs - traceStart) / total) * 100;
-                    const width = Math.max((span.durationMs / total) * 100, 1.5);
                     const isSelected = selected === span.spanId;
                     return (
                       <div key={span.spanId}>
@@ -224,12 +222,6 @@ export function LiveTraces({ auth, signedIn }: { auth: TrustZoneWebAuth; signedI
                           >
                             <span className="waterfall-service">{span.service}</span>
                             {shortName(span.name)}
-                          </span>
-                          <span className="waterfall-track">
-                            <span
-                              className={`waterfall-bar svc-c${serviceClass(span.service)}${span.status === "error" ? " error" : ""}`}
-                              style={{ left: `${left}%`, width: `${width}%` }}
-                            />
                           </span>
                           <span className="waterfall-ms">{span.durationMs}ms</span>
                         </button>

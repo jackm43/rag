@@ -167,9 +167,9 @@ message ServiceCredential {
   string client_secret = 2;
 }
 
-message WhoAmIRequest {}
+message IntrospectRequest {}
 
-message WhoAmIResponse {
+message IntrospectResponse {
   string subject = 1;
   string email = 2;
   string token_kind = 3;
@@ -238,7 +238,7 @@ message RevokeSessionResponse {
 }
 
 service IdentityService {
-  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
+  rpc Introspect(IntrospectRequest) returns (IntrospectResponse);
   rpc ExchangeToken(ExchangeTokenRequest) returns (ExchangeTokenResponse);
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   rpc RefreshSession(RefreshSessionRequest) returns (RefreshSessionResponse);
@@ -332,7 +332,7 @@ message Endpoints {
   string session_create = 2;
   string session_refresh = 3;
   string session_revoke = 4;
-  string who_am_i = 5;
+  string introspect = 5;
   string discovery = 6;
   string jwks = 7;
 }

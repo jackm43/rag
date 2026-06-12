@@ -14,7 +14,7 @@ const Usage = `usage: platy <command>
 commands:
   login                                     force a fresh browser login and device-bound gateway session
   logout                                    revoke the gateway session and drop cached tokens
-  whoami [--as <app>]                       show the identity the gateway sees
+  introspect [--as <app>]                   show the identity the gateway sees
   impersonate authorize <app>               authorize service impersonation through Cloudflare Access
   discover                                  refresh local application metadata from the gateway and list methods
   metadata [app]                            list applications and callable methods from local metadata

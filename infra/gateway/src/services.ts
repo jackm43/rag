@@ -405,7 +405,7 @@ export const gatewayEndpoints = (env: Env) => {
     sessionCreate: `${base}/idp.v1.IdentityService/CreateSession`,
     sessionRefresh: `${base}/idp.v1.IdentityService/RefreshSession`,
     sessionRevoke: `${base}/idp.v1.IdentityService/RevokeSession`,
-    whoAmI: `${base}/idp.v1.IdentityService/WhoAmI`,
+    introspect: `${base}/idp.v1.IdentityService/Introspect`,
     discovery: `${base}/api/discovery`,
     jwks: jwksUrl(env),
   };
@@ -419,7 +419,7 @@ export const registerServices = (router: ConnectRouter, env: Env) => {
   };
 
   router.service(IdentityService, {
-    whoAmI: async (_request, context) => {
+    introspect: async (_request, context) => {
       const identity = await authenticate(context.requestHeader, requestDescriptor(context));
       if (!identity) {
         throw new ConnectError("unauthenticated", Code.Unauthenticated);

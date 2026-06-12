@@ -15,9 +15,9 @@ func Login(ctx context.Context) {
 	if _, err := s.UserToken(ctx, true); err != nil {
 		output.Fail("login: %v", err)
 	}
-	response, err := s.WhoAmI(ctx)
+	response, err := s.Introspect(ctx)
 	if err != nil {
-		output.Fail("whoami: %v", err)
+		output.Fail("introspect: %v", err)
 	}
 	output.PrintJSON(map[string]any{
 		"subject":     response.Subject,
@@ -46,20 +46,20 @@ func ImpersonateAuthorize(ctx context.Context, cmdArgs []string) {
 		output.Fail("impersonate authorize: %v", err)
 	}
 	output.PrintJSON(map[string]any{
-		"ok":          true,
-		"application": application,
+		"ok":           true,
+		"application":  application,
 		"token_prefix": token[:min(12, len(token))] + "...",
 	})
 }
 
-func WhoAmI(ctx context.Context, cmdArgs []string) {
+func Introspect(ctx context.Context, cmdArgs []string) {
 	as, _ := args.ParseAsFlag(cmdArgs)
 	if as != "" {
 		ctx = gateway.WithImpersonate(ctx, as)
 	}
-	response, err := platform.Session().WhoAmI(ctx)
+	response, err := platform.Session().Introspect(ctx)
 	if err != nil {
-		output.Fail("whoami: %v", err)
+		output.Fail("introspect: %v", err)
 	}
 	output.PrintJSON(map[string]any{
 		"subject":     response.Subject,
@@ -83,7 +83,7 @@ func Discover(ctx context.Context) {
 		"session create    "+document.Endpoints.SessionCreate,
 		"session refresh   "+document.Endpoints.SessionRefresh,
 		"session revoke    "+document.Endpoints.SessionRevoke,
-		"whoami            "+document.Endpoints.WhoAmI,
+		"introspect        "+document.Endpoints.Introspect,
 		"oidc issuer       "+document.Oidc.Issuer,
 		"oidc authorize    "+document.Oidc.AuthorizationEndpoint,
 		"oidc token        "+document.Oidc.TokenEndpoint,

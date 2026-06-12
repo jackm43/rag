@@ -30,8 +30,8 @@ func main() {
 		cmdauth.Login(ctx)
 	case "logout":
 		cmdauth.Logout(ctx)
-	case "whoami":
-		cmdauth.WhoAmI(ctx, rest)
+	case "introspect":
+		cmdauth.Introspect(ctx, rest)
 	case "impersonate":
 		if len(rest) == 0 {
 			output.UsageExit()

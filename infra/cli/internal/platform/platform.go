@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"gopkg.in/yaml.v3"
 	"jsmunro.me/platy/cli/internal/clientmetadata"
 	"jsmunro.me/platy/cli/internal/env"
 	"jsmunro.me/platy/cli/internal/output"
@@ -91,11 +92,32 @@ func resolveServiceCredential(ctx context.Context, application string) (string, 
 	return resolved.ClientID, resolved.ClientSecret, nil
 }
 
+func gatewayURL() string {
+	if override := env.Or("PLATY_GATEWAY_URL", ""); override != "" {
+		return override
+	}
+	path := filepath.Join(RepoRoot(), "infra", "applications", "applications.yaml")
+	data, err := os.ReadFile(path)
+	if err == nil {
+		var loaded struct {
+			Applications map[string]struct {
+				Endpoint string `yaml:"endpoint"`
+			} `yaml:"applications"`
+		}
+		if yaml.Unmarshal(data, &loaded) == nil {
+			if idp, ok := loaded.Applications["idp"]; ok && idp.Endpoint != "" {
+				return idp.Endpoint
+			}
+		}
+	}
+	return DefaultGatewayURL
+}
+
 func Session() *gateway.Session {
 	secretsSvc := secrets.Service()
 	user := currentUser()
 	provider := sdksecrets.FileProvider
-	s := gateway.NewSession(env.Or("PLATY_GATEWAY_URL", DefaultGatewayURL), tokenStore(), output.Logger)
+	s := gateway.NewSession(gatewayURL(), tokenStore(), output.Logger)
 	s.Local = DiscoveryService()
 	s.RotateDeviceKey = func(ctx context.Context) (*dpop.Key, error) {
 		return dpop.Rotate(ctx, secretsSvc, user, provider)

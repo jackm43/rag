@@ -24,7 +24,7 @@ type Endpoints struct {
 	SessionCreate  string `json:"session_create"`
 	SessionRefresh string `json:"session_refresh"`
 	SessionRevoke  string `json:"session_revoke"`
-	WhoAmI         string `json:"who_am_i"`
+	Introspect     string `json:"introspect"`
 	Discovery      string `json:"discovery"`
 	Jwks           string `json:"jwks"`
 }

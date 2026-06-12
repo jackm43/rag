@@ -31,7 +31,7 @@ generated connect-go clients are wire compatible with gRPC semantics).
  - STS issuer: RFC 8693 token exchange at `idp.v1.IdentityService/ExchangeToken`, ES256 JWTs (5 minute lifetime), signing keys rotated weekly in the `SigningKeys` Durable Object, JWKS at `/.well-known/jwks.json`
  - sessions: `CreateSession`/`RefreshSession`/`RevokeSession` issue device-bound user sessions (DPoP, RFC 9449); access tokens carry `cnf.jkt` and `sid`, refresh tokens rotate on every use (reuse revokes the session and is audited), refresh lifetime 12 months; every refresh and every use of a `cnf`-bound token requires a fresh DPoP proof or the CLI falls back to the browser flow
  - registry: applications, resources/methods (scopes), delegations (which audiences/scopes an application may chain to), service clients (hashed secrets, only issued when none exist; rotate explicitly), audit log in its own D1 (`infra/gateway/schema.sql`)
- - discovery: `GET /api/discovery` (issuer, full endpoint map including session/exchange/jwks/whoami endpoints, OIDC client metadata, registered applications with delegations)
+ - discovery: `GET /api/discovery` (issuer, full endpoint map including session/exchange/jwks/introspect endpoints, OIDC client metadata, registered applications with delegations)
  - trace store: `POST /v1/traces` ingests OTLP JSON from workers (authenticated with their service credential `Bearer <client_id>:<client_secret>`), 7-day retention in `idp_spans`; reads are a normal platform service — `idp.v1.TraceService` (`ListTraces`, `GetTrace`, server-streaming `StreamTraces` live tail) behind the standard protect policy, with generated Go/TS clients like any other RPC (`platy fetch idp.TraceService.ListTraces`)
  - client identities: `idp.v1.ClientIdentityService` (`RegisterClientIdentity`, `ListClientIdentities`) federates application sub-identities (e.g. one chat conversation) with the platform IdP — registered by the application acting for the user over a scoped delegation, stored in `idp_client_identities` (application, subject, key thumbprint), returning a gateway-signed ES256 identity token (`aud` = application, `sub` = user, `cnf.jkt` = the instance key, `act` = the registering chain)
  - subject tokens: Access OIDC access tokens, gateway STS tokens (chaining requires a service-credential actor token, recorded in the `act` claim and validated against the actor's registered delegations), or service credentials
@@ -88,7 +88,7 @@ in `infra/cli/internal/platform/platform.go`):
 ```bash
 go build -o platy jsmunro.me/platy/cli
 ./platy login
-./platy whoami
+./platy introspect
 ./platy discover
 ./platy metadata ragbot
 ./platy fetch ragbot --help

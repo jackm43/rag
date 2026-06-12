@@ -159,12 +159,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .waterfall-row {
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(180px, 34%) 1fr 64px;
-  align-items: center;
-  gap: 0.6rem;
+  grid-template-columns: minmax(0, 1fr) 64px;
+  align-items: start;
+  gap: 0.75rem;
   background: transparent;
   border: 0;
-  padding: 0.18rem 0.2rem;
+  padding: 0.28rem 0.2rem;
   font: inherit;
   font-size: 0.74rem;
   color: var(--text);
@@ -173,12 +173,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .waterfall-row:hover, .waterfall-row.selected { background: var(--assistant); }
 .waterfall-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   gap: 0.4rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .waterfall-service {
   flex: none;
@@ -187,29 +188,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-radius: 4px;
   background: var(--assistant);
 }
-.waterfall-track {
-  position: relative;
-  height: 10px;
-  background: var(--panel);
-  border-radius: 5px;
-  overflow: hidden;
-}
-.waterfall-bar {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  border-radius: 5px;
-  min-width: 3px;
-}
-.waterfall-bar.error { background: #f87171 !important; }
-.waterfall-ms { color: var(--muted); text-align: right; }
+.waterfall-ms { color: var(--muted); text-align: right; padding-top: 0.02rem; }
 
-.svc-c0 .waterfall-service, .waterfall-bar.svc-c0 { background: #2563eb; color: #dbeafe; }
-.svc-c1 .waterfall-service, .waterfall-bar.svc-c1 { background: #7c3aed; color: #ede9fe; }
-.svc-c2 .waterfall-service, .waterfall-bar.svc-c2 { background: #0d9488; color: #ccfbf1; }
-.svc-c3 .waterfall-service, .waterfall-bar.svc-c3 { background: #d97706; color: #fef3c7; }
-.svc-c4 .waterfall-service, .waterfall-bar.svc-c4 { background: #db2777; color: #fce7f3; }
-.svc-c5 .waterfall-service, .waterfall-bar.svc-c5 { background: #65a30d; color: #ecfccb; }
+.svc-c0 .waterfall-service { background: #2563eb; color: #dbeafe; }
+.svc-c1 .waterfall-service { background: #7c3aed; color: #ede9fe; }
+.svc-c2 .waterfall-service { background: #0d9488; color: #ccfbf1; }
+.svc-c3 .waterfall-service { background: #d97706; color: #fef3c7; }
+.svc-c4 .waterfall-service { background: #db2777; color: #fce7f3; }
+.svc-c5 .waterfall-service { background: #65a30d; color: #ecfccb; }
 
 .span-detail {
   margin: 0.1rem 0.4rem 0.4rem;

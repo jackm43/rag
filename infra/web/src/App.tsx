@@ -183,7 +183,7 @@ export function App({ auth, signedIn: initialSignedIn }: { auth: TrustZoneWebAut
   return (
     <>
       <header className="topbar">
-        <div className="brand"><span className="lock">🔐</span> Trust Zone Chat</div>
+        <div className="brand"><span className="lock">🔐</span>Chat</div>
         <div className="session">
           <span className={`status${signedIn ? " active" : ""}`}>{signedIn ? "signed in" : "signed out"}</span>
           {signedIn ? (
