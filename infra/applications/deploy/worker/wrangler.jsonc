@@ -1,0 +1,35 @@
+{
+  "name": "deploy",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "deploy.jsmunro.me",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.me",
+    "CLOUDFLARE_ENDPOINT": "https://cloudflare.jsmunro.me"
+  },
+  "services": [
+    {
+      "binding": "AUTH_GATEWAY",
+      "service": "auth-gateway"
+    },
+    {
+      "binding": "CLOUDFLARE",
+      "service": "cloudflare"
+    }
+  ],
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  }
+}

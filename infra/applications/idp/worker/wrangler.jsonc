@@ -1,0 +1,81 @@
+{
+  "name": "auth-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  // Same-origin API routes for browser clients: the chat app calls the gateway
+  // on its own origin (no CORS). Routes take precedence over the chat worker's
+  // custom domain for these path prefixes. The canonical endpoint is the
+  // custom domain — workers.dev is disabled everywhere so endpoints map to
+  // applications one-to-one.
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "auth-gateway.jsmunro.me",
+      "custom_domain": true
+    },
+    {
+      "pattern": "chat.jsmunro.me/idp.v1.*",
+      "zone_name": "jsmunro.me"
+    },
+    {
+      "pattern": "chat.jsmunro.me/api/*",
+      "zone_name": "jsmunro.me"
+    },
+    {
+      "pattern": "chat.jsmunro.me/.well-known/jwks.json",
+      "zone_name": "jsmunro.me"
+    },
+    {
+      "pattern": "console.jsmunro.me/idp.v1.*",
+      "zone_name": "jsmunro.me"
+    },
+    {
+      "pattern": "console.jsmunro.me/api/*",
+      "zone_name": "jsmunro.me"
+    },
+    {
+      "pattern": "console.jsmunro.me/.well-known/jwks.json",
+      "zone_name": "jsmunro.me"
+    }
+  ],
+  "vars": {
+    "ACCESS_TEAM_DOMAIN": "https://jsmunro.cloudflareaccess.com",
+    "ACCESS_OIDC_CLIENT_ID": "ac54e29071a4290c456817550ba97163740dcca388330f33e6a77660c0bbc4ee",
+    "GATEWAY_ISSUER": "https://auth-gateway.jsmunro.me",
+    "ALLOWED_EMAILS": "jack@jsmunro.me",
+    "GATEWAY_ALLOWED_ORIGINS": "https://chat.jsmunro.me,https://console.jsmunro.me,http://localhost:8788",
+    "OTEL_SERVICE_NAME": "auth-gateway"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "rag-auth-gateway",
+      "database_id": "a9f82149-e5d2-446a-b559-e5eeaf612ddb"
+    }
+  ],
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SIGNING_KEYS",
+        "class_name": "SigningKeys"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "SigningKeys"
+      ]
+    }
+  ]
+}

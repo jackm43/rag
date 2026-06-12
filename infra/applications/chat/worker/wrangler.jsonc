@@ -1,0 +1,44 @@
+{
+  "name": "chat",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-04-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [{"pattern": "chat.jsmunro.me", "custom_domain": true}],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/client/*",
+      "/aigateway.v1.*",
+      "/ragbot.v1.ConfigService/*",
+      "/ragbot.v1.GatewayControlService/*",
+      "/ragbot.v1.InteractionService/*",
+      "/ragbot.v1.LeaderboardService/*"
+    ]
+  },
+  "vars": {
+      "AIGATEWAY_ENDPOINT": "https://aigateway.jsmunro.me",
+      "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.me",
+      "OTEL_SERVICE_NAME": "chat",
+      "RAGBOT_ENDPOINT": "https://ragbot.jsmunro.me"
+    },
+  "services": [
+    {
+      "binding": "AUTH_GATEWAY",
+      "service": "auth-gateway"
+    },
+    {
+      "binding": "AIGATEWAY",
+      "service": "aigateway"
+    },
+    {
+      "binding": "RAGBOT",
+      "service": "ragbot-worker"
+    }
+  ],
+  "observability": {
+    "logs": {"enabled": true, "invocation_logs": true}
+  }
+}

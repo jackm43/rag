@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package idp.v1;
+
+message TraceSummary {
+  string trace_id = 1;
+  string root = 2;
+  string service = 3;
+  string actor = 4;
+  string actor_chain = 5;
+  string client_instance = 6;
+  string start = 7;
+  int64 duration_ms = 8;
+  string status = 9;
+  int32 spans = 10;
+}
+
+message ListTracesRequest {
+  int32 limit = 1;
+}
+
+message ListTracesResponse {
+  repeated TraceSummary traces = 1;
+}
+
+message GetTraceRequest {
+  string trace_id = 1;
+}
+
+message TraceSpan {
+  string span_id = 1;
+  string parent_span_id = 2;
+  string service = 3;
+  string name = 4;
+  string kind = 5;
+  string start = 6;
+  int64 duration_ms = 7;
+  string status = 8;
+  string error = 9;
+  string attributes_json = 10;
+}
+
+message GetTraceResponse {
+  string trace_id = 1;
+  repeated TraceSpan spans = 2;
+}
+
+message StreamTracesRequest {}
+
+message StreamedSpan {
+  string trace_id = 1;
+  TraceSpan span = 2;
+}
+
+service TraceService {
+  rpc ListTraces(ListTracesRequest) returns (ListTracesResponse);
+  rpc GetTrace(GetTraceRequest) returns (GetTraceResponse);
+  rpc StreamTraces(StreamTracesRequest) returns (stream StreamedSpan);
+}

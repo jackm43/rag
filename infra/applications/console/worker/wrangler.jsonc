@@ -1,0 +1,19 @@
+{
+  "name": "console",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-04-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [{"pattern": "console.jsmunro.me", "custom_domain": true}],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/client/*","/deploy.v1.DeployService/*","/discovery.v1.DiscoveryService/*","/ragbot.v1.ConfigService/*","/ragbot.v1.GatewayControlService/*"]
+  },
+  "vars": {"AUTH_GATEWAY_URL":"https://auth-gateway.jsmunro.me","DEPLOY_ENDPOINT":"https://deploy.jsmunro.me","DISCOVERY_ENDPOINT":"https://discovery.jsmunro.me","OTEL_SERVICE_NAME":"console","RAGBOT_ENDPOINT":"https://ragbot.jsmunro.me"},
+  "services": [{"binding":"AUTH_GATEWAY","service":"auth-gateway"},{"binding":"DEPLOY","service":"deploy"},{"binding":"DISCOVERY","service":"discovery"},{"binding":"RAGBOT","service":"ragbot-worker"}],
+  "observability": {
+    "logs": {"enabled": true, "invocation_logs": true}
+  }
+}

@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+package idp.v1;
+
+message ResourceMethod {
+  string name = 1;
+  string scope = 2;
+}
+
+message Resource {
+  string name = 1;
+  repeated ResourceMethod methods = 2;
+}
+
+message Delegation {
+  string audience = 1;
+  repeated string scopes = 2;
+}
+
+message TrustBoundary {
+  string provider = 1;
+  string account_id = 2;
+  string team_id = 3;
+  string team_name = 4;
+  string team_domain = 5;
+}
+
+message IdentityProvider {
+  string id = 1;
+  string name = 2;
+  string type = 3;
+}
+
+message AccessGroup {
+  string id = 1;
+  string name = 2;
+}
+
+message PostureCheck {
+  string type = 1;
+}
+
+message PosturePolicy {
+  bool enabled = 1;
+  string rule_id = 2;
+  repeated PostureCheck checks = 3;
+}
+
+message ApplicationAccess {
+  repeated string allowed_groups = 1;
+  repeated string allowed_idps = 2;
+  bool posture_required = 3;
+}
+
+message ZeroTrustGatewaySettings {
+  bool tls_decrypt = 1;
+  string inspection_mode = 2;
+}
+
+message ZeroTrustDeviceSettings {
+  bool gateway_proxy_enabled = 1;
+  bool gateway_udp_proxy_enabled = 2;
+}
+
+message PostureCheckSpec {
+  string type = 1;
+  string name = 2;
+}
+
+message ZeroTrustPostureSpec {
+  repeated PostureCheckSpec checks = 1;
+}
+
+message ZeroTrustSettings {
+  ZeroTrustGatewaySettings gateway = 1;
+  ZeroTrustDeviceSettings devices = 2;
+  ZeroTrustPostureSpec posture = 3;
+}
+
+message AccessPolicyMfaConfig {
+  string session_duration = 1;
+}
+
+message AccessPolicySpec {
+  bool approval_required = 1;
+  bool purpose_justification_required = 2;
+  string session_duration = 3;
+  bool isolation_required = 4;
+  bool require_posture = 5;
+  AccessPolicyMfaConfig mfa_config = 6;
+}
+
+message EnrollStaffPolicy {
+  repeated string idp_types = 1;
+  bool require_posture = 2;
+}
+
+message EnrollContractorPolicy {
+  repeated string idp_types = 1;
+  bool require_warp_or_rbi = 2;
+}
+
+message EnrollOnSuccess {
+  string grant_group = 1;
+  bool gateway_session = 2;
+}
+
+message EnrollOnRevoke {
+  bool require_reenroll = 1;
+}
+
+message EnrollPolicy {
+  EnrollStaffPolicy staff = 1;
+  EnrollContractorPolicy contractor = 2;
+  EnrollOnSuccess on_success = 3;
+  EnrollOnRevoke on_revoke = 4;
+}
+
+message TrustZoneSpec {
+  string name = 1;
+  string description = 2;
+  string team_label = 3;
+  repeated string groups = 4;
+  AccessPolicySpec access_policy = 5;
+  EnrollPolicy enroll = 6;
+  string role = 7;
+}
+
+message OrganizationSpec {
+  string name = 1;
+  string provider = 2;
+}
+
+message OrganizationPolicy {
+  OrganizationSpec organization = 1;
+  repeated TrustZoneSpec trust_zones = 2;
+  ZeroTrustSettings zero_trust = 3;
+}
+
+message ProviderConfig {
+  TrustBoundary boundary = 1;
+  repeated IdentityProvider identity_providers = 2;
+  repeated AccessGroup groups = 3;
+  repeated string email_allowlist = 4;
+  PosturePolicy posture = 5;
+  OrganizationPolicy organization = 6;
+}
+
+message Application {
+  string name = 1;
+  string audience = 2;
+  string endpoint = 3;
+  string description = 4;
+  repeated Resource resources = 5;
+  int64 created_at = 6;
+  int64 updated_at = 7;
+  repeated Delegation delegations = 8;
+  string provider = 9;
+  TrustBoundary trust_boundary = 10;
+  ApplicationAccess access = 11;
+  string trust_zone = 12;
+  string impersonation_access_client_id = 13;
+  string provider_oauth_client_id = 14;
+  repeated string provider_oauth_scopes = 15;
+}
+
+message ServiceCredential {
+  string client_id = 1;
+  string client_secret = 2;
+}

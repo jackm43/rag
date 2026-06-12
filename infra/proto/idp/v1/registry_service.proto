@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package idp.v1;
+
+import "idp/v1/types.proto";
+
+message RegisterApplicationRequest {
+  string name = 1;
+  string endpoint = 2;
+  string description = 3;
+  repeated Resource resources = 4;
+  repeated Delegation delegations = 5;
+  string provider = 6;
+  TrustBoundary trust_boundary = 7;
+  ApplicationAccess access = 8;
+  string trust_zone = 9;
+  string impersonation_access_client_id = 10;
+  string provider_oauth_client_id = 11;
+  repeated string provider_oauth_scopes = 12;
+}
+
+message RegisterApplicationResponse {
+  Application application = 1;
+  ServiceCredential credential = 2;
+}
+
+message GetApplicationRequest {
+  string name = 1;
+}
+
+message GetApplicationResponse {
+  Application application = 1;
+}
+
+message ListApplicationsRequest {}
+
+message ListApplicationsResponse {
+  repeated Application applications = 1;
+}
+
+message DeleteApplicationRequest {
+  string name = 1;
+}
+
+message DeleteApplicationResponse {
+  bool deleted = 1;
+}
+
+message RegisterClientRequest {
+  string application = 1;
+}
+
+message RegisterClientResponse {
+  ServiceCredential credential = 1;
+}
+
+message UpsertProviderConfigRequest {
+  string config_json = 1;
+}
+
+message UpsertProviderConfigResponse {
+  ProviderConfig config = 1;
+}
+
+message GetProviderConfigRequest {}
+
+message GetProviderConfigResponse {
+  ProviderConfig config = 1;
+}
+
+service RegistryService {
+  rpc RegisterApplication(RegisterApplicationRequest) returns (RegisterApplicationResponse);
+  rpc GetApplication(GetApplicationRequest) returns (GetApplicationResponse);
+  rpc ListApplications(ListApplicationsRequest) returns (ListApplicationsResponse);
+  rpc DeleteApplication(DeleteApplicationRequest) returns (DeleteApplicationResponse);
+  rpc RegisterClient(RegisterClientRequest) returns (RegisterClientResponse);
+  rpc UpsertProviderConfig(UpsertProviderConfigRequest) returns (UpsertProviderConfigResponse);
+  rpc GetProviderConfig(GetProviderConfigRequest) returns (GetProviderConfigResponse);
+}

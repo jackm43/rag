@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package idp.v1;
+
+import "platy/oauth/v1/session.proto";
+import "platy/oauth/v1/token.proto";
+
+message IntrospectRequest {}
+
+message Principal {
+  string kind = 1;
+  string sub = 2;
+  string email = 3;
+  repeated string act = 4;
+}
+
+message IntrospectResponse {
+  Principal principal = 1;
+  repeated string scopes = 2;
+}
+
+message ExchangeProviderTokenRequest {
+  string subject_token = 1;
+  string application = 2;
+  reserved 3;
+  reserved "provider_scopes";
+}
+
+message ExchangeProviderTokenResponse {
+  string access_token = 1;
+  int64 expires_in = 2;
+  string authorize_url = 3;
+}
+
+service IdentityService {
+  rpc Introspect(IntrospectRequest) returns (IntrospectResponse);
+  rpc ExchangeToken(oauth.v1.TokenExchangeRequest) returns (oauth.v1.TokenExchangeResponse);
+  rpc ExchangeProviderToken(ExchangeProviderTokenRequest) returns (ExchangeProviderTokenResponse);
+  rpc CreateSession(oauth.v1.CreateSessionRequest) returns (oauth.v1.CreateSessionResponse);
+  rpc RefreshSession(oauth.v1.RefreshSessionRequest) returns (oauth.v1.RefreshSessionResponse);
+  rpc RevokeSession(oauth.v1.RevokeSessionRequest) returns (oauth.v1.RevokeSessionResponse);
+}

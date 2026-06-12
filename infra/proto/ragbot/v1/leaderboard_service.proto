@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package ragbot.v1;
+
+message RagTotal {
+  string user_id = 1;
+  string username = 2;
+  int64 rag_count = 3;
+  string updated_at = 4;
+}
+
+message ListTotalsRequest {
+  int32 limit = 1;
+}
+
+message ListTotalsResponse {
+  repeated RagTotal totals = 1;
+}
+
+service LeaderboardService {
+  rpc ListTotals(ListTotalsRequest) returns (ListTotalsResponse);
+}
