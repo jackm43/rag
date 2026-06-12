@@ -51,12 +51,15 @@ func (e *apiEnvelope) decode(target any) error {
 }
 
 type oauthClientInfo struct {
-	ClientID   string   `json:"client_id"`
-	ClientName string   `json:"client_name"`
-	Scopes     []string `json:"scopes"`
+	ClientID     string   `json:"client_id"`
+	ClientName   string   `json:"client_name"`
+	ClientSecret string   `json:"client_secret"`
+	Scopes       []string `json:"scopes"`
 }
 
-var defaultOauthScopeIDs = cfcloud.PlatformScopeIDs()
+func applicationOAuthClientName(application string) string {
+	return "platy-app-" + application
+}
 
 func normalizeAccessTeamDomain(raw string) string {
 	raw = strings.TrimSpace(raw)
@@ -747,37 +750,61 @@ func (p *cloudflareProvider) ensureWorkerDevBypassApp(ctx context.Context, accou
 
 func (p *cloudflareProvider) EnsureWorkersDevBypassApps(ctx context.Context, boundary core.TrustBoundary, subdomain string) error {
 	bypassPolicyID := p.findBypassPolicy(ctx, boundary.AccountID)
-	for _, worker := range []string{"auth-gateway", "deploy"} {
+	for _, worker := range []string{"auth-gateway", "deploy", "cloudflare"} {
 		domain := fmt.Sprintf("%s.%s.workers.dev", worker, subdomain)
 		p.ensureWorkerDevBypassApp(ctx, boundary.AccountID, worker, domain, bypassPolicyID)
 	}
 	return nil
 }
 
-func (p *cloudflareProvider) selectOauthScopes(ctx context.Context, override string) []string {
-	if override != "" {
-		return strings.FieldsFunc(override, func(r rune) bool { return r == ',' || r == ' ' })
+func (p *cloudflareProvider) EnsureWebClientBypassAccess(
+	ctx context.Context,
+	boundary core.TrustBoundary,
+	application, domain string,
+) error {
+	bypassPolicyID := p.findBypassPolicy(ctx, boundary.AccountID)
+	policyLinks := []zero_trust.AccessApplicationNewParamsBodySelfHostedApplicationPolicyUnion{
+		zero_trust.AccessApplicationNewParamsBodySelfHostedApplicationPoliciesAccessAppPolicyLink{
+			ID:         cf.F(bypassPolicyID),
+			Precedence: cf.F(int64(1)),
+		},
 	}
-	envelope := &apiEnvelope{}
-	if err := p.client.Get(ctx, "oauth/scopes", nil, envelope); err != nil {
-		output.Fail("list oauth scopes: %v", err)
+	updatePolicyLinks := []zero_trust.AccessApplicationUpdateParamsBodySelfHostedApplicationPolicyUnion{
+		zero_trust.AccessApplicationUpdateParamsBodySelfHostedApplicationPoliciesAccessAppPolicyLink{
+			ID:         cf.F(bypassPolicyID),
+			Precedence: cf.F(int64(1)),
+		},
 	}
-	var scopes []struct {
-		ID string `json:"id"`
+	appID := p.findSelfHostedAccessAppID(ctx, boundary.AccountID, domain)
+	if appID != "" {
+		_, err := p.client.ZeroTrust.Access.Applications.Update(ctx, zero_trust.AppIDParam(appID), zero_trust.AccessApplicationUpdateParams{
+			AccountID: cf.F(boundary.AccountID),
+			Body: zero_trust.AccessApplicationUpdateParamsBodySelfHostedApplication{
+				Type:     cf.F(zero_trust.ApplicationTypeSelfHosted),
+				Domain:   cf.F(domain),
+				Policies: cf.F(updatePolicyLinks),
+			},
+		})
+		if err != nil {
+			return err
+		}
+		output.Logger.Info("updated web client access application to bypass", "application", application, "domain", domain)
+		return nil
 	}
-	if err := envelope.decode(&scopes); err != nil {
-		output.Fail("decode oauth scopes: %v", err)
+	_, err := p.client.ZeroTrust.Access.Applications.New(ctx, zero_trust.AccessApplicationNewParams{
+		AccountID: cf.F(boundary.AccountID),
+		Body: zero_trust.AccessApplicationNewParamsBodySelfHostedApplication{
+			Type:     cf.F(zero_trust.ApplicationTypeSelfHosted),
+			Name:     cf.F(application + " web client"),
+			Domain:   cf.F(domain),
+			Policies: cf.F(policyLinks),
+		},
+	})
+	if err != nil {
+		return err
 	}
-	available := map[string]string{}
-	for _, scope := range scopes {
-		available[strings.ToLower(scope.ID)] = scope.ID
-	}
-	selected := cfcloud.FilterAvailableScopeIDs(available, defaultOauthScopeIDs)
-	if len(selected) == 0 {
-		output.Fail("no default oauth scopes are available; pass --oauth-scopes explicitly")
-	}
-	output.Logger.Info("selected oauth scopes", "scopes", strings.Join(selected, ","))
-	return selected
+	output.Logger.Info("created web client bypass access application", "application", application, "domain", domain)
+	return nil
 }
 
 func oauthScopesEqual(a, b []string) bool {
@@ -796,6 +823,61 @@ func oauthScopesEqual(a, b []string) bool {
 	return true
 }
 
+func (p *cloudflareProvider) finalizeOAuthClientRotation(ctx context.Context, accountID, clientID string) error {
+	path := fmt.Sprintf("accounts/%s/oauth_clients/%s/rotate_secret", accountID, clientID)
+	envelope := &apiEnvelope{}
+	if err := p.client.Delete(ctx, path, nil, envelope); err != nil {
+		return fmt.Errorf("finalize oauth client rotation: %w", err)
+	}
+	if err := envelope.decode(&struct{}{}); err != nil {
+		return err
+	}
+	output.Logger.Info("finalized oauth client secret rotation", "client_id", clientID)
+	return nil
+}
+
+func (p *cloudflareProvider) DeleteApplicationOAuthClient(ctx context.Context, boundary core.TrustBoundary, clientID string) error {
+	path := fmt.Sprintf("accounts/%s/oauth_clients/%s", boundary.AccountID, clientID)
+	envelope := &apiEnvelope{}
+	if err := p.client.Delete(ctx, path, nil, envelope); err != nil {
+		return fmt.Errorf("delete oauth client: %w", err)
+	}
+	return envelope.decode(&struct{}{})
+}
+
+func (p *cloudflareProvider) RotateApplicationOAuthClientSecret(ctx context.Context, boundary core.TrustBoundary, clientID string) (string, error) {
+	path := fmt.Sprintf("accounts/%s/oauth_clients/%s/rotate_secret", boundary.AccountID, clientID)
+	envelope := &apiEnvelope{}
+	if err := p.client.Post(ctx, path, nil, envelope); err != nil {
+		if strings.Contains(err.Error(), "70721") {
+			if deleteErr := p.finalizeOAuthClientRotation(ctx, boundary.AccountID, clientID); deleteErr != nil {
+				return "", fmt.Errorf("clear rotated oauth client secret: %w", deleteErr)
+			}
+			envelope = &apiEnvelope{}
+			if err := p.client.Post(ctx, path, nil, envelope); err != nil {
+				return "", fmt.Errorf("rotate oauth client secret: %w", err)
+			}
+		} else {
+			return "", fmt.Errorf("rotate oauth client secret: %w", err)
+		}
+	}
+	result := &struct {
+		ClientSecret string `json:"client_secret"`
+	}{}
+	if err := envelope.decode(result); err != nil {
+		return "", err
+	}
+	if result.ClientSecret == "" {
+		return "", fmt.Errorf("rotate oauth client secret returned empty secret")
+	}
+	output.Logger.Info("rotated application oauth client secret", "client_id", clientID)
+	return result.ClientSecret, nil
+}
+
+func (p *cloudflareProvider) FinalizeApplicationOAuthClientRotation(ctx context.Context, boundary core.TrustBoundary, clientID string) error {
+	return p.finalizeOAuthClientRotation(ctx, boundary.AccountID, clientID)
+}
+
 func (p *cloudflareProvider) updateOAuthClientScopes(ctx context.Context, accountID, clientID string, scopes []string) error {
 	path := fmt.Sprintf("accounts/%s/oauth_clients/%s", accountID, clientID)
 	envelope := &apiEnvelope{}
@@ -809,54 +891,83 @@ func (p *cloudflareProvider) updateOAuthClientScopes(ctx context.Context, accoun
 	return nil
 }
 
-func (p *cloudflareProvider) EnsureOAuthClient(ctx context.Context, boundary core.TrustBoundary, name string, scopesOverride string) (string, []string, error) {
-	scopes := p.selectOauthScopes(ctx, scopesOverride)
-	listEnvelope := &apiEnvelope{}
+func (p *cloudflareProvider) EnsureApplicationOAuthClient(
+	ctx context.Context,
+	boundary core.TrustBoundary,
+	application string,
+	wantedScopes []string,
+	callbackURL string,
+) (string, string, []string, error) {
+	scopes := cfcloud.WithOfflineAccess(cfcloud.FilterAvailableScopeIDs(p.availableOauthScopes(ctx), wantedScopes))
+	if len(scopes) == 0 {
+		return "", "", nil, fmt.Errorf("no provider oauth scopes are available for %s", application)
+	}
+	name := applicationOAuthClientName(application)
 	path := fmt.Sprintf("accounts/%s/oauth_clients", boundary.AccountID)
+	listEnvelope := &apiEnvelope{}
 	if err := p.client.Get(ctx, path, nil, listEnvelope); err == nil {
 		var existing []oauthClientInfo
 		if err := listEnvelope.decode(&existing); err == nil {
 			for _, candidate := range existing {
-				if candidate.ClientName == name {
-					if !oauthScopesEqual(candidate.Scopes, scopes) {
-						if err := p.updateOAuthClientScopes(ctx, boundary.AccountID, candidate.ClientID, scopes); err != nil {
-							return "", nil, err
-						}
-					} else {
-						output.Logger.Info("reusing oauth client", "client_id", candidate.ClientID)
-					}
-					return candidate.ClientID, scopes, nil
+				if candidate.ClientName != name {
+					continue
 				}
+				if !oauthScopesEqual(candidate.Scopes, scopes) {
+					if err := p.updateOAuthClientScopes(ctx, boundary.AccountID, candidate.ClientID, scopes); err != nil {
+						return "", "", nil, err
+					}
+				} else {
+					output.Logger.Info("reusing application oauth client", "application", application, "client_id", candidate.ClientID)
+				}
+				return candidate.ClientID, "", scopes, nil
 			}
 		}
 	}
+	redirects := []string{
+		strings.TrimRight(callbackURL, "/") + "/provider/oauth/callback",
+		auth.RedirectURL,
+		fmt.Sprintf("http://localhost:%d/callback", auth.CallbackPort),
+	}
 	body := map[string]any{
 		"client_name":                name,
-		"grant_types":                []string{"authorization_code"},
+		"grant_types":                []string{"authorization_code", "refresh_token"},
 		"response_types":             []string{"code"},
-		"token_endpoint_auth_method": "none",
-		"redirect_uris": []string{
-			auth.RedirectURL,
-			fmt.Sprintf("http://localhost:%d/callback", auth.CallbackPort),
-		},
-		"scopes": scopes,
+		"token_endpoint_auth_method": "client_secret_post",
+		"redirect_uris":              redirects,
+		"scopes":                     scopes,
+		"visibility":                 "private",
 	}
 	createEnvelope := &apiEnvelope{}
 	if err := p.client.Post(ctx, path, body, createEnvelope); err != nil {
-		if strings.Contains(err.Error(), "403") {
-			output.Fail(
-				"create oauth client: %v (the API token needs OAuth Clients Write; create one at https://dash.cloudflare.com/profile/api-tokens or add that permission to the token used by bootstrap)",
-				err,
-			)
-		}
-		return "", nil, fmt.Errorf("create oauth client: %w", err)
+		return "", "", nil, fmt.Errorf("create application oauth client: %w", err)
 	}
 	created := &oauthClientInfo{}
 	if err := createEnvelope.decode(created); err != nil {
-		return "", nil, fmt.Errorf("decode oauth client response: %w", err)
+		return "", "", nil, fmt.Errorf("decode application oauth client response: %w", err)
 	}
-	output.Logger.Info("created oauth client", "client_id", created.ClientID)
-	return created.ClientID, scopes, nil
+	if created.ClientSecret == "" {
+		return "", "", nil, fmt.Errorf("cloudflare did not return a provider oauth client secret")
+	}
+	output.Logger.Info("created application oauth client", "application", application, "client_id", created.ClientID)
+	return created.ClientID, created.ClientSecret, scopes, nil
+}
+
+func (p *cloudflareProvider) availableOauthScopes(ctx context.Context) map[string]string {
+	envelope := &apiEnvelope{}
+	if err := p.client.Get(ctx, "oauth/scopes", nil, envelope); err != nil {
+		output.Fail("list oauth scopes: %v", err)
+	}
+	var scopes []struct {
+		ID string `json:"id"`
+	}
+	if err := envelope.decode(&scopes); err != nil {
+		output.Fail("decode oauth scopes: %v", err)
+	}
+	available := map[string]string{}
+	for _, scope := range scopes {
+		available[strings.ToLower(scope.ID)] = scope.ID
+	}
+	return available
 }
 
 func (p *cloudflareProvider) Bootstrap(ctx context.Context, boundary core.TrustBoundary, opts core.BootstrapOptions) (*core.BootstrapResult, error) {
@@ -923,7 +1034,7 @@ func (p *cloudflareProvider) Bootstrap(ctx context.Context, boundary core.TrustB
 		return nil, err
 	}
 
-	result := &core.BootstrapResult{
+	return &core.BootstrapResult{
 		Boundary:           boundary,
 		IdentityProviders:  identityProviders,
 		Groups:             groups,
@@ -931,14 +1042,5 @@ func (p *cloudflareProvider) Bootstrap(ctx context.Context, boundary core.TrustB
 		AdminPolicyID:      adminPolicyID,
 		Posture:            posture,
 		AccessOIDCClientID: accessClientID,
-	}
-	if !opts.SkipOAuthClient {
-		oauthClientID, scopes, err := p.EnsureOAuthClient(ctx, boundary, opts.OAuthClientName, opts.OAuthScopes)
-		if err != nil {
-			return nil, err
-		}
-		result.OAuthClientID = oauthClientID
-		result.OAuthScopes = scopes
-	}
-	return result, nil
+	}, nil
 }

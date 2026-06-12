@@ -1,7 +1,10 @@
-import type { Identity } from "../identity";
+import { requireSenderConstraint } from "../authz/constraints";
+import { verifyMintedToken } from "../authz/minted";
+import { ttlCache } from "../client/cache";
 import { chainExchange, type ServiceCredential } from "../client/exchange";
+import type { Identity } from "../identity";
 import { verifyStsToken, type StsVerifierConfig } from "../verify/sts";
-import { bearerToken, requireSenderConstraint, type Authenticator } from "./authenticators";
+import { bearerToken, type Authenticator } from "./authenticators";
 
 export type SessionChainConfig = {
   // Gateway issuer base URL (also the exchange endpoint host).
@@ -11,7 +14,7 @@ export type SessionChainConfig = {
   // This application's service credential (worker secrets); the client secret
   // never leaves the server side.
   credential: ServiceCredential;
-  // Verifier overrides (jwksUrl / jwksFetch via a service binding).
+  // Verifier overrides (jwksUrl / gatewayFetch via a service binding).
   verify?: Partial<StsVerifierConfig>;
   // Transport for the exchange call; workers must pass their gateway service
   // binding's fetch (same-account workers.dev subrequests are blocked).
@@ -28,7 +31,7 @@ export type SessionChainConfig = {
 // minted token carries the actor chain, so audit still names this app.
 export const sessionChainAuthenticator = (config: SessionChainConfig): Authenticator => {
   const issuer = config.gatewayUrl.replace(/\/$/, "");
-  const exchanged = new Map<string, { identity: Identity; expiresAt: number }>();
+  const exchanged = ttlCache<Identity>();
 
   return async (headers, request) => {
     const token = bearerToken(headers);
@@ -51,10 +54,9 @@ export const sessionChainAuthenticator = (config: SessionChainConfig): Authentic
       return null;
     }
 
-    const now = Math.floor(Date.now() / 1000);
     const cached = exchanged.get(token);
-    if (cached && now < cached.expiresAt - 15) {
-      return cached.identity;
+    if (cached) {
+      return cached;
     }
 
     const minted = await chainExchange(
@@ -68,25 +70,18 @@ export const sessionChainAuthenticator = (config: SessionChainConfig): Authentic
     if (!minted) {
       return null;
     }
-    const verified = await verifyStsToken(minted.accessToken, {
-      issuer,
-      audience: config.audience,
-      ...config.verify,
-    });
+    const verified = await verifyMintedToken(
+      minted.accessToken,
+      { issuer, audience: config.audience, ...config.verify },
+      session.subject,
+    );
     if (!verified) {
       return null;
     }
     // The original session token (not the minted audience token) is the right
     // subject for any further chained exchange this application makes.
     const identity = { ...verified, subjectToken: token };
-    exchanged.set(token, { identity, expiresAt: now + minted.expiresIn });
-    if (exchanged.size > 256) {
-      for (const [key, value] of exchanged) {
-        if (value.expiresAt <= now) {
-          exchanged.delete(key);
-        }
-      }
-    }
+    exchanged.set(token, identity, minted.expiresIn);
     return identity;
   };
 };

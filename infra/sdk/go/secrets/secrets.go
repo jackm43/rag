@@ -6,13 +6,14 @@ import (
 )
 
 const (
-	FieldServiceClientSecret  = "service_client_secret"
-	FieldClientSecret         = "client_secret"
-	FieldAPIKey               = "api_key"
-	FieldTLSCertificate       = "tls_certificate"
-	FieldTLSPrivateKey        = "tls_private_key"
-	FieldAuthenticationTokens = "authentication_tokens"
-	FieldDeviceKey            = "device_key"
+	FieldServiceClientSecret       = "service_client_secret"
+	FieldProviderOAuthClientSecret = "provider_oauth_client_secret"
+	FieldClientSecret              = "client_secret"
+	FieldAPIKey                    = "api_key"
+	FieldTLSCertificate            = "tls_certificate"
+	FieldTLSPrivateKey             = "tls_private_key"
+	FieldAuthenticationTokens      = "authentication_tokens"
+	FieldDeviceKey                 = "device_key"
 )
 
 type Provider interface {
@@ -87,6 +88,14 @@ type ApplicationSecrets struct {
 	service *Service
 }
 
+func (a *ApplicationSecrets) StoreProviderOAuthCredential(ctx context.Context, application, clientID, clientSecret, provider string) (*ClientCredential, error) {
+	reference, err := a.service.Store(ctx, applicationSecretName(application, FieldProviderOAuthClientSecret), clientSecret, provider)
+	if err != nil {
+		return nil, err
+	}
+	return &ClientCredential{ClientID: clientID, ClientSecret: reference, Provider: provider}, nil
+}
+
 func (a *ApplicationSecrets) StoreServiceClientCredential(ctx context.Context, application, clientID, clientSecret, provider string) (*ClientCredential, error) {
 	reference, err := a.service.Store(ctx, applicationSecretName(application, FieldServiceClientSecret), clientSecret, provider)
 	if err != nil {
@@ -103,9 +112,28 @@ func (a *ApplicationSecrets) ServiceClientCredential(ctx context.Context, applic
 	return &ClientCredential{ClientID: clientID, ClientSecret: secret, Provider: provider}, nil
 }
 
+func (a *ApplicationSecrets) ProviderOAuthCredential(ctx context.Context, application, clientID, provider string) (*ClientCredential, error) {
+	secret, err := a.service.resolveName(ctx, applicationSecretName(application, FieldProviderOAuthClientSecret), provider)
+	if err != nil {
+		return nil, err
+	}
+	return &ClientCredential{ClientID: clientID, ClientSecret: secret, Provider: provider}, nil
+}
+
 func (a *ApplicationSecrets) ResolveServiceClientCredential(ctx context.Context, credential *ClientCredential) (*ClientCredential, error) {
 	if credential == nil || credential.ClientID == "" || credential.ClientSecret == "" {
 		return nil, fmt.Errorf("service client credential is missing client_id or client_secret")
+	}
+	secret, err := a.service.Resolve(ctx, credential.ClientSecret, credential.Provider)
+	if err != nil {
+		return nil, err
+	}
+	return &ClientCredential{ClientID: credential.ClientID, ClientSecret: secret, Provider: credential.Provider}, nil
+}
+
+func (a *ApplicationSecrets) ResolveProviderOAuthCredential(ctx context.Context, credential *ClientCredential) (*ClientCredential, error) {
+	if credential == nil || credential.ClientID == "" || credential.ClientSecret == "" {
+		return nil, fmt.Errorf("provider oauth credential is missing client_id or client_secret")
 	}
 	secret, err := a.service.Resolve(ctx, credential.ClientSecret, credential.Provider)
 	if err != nil {

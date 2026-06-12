@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+package cloudflare.v1;
+
+import "google/protobuf/struct.proto";
+
+message DevicePolicySummary {
+  string id = 1;
+  bool default = 2;
+  bool deleted = 3;
+  string name = 4;
+  string updated_at = 5;
+}
+
+message DeviceRegistrationSummary {
+  DevicePolicySummary policy = 1;
+}
+
+message DeviceUserSummary {
+  string id = 1;
+  string email = 2;
+  string name = 3;
+}
+
+message Device {
+  string id = 1;
+  int64 active_registrations = 2;
+  string created_at = 3;
+  string last_seen_at = 4;
+  string name = 5;
+  string updated_at = 6;
+  string client_version = 7;
+  string deleted_at = 8;
+  string device_type = 9;
+  string hardware_id = 10;
+  DeviceRegistrationSummary last_seen_registration = 11;
+  DeviceUserSummary last_seen_user = 12;
+  string mac_address = 13;
+  string manufacturer = 14;
+  string model = 15;
+  string os_version = 16;
+  string os_version_extra = 17;
+  string serial_number = 18;
+}
+
+message ListDevicesRequest {
+  repeated string ids = 1;
+  string active_registrations = 2;
+  string cursor = 3;
+  string include = 4;
+  string last_seen_user_email = 5;
+  int32 per_page = 6;
+  string search = 7;
+  string seen_after = 8;
+  string seen_before = 9;
+  string sort_by = 10;
+  string sort_order = 11;
+}
+
+message ListDevicesResponse {
+  repeated Device devices = 1;
+  string next_cursor = 2;
+  int32 count = 3;
+  int32 per_page = 4;
+}
+
+message GetDeviceRequest {
+  string device_id = 1;
+  string include = 2;
+}
+
+message GetDeviceResponse {
+  Device device = 1;
+}
+
+message DeleteDeviceRequest {
+  string device_id = 1;
+}
+
+message DeleteDeviceResponse {}
+
+message RevokeDeviceRequest {
+  string device_id = 1;
+}
+
+message RevokeDeviceResponse {}
+
+service DeviceService {
+  rpc ListDevices(ListDevicesRequest) returns (ListDevicesResponse);
+  rpc GetDevice(GetDeviceRequest) returns (GetDeviceResponse);
+  rpc DeleteDevice(DeleteDeviceRequest) returns (DeleteDeviceResponse);
+  rpc RevokeDevice(RevokeDeviceRequest) returns (RevokeDeviceResponse);
+}
+
+message WorkerModule {
+  string name = 1;
+  string content_type = 2;
+  bytes content = 3;
+}
+
+message DeployWorkerRequest {
+  string script_name = 1;
+  string main_module = 2;
+  repeated WorkerModule modules = 3;
+  string compatibility_date = 4;
+  repeated string compatibility_flags = 5;
+  google.protobuf.Struct metadata = 6;
+}
+
+message DeployWorkerResponse {
+  string script_name = 1;
+  string etag = 2;
+  string modified_on = 3;
+}
+
+message WorkerInfo {
+  string name = 1;
+  string modified_on = 2;
+}
+
+message ListWorkersRequest {}
+
+message ListWorkersResponse {
+  repeated WorkerInfo workers = 1;
+}
+
+service WorkerService {
+  rpc DeployWorker(DeployWorkerRequest) returns (DeployWorkerResponse);
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+}

@@ -7,7 +7,6 @@ import (
 
 	idpv1 "jsmunro.me/platy/applications/idp/client/idp/v1"
 	"jsmunro.me/platy/cli/internal/output"
-	"jsmunro.me/platy/cli/internal/platform"
 	"jsmunro.me/platy/sdk/discovery"
 	sdksecrets "jsmunro.me/platy/sdk/secrets"
 )
@@ -24,35 +23,25 @@ func WriteRepoMetadata(root string, document *discovery.Application) {
 	output.Logger.Info("wrote application metadata", "application", document.Name, "path", path)
 }
 
-func CredentialDocument(root, name string) *discovery.Application {
-	if document, err := platform.DiscoveryService().Application(name); err == nil && document.Credential != nil {
-		return document
-	}
-	data, err := os.ReadFile(RepoMetadataPath(root, name))
-	if err != nil {
-		return nil
-	}
-	document := &discovery.Application{}
-	if err := json.Unmarshal(data, document); err != nil {
-		return nil
-	}
-	if document.Credential == nil {
-		return nil
-	}
-	return document
-}
-
-func Document(app *idpv1.Application, gatewayURL string, credential *sdksecrets.ClientCredential, fullNames map[string]string) *discovery.Application {
+func Document(
+	app *idpv1.Application,
+	gatewayURL string,
+	credential *sdksecrets.ClientCredential,
+	providerOAuth *sdksecrets.ClientCredential,
+	fullNames map[string]string,
+) *discovery.Application {
 	document := &discovery.Application{
-		Name:                          app.GetName(),
-		Audience:                      app.GetAudience(),
-		Endpoint:                      app.GetEndpoint(),
-		Description:                   app.GetDescription(),
-		CreatedAt:                     app.GetCreatedAt(),
-		UpdatedAt:                     app.GetUpdatedAt(),
-		GatewayURL:                    gatewayURL,
-		ImpersonationAccessClientID:   app.GetImpersonationAccessClientId(),
-		Credential:                    credential,
+		Name:                        app.GetName(),
+		Audience:                    app.GetAudience(),
+		Endpoint:                    app.GetEndpoint(),
+		Description:                 app.GetDescription(),
+		CreatedAt:                   app.GetCreatedAt(),
+		UpdatedAt:                   app.GetUpdatedAt(),
+		GatewayURL:                  gatewayURL,
+		ImpersonationAccessClientID: app.GetImpersonationAccessClientId(),
+		ProviderOAuthClientID:       app.GetProviderOauthClientId(),
+		Credential:                  credential,
+		ProviderOAuth:               providerOAuth,
 	}
 	for _, resource := range app.GetResources() {
 		converted := discovery.Resource{Name: resource.GetName(), FullName: fullNames[resource.GetName()]}
@@ -88,12 +77,39 @@ func Document(app *idpv1.Application, gatewayURL string, credential *sdksecrets.
 	return document
 }
 
-func RegisterDocument(document *discovery.Application) {
-	service := platform.DiscoveryService()
-	if err := service.Register(document); err != nil {
-		output.Fail("register application document: %v", err)
+// MergeRepoMetadata carries forward the fields only the repository metadata
+// document knows: the stored credentials and the protos' qualified resource
+// names.
+func MergeRepoMetadata(root string, document *discovery.Application) {
+	data, err := os.ReadFile(RepoMetadataPath(root, document.Name))
+	if err != nil {
+		return
 	}
-	output.Logger.Info("registered local application document", "application", document.Name, "dir", service.Dir)
+	existing := &discovery.Application{}
+	if err := json.Unmarshal(data, existing); err != nil {
+		return
+	}
+	if document.Credential == nil {
+		document.Credential = existing.Credential
+	}
+	if document.ProviderOAuth == nil {
+		document.ProviderOAuth = existing.ProviderOAuth
+	}
+	if document.ProviderOAuthClientID == "" {
+		document.ProviderOAuthClientID = existing.ProviderOAuthClientID
+	}
+	if document.ImpersonationAccessClientID == "" {
+		document.ImpersonationAccessClientID = existing.ImpersonationAccessClientID
+	}
+	existingResources := map[string]discovery.Resource{}
+	for _, resource := range existing.Resources {
+		existingResources[resource.Name] = resource
+	}
+	for index := range document.Resources {
+		if resource, ok := existingResources[document.Resources[index].Name]; ok && document.Resources[index].FullName == "" {
+			document.Resources[index].FullName = resource.FullName
+		}
+	}
 }
 
 func JSON(app *idpv1.Application) map[string]any {

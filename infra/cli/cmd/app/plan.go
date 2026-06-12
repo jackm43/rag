@@ -41,15 +41,16 @@ func desiredApplication(
 	app := loaded.Application(name)
 	resources, _, _ := applicationResources(root, name)
 	return &idpv1.Application{
-		Name:          name,
-		Endpoint:      app.Endpoint,
-		Description:   app.Description,
-		Resources:     resources,
-		Delegations:   manifestDelegations(app),
-		Provider:      app.ProxyProvider(),
-		TrustBoundary: manifestTrustBoundary(app, providerConfig),
-		Access:        manifestAccess(app, providerConfig),
-		TrustZone:     app.ResolvedTrustZone(),
+		Name:                name,
+		Endpoint:            app.Endpoint,
+		Description:         app.Description,
+		Resources:           resources,
+		Delegations:         manifestDelegations(app),
+		Provider:            app.ProxyProvider(),
+		TrustBoundary:       manifestTrustBoundary(app, providerConfig),
+		Access:              manifestAccess(app, providerConfig),
+		TrustZone:           app.ResolvedTrustZone(),
+		ProviderOauthScopes: app.ProviderAPIScopes,
 	}
 }
 
@@ -88,7 +89,22 @@ func diffApplication(desired, actual *idpv1.Application) []string {
 	if !proto.Equal(desired.GetTrustBoundary(), actual.GetTrustBoundary()) {
 		changes = append(changes, messageChange("trust_boundary", desired.GetTrustBoundary(), actual.GetTrustBoundary()))
 	}
+	if !slicesEqual(desired.GetProviderOauthScopes(), actual.GetProviderOauthScopes()) {
+		changes = append(changes, fmt.Sprintf("provider_oauth_scopes: %v -> %v", actual.GetProviderOauthScopes(), desired.GetProviderOauthScopes()))
+	}
 	return changes
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for index := range a {
+		if a[index] != b[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func sortedDelegations(delegations []*idpv1.Delegation) []*idpv1.Delegation {
@@ -123,7 +139,9 @@ func registeredApplications(ctx context.Context) map[string]*idpv1.Application {
 
 // Plan retrieves the registry's current state and diffs it against the
 // manifest, so a sync's effect is visible before anything is applied.
-func Plan(ctx context.Context) {
+// It returns the number of applications that would change (non-zero exit
+// status when invoked as `platy app plan`).
+func Plan(ctx context.Context) int {
 	root := platform.RepoRoot()
 	loaded := manifest.Load(root)
 	providerConfig := loadProviderConfig(root)
@@ -173,7 +191,8 @@ func Plan(ctx context.Context) {
 	output.PrintLines(lines...)
 	if changedCount == 0 && len(orphans) == 0 {
 		output.PrintLines("", "registry matches the manifest; app sync would change nothing")
-	} else {
-		output.PrintLines("", fmt.Sprintf("%d application(s) would change; apply with platy app sync", changedCount))
+		return 0
 	}
+	output.PrintLines("", fmt.Sprintf("%d application(s) would change; apply with platy app sync", changedCount+len(orphans)))
+	return changedCount + len(orphans)
 }

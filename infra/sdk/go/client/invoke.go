@@ -67,7 +67,28 @@ type ClientError struct {
 }
 
 func (e *ClientError) Error() string {
+	if record, ok := e.Body.(map[string]any); ok {
+		if message, ok := record["message"].(string); ok && message != "" {
+			return fmt.Sprintf("%s failed with status %d: %s", e.Target, e.Status, message)
+		}
+	}
 	return fmt.Sprintf("%s failed with status %d", e.Target, e.Status)
+}
+
+// IsProviderAuthorizationError recognizes a provider-connector refusal that
+// carries an authorize URL the caller must visit to store a provider grant.
+func IsProviderAuthorizationError(err error) (string, bool) {
+	clientErr, ok := err.(*ClientError)
+	if !ok {
+		return "", false
+	}
+	record, _ := clientErr.Body.(map[string]any)
+	message, _ := record["message"].(string)
+	const prefix = "provider authorization required: "
+	if !strings.HasPrefix(message, prefix) {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(message, prefix)), true
 }
 
 func (c *Client) Invoke(ctx context.Context, target, body string) (any, error) {

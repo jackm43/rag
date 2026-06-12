@@ -1,0 +1,65 @@
+{
+  "name": "console",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-04-23",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "console.jsmunro.me",
+      "custom_domain": true
+    }
+  ],
+  // The worker is the confidential web client (BFF): run_worker_first routes
+  // only the API prefixes it proxies; every other path is served straight
+  // from assets (security headers via public/_headers, SPA fallback for
+  // /callback). Gateway session paths (/idp.v1.*, /api/*, jwks) are
+  // zone-routed to the auth gateway and never reach this worker. The worker
+  // never fetches its own URLs - proxied requests go out over service
+  // bindings - so the run_worker_first loop (CF error 1042) cannot occur.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/client/*",
+      "/deploy.v1.DeployService/*",
+      "/discovery.v1.DiscoveryService/*",
+      "/ragbot.v1.ConfigService/*",
+      "/ragbot.v1.GatewayControlService/*"
+    ]
+  },
+  "vars": {
+    "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.me",
+    "DEPLOY_ENDPOINT": "https://deploy.jsmunro.me",
+    "DISCOVERY_ENDPOINT": "https://discovery.jsmunro.me",
+    "RAGBOT_ENDPOINT": "https://ragbot.jsmunro.me",
+    "OTEL_SERVICE_NAME": "console"
+  },
+  "services": [
+    {
+      "binding": "AUTH_GATEWAY",
+      "service": "auth-gateway"
+    },
+    {
+      "binding": "DEPLOY",
+      "service": "deploy"
+    },
+    {
+      "binding": "DISCOVERY",
+      "service": "discovery"
+    },
+    {
+      "binding": "RAGBOT",
+      "service": "ragbot-worker"
+    }
+  ],
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  }
+}

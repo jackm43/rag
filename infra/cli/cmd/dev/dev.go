@@ -2,11 +2,13 @@ package dev
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 
-	"jsmunro.me/platy/cli/internal/args"
+	"github.com/spf13/cobra"
+
 	"jsmunro.me/platy/cli/internal/manifest"
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/platform"
@@ -15,10 +17,10 @@ import (
 
 // protoApps lists every application with a proto package, matching
 // generate.sh's own default.
-func protoApps() []string {
+func protoApps() ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(root(), "infra", "proto"))
 	if err != nil {
-		output.Fail("list proto packages: %v", err)
+		return nil, fmt.Errorf("list proto packages: %w", err)
 	}
 	var apps []string
 	for _, entry := range entries {
@@ -26,7 +28,7 @@ func protoApps() []string {
 			apps = append(apps, entry.Name())
 		}
 	}
-	return apps
+	return apps, nil
 }
 
 var goPackages = []string{
@@ -35,78 +37,130 @@ var goPackages = []string{
 	"jsmunro.me/platy/applications/...",
 }
 
-func Run(ctx context.Context, cmdArgs []string) {
-	if len(cmdArgs) == 0 || args.HasHelpFlag(cmdArgs) {
-		printUsage()
-		return
+func Command() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "dev",
+		Short: "Development workflows: codegen, builds, checks, tests, local config",
 	}
-	cmdArgs = args.StripHelpFlag(cmdArgs)
-	switch cmdArgs[0] {
-	case "generate":
-		generate(cmdArgs[1:])
-	case "platy":
-		buildPlaty()
-	case "check":
-		vet()
-		buildGo()
-		npmRun("check")
-	case "test":
-		npmRun("test")
-		goTest("./infra/cli/internal/provider/...")
-	case "install":
-		runCommand("npm", "install")
-	case "migrate":
-		npmRun("run", "d1:migrate:local")
-		npmRun("run", "gw:d1:migrate:local")
-	case "vet":
-		vet()
-	case "build-go":
-		buildGo()
-	case "vars":
-		writeDevVars(ctx, cmdArgs[1:])
-	case "register-commands":
-		registerCommands(ctx)
-	default:
-		output.Fail("unknown dev command %q", cmdArgs[0])
-	}
-}
-
-func printUsage() {
-	output.PrintLines(
-		"usage: platy dev <command>",
-		"",
-		"commands:",
-		"  generate [app...]     regenerate protobuf code and web clients (default: all proto packages)",
-		"  platy                 build ./platy CLI binary",
-		"  check                 go vet, go build, and npm run check",
-		"  test                  npm test and Go provider tests",
-		"  install               npm install",
-		"  migrate               apply local D1 schemas for ragbot and gateway",
-		"  vet                   go vet on CLI, SDK, and application clients",
-		"  build-go              go build on CLI, SDK, and application clients",
-		"  vars [app]            write .dev.vars from application secrets (default: ragbot)",
-		"  register-commands     register Discord slash commands using ragbot secrets",
+	cmd.AddCommand(
+		&cobra.Command{
+			Use:   "generate [app...]",
+			Short: "Regenerate protobuf code and web clients (default: all proto packages)",
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return generate(args)
+			},
+		},
+		&cobra.Command{
+			Use:   "platy",
+			Short: "Build ./platy CLI binary",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				return buildPlaty()
+			},
+		},
+		&cobra.Command{
+			Use:   "check",
+			Short: "go vet, go build, and npm run check",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				if err := vet(); err != nil {
+					return err
+				}
+				if err := buildGo(); err != nil {
+					return err
+				}
+				return npmRun("check")
+			},
+		},
+		&cobra.Command{
+			Use:   "test",
+			Short: "npm test and Go provider tests",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				if err := npmRun("test"); err != nil {
+					return err
+				}
+				return goTest("./infra/cli/internal/provider/...")
+			},
+		},
+		&cobra.Command{
+			Use:   "install",
+			Short: "npm install",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				return runCommand("npm", "install")
+			},
+		},
+		&cobra.Command{
+			Use:   "migrate",
+			Short: "Apply local D1 schemas for ragbot and gateway",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				if err := npmRun("run", "d1:migrate:local"); err != nil {
+					return err
+				}
+				return npmRun("run", "gw:d1:migrate:local")
+			},
+		},
+		&cobra.Command{
+			Use:   "vet",
+			Short: "go vet on CLI, SDK, and application clients",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				return vet()
+			},
+		},
+		&cobra.Command{
+			Use:   "build-go",
+			Short: "go build on CLI, SDK, and application clients",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				return buildGo()
+			},
+		},
+		&cobra.Command{
+			Use:   "vars [app]",
+			Short: "Write .dev.vars from application secrets (default: ragbot)",
+			Args:  cobra.MaximumNArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return writeDevVars(cmd.Context(), args)
+			},
+		},
+		&cobra.Command{
+			Use:   "register-commands",
+			Short: "Register Discord slash commands using ragbot secrets",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				return registerCommands(cmd.Context())
+			},
+		},
 	)
+	return cmd
 }
 
 func root() string {
 	return platform.RepoRoot()
 }
 
-func runCommand(name string, commandArgs ...string) {
+func runCommand(name string, commandArgs ...string) error {
 	cmd := exec.Command(name, commandArgs...)
 	cmd.Dir = root()
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
 	if err := cmd.Run(); err != nil {
-		output.Fail("%s: %v", name, err)
+		return fmt.Errorf("%s: %w", name, err)
 	}
+	return nil
 }
 
-func generate(apps []string) {
+func generate(apps []string) error {
 	if len(apps) == 0 {
-		apps = protoApps()
+		all, err := protoApps()
+		if err != nil {
+			return err
+		}
+		apps = all
 	}
 	script := filepath.Join(root(), "infra", "scripts", "generate.sh")
 	cmd := exec.Command(script, apps...)
@@ -115,38 +169,48 @@ func generate(apps []string) {
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
 	if err := cmd.Run(); err != nil {
-		output.Fail("generate: %v", err)
+		return fmt.Errorf("generate: %w", err)
 	}
 	webgen.Generate(root(), apps)
 	output.Logger.Info("generated protobuf code", "apps", apps)
+	return nil
 }
 
-func buildPlaty() {
-	runCommand("go", "build", "-o", "platy", "jsmunro.me/platy/cli")
+func buildPlaty() error {
+	if err := runCommand("go", "build", "-o", "platy", "jsmunro.me/platy/cli"); err != nil {
+		return err
+	}
 	output.Logger.Info("built platy binary", "path", filepath.Join(root(), "platy"))
+	return nil
 }
 
-func vet() {
+func vet() error {
 	for _, pkg := range goPackages {
-		runCommand("go", "vet", pkg)
+		if err := runCommand("go", "vet", pkg); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func buildGo() {
+func buildGo() error {
 	for _, pkg := range goPackages {
-		runCommand("go", "build", pkg)
+		if err := runCommand("go", "build", pkg); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func npmRun(scriptArgs ...string) {
-	runCommand("npm", append([]string{"run"}, scriptArgs...)...)
+func npmRun(scriptArgs ...string) error {
+	return runCommand("npm", append([]string{"run"}, scriptArgs...)...)
 }
 
-func goTest(pattern string) {
-	runCommand("go", "test", pattern)
+func goTest(pattern string) error {
+	return runCommand("go", "test", pattern)
 }
 
-func writeDevVars(ctx context.Context, cmdArgs []string) {
+func writeDevVars(ctx context.Context, cmdArgs []string) error {
 	appName := "ragbot"
 	if len(cmdArgs) > 0 {
 		appName = cmdArgs[0]
@@ -157,19 +221,27 @@ func writeDevVars(ctx context.Context, cmdArgs []string) {
 	if app.Config != "" {
 		dir = filepath.Dir(filepath.Join(root(), filepath.FromSlash(app.Config)))
 	}
-	manifest.WriteDevVars(dir, app.ResolveSecrets(ctx))
+	resolved, err := app.ResolveSecrets(ctx)
+	if err != nil {
+		return err
+	}
+	manifest.WriteDevVars(dir, resolved)
+	return nil
 }
 
-func registerCommands(ctx context.Context) {
+func registerCommands(ctx context.Context) error {
 	loaded := manifest.Load(root())
 	app := loaded.Application("ragbot")
-	resolved := app.ResolveSecrets(ctx)
+	resolved, err := app.ResolveSecrets(ctx)
+	if err != nil {
+		return err
+	}
 	applicationID := resolved["DISCORD_APPLICATION_ID"]
 	botToken := resolved["DISCORD_BOT_TOKEN"]
 	if applicationID == "" || botToken == "" {
-		output.Fail("ragbot secrets must include DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN")
+		return fmt.Errorf("ragbot secrets must include DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN")
 	}
-	cmd := exec.Command("npx", "tsx", "infra/ragbot/scripts/register-commands.ts")
+	cmd := exec.Command("npx", "tsx", "infra/applications/ragbot/worker/scripts/register-commands.ts")
 	cmd.Dir = root()
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
@@ -178,7 +250,8 @@ func registerCommands(ctx context.Context) {
 		"DISCORD_BOT_TOKEN="+botToken,
 	)
 	if err := cmd.Run(); err != nil {
-		output.Fail("register commands: %v", err)
+		return fmt.Errorf("register commands: %w", err)
 	}
 	output.Logger.Info("registered discord slash commands")
+	return nil
 }

@@ -1,4 +1,4 @@
-import { logger } from "../logger";
+import { identityExchanged, identityExchangeRefused } from "../identity";
 import { traceHeaders } from "../otel";
 import { TOKEN_TYPE_ACCESS_TOKEN, TOKEN_TYPE_JWT, TOKEN_TYPE_SERVICE_CREDENTIAL } from "../verify/sts";
 
@@ -89,15 +89,18 @@ export const exchangeToken = async (
       }),
     },
   );
-  // Identity-boundary standard: every identity change is logged at the
-  // client that makes it (the gateway's server span records the other side).
-  // Only the actor's client id is ever logged, never a secret.
   const actorClientId = request.actorToken ? request.actorToken.split(":")[0] : "";
+  const subjectTokenType = request.subjectTokenType ?? TOKEN_TYPE_ACCESS_TOKEN;
+  const actorTokenType = request.actorToken
+    ? request.actorTokenType ?? TOKEN_TYPE_SERVICE_CREDENTIAL
+    : undefined;
   if (!response.ok) {
-    logger.warn("identity_exchange_refused", {
+    identityExchangeRefused({
       audience: request.audience,
-      subject_type: request.subjectTokenType ?? TOKEN_TYPE_ACCESS_TOKEN,
-      actor: actorClientId,
+      subject_token_type: subjectTokenType,
+      ...(actorTokenType ? { actor_token_type: actorTokenType } : {}),
+      ...(actorClientId ? { act: actorClientId } : {}),
+      ...(request.impersonationToken ? { impersonation: true } : {}),
       status: response.status,
     });
     return null;
@@ -110,10 +113,12 @@ export const exchangeToken = async (
   if (!body.accessToken) {
     return null;
   }
-  logger.info("identity_exchanged", {
+  identityExchanged({
     audience: request.audience,
-    subject_type: request.subjectTokenType ?? TOKEN_TYPE_ACCESS_TOKEN,
-    actor: actorClientId,
+    subject_token_type: subjectTokenType,
+    ...(actorTokenType ? { actor_token_type: actorTokenType } : {}),
+    ...(actorClientId ? { act: actorClientId } : {}),
+    ...(request.impersonationToken ? { impersonation: true } : {}),
     scopes: body.scopes ?? [],
   });
   return {

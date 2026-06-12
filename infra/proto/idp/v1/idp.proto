@@ -160,6 +160,8 @@ message Application {
   ApplicationAccess access = 11;
   string trust_zone = 12;
   string impersonation_access_client_id = 13;
+  string provider_oauth_client_id = 14;
+  repeated string provider_oauth_scopes = 15;
 }
 
 message ServiceCredential {
@@ -169,12 +171,16 @@ message ServiceCredential {
 
 message IntrospectRequest {}
 
+message Principal {
+  string kind = 1;
+  string sub = 2;
+  string email = 3;
+  repeated string act = 4;
+}
+
 message IntrospectResponse {
-  string subject = 1;
-  string email = 2;
-  string token_kind = 3;
-  repeated string scopes = 4;
-  repeated string actor_chain = 5;
+  Principal principal = 1;
+  repeated string scopes = 2;
 }
 
 message ExchangeTokenRequest {
@@ -195,6 +201,19 @@ message ExchangeTokenResponse {
   string token_type = 3;
   int64 expires_in = 4;
   repeated string scopes = 5;
+}
+
+message ExchangeProviderTokenRequest {
+  string subject_token = 1;
+  string application = 2;
+  reserved 3;
+  reserved "provider_scopes";
+}
+
+message ExchangeProviderTokenResponse {
+  string access_token = 1;
+  int64 expires_in = 2;
+  string authorize_url = 3;
 }
 
 message SessionTokens {
@@ -240,6 +259,7 @@ message RevokeSessionResponse {
 service IdentityService {
   rpc Introspect(IntrospectRequest) returns (IntrospectResponse);
   rpc ExchangeToken(ExchangeTokenRequest) returns (ExchangeTokenResponse);
+  rpc ExchangeProviderToken(ExchangeProviderTokenRequest) returns (ExchangeProviderTokenResponse);
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   rpc RefreshSession(RefreshSessionRequest) returns (RefreshSessionResponse);
   rpc RevokeSession(RevokeSessionRequest) returns (RevokeSessionResponse);
@@ -256,6 +276,8 @@ message RegisterApplicationRequest {
   ApplicationAccess access = 8;
   string trust_zone = 9;
   string impersonation_access_client_id = 10;
+  string provider_oauth_client_id = 11;
+  repeated string provider_oauth_scopes = 12;
 }
 
 message RegisterApplicationResponse {

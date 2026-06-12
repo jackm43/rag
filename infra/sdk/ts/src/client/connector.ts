@@ -2,10 +2,12 @@ import { createClient as createConnectClient, type Client, type Interceptor, typ
 import { createConnectTransport } from "@connectrpc/connect-web";
 import type { DescService } from "@bufbuild/protobuf";
 
+import { verifyMintedToken } from "../authz/minted";
 import type { Identity } from "../identity";
 import { errorMessage, logger } from "../logger";
 import { traceHeaders } from "../otel";
-import { chainExchange, type ServiceCredential } from "./exchange";
+import { ttlCache } from "./cache";
+import { chainExchange, serviceCredentialFromEnv, type ServiceCredential } from "./exchange";
 import { createClient, type PlatformClient } from "./fetch";
 
 // A connector is the standard outbound integration with another trust zone
@@ -41,21 +43,9 @@ export class ConnectorAuthError extends Error {
   }
 }
 
-const decodeClaims = (token: string): Record<string, unknown> | null => {
-  try {
-    const payload = token.split(".")[1];
-    return JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/"))) as Record<
-      string,
-      unknown
-    >;
-  } catch {
-    return null;
-  }
-};
-
 // Chained tokens are cached per (audience, subject token) until near expiry,
 // shared across connector instances since clients are built per request.
-const tokenCache = new Map<string, { token: string; expiresAt: number }>();
+const tokenCache = ttlCache<string>();
 
 // connectorToken authenticates the caller and mints the chained audience
 // token for one outbound hop; exported for proxies that inject the token on
@@ -67,10 +57,9 @@ export const connectorToken = async (config: ConnectorConfig, identity: Identity
     );
   }
   const key = `${config.partition ?? ""}:${config.application}:${identity.subjectToken}`;
-  const now = Math.floor(Date.now() / 1000);
   const cached = tokenCache.get(key);
-  if (cached && now < cached.expiresAt - 15) {
-    return cached.token;
+  if (cached) {
+    return cached;
   }
   const minted = await chainExchange(
     config.gatewayUrl,
@@ -86,26 +75,28 @@ export const connectorToken = async (config: ConnectorConfig, identity: Identity
     );
   }
   // Fail closed unless the gateway minted exactly what this request needs: a
-  // token for the target audience that still names the caller as subject.
-  const claims = decodeClaims(minted.accessToken);
-  if (!claims || claims.aud !== config.application || claims.sub !== identity.subject) {
+  // fully verified token for the target audience whose actor chain is a
+  // currently-delegated path and that still names the caller as subject.
+  const verified = await verifyMintedToken(
+    minted.accessToken,
+    {
+      issuer: config.gatewayUrl.replace(/\/$/, ""),
+      audience: config.application,
+      gatewayFetch: config.gatewayFetch,
+    },
+    identity.subject,
+  );
+  if (!verified) {
     throw new ConnectorAuthError(
       `connector ${config.application}: minted token does not match caller identity`,
     );
   }
-  tokenCache.set(key, { token: minted.accessToken, expiresAt: now + minted.expiresIn });
-  if (tokenCache.size > 256) {
-    for (const [cachedKey, value] of tokenCache) {
-      if (value.expiresAt <= now) {
-        tokenCache.delete(cachedKey);
-      }
-    }
-  }
+  tokenCache.set(key, minted.accessToken, minted.expiresIn);
   return minted.accessToken;
 };
 
 // connectorClient builds the per-caller outbound client for a connector.
-export const connectorClient = (config: ConnectorConfig, identity: Identity): PlatformClient =>
+const connectorClient = (config: ConnectorConfig, identity: Identity): PlatformClient =>
   createClient({
     endpoint: config.endpoint,
     fetch: config.fetch,
@@ -122,7 +113,7 @@ export const connectorClient = (config: ConnectorConfig, identity: Identity): Pl
 // generated or hand-written layer: outbound boundary crossings are logged
 // (request, status, duration, actor) and the trace context propagates, so
 // codegen output and applications never re-implement it.
-export const connectorTransport = (config: ConnectorConfig, identity: Identity): Transport => {
+const connectorTransport = (config: ConnectorConfig, identity: Identity): Transport => {
   const platform = connectorClient(config, identity);
   const boundary: Interceptor = (next) => async (req) => {
     const method = `${req.service.typeName}/${req.method.name}`;
@@ -165,3 +156,46 @@ export const connectorServiceClient = <S extends DescService>(
   identity: Identity,
   service: S,
 ): Client<S> => createConnectClient(service, connectorTransport(config, identity));
+
+type ServiceBinding = {
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+};
+
+export type ServiceConnectionEnv = {
+  AUTH_GATEWAY_URL?: string;
+  SERVICE_CLIENT_ID?: string;
+  SERVICE_CLIENT_SECRET?: string;
+  AUTH_GATEWAY?: ServiceBinding;
+};
+
+export type ServiceConnectionTarget = {
+  endpoint?: string;
+  // Target's service binding; same-account worker-to-worker fetches over
+  // public URLs are blocked.
+  binding?: ServiceBinding;
+  scopes?: string[];
+};
+
+// serviceConnection is the one way a worker wires an outbound connector: its
+// own service credential and gateway binding from the environment plus the
+// target's endpoint/binding. Returns null until the credential and endpoint
+// are configured (first-deploy ordering), so callers can fail closed.
+export const serviceConnection = (
+  env: ServiceConnectionEnv,
+  target: ServiceConnectionTarget,
+): Omit<ConnectorConfig, "application"> | null => {
+  const credential = serviceCredentialFromEnv(env);
+  if (!credential || !target.endpoint) {
+    return null;
+  }
+  return {
+    endpoint: target.endpoint,
+    gatewayUrl: (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, ""),
+    credential,
+    scopes: target.scopes,
+    gatewayFetch: env.AUTH_GATEWAY
+      ? (input, init) => env.AUTH_GATEWAY!.fetch(input, init)
+      : undefined,
+    fetch: target.binding ? (input, init) => target.binding!.fetch(input, init) : undefined,
+  };
+};

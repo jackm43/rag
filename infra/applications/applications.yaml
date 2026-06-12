@@ -3,8 +3,7 @@ applications:
     description: "Authentication gateway: identity, token exchange, registry, discovery"
     endpoint: https://auth-gateway.jsmunro.me
     worker: auth-gateway
-    config: infra/gateway/wrangler.jsonc
-    language: typescript
+    config: infra/applications/idp/worker/wrangler.jsonc
     provider: cloudflare
     secret_provider: 1password
     trust_zone: tier2
@@ -19,8 +18,7 @@ applications:
     description: Discord bot admin services
     endpoint: https://ragbot.jsmunro.me
     worker: ragbot-worker
-    config: infra/ragbot/wrangler.jsonc
-    language: typescript
+    config: infra/applications/ragbot/worker/wrangler.jsonc
     provider: cloudflare
     secret_provider: 1password
     trust_zone: tier2
@@ -35,19 +33,20 @@ applications:
     delegations:
       - audience: idp
       - audience: deploy
+        scopes:
+          - deploy/DeployService.ListWorkers
       - audience: aigateway
-    webhooks:
-      - name: discord
-        type: ed25519
     post_deploy:
       - gateway-start
   aigateway:
     description: AI Gateway proxy with unified billing and injected gateway auth token
     endpoint: https://aigateway.jsmunro.me
     worker: aigateway
-    config: infra/aigateway/wrangler.jsonc
-    language: typescript
+    config: infra/applications/aigateway/worker/wrangler.jsonc
     provider: cloudflare
+    # The upstream AI Gateway only supports a static credential: the secret
+    # below is delivered as a worker secret and injected on outbound calls.
+    provider_auth: api_token
     secret_provider: 1password
     trust_zone: tier2
     # aigateway is only ever a target of impersonation, never the actor, so it
@@ -77,8 +76,7 @@ applications:
     description: Browser chat web client (confidential BFF) fronting the AI Gateway
     endpoint: https://chat.jsmunro.me
     worker: chat
-    config: infra/web/wrangler.jsonc
-    language: typescript
+    config: infra/applications/chat/worker/wrangler.jsonc
     provider: cloudflare
     secret_provider: 1password
     trust_zone: tier2
@@ -108,15 +106,111 @@ applications:
     access:
       allowed_groups: [admins]
       allowed_idps: [github]
-  deploy:
-    description: Worker deployment service using delegated Cloudflare tokens
-    endpoint: https://deploy.jsmunro.me
-    worker: deploy
-    config: infra/deploy/wrangler.jsonc
-    language: typescript
+  console:
+    description: Platform management web console (confidential BFF) over registry, deploys, config, and traces
+    endpoint: https://console.jsmunro.me
+    worker: console
+    config: infra/applications/console/worker/wrangler.jsonc
     provider: cloudflare
     secret_provider: 1password
     trust_zone: tier2
+    # Client-only application like chat: no proto/RPC surface of its own. The
+    # worker holds the service credential and runs the confidential flow on
+    # the browser's behalf - it validates the DPoP-bound session at its edge,
+    # chains the user's identity per target audience, and injects the token
+    # on the forwarded request. Targets always re-validate.
+    impersonatable: false
+    delegations:
+      # Registry management, trace views, and gateway discovery reads; the
+      # ClientIdentityService scope backs instance registration (the live
+      # trace follower runs under its own registered identity).
+      - audience: idp
+        scopes:
+          - idp/RegistryService.RegisterApplication
+          - idp/RegistryService.GetApplication
+          - idp/RegistryService.ListApplications
+          - idp/RegistryService.DeleteApplication
+          - idp/TraceService.ListTraces
+          - idp/TraceService.GetTrace
+          - idp/TraceService.StreamTraces
+          - idp/DiscoveryService.Discover
+          - idp/ClientIdentityService.RegisterClientIdentity
+      - audience: deploy
+        scopes:
+          - deploy/DeployService.ListWorkers
+          - deploy/DeployService.DeployWorker
+      - audience: discovery
+        scopes:
+          - discovery/DiscoveryService.Query
+          - discovery/DiscoveryService.Sync
+      - audience: ragbot
+        scopes:
+          - ragbot/ConfigService.ListConfig
+          - ragbot/ConfigService.GetConfig
+          - ragbot/ConfigService.UpdateConfig
+          - ragbot/ConfigService.ResetConfig
+          - ragbot/GatewayControlService.GetHealth
+    access:
+      allowed_groups: [admins]
+      allowed_idps: [github]
+  discovery:
+    description: Platform discovery read model; GraphQL queries over the gateway registry
+    endpoint: https://discovery.jsmunro.me
+    worker: discovery
+    config: infra/applications/discovery/worker/wrangler.jsonc
+    provider: cloudflare
+    secret_provider: 1password
+    trust_zone: tier2
+    service_client: true
+    web_client: true
+    # Ingestion: the worker re-reads the gateway registry through the
+    # standard connector, so the delegation is scoped to exactly that RPC.
+    delegations:
+      - audience: idp
+        scopes:
+          - idp/DiscoveryService.Discover
+    access:
+      allowed_groups: [admins]
+      allowed_idps: [github]
+  deploy:
+    description: Worker deployment service; chains to the cloudflare application for provider API access
+    endpoint: https://deploy.jsmunro.me
+    worker: deploy
+    config: infra/applications/deploy/worker/wrangler.jsonc
+    provider: cloudflare
+    secret_provider: 1password
+    trust_zone: tier2
+    service_client: true
+    delegations:
+      - audience: cloudflare
+        scopes:
+          - cloudflare/WorkerService.DeployWorker
+          - cloudflare/WorkerService.ListWorkers
+    access:
+      allowed_groups: [admins]
+      allowed_idps: [github]
+  cloudflare:
+    description: Cloudflare API proxy using delegated OAuth tokens
+    endpoint: https://cloudflare.jsmunro.me
+    worker: cloudflare
+    config: infra/applications/cloudflare/worker/wrangler.jsonc
+    provider: cloudflare
+    secret_provider: 1password
+    impersonatable: false
+    trust_zone: tier2
+    service_client: true
+    # User-delegated provider OAuth: registration provisions a confidential
+    # OAuth client scoped to exactly these provider API scopes, and the
+    # gateway exchanges each caller's identity for short-lived tokens.
+    provider_auth: oauth
+    provider_api_scopes:
+      - teams-connector-warp.read
+      - teams-connector-warp.write
+      - teams.read
+      - teams.write
+      - teams-pii.read
+      - workers-scripts.read
+      - workers-scripts.write
     access:
       allowed_groups: [admins]
       allowed_idps: [github]

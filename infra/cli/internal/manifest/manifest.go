@@ -21,11 +21,6 @@ type Delegation struct {
 	Scopes   []string `yaml:"scopes"`
 }
 
-type Webhook struct {
-	Name string `yaml:"name"`
-	Type string `yaml:"type"`
-}
-
 type TrustBoundary struct {
 	TeamName   string `yaml:"team_name"`
 	TeamDomain string `yaml:"team_domain"`
@@ -44,7 +39,6 @@ type Application struct {
 	Endpoint         string            `yaml:"endpoint"`
 	Worker           string            `yaml:"worker"`
 	Config           string            `yaml:"config"`
-	Language         string            `yaml:"language"`
 	IdentityProvider string            `yaml:"provider"`
 	TrustZone        string            `yaml:"trust_zone"`
 	TrustBoundary    TrustBoundary     `yaml:"trust_boundary"`
@@ -68,9 +62,50 @@ type Application struct {
 	// connector (validate caller, chain identity, attach token) so callers
 	// only configure the connection; also exports the session-proxy target.
 	ServiceClient bool         `yaml:"service_client"`
-	Delegations []Delegation `yaml:"delegations"`
-	Webhooks    []Webhook    `yaml:"webhooks"`
-	PostDeploy  []string     `yaml:"post_deploy"`
+	Delegations   []Delegation `yaml:"delegations"`
+	PostDeploy    []string     `yaml:"post_deploy"`
+	// ProviderAuth selects how this application authenticates to its external
+	// provider API: "oauth" provisions a confidential provider OAuth client
+	// during registration and the gateway exchanges the caller's identity for
+	// short-lived delegated tokens (requires provider_api_scopes);
+	// "api_token" delivers a static credential from the secrets map as a
+	// worker secret. Defaults to oauth when provider_api_scopes is set.
+	ProviderAuth string `yaml:"provider_auth"`
+	// ProviderAPIScopes lists Cloudflare OAuth API scopes provisioned for this
+	// application during registration. The gateway exchanges the operator's
+	// session for provider API tokens using the confidential OAuth client.
+	ProviderAPIScopes []string `yaml:"provider_api_scopes"`
+}
+
+const (
+	ProviderAuthNone     = ""
+	ProviderAuthOAuth    = "oauth"
+	ProviderAuthAPIToken = "api_token"
+)
+
+// ProviderAuthMode resolves the provider authentication mode, defaulting to
+// oauth when provider API scopes are declared. Invalid combinations fail.
+func (a *Application) ProviderAuthMode() string {
+	switch a.ProviderAuth {
+	case ProviderAuthNone:
+		if len(a.ProviderAPIScopes) > 0 {
+			return ProviderAuthOAuth
+		}
+		return ProviderAuthNone
+	case ProviderAuthOAuth:
+		if len(a.ProviderAPIScopes) == 0 {
+			output.Fail("provider_auth: oauth requires provider_api_scopes")
+		}
+		return ProviderAuthOAuth
+	case ProviderAuthAPIToken:
+		if len(a.ProviderAPIScopes) > 0 {
+			output.Fail("provider_auth: api_token does not take provider_api_scopes")
+		}
+		return ProviderAuthAPIToken
+	default:
+		output.Fail("provider_auth must be oauth or api_token, got %q", a.ProviderAuth)
+		return ProviderAuthNone
+	}
 }
 
 func (a *Application) ProxyProvider() string {

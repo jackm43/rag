@@ -17,32 +17,20 @@ import (
 
 const maxResponseBytes = 10 << 20
 
-// Decorator mutates outbound request headers for a target application,
-// for example to attach delegated provider tokens.
-type Decorator func(ctx context.Context, header http.Header) error
-
 // Client is the standard outbound request client for platform applications.
 // It resolves endpoints and method paths from discovery metadata, acquires
 // audience-scoped tokens through the gateway session (refreshing and proving
-// possession as needed), applies per-application decorators, and executes
-// the request.
+// possession as needed), and executes the request.
 type Client struct {
 	Session    *gateway.Session
 	HTTPClient *http.Client
-
-	decorators map[string][]Decorator
 }
 
 func New(session *gateway.Session) *Client {
 	return &Client{
 		Session:    session,
 		HTTPClient: http.DefaultClient,
-		decorators: map[string][]Decorator{},
 	}
-}
-
-func (c *Client) Decorate(application string, decorator Decorator) {
-	c.decorators[application] = append(c.decorators[application], decorator)
 }
 
 type Response struct {
@@ -62,15 +50,6 @@ func (r *Response) Decoded() any {
 
 func (r *Response) OK() bool {
 	return r.StatusCode == http.StatusOK
-}
-
-func (c *Client) decorate(ctx context.Context, application string, header http.Header) error {
-	for _, decorator := range c.decorators[application] {
-		if err := decorator(ctx, header); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // Fetch performs an authenticated HTTP request against an application
@@ -110,9 +89,6 @@ func (c *Client) Fetch(ctx context.Context, application, method, path string, bo
 		traceparent = trace.NewTraceparent()
 	}
 	request.Header.Set(trace.Header, traceparent)
-	if err := c.decorate(ctx, application, request.Header); err != nil {
-		return nil, err
-	}
 	start := time.Now()
 	response, err := c.httpClient().Do(request)
 	if err != nil {

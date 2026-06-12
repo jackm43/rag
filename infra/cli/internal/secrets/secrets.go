@@ -5,17 +5,16 @@ import (
 	"strings"
 
 	"jsmunro.me/platy/cli/internal/output"
+	sdkplatform "jsmunro.me/platy/sdk/platform"
 	sdksecrets "jsmunro.me/platy/sdk/secrets"
 )
 
-const servicesVaultID = "mqrwrig24fxs3ssywmf3pxwqgy"
-
 func Service() *sdksecrets.Service {
-	file, err := sdksecrets.DefaultFile()
+	service, err := sdkplatform.SecretsService(output.Logger)
 	if err != nil {
-		output.Fail("file secret provider: %v", err)
+		output.Fail("secret service: %v", err)
 	}
-	return sdksecrets.NewService(&sdksecrets.OnePassword{VaultID: servicesVaultID, Logger: output.Logger}, file)
+	return service
 }
 
 func ResolveValue(ctx context.Context, value string) string {
@@ -38,6 +37,18 @@ func ResolveCloudflareAPIToken(ctx context.Context, override, organizationRef st
 		return token
 	}
 	return ResolveValue(ctx, organizationRef)
+}
+
+func StoreProviderOAuthCredential(ctx context.Context, app, clientID, clientSecret, provider string) *sdksecrets.ClientCredential {
+	if provider == "" {
+		provider = sdksecrets.OnePasswordProvider
+	}
+	credential, err := Service().Application.StoreProviderOAuthCredential(ctx, app, clientID, clientSecret, provider)
+	if err != nil {
+		output.Fail("store provider oauth credential: %v", err)
+	}
+	output.Logger.Info("stored provider oauth credential", "provider", credential.Provider, "application", app)
+	return credential
 }
 
 func StoreServiceCredential(ctx context.Context, app, clientID, clientSecret, provider string) *sdksecrets.ClientCredential {

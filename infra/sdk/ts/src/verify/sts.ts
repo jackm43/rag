@@ -11,7 +11,9 @@ export type StsVerifierConfig = {
   issuer: string;
   audience: string;
   jwksUrl?: string;
-  jwksFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  // Transport for gateway-hosted verification material (JWKS, delegation
+  // discovery). Workers pass the auth gateway service binding here.
+  gatewayFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
 type ActClaim = { sub?: string; act?: ActClaim };
@@ -42,7 +44,7 @@ export const verifyStsToken = async (
   try {
     const { payload } = await jwtVerify(
       token,
-      remoteJwks(config.jwksUrl ?? stsJwksUrl(config.issuer), config.jwksFetch),
+      remoteJwks(config.jwksUrl ?? stsJwksUrl(config.issuer), config.gatewayFetch),
       {
         issuer: config.issuer,
         audience: config.audience,

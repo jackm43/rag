@@ -69,9 +69,6 @@ type BootstrapOptions struct {
 	DefaultIdPType      string
 	AccessAppName       string
 	WorkersDevSubdomain string
-	OAuthClientName     string
-	OAuthScopes         string
-	SkipOAuthClient     bool
 	PostureEnabled      bool
 	PostureCheckName    string
 }
@@ -84,8 +81,6 @@ type BootstrapResult struct {
 	AdminPolicyID      string
 	Posture            PosturePolicy
 	AccessOIDCClientID string
-	OAuthClientID      string
-	OAuthScopes        []string
 }
 
 type ProviderConfig struct {
@@ -126,6 +121,16 @@ type IdentityProxy interface {
 	) (AccessApplicationSpec, error)
 	EnsureImpersonationAccessApplication(ctx context.Context, boundary TrustBoundary, application string, spec AccessApplicationSpec) (*AccessApplication, error)
 	EnsureWorkersDevBypassApps(ctx context.Context, boundary TrustBoundary, subdomain string) error
-	EnsureOAuthClient(ctx context.Context, boundary TrustBoundary, name string, scopesOverride string) (clientID string, scopes []string, err error)
+	EnsureWebClientBypassAccess(ctx context.Context, boundary TrustBoundary, application, domain string) error
+	EnsureApplicationOAuthClient(
+		ctx context.Context,
+		boundary TrustBoundary,
+		application string,
+		scopes []string,
+		callbackURL string,
+	) (clientID, clientSecret string, grantedScopes []string, err error)
+	RotateApplicationOAuthClientSecret(ctx context.Context, boundary TrustBoundary, clientID string) (string, error)
+	FinalizeApplicationOAuthClientRotation(ctx context.Context, boundary TrustBoundary, clientID string) error
+	DeleteApplicationOAuthClient(ctx context.Context, boundary TrustBoundary, clientID string) error
 	EnsureOrganization(ctx context.Context, boundary TrustBoundary, input EnsureOrganizationInput) (OrganizationPolicy, error)
 }

@@ -407,7 +407,7 @@ sessions, with login UX no worse than any SSO-protected web app.
 ### Implementation status
 
 A first web client is live: the `chat` application
-(`infra/web/`, served at `chat.jsmunro.me`) is a browser chat UI that calls the
+(`infra/applications/chat/`, served at `chat.jsmunro.me`) is a browser chat UI that calls the
 AI Gateway application (Module 14b). It implements this module directly:
 
 - `infra/sdk/web/` is the shared browser SDK, reused by every web application
@@ -426,7 +426,7 @@ AI Gateway application (Module 14b). It implements this module directly:
   service (e.g. `createChatServiceClient(auth)`) bound through the SDK
   factory. Pages stay dumb clients: construct `TrustZoneWebAuth`, call
   `ensureAuthenticated()`, build the generated client, render data.
-- `infra/web/src/App.tsx` + `main.tsx` are a React UI on exactly that
+- `infra/applications/chat/app/App.tsx` + `main.tsx` are a React UI on exactly that
   pattern, streaming responses token by token over the Connect protocol
   (`StreamComplete`). The session token is the only credential the browser
   holds; only gateway session calls and application requests carry DPoP

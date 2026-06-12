@@ -1,3 +1,4 @@
+export { ttlCache, type TtlCache } from "./cache";
 export {
   chainExchange,
   exchangeToken,
@@ -7,19 +8,18 @@ export {
   type ServiceCredential,
 } from "./exchange";
 export {
-  chainedTokenSource,
   ClientError,
   createClient,
-  serviceTokenSource,
   type ClientConfig,
   type PlatformClient,
   type TokenSource,
 } from "./fetch";
 export {
   ConnectorAuthError,
-  connectorClient,
   connectorServiceClient,
   connectorToken,
-  connectorTransport,
+  serviceConnection,
   type ConnectorConfig,
+  type ServiceConnectionEnv,
+  type ServiceConnectionTarget,
 } from "./connector";

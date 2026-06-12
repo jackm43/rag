@@ -1,5 +1,6 @@
+import { requireExpectedActorChain, requireSenderConstraint } from "../authz/constraints";
 import type { Identity } from "../identity";
-import { verifyDpopProof, type RequestDescriptor } from "../verify/dpop";
+import type { RequestDescriptor } from "../verify/dpop";
 import { verifyOidcToken, type OidcProviderConfig } from "../verify/oidc";
 import { verifyStsToken, type StsVerifierConfig } from "../verify/sts";
 
@@ -14,26 +15,6 @@ export const bearerToken = (headers: Headers): string | null => {
   return match ? match[1].trim() : null;
 };
 
-// A cnf-bound identity is only valid when the caller proves possession of
-// the bound key with a fresh DPoP proof for this exact request.
-export const requireSenderConstraint = async (
-  identity: Identity | null,
-  headers: Headers,
-  request?: RequestDescriptor,
-): Promise<Identity | null> => {
-  if (!identity || !identity.cnfJkt) {
-    return identity;
-  }
-  if (!request) {
-    return null;
-  }
-  const proof = await verifyDpopProof(headers, request);
-  if (!proof || proof.jkt !== identity.cnfJkt) {
-    return null;
-  }
-  return identity;
-};
-
 export const stsAuthenticator =
   (config: StsVerifierConfig): Authenticator =>
     async (headers, request) => {
@@ -41,7 +22,7 @@ export const stsAuthenticator =
       if (!token) {
         return null;
       }
-      const identity = await verifyStsToken(token, config);
+      const identity = await requireExpectedActorChain(await verifyStsToken(token, config), config);
       const constrained = await requireSenderConstraint(identity, headers, request);
       return constrained ? { ...constrained, subjectToken: token } : null;
     };

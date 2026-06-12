@@ -1,10 +1,12 @@
+import { requireSenderConstraint } from "../authz/constraints";
 import { connectorToken } from "../client/connector";
 import type { ServiceCredential } from "../client/exchange";
 import type { Identity } from "../identity";
 import { errorMessage, logger } from "../logger";
+import { principalFromIdentity } from "../identity";
 import { annotateSpan, traceHeaders } from "../otel";
 import { verifyStsToken, type StsVerifierConfig } from "../verify/sts";
-import { bearerToken, requireSenderConstraint } from "./authenticators";
+import { bearerToken } from "./authenticators";
 
 // sessionProxy is the confidential web client (BFF) pattern: the web
 // application is the registered principal for its pages. The browser stays a
@@ -99,8 +101,12 @@ export const sessionProxy = (config: SessionProxyConfig): SessionProxy => {
       return connectError(401, "unauthenticated", "a DPoP-bound session token with a valid proof is required");
     }
     const instance = clientInstance(request.headers);
+    const principal = principalFromIdentity(identity);
     annotateSpan({
-      actor: identity.email ?? identity.subject,
+      principal_kind: principal.kind,
+      principal_sub: principal.sub,
+      ...(principal.email ? { principal_email: principal.email } : {}),
+      ...(principal.act ? { principal_act: principal.act.join(" > ") } : {}),
       target: target.application,
       ...(instance ? { client_instance: instance } : {}),
     });

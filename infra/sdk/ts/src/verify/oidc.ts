@@ -54,7 +54,10 @@ export const verifyOidcToken = async (
       kind: "user",
       subject: payload.sub,
       email: typeof payload.email === "string" ? payload.email : null,
-      scopes: ["*"],
+      // An upstream OIDC token authenticates the user to the gateway only.
+      // It is not a grant for application audiences: sessions and exchanged
+      // STS tokens carry those scopes.
+      scopes: ["idp/*"],
       actorChain: [],
     };
   } catch {

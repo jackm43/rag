@@ -10,10 +10,10 @@ Cloudflare Worker Discord bot for rag tracking and mention-triggered AI replies.
 - AI: Workers AI binding (`AI`); model is runtime-configurable (`@cf/...` Workers AI models or partner models such as `xai/grok-4.3`), optionally routed through AI Gateway
 - Queue: Cloudflare Queues (`AI_JOBS`, `ai-jobs`, `ai-jobs-dlq`)
 - Stateful connection: Durable Objects (`DiscordGateway`)
-- Admin auth: central auth gateway worker (`infra/gateway`) that exchanges Cloudflare Access OIDC logins (GitHub IdP, authorization code + PKCE) for device-bound gateway sessions (DPoP, RFC 9449) and short-lived audience-scoped STS tokens (RFC 8693), with delegation-controlled identity chaining for service-to-service calls
+- Admin auth: central auth gateway worker (`infra/applications/idp/worker`) that exchanges Cloudflare Access OIDC logins (GitHub IdP, authorization code + PKCE) for device-bound gateway sessions (DPoP, RFC 9449) and short-lived audience-scoped STS tokens (RFC 8693), with delegation-controlled identity chaining for service-to-service calls
 - Service APIs: protobuf-first Connect-RPC services (`infra/proto`, generated code in `infra/applications`)
-- AI Gateway service: `infra/aigateway` worker exposing `aigateway.v1.ChatService` — proxies chat completions to a Cloudflare AI Gateway with unified billing and an injected `cf-aig-authorization` token; callable by other apps (delegation) and the CLI (`./platy fetch aigateway.ChatService.Complete`, optionally `--as <app>`)
-- Web chat client: `infra/web` React app (`chat.jsmunro.me`) with the browser auth SDK (DPoP via Web Crypto, OIDC PKCE, per-audience STS) and a Connect-Web streaming chat UI over the AI Gateway service (`npm run chat:build` bundles it)
+- AI Gateway service: `infra/applications/aigateway/worker` worker exposing `aigateway.v1.ChatService` — proxies chat completions to a Cloudflare AI Gateway with unified billing and an injected `cf-aig-authorization` token; callable by other apps (delegation) and the CLI (`./platy fetch aigateway.ChatService.Complete`, optionally `--as <app>`)
+- Web chat client: `infra/applications/chat` React app (`chat.jsmunro.me`) with the browser auth SDK (DPoP via Web Crypto, OIDC PKCE, per-audience STS) and a Connect-Web streaming chat UI over the AI Gateway service (`npm run chat:build` bundles it)
 - Infrastructure: `platy bootstrap` (Go CLI + cloudflare-go) creates the Access OIDC application, policy, and Cloudflare OAuth client directly via the Cloudflare API
 - Discord integration:
   - Interactions webhook
@@ -121,11 +121,11 @@ flowchart TD
 
 - `infra/proto` protobuf definitions (`idp.v1`, `ragbot.v1`, `deploy.v1`), buf workspace
 - `infra/applications/<app>/client|server` generated connect-go clients and protobuf-es servers
-- `infra/gateway` auth gateway worker: STS issuer (ES256, rotated keys in a Durable Object), application registry (D1), `GET /api/discovery`, `GET /.well-known/jwks.json`
+- `infra/applications/idp/worker` auth gateway worker: STS issuer (ES256, rotated keys in a Durable Object), application registry (D1), `GET /api/discovery`, `GET /.well-known/jwks.json`
 - `infra/sdk/ts` worker-side SDK grouped into `verify/` (token, proof, and webhook verifiers), `auth/` (authenticators and the `protect` policy middleware), and `client/` (standardized fetch client with token sources and identity chaining)
 - `infra/sdk/go` client SDK: Access PKCE login, device-bound DPoP sessions with automatic refresh, token cache, automatic STS exchange, discovery, standardized request client (`sdk/client`), Cloudflare delegated OAuth
 - `infra/cli` the `platy` CLI
-- `infra/deploy` deploy service worker: deploys workers with the caller's delegated Cloudflare OAuth token
+- `infra/applications/deploy/worker` deploy service worker: deploys workers with the caller's delegated Cloudflare OAuth token
 
 ## Configuration
 

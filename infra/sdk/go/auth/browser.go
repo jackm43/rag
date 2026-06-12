@@ -37,7 +37,9 @@ func randomState() string {
 	return base64.RawURLEncoding.EncodeToString(buf)
 }
 
-func openBrowser(logger *slog.Logger, url string) {
+// OpenBrowser launches the system browser for an interactive auth step,
+// logging the URL for manual use when no launcher is available.
+func OpenBrowser(logger *slog.Logger, url string) {
 	for _, command := range []string{"xdg-open", "wslview", "open", "sensible-browser"} {
 		if path, err := exec.LookPath(command); err == nil {
 			cmd := exec.Command(path, url)
@@ -47,7 +49,7 @@ func openBrowser(logger *slog.Logger, url string) {
 			}
 		}
 	}
-	logger.Info("open the login url manually", "url", url)
+	logger.Info("open the url manually", "url", url)
 }
 
 func waitForCallback(ctx context.Context, state string) (string, error) {
@@ -105,7 +107,7 @@ func waitForCallback(ctx context.Context, state string) (string, error) {
 	}
 }
 
-func tokenSet(token *oauth2.Token) *TokenSet {
+func tokenSet(token *oauth2.Token, grantedScopes []string) *TokenSet {
 	expiresAt := token.Expiry.Unix()
 	if token.Expiry.IsZero() {
 		expiresAt = time.Now().Add(5 * time.Minute).Unix()
@@ -114,6 +116,7 @@ func tokenSet(token *oauth2.Token) *TokenSet {
 		AccessToken:  token.AccessToken,
 		RefreshToken: token.RefreshToken,
 		ExpiresAt:    expiresAt,
+		Scopes:       append([]string(nil), grantedScopes...),
 	}
 }
 
@@ -166,7 +169,7 @@ func (f *BrowserFlow) Login(ctx context.Context) (*TokenSet, error) {
 			err  error
 		}{code, err}
 	}()
-	openBrowser(f.logger(), authURL)
+	OpenBrowser(f.logger(), authURL)
 
 	res := <-codeCh
 	if res.err != nil {
@@ -177,10 +180,10 @@ func (f *BrowserFlow) Login(ctx context.Context) (*TokenSet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("authorization code exchange: %w%s", err, tlsHint(err))
 	}
-	return tokenSet(token), nil
+	return tokenSet(token, f.Config.Scopes), nil
 }
 
-func (f *BrowserFlow) Refresh(ctx context.Context, refreshToken string) (*TokenSet, error) {
+func (f *BrowserFlow) Refresh(ctx context.Context, refreshToken string, priorScopes []string) (*TokenSet, error) {
 	config := f.Config
 	config.RedirectURL = RedirectURL
 	source := config.TokenSource(f.oauthContext(ctx), &oauth2.Token{RefreshToken: refreshToken})
@@ -191,23 +194,25 @@ func (f *BrowserFlow) Refresh(ctx context.Context, refreshToken string) (*TokenS
 	if token.RefreshToken == "" {
 		token.RefreshToken = refreshToken
 	}
-	return tokenSet(token), nil
+	return tokenSet(token, priorScopes), nil
 }
 
-func (f *BrowserFlow) Token(ctx context.Context, store TokenStore, key string, forceLogin bool) (*TokenSet, error) {
+func (f *BrowserFlow) Token(ctx context.Context, store TokenStore, key string, forceLogin bool, wantedScopes []string) (*TokenSet, error) {
 	if !forceLogin {
 		cached := store.Get(ctx, key)
-		if cached.Valid(30 * time.Second) {
+		if cached.Valid(30*time.Second) && CoversScopes(cached.Scopes, wantedScopes) {
 			return cached, nil
 		}
-		if cached != nil && cached.RefreshToken != "" {
-			if refreshed, err := f.Refresh(ctx, cached.RefreshToken); err == nil {
+		if cached != nil && cached.RefreshToken != "" && CoversScopes(cached.Scopes, wantedScopes) {
+			if refreshed, err := f.Refresh(ctx, cached.RefreshToken, cached.Scopes); err == nil {
 				if err := store.Put(ctx, key, refreshed); err != nil {
 					return nil, err
 				}
 				return refreshed, nil
 			}
 			f.logger().Debug("token refresh failed, starting browser login")
+		} else if cached != nil && !CoversScopes(cached.Scopes, wantedScopes) {
+			f.logger().Info("cached token missing required scopes, starting browser login")
 		}
 	}
 	token, err := f.Login(ctx)

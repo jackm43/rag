@@ -64,7 +64,7 @@ func (s *Session) ImpersonationToken(ctx context.Context, application string, fo
 		Logger:     s.logger(),
 		HTTPClient: s.HTTPClient,
 	}
-	token, err := flow.Token(ctx, s.Store, impersonationTokenKey(s.GatewayURL, application), forceLogin)
+	token, err := flow.Token(ctx, s.Store, impersonationTokenKey(s.GatewayURL, application), forceLogin, nil)
 	if err != nil {
 		return "", fmt.Errorf("impersonation authorization for %s: %w", application, err)
 	}

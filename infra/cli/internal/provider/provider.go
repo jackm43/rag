@@ -10,35 +10,35 @@ import (
 )
 
 type (
-	Name                    = core.Name
-	TrustBoundary           = core.TrustBoundary
-	TrustBoundaryHints      = core.TrustBoundaryHints
-	IdentityProvider        = core.IdentityProvider
-	AccessGroup             = core.AccessGroup
-	PostureCheck            = core.PostureCheck
-	PosturePolicy           = core.PosturePolicy
-	ApplicationAccess       = core.ApplicationAccess
-	AccessApplicationSpec   = core.AccessApplicationSpec
-	AccessApplication       = core.AccessApplication
-	BootstrapOptions        = core.BootstrapOptions
-	BootstrapResult         = core.BootstrapResult
-	ProviderConfig          = core.ProviderConfig
-	IdentityProxy           = core.IdentityProxy
-	EnsureOrganizationInput = core.EnsureOrganizationInput
-	ZeroTrustSettings       = core.ZeroTrustSettings
+	Name                     = core.Name
+	TrustBoundary            = core.TrustBoundary
+	TrustBoundaryHints       = core.TrustBoundaryHints
+	IdentityProvider         = core.IdentityProvider
+	AccessGroup              = core.AccessGroup
+	PostureCheck             = core.PostureCheck
+	PosturePolicy            = core.PosturePolicy
+	ApplicationAccess        = core.ApplicationAccess
+	AccessApplicationSpec    = core.AccessApplicationSpec
+	AccessApplication        = core.AccessApplication
+	BootstrapOptions         = core.BootstrapOptions
+	BootstrapResult          = core.BootstrapResult
+	ProviderConfig           = core.ProviderConfig
+	IdentityProxy            = core.IdentityProxy
+	EnsureOrganizationInput  = core.EnsureOrganizationInput
+	ZeroTrustSettings        = core.ZeroTrustSettings
 	ZeroTrustGatewaySettings = core.ZeroTrustGatewaySettings
 	ZeroTrustDeviceSettings  = core.ZeroTrustDeviceSettings
 	AccessPolicySpec         = core.AccessPolicySpec
 	AccessPolicyMFAConfig    = core.AccessPolicyMFAConfig
 	EnrollStaffPolicy        = core.EnrollStaffPolicy
-	EnrollContractorPolicy  = core.EnrollContractorPolicy
-	EnrollOnSuccess         = core.EnrollOnSuccess
-	EnrollOnRevoke          = core.EnrollOnRevoke
-	EnrollPolicy            = core.EnrollPolicy
-	TrustZoneProvisioned    = core.TrustZoneProvisioned
-	TrustZoneSpec           = core.TrustZoneSpec
-	OrganizationSpec        = core.OrganizationSpec
-	OrganizationPolicy      = core.OrganizationPolicy
+	EnrollContractorPolicy   = core.EnrollContractorPolicy
+	EnrollOnSuccess          = core.EnrollOnSuccess
+	EnrollOnRevoke           = core.EnrollOnRevoke
+	EnrollPolicy             = core.EnrollPolicy
+	TrustZoneProvisioned     = core.TrustZoneProvisioned
+	TrustZoneSpec            = core.TrustZoneSpec
+	OrganizationSpec         = core.OrganizationSpec
+	OrganizationPolicy       = core.OrganizationPolicy
 )
 
 const (

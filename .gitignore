@@ -3,16 +3,19 @@ node_modules
 dist
 *.log
 /platy
+/roo
 infra/cli/cli
 .env
 .dev.vars
+.platy/
 
 # Generated protobuf and Connect code (regenerate with infra/scripts/generate.sh)
 infra/applications/*/client/
 infra/applications/*/server/
 
-# Web client bundle (regenerate with npm run chat:build)
-infra/web/public/app.js
+# Web client bundles (regenerate with npm run chat:build / console:build)
+infra/applications/chat/worker/public/app.js
+infra/applications/console/worker/public/app.js
 
 # Bootstrap and registration outputs (regenerate with platy bootstrap / platy app sync)
 infra/applications/provider_config.json

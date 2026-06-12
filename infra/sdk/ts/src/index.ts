@@ -3,44 +3,65 @@ export {
   bearerToken,
   CLIENT_INSTANCE_HEADER,
   clientInstance,
-  defaultScope,
   oidcAuthenticator,
-  protect,
-  requireIdentity,
-  requireSenderConstraint,
   sessionChainAuthenticator,
   sessionProxy,
   stsAuthenticator,
   verifySessionRequest,
   type Authenticator,
-  type AuthPolicy,
   type ProxyTarget,
   type SessionChainConfig,
   type SessionProxy,
   type SessionProxyConfig,
 } from "./auth";
 export {
-  chainedTokenSource,
+  actorChainRefusal,
+  applicationFromClientId,
+  defaultScope,
+  delegationGraph,
+  delegationGraphFromDiscovery,
+  hasScope,
+  protect,
+  requireExpectedActorChain,
+  requireIdentity,
+  requireSenderConstraint,
+  scopeMatches,
+  verifyMintedToken,
+  type AuthPolicy,
+  type DelegationGraph,
+} from "./authz";
+export {
   chainExchange,
   ClientError,
   ConnectorAuthError,
-  connectorClient,
   connectorServiceClient,
   connectorToken,
-  connectorTransport,
   createClient,
   exchangeToken,
+  serviceConnection,
   serviceCredentialFromEnv,
-  serviceTokenSource,
+  ttlCache,
   type ClientConfig,
   type ConnectorConfig,
   type ExchangedToken,
   type ExchangeRequest,
   type PlatformClient,
+  type ServiceConnectionEnv,
+  type ServiceConnectionTarget,
   type ServiceCredential,
   type TokenSource,
+  type TtlCache,
 } from "./client";
-export { hasScope, identityKey, scopeMatches, type Identity, type IdentityKind } from "./identity";
+export {
+  identityExchanged,
+  identityExchangeRefused,
+  identityKey,
+  principalFromIdentity,
+  type Identity,
+  type IdentityExchangeLog,
+  type IdentityKind,
+  type Principal,
+} from "./identity";
 export { errorMessage, logger } from "./logger";
 export {
   annotateSpan,
@@ -61,6 +82,14 @@ export {
   type Tracer,
   type TracerConfig,
 } from "./otel";
+export {
+  providerApiClient,
+  providerApiToken,
+  ProviderApiAuthError,
+  type ProviderApiAuth,
+  type ProviderApiConfig,
+} from "./provider/api";
+export { exchangeProviderAccessToken, type ProviderAccessToken } from "./provider/oauth";
 export { createRpcHandler, type RpcHandler } from "./router";
 export {
   accessOidcProvider,

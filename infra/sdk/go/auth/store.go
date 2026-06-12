@@ -9,10 +9,11 @@ import (
 )
 
 type TokenSet struct {
-	AccessToken      string `json:"access_token"`
-	RefreshToken     string `json:"refresh_token,omitempty"`
-	ExpiresAt        int64  `json:"expires_at"`
-	RefreshExpiresAt int64  `json:"refresh_expires_at,omitempty"`
+	AccessToken      string   `json:"access_token"`
+	RefreshToken     string   `json:"refresh_token,omitempty"`
+	ExpiresAt        int64    `json:"expires_at"`
+	RefreshExpiresAt int64    `json:"refresh_expires_at,omitempty"`
+	Scopes           []string `json:"scopes,omitempty"`
 }
 
 func (t *TokenSet) Valid(skew time.Duration) bool {

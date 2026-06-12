@@ -10,13 +10,13 @@ import (
 	"strings"
 
 	"connectrpc.com/connect"
+	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/descriptorpb"
 
 	idpv1 "jsmunro.me/platy/applications/idp/client/idp/v1"
 	"jsmunro.me/platy/cli/cmd/bootstrap"
 	"jsmunro.me/platy/cli/internal/applications"
-	"jsmunro.me/platy/cli/internal/cfauth"
 	"jsmunro.me/platy/cli/internal/display"
 	"jsmunro.me/platy/cli/internal/manifest"
 	"jsmunro.me/platy/cli/internal/output"
@@ -27,37 +27,129 @@ import (
 	sdksecrets "jsmunro.me/platy/sdk/secrets"
 )
 
-func Run(ctx context.Context, cmdArgs []string) {
-	if len(cmdArgs) == 0 {
-		output.UsageExit()
+func Command() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "app",
+		Short: "Manage application registrations in the gateway registry",
 	}
-	action, rest := cmdArgs[0], cmdArgs[1:]
-	switch action {
-	case "register":
-		Register(ctx, rest)
-	case "plan":
-		Plan(ctx)
-	case "sync":
-		Sync(ctx, rest)
-	case "list":
-		List(ctx)
-	case "get":
-		if len(rest) != 1 {
-			output.UsageExit()
-		}
-		Get(ctx, rest[0])
-	case "delete":
-		if len(rest) != 1 {
-			output.UsageExit()
-		}
-		Delete(ctx, rest[0])
-	case "rotate-client":
-		if len(rest) != 1 {
-			output.UsageExit()
-		}
-		RotateClient(ctx, rest[0])
-	default:
-		output.UsageExit()
+	cmd.AddCommand(
+		registerCommand(),
+		planCommand(),
+		syncCommand(),
+		listCommand(),
+		getCommand(),
+		deleteCommand(),
+		rotateClientCommand(),
+		rotateProviderOAuthCommand(),
+	)
+	return cmd
+}
+
+func registerCommand() *cobra.Command {
+	endpoint := ""
+	description := ""
+	skipCodegen := false
+	cmd := &cobra.Command{
+		Use:   "register <name>",
+		Short: "Register an application from applications.yaml and generate code",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			Register(cmd.Context(), args[0], endpoint, description, skipCodegen)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&endpoint, "endpoint", "", "endpoint override for the registered application")
+	cmd.Flags().StringVar(&description, "description", "", "description override for the registered application")
+	cmd.Flags().BoolVar(&skipCodegen, "skip-codegen", false, "skip protobuf code generation after registration")
+	return cmd
+}
+
+func planCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "plan",
+		Short: "Diff applications.yaml against the registry (exits 1 when drift exists)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if Plan(cmd.Context()) > 0 {
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+}
+
+func syncCommand() *cobra.Command {
+	prune := false
+	cmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Reconcile applications.yaml with the gateway, applying only what changed",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			Sync(cmd.Context(), prune)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&prune, "prune", false, "delete gateway applications that are no longer in the manifest")
+	return cmd
+}
+
+func listCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List registered applications",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			List(cmd.Context())
+			return nil
+		},
+	}
+}
+
+func getCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "get <name>",
+		Short: "Show one application document",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			Get(cmd.Context(), args[0])
+			return nil
+		},
+	}
+}
+
+func deleteCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "delete <name>",
+		Short: "Remove an application from the registry",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			Delete(cmd.Context(), args[0])
+			return nil
+		},
+	}
+}
+
+func rotateClientCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rotate-client <name>",
+		Short: "Issue a new service credential for an application",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			RotateClient(cmd.Context(), args[0])
+			return nil
+		},
+	}
+}
+
+func rotateProviderOAuthCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rotate-provider-oauth <name>",
+		Short: "Rotate the confidential provider OAuth client secret for an application",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			RotateProviderOAuth(cmd.Context(), args[0])
+			return nil
+		},
 	}
 }
 
@@ -121,43 +213,11 @@ func generateCode(root, name string) {
 	output.Logger.Info("generated client and server code", "app", name, "dir", filepath.Join("infra", "applications", name))
 }
 
-func parseRegisterArgs(cmdArgs []string) (name, endpoint, description string, skipCodegen bool) {
-	positionals := []string{}
-	for index := 0; index < len(cmdArgs); index++ {
-		arg := cmdArgs[index]
-		switch arg {
-		case "--endpoint":
-			if index+1 >= len(cmdArgs) {
-				output.Fail("--endpoint requires a value")
-			}
-			index++
-			endpoint = cmdArgs[index]
-		case "--description":
-			if index+1 >= len(cmdArgs) {
-				output.Fail("--description requires a value")
-			}
-			index++
-			description = cmdArgs[index]
-		case "--skip-codegen":
-			skipCodegen = true
-		default:
-			if strings.HasPrefix(arg, "-") {
-				output.Fail("unknown flag %s", arg)
-			}
-			positionals = append(positionals, arg)
-		}
-	}
-	if len(positionals) != 1 {
-		output.UsageExit()
-	}
-	return positionals[0], endpoint, description, skipCodegen
-}
-
-func Register(ctx context.Context, cmdArgs []string) {
-	name, endpoint, description, skipCodegen := parseRegisterArgs(cmdArgs)
+func Register(ctx context.Context, name, endpoint, description string, skipCodegen bool) {
 	root := platform.RepoRoot()
 	loaded := manifest.Load(root)
 	result := registerApplication(ctx, root, loaded, name, endpoint, description, skipCodegen)
+	platform.SyncDiscovery(ctx)
 	output.PrintJSON(result)
 }
 
@@ -258,6 +318,8 @@ func registerApplication(
 	} else {
 		output.Logger.Info("skipping impersonation access app (impersonatable: false)", "application", name)
 	}
+	provisionClientOnlyWebAccess(ctx, name, app, endpoint, hasProto, providerConfig)
+	providerOAuthClientID, providerOAuth := provisionProviderOAuth(ctx, name, app, providerConfig)
 	s := platform.Session()
 	response, err := s.RegistryClient().RegisterApplication(ctx, connect.NewRequest(&idpv1.RegisterApplicationRequest{
 		Name:                        name,
@@ -270,6 +332,8 @@ func registerApplication(
 		Access:                      manifestAccess(app, providerConfig),
 		TrustZone:                   app.ResolvedTrustZone(),
 		ImpersonationAccessClientId: impersonationClientID,
+		ProviderOauthClientId:       providerOAuthClientID,
+		ProviderOauthScopes:         app.ProviderAPIScopes,
 	}))
 	if err != nil {
 		output.Fail("register application: %v", err)
@@ -288,76 +352,41 @@ func registerApplication(
 			response.Msg.Credential.GetClientSecret(),
 			app.Provider(),
 		)
-	} else if existing := applications.CredentialDocument(root, name); existing != nil {
+	} else if existing := platform.CredentialDocument(root, name); existing != nil {
 		credential = existing.Credential
 		output.Logger.Info("kept existing service client credential", "application", name)
 	} else {
 		output.Logger.Info("application has a registered client but no local credential; run platy app rotate-client", "application", name)
 	}
-	document := applications.Document(response.Msg.Application, s.GatewayURL, credential, fullNames)
-	applications.RegisterDocument(document)
+	document := applications.Document(response.Msg.Application, s.GatewayURL, credential, providerOAuth, fullNames)
+	applications.MergeRepoMetadata(root, document)
 	applications.WriteRepoMetadata(root, document)
+	syncGatewayProviderOAuthVars(root)
+	// The gateway needs the confidential provider OAuth client to mint
+	// delegated provider tokens; deliver it as part of registration rather
+	// than only on the next idp deploy.
+	if providerOAuth != nil {
+		if err := pushGatewayProviderOAuthSecrets(ctx, root, nil); err != nil {
+			output.Logger.Info("provider oauth clients not pushed to gateway; run platy deploy idp", "error", err)
+		}
+	}
+	platform.Session().InvalidateDiscovery()
 	return map[string]any{
 		"application": applications.JSON(response.Msg.Application),
 		"credential":  credential,
 	}
 }
 
-func Sync(ctx context.Context, cmdArgs []string) {
-	prune := false
-	for _, arg := range cmdArgs {
-		switch arg {
-		case "--prune":
-			prune = true
-		default:
-			output.Fail("unknown flag %s", arg)
-		}
-	}
+func Sync(ctx context.Context, prune bool) {
 	root := platform.RepoRoot()
-	ctx = cfauth.EnsurePlatform(ctx)
 	loaded := manifest.Load(root)
-	providerConfig := loadProviderConfig(root)
-	registered := registeredApplications(ctx)
-	results := map[string]any{}
-	for _, name := range loaded.Names() {
-		if loaded.Application(name).Internal {
-			continue
-		}
-		// Apply only what changed: an application whose registry state already
-		// matches the manifest (and whose credential is stored locally) is
-		// skipped — no re-registration, Access churn, or codegen.
-		if actual, exists := registered[name]; exists {
-			desired := desiredApplication(root, loaded, name, providerConfig)
-			if len(diffApplication(desired, actual)) == 0 && applications.CredentialDocument(root, name) != nil {
-				output.Logger.Info("application unchanged; skipping", "application", name)
-				results[name] = map[string]any{"unchanged": true}
-				continue
-			}
-		}
-		results[name] = registerApplication(ctx, root, loaded, name, "", "", false)
-	}
+	results := SyncApplications(ctx, root, loaded, nil, prune)
 	if config, err := os.ReadFile(bootstrap.ProviderConfigPath(root)); err == nil {
 		providerConfig := provider.ProviderConfig{}
 		if err := json.Unmarshal(config, &providerConfig); err == nil {
 			if err := provider.SyncToGateway(ctx, providerConfig); err != nil {
 				output.Logger.Info("provider config not synced to gateway", "error", err)
 			}
-		}
-	}
-	if prune {
-		response, err := platform.Session().RegistryClient().ListApplications(ctx, connect.NewRequest(&idpv1.ListApplicationsRequest{}))
-		if err != nil {
-			output.Fail("list applications: %v", err)
-		}
-		for _, registered := range response.Msg.Applications {
-			if registered.Name == "idp" {
-				continue
-			}
-			if _, declared := loaded.Applications[registered.Name]; declared {
-				continue
-			}
-			Delete(ctx, registered.Name)
-			results[registered.Name] = map[string]any{"deleted": true}
 		}
 	}
 	output.PrintJSON(results)
@@ -372,7 +401,7 @@ func List(ctx context.Context) {
 		if index > 0 {
 			output.PrintLines("")
 		}
-		display.PrintApplicationSummary(applications.Document(registered, "", nil, nil))
+		display.PrintApplicationSummary(applications.Document(registered, "", nil, nil, nil))
 	}
 }
 
@@ -389,12 +418,10 @@ func Delete(ctx context.Context, name string) {
 	if err != nil {
 		output.Fail("delete application: %v", err)
 	}
-	if err := platform.DiscoveryService().Remove(name); err != nil {
-		output.Fail("remove application document: %v", err)
-	}
 	if err := os.Remove(applications.RepoMetadataPath(platform.RepoRoot(), name)); err != nil && !os.IsNotExist(err) {
 		output.Fail("remove application metadata: %v", err)
 	}
+	platform.SyncDiscovery(ctx)
 	output.PrintJSON(map[string]any{"deleted": response.Msg.Deleted, "name": name})
 }
 
@@ -414,7 +441,7 @@ func RotateClient(ctx context.Context, name string) {
 	}
 	registered.GatewayURL = s.GatewayURL
 	registered.Credential = credential
-	applications.RegisterDocument(registered)
+	applications.MergeRepoMetadata(root, registered)
 	applications.WriteRepoMetadata(root, registered)
 	output.PrintJSON(credential)
 }

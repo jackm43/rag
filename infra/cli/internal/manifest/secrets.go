@@ -12,9 +12,9 @@ import (
 	sdksecrets "jsmunro.me/platy/sdk/secrets"
 )
 
-func ResolveSecretRefs(ctx context.Context, refs map[string]string, provider string) map[string]string {
+func ResolveSecretRefs(ctx context.Context, refs map[string]string, provider string) (map[string]string, error) {
 	if len(refs) == 0 {
-		return map[string]string{}
+		return map[string]string{}, nil
 	}
 	if provider == "" {
 		provider = sdksecrets.OnePasswordProvider
@@ -31,15 +31,15 @@ func ResolveSecretRefs(ctx context.Context, refs map[string]string, provider str
 			var err error
 			value, err = service.Resolve(ctx, ref, provider)
 			if err != nil {
-				output.Fail("resolve %s: %v", key, err)
+				return nil, fmt.Errorf("resolve %s: %w", key, err)
 			}
 		}
 		resolved[key] = value
 	}
-	return resolved
+	return resolved, nil
 }
 
-func (a *Application) ResolveSecrets(ctx context.Context) map[string]string {
+func (a *Application) ResolveSecrets(ctx context.Context) (map[string]string, error) {
 	return ResolveSecretRefs(ctx, a.Secrets, a.Provider())
 }
 

@@ -1,5 +1,7 @@
 import { createContextKey } from "@connectrpc/connect";
 
+import { logger } from "./logger";
+
 export type IdentityKind = "user" | "service" | "platform";
 
 export type Identity = {
@@ -10,27 +12,43 @@ export type Identity = {
   actorChain: string[];
   cnfJkt?: string | null;
   sessionId?: string | null;
-  // The bearer token the caller presented, usable as the subject of a further
-  // chained exchange (the gateway accepts the actor's own audience and "idp"
-  // session tokens as chaining subjects). Set by the authenticators; absent
-  // for identities that cannot chain onward.
   subjectToken?: string | null;
 };
 
 export const identityKey = createContextKey<Identity | null>(null);
 
-export const scopeMatches = (granted: string, required: string): boolean => {
-  if (granted === "*" || granted === required) {
-    return true;
-  }
-  if (granted.endsWith("/*")) {
-    return required.startsWith(granted.slice(0, -1));
-  }
-  if (granted.endsWith(".*")) {
-    return required.startsWith(granted.slice(0, -1));
-  }
-  return false;
+export type Principal = {
+  kind: IdentityKind;
+  sub: string;
+  email?: string;
+  act?: string[];
 };
 
-export const hasScope = (identity: Identity, required: string): boolean =>
-  identity.scopes.some((granted) => scopeMatches(granted, required));
+export const principalFromIdentity = (
+  identity: Pick<Identity, "kind" | "subject" | "email" | "actorChain">,
+): Principal => ({
+  kind: identity.kind,
+  sub: identity.subject,
+  ...(identity.email ? { email: identity.email } : {}),
+  ...(identity.actorChain.length > 0 ? { act: identity.actorChain } : {}),
+});
+
+export type IdentityExchangeLog = {
+  audience: string;
+  subject_token_type: string;
+  actor_token_type?: string;
+  act?: string;
+  impersonation?: boolean;
+  principal?: Principal;
+  scopes?: string[];
+  reason?: string;
+  status?: number;
+};
+
+export const identityExchangeRefused = (fields: IdentityExchangeLog): void => {
+  logger.warn("identity_exchange_refused", fields);
+};
+
+export const identityExchanged = (fields: IdentityExchangeLog): void => {
+  logger.info("identity_exchanged", fields);
+};

@@ -18,6 +18,7 @@ import (
 	"jsmunro.me/platy/sdk/discovery"
 	"jsmunro.me/platy/sdk/dpop"
 	"jsmunro.me/platy/sdk/httpclient"
+	"jsmunro.me/platy/sdk/identity"
 )
 
 const (
@@ -33,16 +34,16 @@ type CredentialResolver func(ctx context.Context, application string) (clientID,
 type Session struct {
 	GatewayURL         string
 	Store              auth.TokenStore
-	Local              *discovery.ApplicationDiscoveryService
 	Dpop               *dpop.Key
 	HTTPClient         *http.Client
 	Logger             *slog.Logger
 	RotateDeviceKey    func(context.Context) (*dpop.Key, error)
 	CredentialResolver CredentialResolver
 
-	mu        sync.Mutex
-	discovery *discovery.Document
-	appTokens map[string]*auth.TokenSet
+	mu              sync.Mutex
+	discovery       *discovery.Document
+	discoveryClient *discovery.Client
+	appTokens       map[string]*auth.TokenSet
 }
 
 func NewSession(gatewayURL string, store auth.TokenStore, logger *slog.Logger) *Session {
@@ -73,12 +74,16 @@ func (s *Session) Discovery(ctx context.Context) (*discovery.Document, error) {
 		return nil, err
 	}
 	s.discovery = document
-	if s.Local != nil {
-		if err := s.Local.Sync(document, s.GatewayURL); err != nil {
-			s.logger().Debug("failed to sync local application documents", "error", err)
-		}
-	}
 	return document, nil
+}
+
+func (s *Session) InvalidateDiscovery() {
+	s.mu.Lock()
+	s.discovery = nil
+	if s.discoveryClient != nil {
+		s.discoveryClient.Invalidate()
+	}
+	s.mu.Unlock()
 }
 
 func (s *Session) oidcFlow(ctx context.Context) (*auth.BrowserFlow, error) {
@@ -404,14 +409,14 @@ func (s *Session) exchangeToken(
 	authenticated bool,
 ) (*auth.TokenSet, error) {
 	request := connect.NewRequest(&idpv1.ExchangeTokenRequest{
-		SubjectToken:          subjectToken,
-		SubjectTokenType:      subjectTokenType,
-		ActorToken:            actorToken,
-		ActorTokenType:        actorTokenType,
-		Audience:              audience,
-		Scopes:                scopes,
-		RequestedTokenType:    TokenTypeJwt,
-		ImpersonationToken:    impersonationToken,
+		SubjectToken:           subjectToken,
+		SubjectTokenType:       subjectTokenType,
+		ActorToken:             actorToken,
+		ActorTokenType:         actorTokenType,
+		Audience:               audience,
+		Scopes:                 scopes,
+		RequestedTokenType:     TokenTypeJwt,
+		ImpersonationToken:     impersonationToken,
 		ImpersonationTokenType: TokenTypeAccessToken,
 	})
 	if authenticated {
@@ -439,21 +444,24 @@ func (s *Session) exchangeToken(
 	if actorToken != "" {
 		actorClientID, _, _ = strings.Cut(actorToken, ":")
 	}
+	impersonation := impersonationToken != ""
+	logActorTokenType := actorTokenType
+	if actorToken != "" && logActorTokenType == "" {
+		logActorTokenType = TokenTypeServiceCredential
+	}
 	response, err := client.ExchangeToken(ctx, request)
 	if err != nil {
 		s.logger().Warn("identity_exchange_refused",
-			"audience", audience,
-			"subject_type", subjectTokenType,
-			"actor", actorClientID,
-			"error", err.Error(),
+			identity.ExchangeRefusedLog(
+				audience, subjectTokenType, logActorTokenType, actorClientID, err.Error(), impersonation, nil,
+			)...,
 		)
 		return nil, err
 	}
 	s.logger().Info("identity_exchanged",
-		"audience", audience,
-		"subject_type", subjectTokenType,
-		"actor", actorClientID,
-		"scopes", response.Msg.Scopes,
+		identity.ExchangedLog(
+			audience, subjectTokenType, logActorTokenType, actorClientID, impersonation, nil, response.Msg.Scopes,
+		)...,
 	)
 	return &auth.TokenSet{
 		AccessToken: response.Msg.AccessToken,
@@ -536,17 +544,108 @@ func (s *Session) UserAuthInterceptor() connect.Interceptor {
 	return &gatewayInterceptor{session: s}
 }
 
-func (s *Session) Application(ctx context.Context, name string) (*discovery.Application, error) {
-	if s.Local != nil {
-		if app, err := s.Local.Application(name); err == nil {
-			return app, nil
-		}
-	}
-	discovered, err := s.Discovery(ctx)
+// DiscoveryClient returns the GraphQL discovery client for the registered
+// discovery application, resolving its endpoint from the gateway bootstrap
+// document and authenticating with an STS token for the discovery audience.
+func (s *Session) DiscoveryClient(ctx context.Context) (*discovery.Client, error) {
+	document, err := s.Discovery(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return discovered.Application(name)
+	app, err := document.Application("discovery")
+	if err != nil {
+		return nil, err
+	}
+	if app.Endpoint == "" {
+		return nil, fmt.Errorf("discovery application has no endpoint registered")
+	}
+	audience := app.Audience
+	if audience == "" {
+		audience = "discovery"
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.discoveryClient != nil && s.discoveryClient.Endpoint == strings.TrimRight(app.Endpoint, "/") {
+		return s.discoveryClient, nil
+	}
+	client := discovery.NewClient(app.Endpoint, func(ctx context.Context) (string, error) {
+		return s.directAppToken(ctx, audience)
+	})
+	client.HTTPClient = s.HTTPClient
+	client.Logger = s.logger()
+	s.discoveryClient = client
+	return client, nil
+}
+
+// Application resolves one application's metadata, preferring the GraphQL
+// discovery read model and falling back to the gateway bootstrap document
+// when the discovery application is unreachable or not yet registered.
+func (s *Session) Application(ctx context.Context, name string) (*discovery.Application, error) {
+	document, err := s.Discovery(ctx)
+	if err != nil {
+		return nil, err
+	}
+	fallback, fallbackErr := document.Application(name)
+	client, err := s.DiscoveryClient(ctx)
+	if err != nil {
+		s.logger().Debug("graphql discovery unavailable; using gateway discovery document", "error", err)
+		return fallback, fallbackErr
+	}
+	app, err := client.Application(ctx, name)
+	if err != nil {
+		if fallbackErr == nil {
+			s.logger().Warn("graphql discovery failed; using gateway discovery document", "application", name, "error", err)
+			return fallback, nil
+		}
+		return nil, err
+	}
+	app.GatewayURL = s.GatewayURL
+	if fallbackErr == nil && app.ImpersonationAccessClientID == "" {
+		app.ImpersonationAccessClientID = fallback.ImpersonationAccessClientID
+	}
+	return app, nil
+}
+
+// Applications lists every registered application, preferring the GraphQL
+// discovery read model with the same fallback as Application.
+func (s *Session) Applications(ctx context.Context) ([]*discovery.Application, error) {
+	document, err := s.Discovery(ctx)
+	if err != nil {
+		return nil, err
+	}
+	fallback := func() []*discovery.Application {
+		apps := make([]*discovery.Application, 0, len(document.Applications))
+		for index := range document.Applications {
+			app := document.Applications[index]
+			app.GatewayURL = s.GatewayURL
+			apps = append(apps, &app)
+		}
+		return apps
+	}
+	client, err := s.DiscoveryClient(ctx)
+	if err != nil {
+		s.logger().Debug("graphql discovery unavailable; using gateway discovery document", "error", err)
+		return fallback(), nil
+	}
+	apps, err := client.ListApplications(ctx)
+	if err != nil {
+		s.logger().Warn("graphql discovery failed; using gateway discovery document", "error", err)
+		return fallback(), nil
+	}
+	for _, app := range apps {
+		app.GatewayURL = s.GatewayURL
+	}
+	return apps, nil
+}
+
+// SyncDiscovery asks the discovery application to re-ingest the gateway
+// registry.
+func (s *Session) SyncDiscovery(ctx context.Context) (*discovery.SyncState, error) {
+	client, err := s.DiscoveryClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return client.Sync(ctx)
 }
 
 func (s *Session) AppEndpoint(ctx context.Context, name string) (string, error) {

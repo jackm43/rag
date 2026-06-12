@@ -17,15 +17,15 @@ const (
 	GroupUsers    = "users"
 	GroupEnrolled = "enrolled"
 
-	PolicyPlatformAdmins   = "Platform admins"
-	PolicyWorkersDevBypass = "workers-dev-bypass"
-	PolicyDevicePosture    = "Platform device posture"
-	PolicyPostureRuleName  = "Platform WARP connected"
+	PolicyPlatformAdmins       = "Platform admins"
+	PolicyWorkersDevBypass     = "workers-dev-bypass"
+	PolicyDevicePosture        = "Platform device posture"
+	PolicyPostureRuleName      = "Platform WARP connected"
 	PolicyEnrollStaff          = "enroll-staff"
 	PolicyEnrollContractorRBI  = "enroll-contractor-rbi"
 	PolicyEnrollContractorWarp = "enroll-contractor-warp"
-	PolicyCriticalAccess   = "critical-access"
-	PolicyRootJIT          = "root-jit"
+	PolicyCriticalAccess       = "critical-access"
+	PolicyRootJIT              = "root-jit"
 
 	PostureCheckWARP = "warp"
 )

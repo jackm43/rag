@@ -1,6 +1,4 @@
 import { createDpopProof, DPOP_HEADER, type DpopKey } from "../verify/dpop";
-import { chainExchange, exchangeToken, type ExchangedToken, type ServiceCredential } from "./exchange";
-import { TOKEN_TYPE_SERVICE_CREDENTIAL } from "../verify/sts";
 
 // TokenSource yields a bearer token for the configured target audience.
 export type TokenSource = () => Promise<string | null>;
@@ -86,50 +84,3 @@ export const createClient = (config: ClientConfig): PlatformClient => {
   return { fetch: doFetch, call };
 };
 
-const cached = (refresh: () => Promise<ExchangedToken | null>): TokenSource => {
-  let token: string | null = null;
-  let expiresAt = 0;
-  return async () => {
-    const now = Math.floor(Date.now() / 1000);
-    if (token && now < expiresAt - 15) {
-      return token;
-    }
-    const exchanged = await refresh();
-    if (!exchanged) {
-      token = null;
-      return null;
-    }
-    token = exchanged.accessToken;
-    expiresAt = now + exchanged.expiresIn;
-    return token;
-  };
-};
-
-// serviceTokenSource authenticates as the service itself.
-export const serviceTokenSource = (
-  gatewayUrl: string,
-  credential: ServiceCredential,
-  audience: string,
-  scopes?: string[],
-): TokenSource =>
-  cached(() =>
-    exchangeToken(gatewayUrl, {
-      subjectToken: `${credential.clientId}:${credential.clientSecret}`,
-      subjectTokenType: TOKEN_TYPE_SERVICE_CREDENTIAL,
-      audience,
-      scopes,
-    }),
-  );
-
-// chainedTokenSource exchanges the calling user's token with the service
-// credential as actor, preserving the delegation chain in the issued token.
-export const chainedTokenSource = (
-  gatewayUrl: string,
-  credential: ServiceCredential,
-  audience: string,
-  callerToken: string,
-  scopes?: string[],
-): TokenSource => {
-  const refresh = cached(() => chainExchange(gatewayUrl, callerToken, credential, audience, scopes));
-  return refresh;
-};

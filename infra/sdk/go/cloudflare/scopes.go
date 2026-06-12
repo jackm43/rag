@@ -2,43 +2,19 @@ package cloudflare
 
 import "strings"
 
-func unionScopeIDs(groups ...[]string) []string {
-	seen := map[string]struct{}{}
-	merged := []string{}
-	for _, group := range groups {
-		for _, scope := range group {
-			if scope == "" {
-				continue
-			}
-			if _, ok := seen[scope]; ok {
-				continue
-			}
-			seen[scope] = struct{}{}
-			merged = append(merged, scope)
+// Provider OAuth scopes have a single source of truth: each application's
+// provider_api_scopes in applications.yaml. These helpers only normalize a
+// wanted scope list against the provider's published catalog.
+
+const OfflineAccessScope = "offline_access"
+
+func WithOfflineAccess(scopes []string) []string {
+	for _, scope := range scopes {
+		if scope == OfflineAccessScope {
+			return scopes
 		}
 	}
-	return merged
-}
-
-var DeployScopeIDs = []string{
-	"workers-scripts.read",
-	"workers-scripts.write",
-	"workers-routes.read",
-	"workers-routes.write",
-	"d1.read",
-	"d1.write",
-	"d1.metadata_read",
-}
-
-var AccessManagementScopeIDs = []string{
-	"access-app.read",
-	"access-app.write",
-	"access-policy.read",
-	"access-policy.write",
-}
-
-func PlatformScopeIDs() []string {
-	return unionScopeIDs(DeployScopeIDs, AccessManagementScopeIDs)
+	return append(scopes, OfflineAccessScope)
 }
 
 func FilterAvailableScopeIDs(available map[string]string, wanted []string) []string {

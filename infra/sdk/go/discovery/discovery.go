@@ -175,21 +175,23 @@ type Resource struct {
 }
 
 type Application struct {
-	Name          string                    `json:"name"`
-	Audience      string                    `json:"audience"`
-	Endpoint      string                    `json:"endpoint"`
-	Description   string                    `json:"description"`
-	Resources     []Resource                `json:"resources"`
-	Delegations   []Delegation              `json:"delegations,omitempty"`
-	Provider      string                    `json:"provider,omitempty"`
-	TrustZone     string                    `json:"trustZone,omitempty"`
-	TrustBoundary TrustBoundary             `json:"trustBoundary,omitempty"`
-	Access        ApplicationAccess         `json:"access,omitempty"`
-	CreatedAt     int64                     `json:"created_at"`
-	UpdatedAt     int64                     `json:"updated_at"`
+	Name                        string                    `json:"name"`
+	Audience                    string                    `json:"audience"`
+	Endpoint                    string                    `json:"endpoint"`
+	Description                 string                    `json:"description"`
+	Resources                   []Resource                `json:"resources"`
+	Delegations                 []Delegation              `json:"delegations,omitempty"`
+	Provider                    string                    `json:"provider,omitempty"`
+	TrustZone                   string                    `json:"trustZone,omitempty"`
+	TrustBoundary               TrustBoundary             `json:"trustBoundary,omitempty"`
+	Access                      ApplicationAccess         `json:"access,omitempty"`
+	CreatedAt                   int64                     `json:"created_at"`
+	UpdatedAt                   int64                     `json:"updated_at"`
 	GatewayURL                  string                    `json:"gateway_url,omitempty"`
 	ImpersonationAccessClientID string                    `json:"impersonation_access_client_id,omitempty"`
-	Credential                    *secrets.ClientCredential `json:"credential,omitempty"`
+	ProviderOAuthClientID       string                    `json:"provider_oauth_client_id,omitempty"`
+	Credential                  *secrets.ClientCredential `json:"credential,omitempty"`
+	ProviderOAuth               *secrets.ClientCredential `json:"provider_oauth,omitempty"`
 }
 
 type Document struct {
