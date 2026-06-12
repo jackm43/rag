@@ -31,6 +31,54 @@ Vocabulary used throughout:
 - "operator CLI": the single command-line tool used for login, discovery,
   invocation, bootstrap, registration, and deployment.
 
+### Module map
+
+```mermaid
+flowchart TB
+    subgraph found [Foundations]
+        M1["1 · Overview &<br/>zero-trust principles"]
+        M8["8 · Choosing an<br/>auth method"]
+        M15["15 · Future state<br/>& gap analysis"]
+    end
+    subgraph idn ["Identity & tokens"]
+        M2["2 · CLI public client<br/>(DPoP sessions)"]
+        M3["3 · Web clients<br/>(BFF, browser keys)"]
+        M4["4 · Edge auth gateway<br/>(STS, keys, audit)"]
+        M7["7 · Transitive identity<br/>chaining (act)"]
+        M10["10 · Workload identity<br/>federation"]
+    end
+    subgraph reg ["Registry & policy"]
+        M5["5 · App registry<br/>& onboarding"]
+        M5b["5b · Providers, trust<br/>zones, org policy"]
+        M6["6 · Scopes, services,<br/>methods"]
+        M13["13 · Authorization<br/>(two layers)"]
+    end
+    subgraph mat ["Secrets & transport"]
+        M9["9 · Secret service"]
+        M11["11 · Service mTLS"]
+        M12["12 · Certificate<br/>authority"]
+    end
+    subgraph out [Outbound brokers]
+        M14["14 · Integration<br/>broker (external APIs)"]
+        M14b["14b · AI Gateway<br/>(model access)"]
+    end
+
+    M1 --> idn
+    M1 --> reg
+    M2 --> M4
+    M3 --> M4
+    M7 --> M4
+    M5 --> M6
+    M5b --> M5
+    M6 --> M13
+    M4 --> M13
+    M9 --> M5
+    M12 --> M11
+    M7 --> M14
+    M7 --> M14b
+    M8 -.->|decision table over| idn
+```
+
 ---
 
 ## Module 1: Platform Overview and Zero-Trust Principles
@@ -126,6 +174,51 @@ managed SQL storage (registry, audit, sessions) and durable objects (signing
 keys, long-lived connections). The secret manager and the identity-aware
 proxy are the only external trust dependencies.
 
+### The deployed zone today
+
+The abstract shape above is instantiated by five registered applications.
+Solid arrows carry requests with tokens; dashed arrows are verification and
+issuance traffic to the gateway.
+
+```mermaid
+flowchart LR
+    subgraph ext [External dependencies]
+        IAP["identity-aware proxy<br/>(Cloudflare Access)"]
+        VAULT["secret manager<br/>(1Password, op:// refs)"]
+        CFAIG["Cloudflare AI Gateway<br/>(unified model billing)"]
+    end
+
+    subgraph clients [Public clients]
+        CLI["operator CLI (platy)<br/>device DPoP key"]
+        BR["browser chat UI<br/>non-extractable DPoP key"]
+    end
+
+    subgraph zone [Trust zone — edge runtime]
+        GW["idp — edge auth gateway<br/>STS · sessions · registry<br/>discovery · audit · traces"]
+        CHAT["chat — BFF worker<br/>(sessionProxy)"]
+        AIGW["aigateway<br/>model broker + connectors"]
+        RB["ragbot<br/>Discord services"]
+        DEP["deploy<br/>worker deployment"]
+    end
+
+    CLI -->|"OIDC code + PKCE (login)"| IAP
+    BR -->|"OIDC code + PKCE (login)"| IAP
+    CLI <-->|"DPoP session / STS exchange"| GW
+    CLI -->|"audience-scoped STS tokens"| RB
+    CLI -->|"audience-scoped STS tokens"| DEP
+    BR <-->|"DPoP-bound session"| CHAT
+    CHAT -->|"chained: user → chat"| AIGW
+    CHAT -->|"chained: user → chat"| RB
+    AIGW -->|"chained: user → chat → aigateway"| RB
+    AIGW -->|"cf-aig-authorization"| CFAIG
+    DEP -->|"delegated provider OAuth token"| ext
+    CHAT -.->|verify JWKS / chain| GW
+    AIGW -.-> GW
+    RB -.-> GW
+    DEP -.-> GW
+    VAULT -.->|"op:// resolution at deploy"| zone
+```
+
 ### Threat model summary
 
 In scope:
@@ -214,6 +307,33 @@ Notes:
   stored via the secret service file provider (0600, owner-only directory).
 - The loopback listener accepts exactly one request, validates `state`, and
   responds with a static "return to your terminal" page.
+
+As a sequence — note the upstream token appears exactly once, and every
+gateway interaction after login is proof-bound:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Operator
+    participant CLI as platy CLI
+    participant B as System browser
+    participant IAP as Identity-aware proxy (OIDC)
+    participant GW as Gateway
+
+    CLI->>GW: GET /api/discovery
+    GW-->>CLI: endpoints, oidc config
+    CLI->>CLI: PKCE verifier + state, listen on 127.0.0.1:port
+    CLI->>B: open authorization_endpoint
+    B->>IAP: SSO login + email allowlist
+    IAP-->>B: redirect to loopback with code
+    B-->>CLI: code (state verified, one request only)
+    CLI->>IAP: token_endpoint (code + PKCE verifier)
+    IAP-->>CLI: upstream access token (used once, never stored)
+    CLI->>CLI: load or generate ES256 device key
+    CLI->>GW: CreateSession(upstream token) + DPoP proof
+    GW-->>CLI: access token (5 min, cnf.jkt) + rotating refresh token
+    Note over CLI,GW: thereafter: RefreshSession(RT) + DPoP proof rotates the RT.<br/>Reusing a rotated RT revokes the session → forced browser login.
+```
 
 ### Session refresh and rotation
 
@@ -357,6 +477,44 @@ Three platform changes support browser clients:
    stays in every token. `run_worker_first` routes only proxied API prefixes
    through the worker; assets serve directly. Pattern 3 remains for direct
    (workers.dev) dumb clients; pattern 4 is the default for web pages.
+5. **Client instance identity.** A browser instance can register itself as a
+   named sub-identity: the chat worker calls the gateway's
+   `ClientIdentityService.RegisterClientIdentity` (Module 4) on behalf of the
+   session and receives a gateway-signed identity document; if the browser
+   supplies a public JWK, the document is key-bound (`identity.jkt`). The
+   `x-client-instance` header carries the instance through `sessionProxy`,
+   which partitions its per-target token cache and annotates trace spans per
+   instance, so two chat conversations from the same user are distinguishable
+   in tokens and traces.
+
+The full request lifecycle for a browser call through the BFF, including a
+connector tool call (Module 14b), looks like this — every hop re-verifies,
+and the actor chain grows at each exchange:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser (chat UI)
+    participant W as chat worker (sessionProxy)
+    participant GW as Gateway (STS)
+    participant AI as aigateway
+    participant RB as ragbot
+
+    B->>W: ChatService/StreamComplete<br/>DPoP session token + per-request proof (ath)
+    W->>W: verify DPoP binding + session (aud = idp)
+    W->>GW: ExchangeToken(subject = session, actor = chat credential,<br/>audience = aigateway)
+    GW->>GW: check chat's delegation grant; audit
+    GW-->>W: token { sub: user, aud: aigateway, act: { sub: app:chat } }
+    W->>AI: forward RPC over service binding with minted token
+    AI->>AI: stsAuthenticator: iss, aud, exp, signature, scope
+    Note over AI: model requests the ragbot tool
+    AI->>GW: ExchangeToken(subject = inbound token, actor = aigateway credential,<br/>audience = ragbot)
+    GW-->>AI: token { sub: user, aud: ragbot,<br/>act: { sub: app:aigateway, act: { sub: app:chat } } }
+    AI->>RB: LeaderboardService.ListTotals
+    RB-->>AI: totals
+    AI-->>W: stream chunks
+    W-->>B: stream chunks (one shared trace id end to end)
+```
 
 Login is automatic: loading the page already required passing the
 identity-aware proxy, so the OIDC redirect completes without interaction
@@ -482,7 +640,8 @@ different token.
   rotation and reuse-detection semantics as Module 2.
 - Multiple tabs coordinate through a `BroadcastChannel` plus a Web Locks
   mutex around refresh, so rotation is never raced (a raced rotation would
-  trip reuse detection and kill the session).
+  trip reuse detection and kill the session). *Status: designed, not yet
+  implemented in the web SDK — tracked in Module 15.*
 - `logout()` revokes server-side, clears IndexedDB token state, and emits
   `onSessionChange`. With `everywhere: true` it revokes the whole session
   family for that user across devices via a gateway endpoint.
@@ -660,6 +819,18 @@ The applications section is what powers `cli discover`, `cli metadata`, and
 generic `cli fetch <app>.<Service>.<Method>` invocation, and what the local
 discovery documents (Module 5) are refreshed from.
 
+### Client identity registration
+
+`ClientIdentityService` (`RegisterClientIdentity`, `ListClientIdentities`)
+lets an authenticated principal register a named sub-identity — for example
+one browser chat instance — and receive a gateway-signed identity document.
+A public JWK supplied at registration produces a key-bound document carrying
+the key thumbprint (`identity.jkt`). Registrations persist in the
+`idp_client_identities` table and back the chat application's per-instance
+identity (Module 3, item 5). Sub-identities never widen authority: they ride
+inside an ordinary session or chained token and exist for attribution and
+partitioning, not for authorization.
+
 ### Audit logging
 
 Every security-relevant event writes one structured row:
@@ -694,6 +865,25 @@ detection module (Module 15). Denials are logged as richly as approvals.
   with a memory-hard hash; refresh tokens stored only as hashes.
 - Clock skew tolerance of at most 60 seconds anywhere a timestamp is checked.
 
+### Implementation status
+
+The gateway implements the surfaces above with these simplifications, each
+tracked as a hardening item in Module 15:
+
+- Audit rows are currently `actor / action / detail` plus structured worker
+  logs; the full schema (actor chain, audience, scopes, decision, reason,
+  client metadata) and the fail-closed "no unaudited issuance" rule are the
+  target, not yet the code.
+- Session revocation is a per-session flag; `family_id` grouping (revoke the
+  whole family on reuse) is designed but not yet stored.
+- Exchanged audience tokens do not yet carry `cnf.jkt`; sender constraints
+  are enforced on session tokens, and audience tokens rely on the 5-minute
+  lifetime and audience scoping.
+- DPoP `use_dpop_nonce` challenges and the server-side `jti` replay cache
+  are not yet implemented; proofs are time- and binding-bound, not
+  single-use.
+- The JWKS response does not yet set the tuned cache headers.
+
 ---
 
 ## Module 5: Application Registry and Onboarding
@@ -725,6 +915,11 @@ applications:
     language: typescript
     provider: cloudflare
     trust_zone: tier2
+    service_client: true        # generate a typed worker-to-worker client
+    web_client: true            # generate a typed browser client (Module 3)
+    secret_provider: 1password
+    secrets:                    # references only; resolved at deploy time
+      DISCORD_TOKEN: op://infra/ragbot/discord_token
     access:
       allowed_groups: [admins]
       allowed_idps: [github]
@@ -737,6 +932,12 @@ applications:
     post_deploy:
       - gateway-start
 ```
+
+Other manifest flags: `internal: true` marks the gateway's own entry (it is
+the issuer, not a registered callee); `impersonatable: false` is described
+below; a per-application trust boundary block can override the bootstrap
+boundary (account, team) for apps that live in a different upstream
+organization.
 
 `platy app sync` reconciles the registry against the manifest: registers new
 applications, updates changed metadata and delegation policies, flags
@@ -807,6 +1008,26 @@ fast and offline-tolerant without ever caching secrets in plaintext.
   audience are resolved through discovery at runtime.
 - Regeneration is idempotent and CI-checkable: a dirty diff after
   `generate.sh` fails the build.
+
+### Deployment
+
+`platy deploy <app>` is the manifest-driven path from code to a running,
+credentialed worker:
+
+1. Build and upload the worker using the operator's delegated provider OAuth
+   token (`platy cloudflare login` captures it; `platy cloudflare logout`
+   discards it — no provider API key is ever stored).
+2. Resolve every `op://` reference in the manifest's `secrets:` block and
+   push the values as worker secrets (`wrangler secret bulk`); values exist
+   only in memory during the push.
+3. Push the application's service credential (`SERVICE_CLIENT_ID` /
+   `SERVICE_CLIENT_SECRET`) the same way, so chaining works on first boot.
+4. Invoke any `post_deploy` hooks as ordinary authenticated RPCs (e.g.
+   `gateway-start`).
+
+`platy dev vars <app>` writes a local `.dev.vars` from the same references
+for development, keeping local and deployed configuration on one source of
+truth.
 
 ### Security requirements
 
@@ -1181,6 +1402,23 @@ Gateway validation order:
    prevents a service from laundering a broad user token into audiences the
    operator never approved for that service.
 4. Mint the token with an extended actor chain.
+
+```mermaid
+flowchart TD
+    REQ["ExchangeToken<br/>subject token + actor credential<br/>+ audience + scopes"] --> S{subject token valid?<br/>own issuance, unexpired}
+    S -- no --> DENY["hard deny<br/>(audited with reason)"]
+    S -- yes --> A{actor credential valid?<br/>resolves to registered app}
+    A -- no --> DENY
+    A -- yes --> D{delegation grant covers<br/>audience + requested scopes?}
+    D -- no --> DENY
+    D -- yes --> C{chain depth within limit?}
+    C -- no --> DENY
+    C -- yes --> MINT["mint 5-minute token<br/>sub = original subject<br/>act = nested actor chain<br/>+ audit row"]
+```
+
+Note what is absent from the checks: the subject token's own scopes. The
+delegation grant *is* the policy, so a service can never launder a broad
+user token into an audience the operator never approved for that service.
 
 ### The act claim
 
@@ -2023,13 +2261,35 @@ page.
 | 9 | Deploy provenance | M | Medium - supply chain |
 
 Done since first draft: the **web client SDK (Module 3)** is implemented and
-deployed (`chat` application), and the **AI Gateway application (Module 14b)**
-brokers model access with unified billing and an injected gateway token.
-Remaining web hardening: a dedicated AI-Gateway-Run-scoped token for the broker
-(rather than reusing the operator token), a JTI replay cache on DPoP proofs
-(today proofs are time-and-binding-bound but not single-use), and a
-gateway-side OIDC code exchange for providers whose token endpoint refuses
-browser CORS.
+deployed (`chat` application); the **AI Gateway application (Module 14b)**
+brokers model access with unified billing, an injected gateway token, and
+connector tool calls over chained identity; **client instance identity**
+(Module 4) gives browser instances gateway-signed, optionally key-bound
+sub-identities; **tracing** (Module 14b) gives every RPC identity-annotated
+spans with a gateway-backed store and live viewer; and the gateway-side OIDC
+code exchange is in place (`CreateSession` completes the upstream exchange
+server-side, so browser CORS against the IdP token endpoint never applies).
+
+### Hardening backlog (designed above, not yet in code)
+
+Smaller than the roadmap items, these are places where the implementation
+intentionally lags the design in this document:
+
+- DPoP `use_dpop_nonce` challenges and a server-side JTI replay cache —
+  proofs today are time- and binding-bound, not single-use (Modules 2, 4).
+- Session `family_id` revocation — reuse detection today revokes the single
+  session, not a family (Module 4).
+- Full audit schema and fail-closed audit on issuance — today rows are
+  `actor/action/detail` plus structured logs, and a failed audit write does
+  not yet fail the exchange (Module 4).
+- `cnf.jkt` on exchanged audience tokens for audiences that opt in
+  (Module 4).
+- JWKS cache headers tuned for rotation propagation (Module 4).
+- Multi-tab refresh coordination (`BroadcastChannel` + Web Locks) and the
+  HTTPS-origin guard in the web SDK (Module 3).
+- `logout --purge-key` in the CLI (Module 2).
+- A dedicated AI-Gateway-Run-scoped token for the broker, rather than
+  reusing the operator's Cloudflare token (Module 14b).
 
 The platform's core invariants - single issuer, short lifetimes, proof of
 possession, explicit delegation, references over values, audit everything -
