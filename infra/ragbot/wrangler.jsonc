@@ -5,9 +5,14 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "ragbot.jsmunro.me", "custom_domain": true }
+  ],
   "vars": {
-    "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.workers.dev",
-    "ALLOWED_GUILD_IDS": "457689460096630794"
+    "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.me",
+    "ALLOWED_GUILD_IDS": "457689460096630794",
+    "OTEL_SERVICE_NAME": "ragbot"
   },
   "services": [
     {

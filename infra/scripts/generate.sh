@@ -2,7 +2,7 @@
 set -eu
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
-apps="${*:-idp ragbot deploy}"
+apps="${*:-$(find "$root/infra/proto" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)}"
 export PATH="$root/node_modules/.bin:$(go env GOPATH)/bin:$PATH"
 
 for app in $apps; do

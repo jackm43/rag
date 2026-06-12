@@ -15,11 +15,14 @@
     "skipLibCheck": true
   },
   "include": [
-    "src/**/*.ts",
-    "scripts/**/*.ts",
+    "infra/ragbot/src/**/*.ts",
+    "infra/ragbot/scripts/**/*.ts",
     "infra/sdk/ts/src/**/*.ts",
     "infra/gateway/src/**/*.ts",
     "infra/deploy/src/**/*.ts",
-    "infra/applications/**/server/**/*.ts"
+    "infra/aigateway/src/**/*.ts",
+    "infra/web/src/worker.ts",
+    "infra/applications/**/server/**/*.ts",
+    "infra/applications/**/service/**/*.ts"
   ]
 }

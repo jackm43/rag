@@ -11,6 +11,9 @@ infra/cli/cli
 infra/applications/*/client/
 infra/applications/*/server/
 
+# Web client bundle (regenerate with npm run chat:build)
+infra/web/public/app.js
+
 # Bootstrap and registration outputs (regenerate with platy bootstrap / platy app sync)
 infra/applications/provider_config.json
 infra/applications/client_metadata.json

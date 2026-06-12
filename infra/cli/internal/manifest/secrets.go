@@ -43,8 +43,10 @@ func (a *Application) ResolveSecrets(ctx context.Context) map[string]string {
 	return ResolveSecretRefs(ctx, a.Secrets, a.Provider())
 }
 
-func WriteDevVars(root string, resolved map[string]string) {
-	path := filepath.Join(root, ".dev.vars")
+// WriteDevVars writes a .dev.vars file into dir (the worker's wrangler config
+// directory, so `wrangler dev -c <dir>/wrangler.jsonc` picks it up).
+func WriteDevVars(dir string, resolved map[string]string) {
+	path := filepath.Join(dir, ".dev.vars")
 	if len(resolved) == 0 {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			output.Fail("remove %s: %v", path, err)

@@ -42,7 +42,8 @@ export const stsAuthenticator =
         return null;
       }
       const identity = await verifyStsToken(token, config);
-      return requireSenderConstraint(identity, headers, request);
+      const constrained = await requireSenderConstraint(identity, headers, request);
+      return constrained ? { ...constrained, subjectToken: token } : null;
     };
 
 export const oidcAuthenticator =

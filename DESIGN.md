@@ -23,8 +23,10 @@ Core components:
 - Slash command handlers:
   - `src/commands/rag.ts`
   - `src/commands/ragboard.ts`
-- AI queue producer/consumer logic: `src/commands/ai.ts`
-- Gateway ingestion and connection lifecycle: `src/discord-gateway.ts`
+- AI model invocation (Workers AI / AI Gateway): `src/ai.ts`
+- Mention handling and AI queue producer/consumer: `src/mention.ts`
+- Gateway ingestion and connection lifecycle: `src/gateway.ts`
+- `ragbot.v1` admin Connect-RPC services: `src/services.ts`
 - Command registration script: `scripts/register-commands.ts`
 
 Cloudflare bindings from `wrangler.jsonc`:

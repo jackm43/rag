@@ -1,4 +1,10 @@
-import { createRpcHandler, type RpcHandler } from "../infra/sdk/ts/src";
+import {
+  createRpcHandler,
+  gatewayTraceExporter,
+  serviceCredentialFromEnv,
+  traceRpc,
+  tracerFromEnv,
+} from "../../sdk/ts/src";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
 import { DiscordGateway } from "./gateway";
@@ -17,15 +23,29 @@ import {
 
 export { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
 
-let cachedRpc: { env: Env; gatewayUrl: string; rpc: RpcHandler } | null = null;
+type TracedRpc = (request: Request, ctx?: ExecutionContext) => Promise<Response | null>;
 
-const rpcHandler = (env: Env): RpcHandler => {
+let cachedRpc: { env: Env; gatewayUrl: string; rpc: TracedRpc } | null = null;
+
+const rpcHandler = (env: Env): TracedRpc => {
   const gatewayUrl = (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, "");
   if (cachedRpc?.env !== env || cachedRpc.gatewayUrl !== gatewayUrl) {
+    const credential = serviceCredentialFromEnv(env);
+    const exporter =
+      credential && env.AUTH_GATEWAY
+        ? gatewayTraceExporter({
+            gatewayUrl,
+            credential,
+            fetch: (input: RequestInfo | URL, init?: RequestInit) => env.AUTH_GATEWAY!.fetch(input, init),
+          })
+        : undefined;
     cachedRpc = {
       env,
       gatewayUrl,
-      rpc: createRpcHandler((router) => registerRagbotServices(router, env)),
+      rpc: traceRpc(
+        tracerFromEnv(env, "ragbot", { exporter }),
+        createRpcHandler((router) => registerRagbotServices(router, env)),
+      ),
     };
   }
   return cachedRpc.rpc;
@@ -87,7 +107,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/ragbot.v1.")) {
-      const rpcResponse = await rpcHandler(env)(request);
+      const rpcResponse = await rpcHandler(env)(request, ctx);
       if (rpcResponse) {
         return rpcResponse;
       }

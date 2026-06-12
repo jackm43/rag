@@ -52,9 +52,25 @@ type Application struct {
 	SecretProvider   string            `yaml:"secret_provider"`
 	Secrets          map[string]string `yaml:"secrets"`
 	Internal         bool              `yaml:"internal"`
-	Delegations      []Delegation      `yaml:"delegations"`
-	Webhooks         []Webhook         `yaml:"webhooks"`
-	PostDeploy       []string          `yaml:"post_deploy"`
+	// Impersonatable controls whether registration provisions a Cloudflare
+	// Access application so this app can be impersonated as an actor
+	// (`platy fetch <target> --as <thisapp>`). Defaults to true to preserve
+	// existing behaviour; set false for target-only services that are never
+	// the actor, which also lets them register without the interactive
+	// Cloudflare OAuth step.
+	Impersonatable *bool `yaml:"impersonatable"`
+	// WebClient makes `platy dev generate` emit a typed browser client for
+	// this application (infra/applications/<name>/web) that binds the
+	// generated Connect services to the trust zone web auth SDK.
+	WebClient bool `yaml:"web_client"`
+	// ServiceClient emits a typed worker-to-worker client
+	// (infra/applications/<name>/service): each factory wraps the SDK
+	// connector (validate caller, chain identity, attach token) so callers
+	// only configure the connection; also exports the session-proxy target.
+	ServiceClient bool         `yaml:"service_client"`
+	Delegations []Delegation `yaml:"delegations"`
+	Webhooks    []Webhook    `yaml:"webhooks"`
+	PostDeploy  []string     `yaml:"post_deploy"`
 }
 
 func (a *Application) ProxyProvider() string {
@@ -73,6 +89,12 @@ func (a *Application) Provider() string {
 
 func (a *Application) ResolvedTrustZone() string {
 	return provider.NormalizeTrustZone(a.TrustZone)
+}
+
+// AllowsImpersonation reports whether registration should provision a
+// Cloudflare Access application for impersonating this app as an actor.
+func (a *Application) AllowsImpersonation() bool {
+	return a.Impersonatable == nil || *a.Impersonatable
 }
 
 type Manifest struct {

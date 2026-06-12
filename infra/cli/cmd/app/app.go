@@ -23,6 +23,7 @@ import (
 	"jsmunro.me/platy/cli/internal/platform"
 	"jsmunro.me/platy/cli/internal/provider"
 	"jsmunro.me/platy/cli/internal/secrets"
+	"jsmunro.me/platy/cli/internal/webgen"
 	sdksecrets "jsmunro.me/platy/sdk/secrets"
 )
 
@@ -34,6 +35,8 @@ func Run(ctx context.Context, cmdArgs []string) {
 	switch action {
 	case "register":
 		Register(ctx, rest)
+	case "plan":
+		Plan(ctx)
 	case "sync":
 		Sync(ctx, rest)
 	case "list":
@@ -114,6 +117,7 @@ func generateCode(root, name string) {
 	if err := command.Run(); err != nil {
 		output.Fail("code generation for %s: %v", name, err)
 	}
+	webgen.Generate(root, []string{name})
 	output.Logger.Info("generated client and server code", "app", name, "dir", filepath.Join("infra", "applications", name))
 }
 
@@ -240,13 +244,20 @@ func registerApplication(
 		description = descriptionOverride
 	}
 
-	if _, err := os.Stat(filepath.Join(root, "infra", "proto", name)); err != nil {
-		output.Fail("infra/proto/%s does not exist; define the application protos first", name)
+	// Applications without a proto package are client-only principals
+	// (confidential web clients, connectors): they register for a service
+	// credential and delegations but expose no RPC resources of their own.
+	resources, fullNames, hasProto := applicationResources(root, name)
+	if !hasProto {
+		output.Logger.Info("no proto package; registering client-only application", "application", name)
 	}
-
-	resources, fullNames := protoResources(root, name)
 	providerConfig := loadProviderConfig(root)
-	impersonationClientID := provisionImpersonationAccessClientID(ctx, name, app, providerConfig)
+	impersonationClientID := ""
+	if app.AllowsImpersonation() {
+		impersonationClientID = provisionImpersonationAccessClientID(ctx, name, app, providerConfig)
+	} else {
+		output.Logger.Info("skipping impersonation access app (impersonatable: false)", "application", name)
+	}
 	s := platform.Session()
 	response, err := s.RegistryClient().RegisterApplication(ctx, connect.NewRequest(&idpv1.RegisterApplicationRequest{
 		Name:                        name,
@@ -264,7 +275,7 @@ func registerApplication(
 		output.Fail("register application: %v", err)
 	}
 
-	if !skipCodegen {
+	if !skipCodegen && hasProto {
 		generateCode(root, name)
 	}
 
@@ -305,10 +316,23 @@ func Sync(ctx context.Context, cmdArgs []string) {
 	root := platform.RepoRoot()
 	ctx = cfauth.EnsurePlatform(ctx)
 	loaded := manifest.Load(root)
+	providerConfig := loadProviderConfig(root)
+	registered := registeredApplications(ctx)
 	results := map[string]any{}
 	for _, name := range loaded.Names() {
 		if loaded.Application(name).Internal {
 			continue
+		}
+		// Apply only what changed: an application whose registry state already
+		// matches the manifest (and whose credential is stored locally) is
+		// skipped — no re-registration, Access churn, or codegen.
+		if actual, exists := registered[name]; exists {
+			desired := desiredApplication(root, loaded, name, providerConfig)
+			if len(diffApplication(desired, actual)) == 0 && applications.CredentialDocument(root, name) != nil {
+				output.Logger.Info("application unchanged; skipping", "application", name)
+				results[name] = map[string]any{"unchanged": true}
+				continue
+			}
 		}
 		results[name] = registerApplication(ctx, root, loaded, name, "", "", false)
 	}

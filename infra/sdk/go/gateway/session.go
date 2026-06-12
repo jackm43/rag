@@ -432,10 +432,29 @@ func (s *Session) exchangeToken(
 	if authenticated {
 		client = s.authenticatedIdentityClient()
 	}
+	// Identity-boundary standard: every identity change is logged at the
+	// client that makes it; only the actor's client id is logged, never the
+	// secret.
+	actorClientID := ""
+	if actorToken != "" {
+		actorClientID, _, _ = strings.Cut(actorToken, ":")
+	}
 	response, err := client.ExchangeToken(ctx, request)
 	if err != nil {
+		s.logger().Warn("identity_exchange_refused",
+			"audience", audience,
+			"subject_type", subjectTokenType,
+			"actor", actorClientID,
+			"error", err.Error(),
+		)
 		return nil, err
 	}
+	s.logger().Info("identity_exchanged",
+		"audience", audience,
+		"subject_type", subjectTokenType,
+		"actor", actorClientID,
+		"scopes", response.Msg.Scopes,
+	)
 	return &auth.TokenSet{
 		AccessToken: response.Msg.AccessToken,
 		ExpiresAt:   time.Now().Unix() + response.Msg.ExpiresIn,

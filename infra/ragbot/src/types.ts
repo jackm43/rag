@@ -66,6 +66,14 @@ export interface Env {
   AUTH_GATEWAY_URL?: string;
   AUTH_GATEWAY?: Fetcher;
   ALLOWED_GUILD_IDS?: string;
+  // Service credential pushed by `platy deploy`; used to authenticate trace
+  // export to the gateway.
+  SERVICE_CLIENT_ID?: string;
+  SERVICE_CLIENT_SECRET?: string;
+  // OTEL: service name override and optional OTLP/HTTP export target.
+  OTEL_SERVICE_NAME?: string;
+  OTEL_EXPORTER_OTLP_ENDPOINT?: string;
+  OTEL_EXPORTER_OTLP_HEADERS?: string;
   DISCORD_GATEWAY: DurableObjectNamespace;
   DB: D1Database;
   AI: Ai;

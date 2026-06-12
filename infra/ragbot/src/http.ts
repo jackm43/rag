@@ -1,4 +1,4 @@
-import { secretsMatch, verifySignedWebhook } from "../infra/sdk/ts/src";
+import { secretsMatch, verifySignedWebhook } from "../../sdk/ts/src";
 
 import type { DiscordInteraction } from "./types";
 

@@ -56,7 +56,40 @@ INSERT OR IGNORE INTO idp_applications (name, audience, endpoint, description, r
 VALUES (
   'idp',
   'idp',
-  '',
+  'https://auth-gateway.jsmunro.me',
   'Authentication gateway: identity, token exchange, registry, discovery',
-  '[{"name":"IdentityService","methods":[{"name":"WhoAmI","scope":"idp/IdentityService.WhoAmI"},{"name":"ExchangeToken","scope":"idp/IdentityService.ExchangeToken"}]},{"name":"RegistryService","methods":[{"name":"RegisterApplication","scope":"idp/RegistryService.RegisterApplication"},{"name":"GetApplication","scope":"idp/RegistryService.GetApplication"},{"name":"ListApplications","scope":"idp/RegistryService.ListApplications"},{"name":"DeleteApplication","scope":"idp/RegistryService.DeleteApplication"},{"name":"RegisterClient","scope":"idp/RegistryService.RegisterClient"}]},{"name":"DiscoveryService","methods":[{"name":"Discover","scope":"idp/DiscoveryService.Discover"}]}]'
+  '[{"name":"IdentityService","methods":[{"name":"WhoAmI","scope":"idp/IdentityService.WhoAmI"},{"name":"ExchangeToken","scope":"idp/IdentityService.ExchangeToken"}]},{"name":"RegistryService","methods":[{"name":"RegisterApplication","scope":"idp/RegistryService.RegisterApplication"},{"name":"GetApplication","scope":"idp/RegistryService.GetApplication"},{"name":"ListApplications","scope":"idp/RegistryService.ListApplications"},{"name":"DeleteApplication","scope":"idp/RegistryService.DeleteApplication"},{"name":"RegisterClient","scope":"idp/RegistryService.RegisterClient"}]},{"name":"DiscoveryService","methods":[{"name":"Discover","scope":"idp/DiscoveryService.Discover"}]},{"name":"TraceService","methods":[{"name":"ListTraces","scope":"idp/TraceService.ListTraces"},{"name":"GetTrace","scope":"idp/TraceService.GetTrace"},{"name":"StreamTraces","scope":"idp/TraceService.StreamTraces"}]},{"name":"ClientIdentityService","methods":[{"name":"RegisterClientIdentity","scope":"idp/ClientIdentityService.RegisterClientIdentity"},{"name":"ListClientIdentities","scope":"idp/ClientIdentityService.ListClientIdentities"}]}]'
 );
+
+CREATE TABLE IF NOT EXISTS idp_spans (
+  span_id TEXT PRIMARY KEY,
+  trace_id TEXT NOT NULL,
+  parent_span_id TEXT NOT NULL DEFAULT '',
+  service TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'internal',
+  start_ms INTEGER NOT NULL,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'ok',
+  error TEXT NOT NULL DEFAULT '',
+  attributes TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE INDEX IF NOT EXISTS idx_idp_spans_trace ON idp_spans(trace_id, start_ms);
+CREATE INDEX IF NOT EXISTS idx_idp_spans_roots ON idp_spans(parent_span_id, start_ms DESC);
+
+CREATE TABLE IF NOT EXISTS idp_client_identities (
+  instance_id TEXT PRIMARY KEY,
+  application TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  email TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT '',
+  jkt TEXT NOT NULL DEFAULT '',
+  public_jwk TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_idp_client_identities_app ON idp_client_identities(application, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_idp_spans_created ON idp_spans(created_at);

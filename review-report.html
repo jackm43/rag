@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Trust Zone Platform — Repo Review</title>
+<style>
+  :root{
+    --bg:#0e1116;--panel:#161b22;--border:#262d38;--text:#e6e9ef;--muted:#9aa3b2;
+    --crit:#ff6b6b;--high:#ffa94d;--med:#ffd43b;--low:#74c0fc;--ok:#69db7c;--accent:#6ea8fe;
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:2rem 1.25rem 4rem}
+  h1{font-size:1.8rem;margin:0 0 .25rem}
+  h2{font-size:1.25rem;margin:2.2rem 0 .8rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+  h3{font-size:1rem;margin:1.4rem 0 .5rem;color:var(--accent)}
+  p{color:var(--text)}
+  .sub{color:var(--muted);margin:0 0 1.5rem}
+  code{background:#0b0f15;border:1px solid var(--border);border-radius:5px;padding:.05rem .35rem;font-size:.85em}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem;margin:1.25rem 0}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:.9rem 1rem}
+  .card .n{font-size:1.7rem;font-weight:700}
+  .card .l{color:var(--muted);font-size:.8rem}
+  .tag{display:inline-block;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:.12rem .45rem;border-radius:999px;vertical-align:middle}
+  .t-crit{background:rgba(255,107,107,.15);color:var(--crit)}
+  .t-high{background:rgba(255,169,77,.15);color:var(--high)}
+  .t-med{background:rgba(255,212,59,.13);color:var(--med)}
+  .t-low{background:rgba(116,192,252,.13);color:var(--low)}
+  .t-fixed{background:rgba(105,219,124,.15);color:var(--ok)}
+  .t-fp{background:rgba(154,163,178,.15);color:var(--muted)}
+  .f{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:.9rem 1.1rem;margin:.7rem 0}
+  .f .hd{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.35rem}
+  .f .ti{font-weight:600}
+  .f .loc{color:var(--muted);font-size:.82rem;font-family:ui-monospace,monospace}
+  .f p{margin:.35rem 0 0;color:var(--text)}
+  .scroll{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:.88rem;min-width:560px}
+  th,td{text-align:left;padding:.5rem .6rem;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-weight:600}
+  ul{margin:.4rem 0;padding-left:1.2rem}
+  li{margin:.25rem 0}
+  .lead{background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:8px;padding:1rem 1.2rem;margin:1rem 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Trust Zone Platform — Repository Review</h1>
+  <p class="sub">Review + build pass on <code>/Users/jackm/personal/rag</code> · branch <code>fable</code> · 2026-06-12</p>
+
+  <div class="lead">
+    <strong>Headline.</strong> The platform is architecturally sound — single STS issuer, short-lived
+    DPoP-bound sessions, explicit delegation, references-not-values, audit-everywhere — and the
+    implementation largely honors it. This review covered the auth gateway, both SDKs (TS + Go), the
+    CLI, and the ragbot worker. Alongside the review I shipped two new applications (AI Gateway service,
+    browser chat client), updated the design doc, and applied the safe fixes below. The most material
+    real issue found is the unauthenticated-by-design <code>DatabaseService.Query</code> RPC (arbitrary
+    SQL for any admin token); the headline <em>false positive</em> was a claimed nil-pointer panic in the
+    Go SDK that is actually nil-guarded.
+  </div>
+
+  <div class="grid">
+    <div class="card"><div class="n" style="color:var(--ok)">8</div><div class="l">fixes applied this pass</div></div>
+    <div class="card"><div class="n" style="color:var(--crit)">1</div><div class="l">design-level risk to decide</div></div>
+    <div class="card"><div class="n" style="color:var(--high)">4</div><div class="l">recommended follow-ups</div></div>
+    <div class="card"><div class="n" style="color:var(--muted)">3</div><div class="l">false positives discarded</div></div>
+  </div>
+
+  <h2>Fixed in this pass <span class="tag t-fixed">done</span></h2>
+
+  <div class="f"><div class="hd"><span class="tag t-fixed">fixed</span><span class="ti">Actor-chain parse was unbounded</span><span class="loc">infra/sdk/ts/src/verify/sts.ts</span></div>
+    <p>A hostile token with a deeply nested <code>act</code> claim could pin CPU in <code>actorChainFromClaim</code>’s walk. Capped at depth 8.</p></div>
+
+  <div class="f"><div class="hd"><span class="tag t-fixed">fixed</span><span class="ti">Session refresh wasn’t audited</span><span class="loc">infra/gateway/src/services.ts</span></div>
+    <p>Module 4 requires every refresh be audited; <code>refreshSession</code> only logged. Added an <code>audit("session_refreshed", …)</code> row with the resolved identity.</p></div>
+
+  <div class="f"><div class="hd"><span class="tag t-fixed">fixed</span><span class="ti">Token exchange resolved app by name, not audience</span><span class="loc">infra/gateway/src/services.ts</span></div>
+    <p><code>exchangeToken</code> used <code>getApplication(audience)</code> (a name lookup). Works only because of the name==audience invariant; switched to <code>getApplicationByAudience</code> for correctness.</p></div>
+
+  <div class="f"><div class="hd"><span class="tag t-fixed">fixed</span><span class="ti">Webhook verifier had no freshness option</span><span class="loc">infra/sdk/ts/src/verify/webhook.ts</span></div>
+    <p>Added optional <code>maxAgeSeconds</code> to reject stale signed payloads (replay window). Off by default to preserve Discord behavior; opt-in for replay-sensitive receivers.</p></div>
+
+  <div class="f"><div class="hd"><span class="tag t-fixed">fixed</span><span class="ti">Registration forced interactive Cloudflare OAuth for target-only apps</span><span class="loc">infra/cli (manifest + app register)</span></div>
+    <p>Every <code>app register</code> provisioned an impersonation Access app (browser OAuth) even for services that are never an actor. Added <code>impersonatable: false</code> to skip it — fewer unused Access apps and headless registration.</p></div>
+
+  <div class="f"><div class="hd"><span class="tag t-fixed">fixed</span><span class="ti">Web client static host caused a subrequest loop</span><span class="loc">infra/web</span></div>
+    <p>The header-stamping worker under <code>run_worker_first</code> + <code>env.ASSETS.fetch</code> looped (CF error 1042), 404’ing the JS — the “static page that does nothing” symptom. Switched to assets-only serving with a <code>public/_headers</code> CSP.</p></div>
+
+  <div class="f"><div class="hd"><span class="tag t-fixed">fixed</span><span class="ti">Root DESIGN.md referenced files that don’t exist</span><span class="loc">DESIGN.md</span></div>
+    <p>Pointed at <code>src/commands/ai.ts</code> and <code>src/discord-gateway.ts</code>; real files are <code>src/ai.ts</code>, <code>src/mention.ts</code>, <code>src/gateway.ts</code>, <code>src/services.ts</code>. Corrected, and added the new apps to README/AGENTS.</p></div>
+
+  <h2>Open findings to decide</h2>
+
+  <div class="f"><div class="hd"><span class="tag t-crit">design risk</span><span class="ti">DatabaseService.Query executes arbitrary SQL</span><span class="loc">src/services.ts:110</span></div>
+    <p>Any token with the <code>ragbot/DatabaseService.Query</code> scope can run arbitrary SQL against D1 (parameters are bound, but the statement itself is caller-supplied — <code>DROP</code>, cross-table reads, writing <code>rag_settings</code>). This is intentional admin tooling for a single operator, so it’s a deliberate trade rather than a bug — but worth either narrowing to read-only/allowlisted statements or gating behind a dedicated higher scope. Left as-is pending your call.</p></div>
+
+  <div class="f"><div class="hd"><span class="tag t-high">recommend</span><span class="ti">DPoP proofs aren’t single-use (no JTI replay cache)</span><span class="loc">infra/sdk/ts/src/verify/dpop.ts</span></div>
+    <p>Proofs are bound to method/URI/time and to <code>cnf.jkt</code>, but a captured proof can be replayed within the 300s window. A real fix needs a short-TTL <code>jti</code> store (D1 or a Durable Object on the gateway). Noted in the design’s remaining-hardening list.</p></div>
+
+  <div class="f"><div class="hd"><span class="tag t-high">recommend</span><span class="ti">Audit rows lack request context</span><span class="loc">infra/gateway/src/registry.ts:383</span></div>
+    <p><code>audit(actor, action, detail)</code> stores no IP, user-agent, or decision outcome, so denials and abuse patterns are hard to correlate. Extend the <code>idp_audit_log</code> schema + helper with client metadata and an allow/deny field.</p></div>
+
+  <div class="f"><div class="hd"><span class="tag t-med">recommend</span><span class="ti">schema.sql vs migrations drift</span><span class="loc">infra/gateway/schema.sql vs migrations/</span></div>
+    <p><code>schema.sql</code> already contains columns that the <code>0001</code>/<code>0002</code> migrations also <code>ADD COLUMN</code>. A fresh DB initialized from <code>schema.sql</code> then running migrations will conflict. Pick one source of truth (recommend: schema.sql as the full snapshot, migrations as forward-only deltas, and don’t replay old migrations on a schema.sql-seeded DB).</p></div>
+
+  <div class="f"><div class="hd"><span class="tag t-med">recommend</span><span class="ti">Duplicate logger implementations</span><span class="loc">src/logger.ts ≡ infra/sdk/ts/src/logger.ts</span></div>
+    <p>Identical files; the ragbot worker should import the SDK logger to avoid drift.</p></div>
+
+  <div class="f"><div class="hd"><span class="tag t-fixed">done</span><span class="ti">Repo layout made uniform: ragbot moved to infra/ragbot/</span><span class="loc">infra/ragbot/</span></div>
+    <p>The ragbot worker (src, wrangler, schema, scripts, tests, manual) was relocated from the repo root to <code>infra/ragbot/</code> via <code>git mv</code> — every app now lives under <code>infra/&lt;app&gt;/</code>. Fixed all import paths, <code>applications.yaml</code>/<code>tsconfig</code>/<code>package.json</code> scripts, and the CLI's hardcoded paths (register-commands, <code>.dev.vars</code> now written to the worker's config dir). Verified: tsc clean, 34/34 tests, <code>go vet</code>, and a live <code>./platy deploy ragbot</code> (post-deploy gateway-start hook ran).</p></div>
+
+  <h2>False positives (verified against the code, discarded)</h2>
+  <div class="f"><div class="hd"><span class="tag t-fp">not a bug</span><span class="ti">“nil-pointer panic on cached TokenSet”</span><span class="loc">infra/sdk/go/auth/store.go:18</span></div>
+    <p>Both <code>TokenSet.Valid</code> and <code>Refreshable</code> begin with <code>t != nil &amp;&amp;</code>, so calling them on a nil map/Get result is safe. The flagged <code>session.go</code> call sites don’t panic.</p></div>
+  <div class="f"><div class="hd"><span class="tag t-fp">by design</span><span class="ti">“audience forced == name is a bug”</span><span class="loc">registry upsert</span></div>
+    <p>Module 5 makes audience == application name an explicit invariant (unique, immutable). The single-binding upsert is intentional, not a defect.</p></div>
+  <div class="f"><div class="hd"><span class="tag t-fp">low value</span><span class="ti">“weak scope enforcement in ragbot”</span><span class="loc">src/services.ts</span></div>
+    <p><code>protect()</code> already enforces the canonical per-method scope (<code>ragbot/&lt;Service&gt;.&lt;Method&gt;</code>); the tests confirm per-method scope checks. No broad-scope bypass exists.</p></div>
+
+  <h2>What shipped alongside the review</h2>
+  <div class="scroll"><table>
+    <tr><th>Deliverable</th><th>Where</th><th>State</th></tr>
+    <tr><td>AI Gateway service (<code>aigateway.v1.ChatService</code>) — unified billing, injected <code>cf-aig-authorization</code></td><td>infra/aigateway, infra/proto/aigateway</td><td>deployed + verified (direct user STS path, Workers AI + paid <code>openai/*</code>)</td></tr>
+    <tr><td>Dedicated authenticated AI Gateway</td><td>Cloudflare <code>platy</code> gateway</td><td>created</td></tr>
+    <tr><td>Browser chat client: React + Connect-Web streaming, DPoP-via-WebCrypto auth SDK</td><td>infra/web (<code>chat.jsmunro.me</code>)</td><td>deployed behind Access; repointed from the old Realtime-Chat app + policy flipped deny→allow</td></tr>
+    <tr><td>Gateway + aigateway CORS for browser origins</td><td>infra/gateway, infra/aigateway</td><td>deployed + verified</td></tr>
+    <tr><td>ragbot → aigateway delegation</td><td>gateway registry</td><td>added (enables <code>--as ragbot</code>)</td></tr>
+    <tr><td>Design doc: new Module 14b (AI Gateway), Module 3 marked implemented, roadmap updated</td><td>infra/DESIGN.md</td><td>updated</td></tr>
+  </table></div>
+
+  <h2>Manual steps still needing a browser</h2>
+  <ul>
+    <li><strong>CLI impersonation</strong> (<code>./platy fetch aigateway.ChatService.Complete --as ragbot</code>) needs a one-time <code>./platy impersonate authorize ragbot</code> (Cloudflare Access browser consent) plus ragbot’s local service credential. The delegation is already in place.</li>
+    <li><strong>Web login</strong> exercises the browser DPoP flow end-to-end; it can’t be driven headlessly. The server-side chain (Access policy, CORS, callback redirect URIs, discovery) is all verified.</li>
+  </ul>
+</div>
+</body>
+</html>

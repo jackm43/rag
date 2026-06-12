@@ -21,7 +21,8 @@ commands:
   fetch <app>.<Service>.<Method> [-d data] [--as <service>]   call as a service on your behalf (requires impersonation authorize)
 
   app register <name> [--endpoint URL]      register an application from applications.yaml and generate code
-  app sync [--prune]                        reconcile every application in applications.yaml with the gateway
+  app plan                                  diff applications.yaml against the registry (no changes applied)
+  app sync [--prune]                        reconcile applications.yaml with the gateway, applying only what changed
   app list                                  list registered applications
   app get <name>                            show one application document
   app delete <name>                         remove an application from the registry

@@ -32,7 +32,7 @@ func Run(ctx context.Context, cmdArgs []string) {
 	if len(names) == 0 {
 		names = loaded.Names()
 	}
-	wranglerEnv := wranglerDeployEnv(ctx, root)
+	wranglerEnv, apiToken := wranglerDeployEnv(ctx, root)
 	wrangler.InjectBootstrapVars(root, loaded)
 
 	for _, name := range names {
@@ -48,6 +48,7 @@ func Run(ctx context.Context, cmdArgs []string) {
 		if !app.Internal {
 			pushServiceCredential(ctx, root, name, app, wranglerEnv)
 		}
+		reconcileRoutes(apiToken, root, name, app)
 	}
 
 	for _, name := range names {
@@ -59,14 +60,14 @@ func Run(ctx context.Context, cmdArgs []string) {
 	output.PrintJSON(map[string]any{"deployed": names})
 }
 
-func wranglerDeployEnv(ctx context.Context, root string) []string {
+func wranglerDeployEnv(ctx context.Context, root string) ([]string, string) {
 	env := os.Environ()
 	organization := provider.LoadOrganization(root)
 	token := secrets.ResolveCloudflareAPIToken(ctx, "", organization.CloudflareAPITokenRef())
 	if token != "" {
 		env = append(env, "CLOUDFLARE_API_TOKEN="+token)
 	}
-	return env
+	return env, token
 }
 
 func pushWorkerSecrets(ctx context.Context, root, name string, app *manifest.Application, env []string) {

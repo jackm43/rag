@@ -6,6 +6,10 @@ export type WebhookVerifierConfig = {
   publicKey: string;
   signatureHeader?: string;
   timestampHeader?: string;
+  // When set, reject signed payloads whose timestamp is older than this many
+  // seconds. Off by default (some platforms reuse one-shot tokens and do not
+  // need it); enable it for replay-sensitive receivers.
+  maxAgeSeconds?: number;
 };
 
 const hexToBytes = (hex: string): Uint8Array | null => {
@@ -27,6 +31,14 @@ export const verifySignedWebhook = async (
   const timestamp = request.headers.get(config.timestampHeader ?? "x-signature-timestamp");
   if (!signature || !timestamp) {
     return null;
+  }
+
+  if (config.maxAgeSeconds !== undefined) {
+    const sent = Number(timestamp);
+    const now = Math.floor(Date.now() / 1000);
+    if (!Number.isFinite(sent) || Math.abs(now - sent) > config.maxAgeSeconds) {
+      return null;
+    }
   }
 
   const signatureBytes = hexToBytes(signature);

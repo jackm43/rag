@@ -24,7 +24,7 @@ import (
 	sdksecrets "jsmunro.me/platy/sdk/secrets"
 )
 
-const DefaultGatewayURL = "https://auth-gateway.jsmunro.workers.dev"
+const DefaultGatewayURL = "https://auth-gateway.jsmunro.me"
 
 const DelegatedTokenHeader = "X-Delegated-Cloudflare-Token"
 

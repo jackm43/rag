@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"jsmunro.me/platy/sdk/gateway"
+	"jsmunro.me/platy/sdk/trace"
 )
 
 const maxResponseBytes = 10 << 20
@@ -100,10 +103,29 @@ func (c *Client) Fetch(ctx context.Context, application, method, path string, bo
 		}
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
+	// Identity-boundary standard: this client roots (or continues) the trace
+	// and logs every outbound crossing — same contract as the worker SDK.
+	traceparent := trace.FromContext(ctx)
+	if traceparent == "" {
+		traceparent = trace.NewTraceparent()
+	}
+	request.Header.Set(trace.Header, traceparent)
 	if err := c.decorate(ctx, application, request.Header); err != nil {
 		return nil, err
 	}
-	return c.httpClient().Do(request)
+	start := time.Now()
+	response, err := c.httpClient().Do(request)
+	if err != nil {
+		slog.Warn("rpc_client_failed", "application", application, "path", path, "error", err.Error())
+		return nil, err
+	}
+	slog.Info("rpc_client",
+		"application", application,
+		"path", path,
+		"status", response.StatusCode,
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+	return response, nil
 }
 
 // Call invokes <application>.<service>.<method> as a Connect JSON unary

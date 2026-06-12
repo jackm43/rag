@@ -208,6 +208,13 @@ message SessionTokens {
 message CreateSessionRequest {
   string subject_token = 1;
   string subject_token_type = 2;
+  // Browser clients (Module 3) send the OIDC authorization code instead of an
+  // upstream access token: the gateway completes the PKCE token exchange
+  // server-side, avoiding a cross-origin call to the identity proxy's token
+  // endpoint (which does not permit browser CORS).
+  string authorization_code = 3;
+  string code_verifier = 4;
+  string redirect_uri = 5;
 }
 
 message CreateSessionResponse {
@@ -341,4 +348,107 @@ message DiscoverResponse {
 
 service DiscoveryService {
   rpc Discover(DiscoverRequest) returns (DiscoverResponse);
+}
+
+message TraceSummary {
+  string trace_id = 1;
+  string root = 2;
+  string service = 3;
+  string actor = 4;
+  string actor_chain = 5;
+  string client_instance = 6;
+  string start = 7;
+  int64 duration_ms = 8;
+  string status = 9;
+  int32 spans = 10;
+}
+
+message ListTracesRequest {
+  int32 limit = 1;
+}
+
+message ListTracesResponse {
+  repeated TraceSummary traces = 1;
+}
+
+message GetTraceRequest {
+  string trace_id = 1;
+}
+
+message TraceSpan {
+  string span_id = 1;
+  string parent_span_id = 2;
+  string service = 3;
+  string name = 4;
+  string kind = 5;
+  string start = 6;
+  int64 duration_ms = 7;
+  string status = 8;
+  string error = 9;
+  // JSON object of span attributes (actor, actor_chain, client_instance, …).
+  string attributes_json = 10;
+}
+
+message GetTraceResponse {
+  string trace_id = 1;
+  repeated TraceSpan spans = 2;
+}
+
+service TraceService {
+  rpc ListTraces(ListTracesRequest) returns (ListTracesResponse);
+  rpc GetTrace(GetTraceRequest) returns (GetTraceResponse);
+  // Live tail: spans stream to the client as they are ingested.
+  rpc StreamTraces(StreamTracesRequest) returns (stream StreamedSpan);
+}
+
+message StreamTracesRequest {}
+
+message StreamedSpan {
+  string trace_id = 1;
+  TraceSpan span = 2;
+}
+
+message ClientIdentity {
+  string instance_id = 1;
+  // Application audience the instance belongs to (verified against the
+  // registering actor's chain).
+  string application = 2;
+  string subject = 3;
+  string email = 4;
+  // Instance kind, e.g. "chat".
+  string kind = 5;
+  // JWK thumbprint of the instance's public key.
+  string jkt = 6;
+  int64 created_at = 7;
+  int64 expires_at = 8;
+}
+
+message RegisterClientIdentityRequest {
+  string application = 1;
+  // Client-proposed instance id; minted when empty.
+  string instance_id = 2;
+  // Instance public key as a JSON JWK; the identity token is key-bound.
+  string public_jwk = 3;
+  string kind = 4;
+}
+
+message RegisterClientIdentityResponse {
+  // Gateway-signed ES256 identity token (aud = application, sub = the user,
+  // cnf.jkt = the instance key).
+  string identity_token = 1;
+  int64 expires_in = 2;
+  ClientIdentity identity = 3;
+}
+
+message ListClientIdentitiesRequest {
+  string application = 1;
+}
+
+message ListClientIdentitiesResponse {
+  repeated ClientIdentity identities = 1;
+}
+
+service ClientIdentityService {
+  rpc RegisterClientIdentity(RegisterClientIdentityRequest) returns (RegisterClientIdentityResponse);
+  rpc ListClientIdentities(ListClientIdentitiesRequest) returns (ListClientIdentitiesResponse);
 }

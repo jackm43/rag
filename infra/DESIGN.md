@@ -276,15 +276,102 @@ Properties the gateway enforces (client must tolerate all of them):
 
 ### Narrative
 
-Some trust zone applications will grow browser frontends, and the browser is
+Some trust zone applications grow browser frontends, and the browser is
 the most hostile place a credential can live: XSS can read anything readable.
 This module brings the CLI's device-bound session design to the web using
 platform cryptography, so that even a script-injection attacker who can read
-all of storage cannot exfiltrate a usable session. This is design-ahead work:
-no web client exists yet, and the module is written so a frontend SDK can be
-implemented directly from it. The outcome is parity: web sessions get the
-same DPoP binding, rotation, and reuse detection as CLI sessions, with login
-UX no worse than any SSO-protected web app.
+all of storage cannot exfiltrate a usable session. The outcome is parity: web
+sessions get the same DPoP binding, rotation, and reuse detection as CLI
+sessions, with login UX no worse than any SSO-protected web app.
+
+### Implementation status
+
+A first web client is live: the `chat` application
+(`infra/web/`, served at `chat.jsmunro.me`) is a browser chat UI that calls the
+AI Gateway application (Module 14b). It implements this module directly:
+
+- `infra/sdk/web/` is the shared browser SDK, reused by every web application
+  in the platform — discovery, a non-extractable ES256 DPoP key in IndexedDB,
+  OIDC authorization code + PKCE login, and gateway session create/refresh
+  with per-request DPoP proofs. Pages call `isAuthenticated()` /
+  `ensureAuthenticated()` on load: silent refresh first, then redirect login
+  (loop-guarded), so app code never implements the bootstrap dance.
+  Mid-session loss surfaces as a `needs_login` state via `onSessionChange`,
+  which the app routes back through `ensureAuthenticated()`. `webTransport` /
+  `webClient` are the client factory: they resolve an application's endpoint
+  from discovery and attach the session token + proof to every request.
+- Applications opt into a generated browser client with `web_client: true` in
+  `applications.yaml`; `platy dev generate` then emits
+  `infra/applications/<app>/web/index.ts`, a typed factory per Connect
+  service (e.g. `createChatServiceClient(auth)`) bound through the SDK
+  factory. Pages stay dumb clients: construct `TrustZoneWebAuth`, call
+  `ensureAuthenticated()`, build the generated client, render data.
+- `infra/web/src/App.tsx` + `main.tsx` are a React UI on exactly that
+  pattern, streaming responses token by token over the Connect protocol
+  (`StreamComplete`). The session token is the only credential the browser
+  holds; only gateway session calls and application requests carry DPoP
+  proofs, and applications mint their own audience tokens server-side.
+- The TSX is bundled by esbuild (`npm run chat:build`) into a single
+  same-origin `public/app.js`; `index.html`/`styles.css` complete the page.
+- The worker is assets-only; a `public/_headers` file stamps a strict
+  Content-Security-Policy (script pinned to same-origin, `connect-src` limited
+  to the gateway, the AI Gateway application, and the upstream identity proxy).
+  An earlier header-stamping worker was removed: under `run_worker_first` it
+  re-fetched its own assets and looped (edge error 1042).
+
+Three platform changes support browser clients:
+
+1. **Same-origin API routes.** Zone worker routes put the gateway
+   (`/idp.v1.*`, `/api/*`, the JWKS path) and called applications
+   (`/aigateway.v1.*`) on the web app's own hostname, so browser calls are
+   same-origin and CORS never applies (CORS headers remain for workers.dev
+   callers). `workers_dev` must stay explicitly true on routed workers.
+2. **Server-side code exchange.** The browser sends the OIDC authorization
+   code (plus PKCE verifier) to `CreateSession`; the gateway completes the
+   token exchange against the identity proxy server-side, because the proxy's
+   token endpoint does not permit browser CORS.
+3. **The dumb-client (session-chain) pattern.** The browser is a pure public
+   client: it holds only the DPoP key and the gateway session, and sends the
+   *session token* plus a per-request proof (with `ath`) to applications. The
+   application verifies the sender constraint at its edge, then mints its own
+   audience token at the gateway via client-credentials chaining (subject =
+   the user's session, actor = its `SERVICE_CLIENT_ID/SECRET` worker secret,
+   gated by a self-delegation). The server SDK ships this as
+   `sessionChainAuthenticator`, composed via `anyAuthenticator` next to the
+   ordinary `stsAuthenticator`; the gateway accepts DPoP-bound session tokens
+   (aud `idp`) as chaining subjects. No audience logic, scope handling, or
+   secret ever reaches the browser, and the minted token still records the
+   actor chain for audit. Workers route the exchange through their gateway
+   service binding (same-account workers.dev subrequests are blocked).
+4. **The confidential web client (BFF).** The web application itself is the
+   registered principal for its pages: `chat` registers as a *client-only*
+   application (no proto/RPC resources — registration supports this) with a
+   service credential and delegations to the applications it fronts. Its
+   worker runs the SDK's `sessionProxy`: validate the browser's DPoP-bound
+   session at the edge, chain the user's identity into an audience token per
+   target (subject = user, actor = chat, audience = next hop), inject it on
+   the forwarded request over a service binding, and stream the response
+   back. One principal holds the tokens for every fronted application;
+   receiving applications always re-validate the audience token with the
+   ordinary `stsAuthenticator`, and the act chain (user → chat → target)
+   stays in every token. `run_worker_first` routes only proxied API prefixes
+   through the worker; assets serve directly. Pattern 3 remains for direct
+   (workers.dev) dumb clients; pattern 4 is the default for web pages.
+
+Login is automatic: loading the page already required passing the
+identity-aware proxy, so the OIDC redirect completes without interaction
+(an attempted-login flag prevents loops). A session lasts 12 months of
+rotating refreshes per device; the OIDC federation app carries the web
+callback (`https://chat.jsmunro.me/callback`) alongside the CLI loopback
+redirect.
+
+The static frontend sits behind the identity-aware proxy (a self-hosted Access
+application on its hostname), so the proxy is the first gate before any
+application code runs; the frontend then establishes its own DPoP-bound gateway
+session for API calls. Cross-origin token exchange against the upstream IdP's
+token endpoint is the one dependency on provider CORS behavior; where a
+provider does not permit it, the fallback is a gateway-side authorization-code
+exchange, noted in Module 15.
 
 ### Key design decision: non-extractable keys
 
@@ -655,6 +742,12 @@ applications:
 applications, updates changed metadata and delegation policies, flags
 manual drift, and never deletes without `--prune` plus confirmation.
 
+An application that is only ever a *target* of impersonation, never the actor,
+declares `impersonatable: false`. Registration then provisions no Cloudflare
+Access application for it and completes without the interactive provider OAuth
+step — the actor capability and the unused Access app are both avoided. The AI
+Gateway application (Module 14b) uses this.
+
 ### Registration flow
 
 ```
@@ -685,6 +778,12 @@ Key properties:
 - `platy app delete <app>` revokes the credential, removes registry entries,
   and deletes the local document; vault items are tombstoned, not erased,
   for audit.
+- `platy app plan` retrieves the registry's current state and prints a
+  field-level diff against the manifest (endpoint, resources, delegations,
+  access, trust boundary — the impersonation client id is cloud-provisioned
+  and excluded) without applying anything. `platy app sync` runs the same
+  diff first and skips unchanged applications, so reconciliation applies
+  only what changed and is safe to run repeatedly.
 
 ### Local discovery documents
 
@@ -1145,6 +1244,7 @@ can do the job, and reviewers can verify the choice against one table.
 | External platform pushes events (signed webhooks) | Signature verification (e.g. ed25519) via SDK webhook handler | The platform cannot hold zone tokens; verify provenance instead |
 | Zone service must call the infrastructure provider's API | User-delegated provider OAuth token forwarded per request | No stored provider credentials; actions attributable to the operator |
 | Zone service must call a third-party API for a user | Integration broker (Module 14) | Centralized grant storage, refresh, audit |
+| Any application or user needs an AI model | AI Gateway application (Module 14b) | One brokered credential, unified billing, attributable inference |
 | CI / cloud dev environment needs zone access | Workload identity federation (Module 10) | No long-lived secrets in CI |
 | Hardened service-to-service paths | mTLS + STS token (Module 11) | Defense in depth; transport identity plus request identity |
 
@@ -1664,6 +1764,136 @@ limiting for free.
 
 ---
 
+## Module 14b: AI Gateway — Unified Model Access
+
+### Narrative
+
+AI inference is the textbook case for the platform's "secrets are references,
+calls are attributable" rules. The naive approach scatters provider API keys
+(OpenAI, Anthropic, Google) across every application that wants a model, each
+key long-lived, each call unattributable, each spend untracked. The AI Gateway
+application is the single broker for model access: it owns exactly one
+credential — the authorization token for an authenticated Cloudflare AI Gateway
+— resolves it from the vault at deploy time, and injects it only on the
+outbound call to the gateway. Provider billing is unified (Cloudflare-managed
+provider credentials, billed to the account), so no application ever holds a
+provider key. Every inference is a normal trust zone RPC: attributable to a
+user or an actor chain, scope-checked, and audited like any other call.
+
+### Responsibilities
+
+- Expose `aigateway.v1.ChatService` (`Complete`, `StreamComplete`,
+  `ListModels`) as a registered application, protected by the standard server
+  SDK (`stsAuthenticator` + `protect`, audience `aigateway`).
+- Proxy chat completions to a Cloudflare AI Gateway's OpenAI-compatible
+  endpoint, translating the RPC request into the provider-qualified
+  `provider/model` form (`openai/gpt-4.1-mini`,
+  `workers-ai/@cf/meta/llama-3.1-8b-instruct`, …).
+- Inject the gateway authorization token on the outbound fetch and nowhere
+  else; the token is a worker secret resolved from an `op://` reference.
+- Be reachable three ways with no code change: directly by a user STS token,
+  by a chained service identity, and by CLI impersonation
+  (`platy fetch aigateway.ChatService.Complete --as <app>`).
+
+### Interface
+
+```
+service ChatService {
+    rpc Complete(ChatRequest) returns (ChatResponse)             # unary
+    rpc StreamComplete(ChatRequest) returns (stream ChatStreamChunk)
+    rpc ListModels(ListModelsRequest) returns (ListModelsResponse)
+}
+
+ChatRequest { model, messages[], max_tokens, temperature }
+ChatResponse { content, model, finish_reason, usage, duration_ms }
+```
+
+### Outbound call
+
+```
+flow complete(request):
+    token = env.CF_AIG_TOKEN                      # worker secret, op:// at rest
+    url   = https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/compat/chat/completions
+    resp  = fetch(url, {
+              headers: { "cf-aig-authorization": "Bearer " + token },  # injected here only
+              body:    { model: request.model, messages, max_tokens, temperature } })
+    return parse_openai_completion(resp)
+```
+
+The `cf-aig-authorization` header authenticates the request to the
+authenticated gateway; unified billing means Cloudflare supplies the provider
+credentials, so no provider key is ever sent. `workers-ai/*` models stay on
+Workers AI postpaid billing; paid providers draw from account credits. Token
+binding is unchanged: the inbound RPC is verified normally, and the gateway
+token is an egress concern that never enters a token claim.
+
+### Authorization and audit
+
+- Direct user call: a user STS token for audience `aigateway`; attributable to
+  the operator (Module 8, row 1).
+- On behalf of another service: a chained token with that service as actor and
+  the user as subject, gated by the actor's `aigateway` delegation grant
+  (Module 7). `ragbot` carries this delegation so the bot can use models
+  through the broker rather than its own binding.
+- CLI impersonation: `--as <app>` reaches the broker as that app's actor
+  identity (Module 2/7); the audit row records the full chain.
+
+The worker logs each inference with the resolved actor chain and model. The AI
+Gateway itself adds a second audit and observability layer (per-request logs,
+caching, rate limiting) outside the trust zone.
+
+### Connectors: chat tools over chained identity
+
+Connectors expose other trust zone applications to the chat as model tools
+(MCP-style). The worker advertises OpenAI-compatible function tools; when the
+model requests one, the connector's outbound interceptor authenticates the
+caller before anything leaves: it takes the inbound caller's subject token
+(`identity.subjectToken`, set by the authenticators), performs a chained
+exchange (subject = the user, actor = this worker's service credential,
+audience = the target application), validates that the minted token names the
+same user and the right audience (fail closed), and forwards the RPC
+service-to-service over the target's service binding. Tool rounds are bounded
+(`MAX_TOOL_ROUNDS`), and tool failures return structured errors to the model
+rather than failing the completion. The first connector reaches `ragbot`
+(`LeaderboardService.ListTotals`), gated by an `aigateway → ragbot` delegation
+scoped to exactly that method. The SDK ships the pattern as `connectorClient`
+(`infra/sdk/ts/src/client/connector.ts`).
+
+### Tracing and measurement
+
+The SDK's `otel` module gives every RPC worker W3C trace propagation and
+spans: `traceRpc` wraps the worker's Connect handler in a server span
+(continuing the caller's `traceparent` or starting a trace), connector calls
+add client spans, and `traceHeaders()` injects context on outbound requests so
+a browser→chat→aigateway→ragbot chain shares one trace id. The auth
+middleware annotates each request span with the verified identity (`actor`,
+`actor_kind`, `actor_chain`, `session_id`, `client_instance`), so a trace is
+also an identity-attributed request path. Every span is emitted as a
+structured log line (Workers Logs), and spans export to the gateway's trace
+store: workers POST OTLP JSON to `/v1/traces` over their gateway service
+binding, authenticated with their service credential; the gateway sinks its
+own spans straight to D1 (`idp_spans`, 7-day retention). Authenticated read
+endpoints (`GET /api/traces`, `GET /api/traces/<id>`) back the web app's
+trace viewer; generic OTLP export via `OTEL_EXPORTER_OTLP_ENDPOINT` remains
+available. The chain itself needs no extra encoding or hashing: it rides in
+the gateway-signed token's `act` claim, so signature verification already
+covers it.
+
+### Deployment notes
+
+- Registered in `applications.yaml` with `impersonatable: false`: the broker is
+  only ever a *target* of impersonation, never an actor, so registration
+  provisions no Cloudflare Access app and runs without the interactive provider
+  OAuth step (see Module 5).
+- The single secret `CF_AIG_TOKEN` is an `op://` reference resolved and pushed
+  as a worker secret by `platy deploy`. Hardening: today it reuses the
+  operator's Cloudflare token; the intended end state is a dedicated
+  AI-Gateway-Run-scoped token so the broker's credential grants nothing else.
+- Browser clients (Module 3) reach it cross-origin, so it answers CORS
+  preflight for configured origins (`AIG_ALLOWED_ORIGINS`).
+
+---
+
 ## Module 15: Future State and Gap Analysis
 
 ### Narrative
@@ -1791,7 +2021,15 @@ page.
 | 7 | Integration broker (Module 14) | L | Medium - safe external access |
 | 8 | Device posture at refresh | L | Medium - continuous verification |
 | 9 | Deploy provenance | M | Medium - supply chain |
-| 10 | Web client SDK (Module 3) | M | Enables web surface safely |
+
+Done since first draft: the **web client SDK (Module 3)** is implemented and
+deployed (`chat` application), and the **AI Gateway application (Module 14b)**
+brokers model access with unified billing and an injected gateway token.
+Remaining web hardening: a dedicated AI-Gateway-Run-scoped token for the broker
+(rather than reusing the operator token), a JTI replay cache on DPoP proofs
+(today proofs are time-and-binding-bound but not single-use), and a
+gateway-side OIDC code exchange for providers whose token endpoint refuses
+browser CORS.
 
 The platform's core invariants - single issuer, short lifetimes, proof of
 possession, explicit delegation, references over values, audit everything -

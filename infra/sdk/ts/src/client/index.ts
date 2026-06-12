@@ -15,3 +15,11 @@ export {
   type PlatformClient,
   type TokenSource,
 } from "./fetch";
+export {
+  ConnectorAuthError,
+  connectorClient,
+  connectorServiceClient,
+  connectorToken,
+  connectorTransport,
+  type ConnectorConfig,
+} from "./connector";

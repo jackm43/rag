@@ -9,7 +9,7 @@ import {
   GatewayControlService,
   InteractionService,
   LeaderboardService,
-} from "../infra/applications/ragbot/server/ragbot/v1/ragbot_pb";
+} from "../../applications/ragbot/server/ragbot/v1/ragbot_pb";
 import {
   errorMessage,
   logger,
@@ -17,7 +17,7 @@ import {
   requireIdentity,
   stsAuthenticator,
   type AuthPolicy,
-} from "../infra/sdk/ts/src";
+} from "../../sdk/ts/src";
 import { CONFIG_DEFAULTS, deleteSetting, getSettings, isConfigKey, setSetting } from "./config";
 import { postChannelMessage } from "./discord";
 import { recordChannelChatInteraction, runChannelChat, streamChannelChat, type ChannelChatInput } from "./mention";

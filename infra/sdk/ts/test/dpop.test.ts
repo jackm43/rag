@@ -10,7 +10,7 @@ import {
   requireSenderConstraint,
   verifyDpopProof,
   type Identity,
-} from "../infra/sdk/ts/src/index.ts";
+} from "../src/index.ts";
 
 const target = { method: "POST", url: "https://gateway.example/idp.v1.IdentityService/RefreshSession" };
 

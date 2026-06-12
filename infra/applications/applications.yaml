@@ -1,7 +1,7 @@
 applications:
   idp:
     description: "Authentication gateway: identity, token exchange, registry, discovery"
-    endpoint: https://auth-gateway.jsmunro.workers.dev
+    endpoint: https://auth-gateway.jsmunro.me
     worker: auth-gateway
     config: infra/gateway/wrangler.jsonc
     language: typescript
@@ -9,18 +9,22 @@ applications:
     secret_provider: 1password
     trust_zone: tier2
     internal: true
+    # Generated worker-to-worker client: applications call gateway services
+    # (client identity registration, tracing) through typed factories.
+    service_client: true
     access:
       allowed_groups: [admins]
       allowed_idps: [github]
   ragbot:
     description: Discord bot admin services
-    endpoint: https://ragbot-worker.jsmunro.workers.dev
+    endpoint: https://ragbot.jsmunro.me
     worker: ragbot-worker
-    config: wrangler.jsonc
+    config: infra/ragbot/wrangler.jsonc
     language: typescript
     provider: cloudflare
     secret_provider: 1password
     trust_zone: tier2
+    service_client: true
     secrets:
       DISCORD_APPLICATION_ID: op://mqrwrig24fxs3ssywmf3pxwqgy/ragbot/ApplicationId
       DISCORD_PUBLIC_KEY: op://mqrwrig24fxs3ssywmf3pxwqgy/ragbot/PublicKey
@@ -31,14 +35,82 @@ applications:
     delegations:
       - audience: idp
       - audience: deploy
+      - audience: aigateway
     webhooks:
       - name: discord
         type: ed25519
     post_deploy:
       - gateway-start
+  aigateway:
+    description: AI Gateway proxy with unified billing and injected gateway auth token
+    endpoint: https://aigateway.jsmunro.me
+    worker: aigateway
+    config: infra/aigateway/wrangler.jsonc
+    language: typescript
+    provider: cloudflare
+    secret_provider: 1password
+    trust_zone: tier2
+    # aigateway is only ever a target of impersonation, never the actor, so it
+    # needs no Cloudflare Access app of its own.
+    impersonatable: false
+    # Self-delegation: the worker chains browser session tokens into its own
+    # audience (backend-for-frontend exchange), acting as itself.
+    # The ragbot delegation backs the chat's ragbot connector (MCP-style
+    # tools): the caller's identity is chained on to ragbot, scoped to
+    # exactly the RPCs the tools use.
+    delegations:
+      - audience: aigateway
+      - audience: ragbot
+        scopes:
+          - ragbot/LeaderboardService.ListTotals
+    # Generate a typed browser client (infra/applications/aigateway/web) for
+    # pages built on the trust zone web auth SDK, and a service client
+    # (infra/applications/aigateway/service) for worker-to-worker hops.
+    web_client: true
+    service_client: true
+    secrets:
+      CF_AIG_TOKEN: op://Services/Cloudflare User API Token/password
+    access:
+      allowed_groups: [admins]
+      allowed_idps: [github]
+  chat:
+    description: Browser chat web client (confidential BFF) fronting the AI Gateway
+    endpoint: https://chat.jsmunro.me
+    worker: chat
+    config: infra/web/wrangler.jsonc
+    language: typescript
+    provider: cloudflare
+    secret_provider: 1password
+    trust_zone: tier2
+    # The web application is the registered principal for its pages: a
+    # client-only application (no proto/RPC surface) whose worker holds the
+    # service credential and runs the confidential flow on the browser's
+    # behalf — it validates the DPoP-bound session at its edge, chains the
+    # user's identity per target audience, and injects the token on the
+    # forwarded request. Targets always re-validate.
+    impersonatable: false
+    # aigateway powers the chat; the ragbot delegation backs the data panel
+    # (read-only RPCs surfaced next to the chat window).
+    delegations:
+      - audience: aigateway
+      - audience: ragbot
+        scopes:
+          - ragbot/LeaderboardService.ListTotals
+          - ragbot/ConfigService.ListConfig
+          - ragbot/InteractionService.ListInteractions
+          - ragbot/GatewayControlService.GetHealth
+      # Chat instances federate with the platform IdP: the BFF registers
+      # each instance (acting for the user) and receives a gateway-signed,
+      # key-bound identity document.
+      - audience: idp
+        scopes:
+          - idp/ClientIdentityService.RegisterClientIdentity
+    access:
+      allowed_groups: [admins]
+      allowed_idps: [github]
   deploy:
     description: Worker deployment service using delegated Cloudflare tokens
-    endpoint: https://deploy.jsmunro.workers.dev
+    endpoint: https://deploy.jsmunro.me
     worker: deploy
     config: infra/deploy/wrangler.jsonc
     language: typescript

@@ -16,10 +16,15 @@ export type StsVerifierConfig = {
 
 type ActClaim = { sub?: string; act?: ActClaim };
 
+// Maximum actor chain depth. The gateway caps chains at issuance, but a
+// verifier must also bound its own walk so a malformed or hostile token with a
+// deeply nested `act` claim cannot pin CPU.
+const MAX_ACTOR_CHAIN_DEPTH = 8;
+
 export const actorChainFromClaim = (act: unknown): string[] => {
   const chain: string[] = [];
   let current = act as ActClaim | undefined;
-  while (current && typeof current === "object") {
+  while (current && typeof current === "object" && chain.length < MAX_ACTOR_CHAIN_DEPTH) {
     if (typeof current.sub === "string") {
       chain.push(current.sub);
     }

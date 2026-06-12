@@ -12,6 +12,8 @@ Cloudflare Worker Discord bot for rag tracking and mention-triggered AI replies.
 - Stateful connection: Durable Objects (`DiscordGateway`)
 - Admin auth: central auth gateway worker (`infra/gateway`) that exchanges Cloudflare Access OIDC logins (GitHub IdP, authorization code + PKCE) for device-bound gateway sessions (DPoP, RFC 9449) and short-lived audience-scoped STS tokens (RFC 8693), with delegation-controlled identity chaining for service-to-service calls
 - Service APIs: protobuf-first Connect-RPC services (`infra/proto`, generated code in `infra/applications`)
+- AI Gateway service: `infra/aigateway` worker exposing `aigateway.v1.ChatService` — proxies chat completions to a Cloudflare AI Gateway with unified billing and an injected `cf-aig-authorization` token; callable by other apps (delegation) and the CLI (`./platy fetch aigateway.ChatService.Complete`, optionally `--as <app>`)
+- Web chat client: `infra/web` React app (`chat.jsmunro.me`) with the browser auth SDK (DPoP via Web Crypto, OIDC PKCE, per-audience STS) and a Connect-Web streaming chat UI over the AI Gateway service (`npm run chat:build` bundles it)
 - Infrastructure: `platy bootstrap` (Go CLI + cloudflare-go) creates the Access OIDC application, policy, and Cloudflare OAuth client directly via the Cloudflare API
 - Discord integration:
   - Interactions webhook

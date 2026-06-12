@@ -1,14 +1,16 @@
 import { Code, ConnectError, type ConnectRouter, type HandlerContext } from "@connectrpc/connect";
 
 import {
+  ClientIdentityService,
   DiscoveryService,
   IdentityService,
   RegistryService,
+  TraceService,
   type Application,
   type ExchangeTokenRequest,
   type ProviderConfig as ProviderConfigMessage,
 } from "../../applications/idp/server/idp/v1/idp_pb";
-import { createLocalJWKSet, jwtVerify } from "jose";
+import { calculateJwkThumbprint, createLocalJWKSet, jwtVerify, type JWK } from "jose";
 
 import {
   accessOidcProvider,
@@ -39,6 +41,7 @@ import {
   delegationFor,
   deleteApplication,
   getApplication,
+  getApplicationByAudience,
   getProviderConfig,
   hasServiceClient,
   listApplications,
@@ -54,6 +57,7 @@ import {
   type TrustBoundary,
 } from "./registry";
 import { consumeRefreshToken, createSession, revokeSession, type Session } from "./sessions";
+import { getTrace, listTraces, streamSpans } from "./traces";
 import { allowedEmails, type Env } from "./types";
 
 const TOKEN_LIFETIME_SECONDS = 300;
@@ -64,7 +68,46 @@ const jwksUrl = (env: Env) => `${issuer(env)}/.well-known/jwks.json`;
 
 const oidcProvider = (env: Env) => accessOidcProvider(env.ACCESS_TEAM_DOMAIN, env.ACCESS_OIDC_CLIENT_ID);
 
-const isAllowedUser = (env: Env, identity: Identity): boolean =>
+// Completes an OIDC authorization-code + PKCE exchange against the identity
+// proxy's token endpoint, server-side, and returns the upstream access token.
+// Browser clients delegate this to the gateway because the proxy's token
+// endpoint does not allow cross-origin (CORS) requests.
+const exchangeAuthorizationCode = async (
+  env: Env,
+  request: { authorizationCode: string; codeVerifier: string; redirectUri: string },
+): Promise<string> => {
+  if (!request.codeVerifier || !request.redirectUri) {
+    throw new ConnectError(
+      "authorization_code requires code_verifier and redirect_uri",
+      Code.InvalidArgument,
+    );
+  }
+  const provider = oidcProvider(env);
+  const response = await fetch(provider.tokenEndpoint, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      code: request.authorizationCode,
+      redirect_uri: request.redirectUri,
+      client_id: provider.clientId,
+      code_verifier: request.codeVerifier,
+    }).toString(),
+  });
+  if (!response.ok) {
+    throw new ConnectError(
+      `upstream token exchange failed (${response.status})`,
+      Code.Unauthenticated,
+    );
+  }
+  const body = (await response.json()) as { access_token?: string };
+  if (!body.access_token) {
+    throw new ConnectError("upstream token response had no access_token", Code.Unauthenticated);
+  }
+  return body.access_token;
+};
+
+export const isAllowedUser = (env: Env, identity: Identity): boolean =>
   identity.kind !== "user" ||
   (identity.email !== null && allowedEmails(env).includes(identity.email.toLowerCase()));
 
@@ -132,7 +175,7 @@ const localGatewayStsAuthenticator = (env: Env): Authenticator => async (headers
   return requireSenderConstraint(identity, headers, request);
 };
 
-const gatewayAuthenticator = (env: Env): Authenticator =>
+export const gatewayAuthenticator = (env: Env): Authenticator =>
   anyAuthenticator(
     oidcAuthenticator(oidcProvider(env)),
     localGatewayStsAuthenticator(env),
@@ -258,15 +301,26 @@ const resolveSubject = async (
   }
 
   if (tokenType === TOKEN_TYPE_JWT) {
-    const audience = actorApplication ?? "idp";
-    return (
-      (await verifyLocalStsToken(env, request.subjectToken, audience)) ??
-      verifyStsToken(request.subjectToken, {
-        issuer: issuer(env),
-        audience,
-        jwksUrl: jwksUrl(env),
-      })
-    );
+    // A chaining subject is normally a token addressed to the actor
+    // application. A DPoP-bound gateway session token (aud "idp") is also
+    // accepted: the actor app has already verified the sender constraint at
+    // its own edge, and the issued token records the actor chain. This lets a
+    // browser hold only its session and let apps mint their own audience
+    // tokens server-side (backend-for-frontend exchange).
+    const audiences = actorApplication ? [actorApplication, "idp"] : ["idp"];
+    for (const audience of audiences) {
+      const identity =
+        (await verifyLocalStsToken(env, request.subjectToken, audience)) ??
+        (await verifyStsToken(request.subjectToken, {
+          issuer: issuer(env),
+          audience,
+          jwksUrl: jwksUrl(env),
+        }));
+      if (identity) {
+        return identity;
+      }
+    }
+    return null;
   }
 
   if (tokenType === TOKEN_TYPE_SERVICE_CREDENTIAL) {
@@ -383,10 +437,14 @@ export const registerServices = (router: ConnectRouter, env: Env) => {
     },
     createSession: async (request, context) => {
       const jkt = await requireDpopProof(context);
-      if (request.subjectTokenType && request.subjectTokenType !== TOKEN_TYPE_ACCESS_TOKEN) {
+      let subjectToken = request.subjectToken;
+      if (request.authorizationCode) {
+        // Server-side PKCE code exchange for browser clients (Module 3).
+        subjectToken = await exchangeAuthorizationCode(env, request);
+      } else if (request.subjectTokenType && request.subjectTokenType !== TOKEN_TYPE_ACCESS_TOKEN) {
         throw new ConnectError("sessions require an upstream access token", Code.InvalidArgument);
       }
-      const identity = await verifyOidcToken(request.subjectToken, oidcProvider(env));
+      const identity = await verifyOidcToken(subjectToken, oidcProvider(env));
       if (!identity) {
         throw new ConnectError("invalid subject token", Code.Unauthenticated);
       }
@@ -407,6 +465,12 @@ export const registerServices = (router: ConnectRouter, env: Env) => {
       if (!rotated) {
         throw new ConnectError("invalid refresh token", Code.Unauthenticated);
       }
+      await audit(
+        env,
+        rotated.session.email ?? rotated.session.subject,
+        "session_refreshed",
+        rotated.session.id,
+      );
       logger.info("session_refreshed", { session: rotated.session.id });
       return { tokens: await sessionTokensMessage(env, rotated.session, rotated.refreshToken) };
     },
@@ -495,7 +559,7 @@ export const registerServices = (router: ConnectRouter, env: Env) => {
         }
       }
 
-      const application = await getApplication(env, request.audience);
+      const application = await getApplicationByAudience(env, request.audience);
       if (!application) {
         throw new ConnectError(`unknown audience ${request.audience}`, Code.NotFound);
       }
@@ -686,6 +750,175 @@ export const registerServices = (router: ConnectRouter, env: Env) => {
         getProviderConfig: async () => ({
           config: providerConfigMessage(await getProviderConfig(env)),
         }),
+      },
+      policy,
+    ),
+  );
+
+  // Tracing is an ordinary platform service: same Connect surface, protect()
+  // policy, and generated clients as every other application RPC.
+  router.service(
+    TraceService,
+    protect(
+      TraceService,
+      {
+        listTraces: async (request) => ({
+          traces: await listTraces(env, request.limit > 0 ? request.limit : 25),
+        }),
+        getTrace: async (request) => {
+          const spans = await getTrace(env, request.traceId);
+          if (!spans) {
+            throw new ConnectError(`trace ${request.traceId} not found`, Code.NotFound);
+          }
+          return { traceId: request.traceId, spans };
+        },
+        // Live tail: poll the span store and stream new spans as they are
+        // ingested. Streams are kept short (~45s) so idle connections are
+        // recycled before intermediaries time them out; clients reconnect
+        // continuously while the live view stays open.
+        streamTraces: async function* (_request, context) {
+          const POLL_MS = 1500;
+          const MAX_TICKS = 30;
+          let cursor = Math.floor(Date.now() / 1000) - 5;
+          const seen = new Set<string>();
+          for (let tick = 0; tick < MAX_TICKS && !context.signal.aborted; tick += 1) {
+            const rows = await streamSpans(env, cursor);
+            for (const row of rows) {
+              if (seen.has(row.span.spanId)) {
+                continue;
+              }
+              seen.add(row.span.spanId);
+              cursor = Math.max(cursor, row.createdAt);
+              yield { traceId: row.traceId, span: row.span };
+            }
+            if (seen.size > 4000) {
+              seen.clear();
+              cursor = Math.floor(Date.now() / 1000);
+            }
+            await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+          }
+        },
+      },
+      policy,
+    ),
+  );
+
+  // Client identity registration: applications (acting for a user via a
+  // chained token) register sub-identities — e.g. one chat conversation —
+  // and receive a gateway-signed, key-bound identity document. This is the
+  // IdP-registration surface; generated clients exist like any other service.
+  router.service(
+    ClientIdentityService,
+    protect(
+      ClientIdentityService,
+      {
+        registerClientIdentity: async (request, context) => {
+          const identity = requireIdentity(context);
+          const application = request.application.trim();
+          if (!/^[a-z][a-z0-9-]*$/.test(application)) {
+            throw new ConnectError("application must be a registered name", Code.InvalidArgument);
+          }
+          if (!(await getApplicationByAudience(env, application))) {
+            throw new ConnectError(`unknown application ${application}`, Code.NotFound);
+          }
+          // The registering actor must be the application itself (chained
+          // call) or the user directly (no actor chain).
+          const lastActor = identity.actorChain[identity.actorChain.length - 1];
+          if (lastActor && !lastActor.startsWith(`svc_${application}_`)) {
+            throw new ConnectError(
+              `actor ${lastActor} cannot register identities for ${application}`,
+              Code.PermissionDenied,
+            );
+          }
+          const instanceId = /^[A-Za-z0-9_-]{1,64}$/.test(request.instanceId)
+            ? request.instanceId
+            : crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+          let jkt = "";
+          if (request.publicJwk) {
+            try {
+              jkt = await calculateJwkThumbprint(JSON.parse(request.publicJwk) as JWK, "sha256");
+            } catch {
+              throw new ConnectError("public_jwk is not a valid JWK", Code.InvalidArgument);
+            }
+          }
+          const kind = request.kind.trim() || "client";
+          const now = Math.floor(Date.now() / 1000);
+          const expiresAt = now + TOKEN_LIFETIME_SECONDS * 144; // 12 hours
+          await env.DB.prepare(
+            `INSERT OR REPLACE INTO idp_client_identities
+               (instance_id, application, subject, email, kind, jkt, public_jwk, created_at, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+            .bind(
+              instanceId,
+              application,
+              identity.subject,
+              identity.email ?? "",
+              kind,
+              jkt,
+              request.publicJwk ?? "",
+              now,
+              expiresAt,
+            )
+            .run();
+          const token = await signToken(env, {
+            iss: issuer(env),
+            sub: identity.subject,
+            aud: application,
+            email: identity.email ?? undefined,
+            kind,
+            instance: instanceId,
+            iat: now,
+            exp: expiresAt,
+            jti: crypto.randomUUID(),
+            ...(identity.actorChain.length > 0 ? { act: nestActChain(identity.actorChain) } : {}),
+            ...(jkt ? { cnf: { jkt } } : {}),
+          });
+          await audit(
+            env,
+            identity.email ?? identity.subject,
+            "register_client_identity",
+            `${application}:${instanceId}`,
+          );
+          return {
+            identityToken: token,
+            expiresIn: BigInt(expiresAt - now),
+            identity: {
+              instanceId,
+              application,
+              subject: identity.subject,
+              email: identity.email ?? "",
+              kind,
+              jkt,
+              createdAt: BigInt(now),
+              expiresAt: BigInt(expiresAt),
+            },
+          };
+        },
+        listClientIdentities: async (request) => {
+          const application = request.application.trim();
+          const rows = application
+            ? await env.DB.prepare(
+                "SELECT * FROM idp_client_identities WHERE application = ? ORDER BY created_at DESC LIMIT 100",
+              )
+                .bind(application)
+                .run<Record<string, string | number>>()
+            : await env.DB.prepare(
+                "SELECT * FROM idp_client_identities ORDER BY created_at DESC LIMIT 100",
+              ).run<Record<string, string | number>>();
+          return {
+            identities: rows.results.map((row) => ({
+              instanceId: String(row.instance_id),
+              application: String(row.application),
+              subject: String(row.subject),
+              email: String(row.email),
+              kind: String(row.kind),
+              jkt: String(row.jkt),
+              createdAt: BigInt(row.created_at),
+              expiresAt: BigInt(row.expires_at),
+            })),
+          };
+        },
       },
       policy,
     ),

@@ -10,9 +10,24 @@ import (
 	"jsmunro.me/platy/cli/internal/manifest"
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/platform"
+	"jsmunro.me/platy/cli/internal/webgen"
 )
 
-var defaultApps = []string{"idp", "ragbot", "deploy"}
+// protoApps lists every application with a proto package, matching
+// generate.sh's own default.
+func protoApps() []string {
+	entries, err := os.ReadDir(filepath.Join(root(), "infra", "proto"))
+	if err != nil {
+		output.Fail("list proto packages: %v", err)
+	}
+	var apps []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			apps = append(apps, entry.Name())
+		}
+	}
+	return apps
+}
 
 var goPackages = []string{
 	"jsmunro.me/platy/cli/...",
@@ -61,7 +76,7 @@ func printUsage() {
 		"usage: platy dev <command>",
 		"",
 		"commands:",
-		"  generate [app...]     regenerate protobuf code (default: idp ragbot deploy)",
+		"  generate [app...]     regenerate protobuf code and web clients (default: all proto packages)",
 		"  platy                 build ./platy CLI binary",
 		"  check                 go vet, go build, and npm run check",
 		"  test                  npm test and Go provider tests",
@@ -91,7 +106,7 @@ func runCommand(name string, commandArgs ...string) {
 
 func generate(apps []string) {
 	if len(apps) == 0 {
-		apps = defaultApps
+		apps = protoApps()
 	}
 	script := filepath.Join(root(), "infra", "scripts", "generate.sh")
 	cmd := exec.Command(script, apps...)
@@ -102,6 +117,7 @@ func generate(apps []string) {
 	if err := cmd.Run(); err != nil {
 		output.Fail("generate: %v", err)
 	}
+	webgen.Generate(root(), apps)
 	output.Logger.Info("generated protobuf code", "apps", apps)
 }
 
@@ -137,7 +153,11 @@ func writeDevVars(ctx context.Context, cmdArgs []string) {
 	}
 	loaded := manifest.Load(root())
 	app := loaded.Application(appName)
-	manifest.WriteDevVars(root(), app.ResolveSecrets(ctx))
+	dir := root()
+	if app.Config != "" {
+		dir = filepath.Dir(filepath.Join(root(), filepath.FromSlash(app.Config)))
+	}
+	manifest.WriteDevVars(dir, app.ResolveSecrets(ctx))
 }
 
 func registerCommands(ctx context.Context) {
@@ -149,7 +169,7 @@ func registerCommands(ctx context.Context) {
 	if applicationID == "" || botToken == "" {
 		output.Fail("ragbot secrets must include DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN")
 	}
-	cmd := exec.Command("npx", "tsx", "scripts/register-commands.ts")
+	cmd := exec.Command("npx", "tsx", "infra/ragbot/scripts/register-commands.ts")
 	cmd.Dir = root()
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr

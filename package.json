@@ -4,19 +4,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "go run jsmunro.me/platy/cli dev vars ragbot && wrangler dev",
-    "deploy": "wrangler deploy",
+    "dev": "go run jsmunro.me/platy/cli dev vars ragbot && wrangler dev -c infra/ragbot/wrangler.jsonc",
+    "deploy": "wrangler deploy -c infra/ragbot/wrangler.jsonc",
     "gw:dev": "wrangler dev -c infra/gateway/wrangler.jsonc",
     "gw:deploy": "wrangler deploy -c infra/gateway/wrangler.jsonc",
     "gw:d1:migrate:local": "wrangler d1 execute rag-auth-gateway --local -c infra/gateway/wrangler.jsonc --file=./infra/gateway/schema.sql",
     "gw:d1:migrate:remote": "wrangler d1 execute rag-auth-gateway --remote -c infra/gateway/wrangler.jsonc --file=./infra/gateway/schema.sql",
     "deploysvc:dev": "wrangler dev -c infra/deploy/wrangler.jsonc",
     "deploysvc:deploy": "wrangler deploy -c infra/deploy/wrangler.jsonc",
-    "generate": "infra/scripts/generate.sh",
-    "check": "tsc --noEmit",
-    "test": "node --test --import tsx",
+    "generate": "go run jsmunro.me/platy/cli dev generate",
+    "chat:build": "esbuild infra/web/src/main.tsx --bundle --format=esm --jsx=automatic --minify --define:process.env.NODE_ENV='\"production\"' --outfile=infra/web/public/app.js",
+    "check": "tsc --noEmit && tsc -p infra/sdk/web",
+    "test": "node --test --import tsx infra/ragbot/test/*.test.ts infra/sdk/ts/test/*.test.ts",
     "register:commands": "go run jsmunro.me/platy/cli dev register-commands",
-    "d1:migrate:local": "wrangler d1 execute ragbot --local --file=./schema.sql"
+    "d1:migrate:local": "wrangler d1 execute ragbot --local -c infra/ragbot/wrangler.jsonc --file=./infra/ragbot/schema.sql"
   },
   "devDependencies": {
     "@bufbuild/protoc-gen-es": "^2.12.0",
@@ -29,7 +30,10 @@
   "dependencies": {
     "@bufbuild/protobuf": "^2.12.0",
     "@connectrpc/connect": "^2.1.1",
+    "@connectrpc/connect-web": "^2.1.1",
     "jose": "^6.0.13",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "tweetnacl": "^1.0.3"
   }
 }

@@ -1,16 +1,24 @@
-import { createRpcHandler, type RpcHandler } from "../../sdk/ts/src";
+import { createRpcHandler, traceRpc, tracerFromEnv } from "../../sdk/ts/src";
 import { getJwks } from "./keys";
-import { registerServices, buildDiscovery } from "./services";
+import { buildDiscovery, registerServices } from "./services";
+import { handleTraceIngest, localSpanSink } from "./traces";
 import { SigningKeys } from "./keys";
 import type { Env } from "./types";
 
 export { SigningKeys };
 
-let cached: { env: Env; rpc: RpcHandler } | null = null;
+type TracedRpc = (request: Request, ctx?: ExecutionContext) => Promise<Response | null>;
 
-const rpcHandler = (env: Env): RpcHandler => {
+let cached: { env: Env; rpc: TracedRpc } | null = null;
+
+const rpcHandler = (env: Env): TracedRpc => {
   if (cached?.env !== env) {
-    cached = { env, rpc: createRpcHandler((router) => registerServices(router, env)) };
+    // The gateway exports its own spans straight to the trace store in D1.
+    const tracer = tracerFromEnv(env, "auth-gateway", { exporter: localSpanSink(env) });
+    cached = {
+      env,
+      rpc: traceRpc(tracer, createRpcHandler((router) => registerServices(router, env))),
+    };
   }
   return cached.rpc;
 };
@@ -20,6 +28,41 @@ const jsonResponse = (body: unknown, status = 200) =>
     status,
     headers: { "content-type": "application/json" },
   });
+
+// Web clients (Module 3) run the session and token-exchange flows from the
+// browser, so the gateway must answer CORS preflight and echo allowed origins.
+// Origins are configured per-deployment; an unlisted origin gets no CORS
+// headers and the browser blocks it, while the RPC auth itself is unchanged.
+const allowedOrigins = (env: Env): string[] =>
+  (env.GATEWAY_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+const corsHeaders = (env: Env, request: Request): Record<string, string> => {
+  const origin = request.headers.get("origin");
+  if (!origin || !allowedOrigins(env).includes(origin)) {
+    return {};
+  }
+  return {
+    "access-control-allow-origin": origin,
+    "access-control-allow-methods": "POST, GET, OPTIONS",
+    "access-control-allow-headers": "authorization, dpop, content-type, connect-protocol-version, connect-timeout-ms, traceparent, x-client-instance, x-client-token",
+    "access-control-max-age": "86400",
+    vary: "origin",
+  };
+};
+
+const withCors = (response: Response, cors: Record<string, string>): Response => {
+  if (Object.keys(cors).length === 0) {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  for (const [key, value] of Object.entries(cors)) {
+    headers.set(key, value);
+  }
+  return new Response(response.body, { status: response.status, headers });
+};
 
 const handleDiscovery = async (env: Env): Promise<Response> => {
   const discovered = await buildDiscovery(env);
@@ -62,20 +105,28 @@ const handleDiscovery = async (env: Env): Promise<Response> => {
 };
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    const cors = corsHeaders(env, request);
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: cors });
+    }
 
     if (url.pathname === "/.well-known/jwks.json" && request.method === "GET") {
-      return getJwks(env);
+      return withCors(await getJwks(env), cors);
     }
 
     if (url.pathname === "/api/discovery" && request.method === "GET") {
-      return handleDiscovery(env);
+      return withCors(await handleDiscovery(env), cors);
     }
 
-    const rpcResponse = await rpcHandler(env)(request);
+    if (url.pathname === "/v1/traces" && request.method === "POST") {
+      return handleTraceIngest(env, request);
+    }
+
+    const rpcResponse = await rpcHandler(env)(request, ctx);
     if (rpcResponse) {
-      return rpcResponse;
+      return withCors(rpcResponse, cors);
     }
 
     if (url.pathname === "/" && request.method === "GET") {

@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package aigateway.v1;
+
+// AI Gateway service. Proxies chat completions through a Cloudflare AI Gateway
+// using unified billing (Cloudflare-managed provider credentials) and an
+// authenticated gateway: the worker injects the `cf-aig-authorization` token on
+// every outbound call. Callers reach it as themselves (user STS token), as a
+// chained service identity, or via CLI impersonation (`platy fetch
+// aigateway.ChatService.Complete --as <app>`).
+
+message ChatMessage {
+  // One of "system", "user", "assistant".
+  string role = 1;
+  string content = 2;
+}
+
+message ChatRequest {
+  // Provider-qualified model id, e.g. "openai/gpt-4.1-mini",
+  // "anthropic/claude-4-5-sonnet", or "workers-ai/@cf/meta/llama-3.1-8b-instruct".
+  // Empty falls back to the worker's configured default model.
+  string model = 1;
+  repeated ChatMessage messages = 2;
+  // 0 leaves the provider/worker default in place.
+  int32 max_tokens = 3;
+  // <0 leaves the provider/worker default in place; 0 is a valid temperature.
+  double temperature = 4;
+}
+
+message Usage {
+  int64 prompt_tokens = 1;
+  int64 completion_tokens = 2;
+  int64 total_tokens = 3;
+}
+
+message ChatResponse {
+  string content = 1;
+  // Provider-reported resolved model id.
+  string model = 2;
+  string finish_reason = 3;
+  Usage usage = 4;
+  int64 duration_ms = 5;
+}
+
+message ChatStreamChunk {
+  string delta = 1;
+  bool done = 2;
+  // Populated only on the final chunk (done = true).
+  string content = 3;
+  string model = 4;
+  string finish_reason = 5;
+  Usage usage = 6;
+  int64 duration_ms = 7;
+}
+
+message ListModelsRequest {
+  // Optional case-insensitive substring filter over model ids.
+  string filter = 1;
+  // Maximum models to return; 0 means no limit.
+  int32 limit = 2;
+}
+
+message ModelInfo {
+  // Provider-qualified id, e.g. "anthropic/claude-fable-5".
+  string id = 1;
+  string provider = 2;
+  // Per-token USD costs as reported by the gateway catalog (0 when unknown).
+  double cost_in = 3;
+  double cost_out = 4;
+}
+
+message ListModelsResponse {
+  repeated ModelInfo models = 1;
+  // Total catalog size before filter/limit were applied.
+  int32 total = 2;
+}
+
+// ChatService is the public application surface. Both methods route through the
+// configured AI Gateway with the injected authorization token.
+service ChatService {
+  rpc Complete(ChatRequest) returns (ChatResponse);
+  rpc StreamComplete(ChatRequest) returns (stream ChatStreamChunk);
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+}
