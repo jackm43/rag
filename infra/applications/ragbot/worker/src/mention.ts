@@ -1,8 +1,9 @@
 import { runChatModel, sanitizeAiText, streamChatModel, type ChatMessage } from "./ai";
+import { selfIdentity } from "./connector";
 import { loadConfig, type BotConfig } from "./config";
 import { fetchBotRoleIds, fetchChannelMessages, fetchMessage, postChannelMessage } from "./discord";
 import { rejectDisallowedGuild } from "./guild";
-import { errorMessage, logger } from "../../../../sdk/ts/src";
+import { errorMessage, logger, type Identity } from "../../../../sdk/ts/src";
 import type { AiChannelJob, AiJob, DiscordMessage, Env } from "./types";
 
 const MAX_DISCORD_MESSAGE_LENGTH = 1900;
@@ -284,6 +285,7 @@ export type ChannelChatStreamChunk = {
 
 export async function* streamChannelChat(
   env: Env,
+  identity: Identity,
   input: ChannelChatInput,
 ): AsyncGenerator<ChannelChatStreamChunk> {
   const startedAt = Date.now();
@@ -308,10 +310,16 @@ export async function* streamChannelChat(
   const conversation = await buildConversation(env, config, job);
   const aiStartedAt = Date.now();
   let rawText = "";
-  for await (const delta of streamChatModel(env, config, conversation)) {
-    rawText += delta;
-    if (delta) {
-      yield { delta };
+  let resolvedModel = config.responseModel;
+  for await (const chunk of streamChatModel(env, identity, config, conversation)) {
+    if (chunk.done) {
+      rawText = chunk.content;
+      resolvedModel = chunk.model;
+      break;
+    }
+    rawText += chunk.delta;
+    if (chunk.delta) {
+      yield { delta: chunk.delta };
     }
   }
 
@@ -324,13 +332,17 @@ export async function* streamChannelChat(
     delta: "",
     done: true,
     responseText,
-    model: config.responseModel,
+    model: resolvedModel,
     aiDurationMs,
     totalDurationMs: Date.now() - startedAt,
   };
 }
 
-export const runChannelChat = async (env: Env, input: ChannelChatInput): Promise<ChannelChatResult> => {
+export const runChannelChat = async (
+  env: Env,
+  identity: Identity,
+  input: ChannelChatInput,
+): Promise<ChannelChatResult> => {
   const startedAt = Date.now();
   const prompt = input.prompt.trim();
   if (!prompt) {
@@ -352,15 +364,15 @@ export const runChannelChat = async (env: Env, input: ChannelChatInput): Promise
 
   const conversation = await buildConversation(env, config, job);
   const aiStartedAt = Date.now();
-  const rawText = await runChatModel(env, config, conversation);
+  const result = await runChatModel(env, identity, config, conversation);
   const aiDurationMs = Date.now() - aiStartedAt;
-  const text = sanitizeAiText(rawText);
+  const text = sanitizeAiText(result.content);
   const responseText =
     text.length > 0 ? text.slice(0, MAX_DISCORD_MESSAGE_LENGTH) : "I could not generate a response.";
 
   return {
     responseText,
-    model: config.responseModel,
+    model: result.model,
     aiDurationMs,
     totalDurationMs: Date.now() - startedAt,
   };
@@ -449,7 +461,8 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
     recordAiInteraction(env, job, model, Date.now() - startedAt, status, content, aiDurationMs, errorText);
 
   try {
-    const result = await runChannelChat(env, job);
+    const identity = await selfIdentity(env);
+    const result = await runChannelChat(env, identity, job);
     model = result.model;
     aiDurationMs = result.aiDurationMs;
     content = result.responseText;

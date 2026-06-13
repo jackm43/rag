@@ -11,7 +11,6 @@ export const CONFIG_DEFAULTS = {
   ai_max_tokens: "96",
   ai_temperature: "0.75",
   ai_history_limit: "12",
-  ai_gateway_id: "",
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_DEFAULTS;
@@ -28,7 +27,6 @@ export type BotConfig = {
   maxTokens: number;
   temperature: number;
   historyLimit: number;
-  gatewayId: string | null;
 };
 
 const parsePositiveInt = (value: string, fallback: number) => {
@@ -69,7 +67,6 @@ export const loadConfig = async (env: Env): Promise<BotConfig> => {
     maxTokens: parsePositiveInt(value("ai_max_tokens"), 256),
     temperature: parseTemperature(value("ai_temperature"), 0.7),
     historyLimit: parsePositiveInt(value("ai_history_limit"), 12),
-    gatewayId: value("ai_gateway_id") || null,
   };
 };
 

@@ -36,6 +36,9 @@ applications:
         scopes:
           - deploy/DeployService.ListWorkers
       - audience: aigateway
+        scopes:
+          - aigateway/ChatService.Complete
+          - aigateway/ChatService.StreamComplete
     post_deploy:
       - gateway-start
   aigateway:

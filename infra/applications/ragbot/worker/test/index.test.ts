@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import nacl from "tweetnacl";
 
 import worker, {
@@ -11,6 +10,13 @@ import worker, {
   resolveChannelPrompt,
 } from "../src/index.ts";
 import { sanitizeAiText } from "../src/ai.ts";
+import {
+  authGatewayFetch,
+  createAigatewayEnv,
+  GATEWAY_ISSUER,
+  signToken,
+  type AiCompleteRequest,
+} from "./aigateway-mock.ts";
 
 const encoder = new TextEncoder();
 
@@ -44,11 +50,6 @@ const createEnv = (publicKeyHex: string, overrides: Record<string, unknown> = {}
         throw new Error("DB should not be used in this test");
       },
     },
-    AI: {
-      run: () => {
-        throw new Error("AI should not be used in this test");
-      },
-    },
     AI_JOBS: {
       send: () => {
         throw new Error("AI_JOBS should not be used in this test");
@@ -56,6 +57,12 @@ const createEnv = (publicKeyHex: string, overrides: Record<string, unknown> = {}
     },
     ...overrides,
   }) as never;
+
+const stsEnv = (overrides: Record<string, unknown> = {}) =>
+  createEnv("unused", {
+    AUTH_GATEWAY_URL: GATEWAY_ISSUER,
+    ...overrides,
+  });
 
 // DB mock that supports both prepare().run() (settings load) and
 // prepare().bind().run()/first() (everything else).
@@ -214,11 +221,12 @@ test("/rag interaction is deferred and edits the original response from waitUnti
   const waitUntilPromises: Promise<unknown>[] = [];
 
   try {
+    const aiHarness = createAigatewayEnv({
+      complete: () => ({ content: "Alice booked the scoreboard, and Bob keeps signing receipts." }),
+    });
     const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
       DB: createDbMock({ ragCount: 7, reportCount: 3 }),
-      AI: {
-        run: async () => ({ response: "Alice booked the scoreboard, and Bob keeps signing receipts." }),
-      },
+      ...aiHarness.env,
     });
     const request = createSignedRequest(
       {
@@ -283,6 +291,9 @@ test("/rag interaction fetches target username when Discord does not include res
   };
 
   try {
+    const aiHarness = createAigatewayEnv({
+      complete: () => ({ content: "Alice rang the bell, and someone added another mark." }),
+    });
     const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
       DISCORD_BOT_TOKEN: "bot-token",
       DB: createDbMock({
@@ -290,9 +301,7 @@ test("/rag interaction fetches target username when Discord does not include res
           batchStatements.push(...statements);
         },
       }),
-      AI: {
-        run: async () => ({ response: "Alice rang the bell, and someone added another mark." }),
-      },
+      ...aiHarness.env,
     });
     const request = createSignedRequest(
       {
@@ -338,22 +347,21 @@ test("/rag retries the roast generation when the model repeats a recent line", a
   const duplicateLine = "Bob did the exact same thing again today.";
   const freshLine = "Bob set a brand new personal record for chaos.";
   const aiResponses = [duplicateLine, freshLine];
-  let aiCalls = 0;
   const waitUntilPromises: Promise<unknown>[] = [];
 
   try {
+    const aiHarness = createAigatewayEnv({
+      complete: (_request, index) => ({
+        content: aiResponses[index] ?? freshLine,
+      }),
+    });
     const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
       DB: createDbMock({
         ragCount: 4,
         reportCount: 2,
         roasts: [{ roast_text: duplicateLine }],
       }),
-      AI: {
-        run: async () => {
-          aiCalls += 1;
-          return { response: aiResponses.shift() ?? freshLine };
-        },
-      },
+      ...aiHarness.env,
     });
     const request = createSignedRequest(
       {
@@ -384,7 +392,7 @@ test("/rag retries the roast generation when the model repeats a recent line", a
 
     // The first generation duplicated a recent roast, so it must retry rather
     // than fall back to a canned line.
-    assert.equal(aiCalls, 2);
+    assert.equal(aiHarness.completeCalls.length, 2);
     assert.equal(fetchCalls.length, 1);
     const body = JSON.parse(String(fetchCalls[0].init?.body));
     assert.equal(body.content, `<@2> has just ragged. Total: 4\n${freshLine}`);
@@ -404,22 +412,19 @@ test("/rag uses the model's line over a canned fallback even when it repeats", a
 
   // Every attempt returns a line that already exists in recent roasts.
   const repeatedLine = "Bob keeps speedrunning bad decisions while Alice keeps the receipts.";
-  let aiCalls = 0;
   const waitUntilPromises: Promise<unknown>[] = [];
 
   try {
+    const aiHarness = createAigatewayEnv({
+      complete: () => ({ content: repeatedLine }),
+    });
     const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
       DB: createDbMock({
         ragCount: 9,
         reportCount: 5,
         roasts: [{ roast_text: repeatedLine }],
       }),
-      AI: {
-        run: async () => {
-          aiCalls += 1;
-          return { response: repeatedLine };
-        },
-      },
+      ...aiHarness.env,
     });
     const request = createSignedRequest(
       {
@@ -449,7 +454,7 @@ test("/rag uses the model's line over a canned fallback even when it repeats", a
 
     // It exhausts its attempts trying for something fresh, then still returns
     // the model's line rather than a canned fallback.
-    assert.equal(aiCalls, 3);
+    assert.equal(aiHarness.completeCalls.length, 3);
     const body = JSON.parse(String(fetchCalls[0].init?.body));
     assert.equal(body.content, `<@2> has just ragged. Total: 9\n${repeatedLine}`);
   } finally {
@@ -1114,18 +1119,19 @@ test("queue handler builds a conversation from channel history and posts the rep
     return new Response("{}", { status: 200 });
   };
 
-  const aiInputs: unknown[] = [];
+  const aiInputs: AiCompleteRequest[] = [];
 
   try {
+    const aiHarness = createAigatewayEnv({
+      complete: (request) => {
+        aiInputs.push(request);
+        return { content: "Short answer." };
+      },
+    });
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       DB: createDbMock({}),
-      AI: {
-        run: async (_model: unknown, input: unknown) => {
-          aiInputs.push(input);
-          return { response: "Short answer." };
-        },
-      },
+      ...aiHarness.env,
     });
     const ackedMessages: unknown[] = [];
     const message = {
@@ -1156,7 +1162,7 @@ test("queue handler builds a conversation from channel history and posts the rep
     );
 
     assert.equal(aiInputs.length, 1);
-    const input = aiInputs[0] as { messages: Array<{ role: string; content: string }> };
+    const input = aiInputs[0];
     assert.equal(input.messages[0].role, "system");
     assert.deepEqual(input.messages.slice(1), [
       { role: "user", content: "[bob] hello" },
@@ -1202,18 +1208,19 @@ test("queue handler omits /rag announcement lines from channel history", async (
     return new Response("{}", { status: 200 });
   };
 
-  const aiInputs: unknown[] = [];
+  const aiInputs: AiCompleteRequest[] = [];
 
   try {
+    const aiHarness = createAigatewayEnv({
+      complete: (request) => {
+        aiInputs.push(request);
+        return { content: "Hey." };
+      },
+    });
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       DB: createDbMock({}),
-      AI: {
-        run: async (_model: unknown, input: unknown) => {
-          aiInputs.push(input);
-          return { response: "Hey." };
-        },
-      },
+      ...aiHarness.env,
     });
     const message = {
       body: {
@@ -1234,7 +1241,7 @@ test("queue handler omits /rag announcement lines from channel history", async (
     await worker.queue({ messages: [message] } as never, env);
 
     assert.equal(aiInputs.length, 1);
-    const input = aiInputs[0] as { messages: Array<{ role: string; content: string }> };
+    const input = aiInputs[0];
     assert.deepEqual(input.messages.slice(1), [
       { role: "user", content: "[alice] gm everyone" },
       {
@@ -1257,12 +1264,13 @@ test("queue handler posts model output without stripping mentions", async () => 
   };
 
   try {
+    const aiHarness = createAigatewayEnv({
+      complete: () => ({ content: "Hello <@123456789012345678> there 123456789012345678" }),
+    });
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       DB: createDbMock({}),
-      AI: {
-        run: async () => ({ response: "Hello <@123456789012345678> there 123456789012345678" }),
-      },
+      ...aiHarness.env,
     });
     const message = {
       body: {
@@ -1299,11 +1307,6 @@ test("queue handler skips jobs when the source message was already answered", as
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       DB: createDbMock({ answeredMessageIds: new Set(["trigger-id"]) }),
-      AI: {
-        run: () => {
-          throw new Error("AI should not be called");
-        },
-      },
     });
     const message = {
       body: {
@@ -1347,24 +1350,17 @@ test("queue handler uses a configured partner model and parses the OpenAI respon
     fetchCalls.push({ url: String(url), init });
     return new Response("{}", { status: 200 });
   };
-  const aiCalls: Array<{ model: unknown; input: Record<string, unknown> }> = [];
 
   try {
+    const aiHarness = createAigatewayEnv({
+      complete: (request) => ({ content: "grok response", model: request.model }),
+    });
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       DB: createDbMock({
-        settings: [
-          { key: "ai_response_model", value: "xai/grok-4.3" },
-          { key: "ai_gateway_id", value: "ragbot-gateway" },
-        ],
+        settings: [{ key: "ai_response_model", value: "xai/grok-4.3" }],
       }),
-      AI: {
-        run: async (model: unknown, input: unknown, options: unknown) => {
-          aiCalls.push({ model, input: input as Record<string, unknown> });
-          assert.deepEqual(options, { gateway: { id: "ragbot-gateway" } });
-          return { choices: [{ message: { content: "grok response" } }] };
-        },
-      },
+      ...aiHarness.env,
     });
     const message = {
       body: {
@@ -1380,10 +1376,9 @@ test("queue handler uses a configured partner model and parses the OpenAI respon
 
     await worker.queue({ messages: [message] } as never, env);
 
-    assert.equal(aiCalls.length, 1);
-    assert.equal(aiCalls[0].model, "xai/grok-4.3");
-    assert.equal(aiCalls[0].input.max_completion_tokens, 96);
-    assert.equal(aiCalls[0].input.max_tokens, undefined);
+    assert.equal(aiHarness.completeCalls.length, 1);
+    assert.equal(aiHarness.completeCalls[0].model, "xai/grok-4.3");
+    assert.equal(aiHarness.completeCalls[0].maxTokens, 96);
 
     assert.deepEqual(JSON.parse(String(fetchCalls[0].init?.body)), {
       content: "grok response",
@@ -1395,44 +1390,6 @@ test("queue handler uses a configured partner model and parses the OpenAI respon
 
 // Admin RPC tests use a fake auth gateway issuer: a real ES256 keypair whose
 // public JWKS is served from the well-known endpoint via a mocked fetch.
-const GATEWAY_ISSUER = "https://auth-gateway.example.com";
-
-const stsIssuer = await (async () => {
-  const { publicKey, privateKey } = await generateKeyPair("ES256");
-  const jwk = await exportJWK(publicKey);
-  jwk.kid = "sts-test-kid";
-  jwk.alg = "ES256";
-  jwk.use = "sig";
-
-  const signToken = (options: { audience?: string; scope?: string } = {}) =>
-    new SignJWT({
-      email: "jack@jsmunro.me",
-      scope: options.scope ?? "ragbot/*",
-      kind: "user",
-    })
-      .setProtectedHeader({ alg: "ES256", kid: "sts-test-kid" })
-      .setIssuer(GATEWAY_ISSUER)
-      .setAudience(options.audience ?? "ragbot")
-      .setSubject("access-user-sub")
-      .setIssuedAt()
-      .setExpirationTime("5m")
-      .sign(privateKey);
-
-  const fetchMock = async (url: unknown): Promise<Response> => {
-    if (String(url) === `${GATEWAY_ISSUER}/.well-known/jwks.json`) {
-      return Response.json({ keys: [jwk] });
-    }
-    return new Response("{}", { status: 200 });
-  };
-
-  return { signToken, fetchMock };
-})();
-
-const createStsEnv = (overrides: Record<string, unknown> = {}) =>
-  createEnv("unused", {
-    AUTH_GATEWAY_URL: GATEWAY_ISSUER,
-    ...overrides,
-  });
 
 const rpcRequest = (path: string, body: unknown, token?: string) =>
   new Request(`https://example.com${path}`, {
@@ -1511,7 +1468,7 @@ const streamingRpcRequest = (path: string, body: unknown, token?: string) =>
 
 test("admin RPCs reject requests when the auth gateway is not configured", async () => {
   const response = await worker.fetch(
-    rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}, await stsIssuer.signToken()),
+    rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}, await signToken()),
     createEnv("unused", { DB: createDbMock({}) }),
     {} as never,
   );
@@ -1520,10 +1477,10 @@ test("admin RPCs reject requests when the auth gateway is not configured", async
 
 test("admin RPCs reject missing, invalid, and wrong-audience tokens", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = stsIssuer.fetchMock as never;
+  globalThis.fetch = authGatewayFetch as never;
 
   try {
-    const env = createStsEnv({ DB: createDbMock({}) });
+    const env = stsEnv({ DB: createDbMock({}) });
 
     const missingToken = await worker.fetch(
       rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}),
@@ -1543,7 +1500,7 @@ test("admin RPCs reject missing, invalid, and wrong-audience tokens", async () =
       rpcRequest(
         "/ragbot.v1.ConfigService/ListConfig",
         {},
-        await stsIssuer.signToken({ audience: "another-app" }),
+        await signToken({ audience: "another-app" }),
       ),
       env,
       {} as never,
@@ -1556,14 +1513,14 @@ test("admin RPCs reject missing, invalid, and wrong-audience tokens", async () =
 
 test("config list RPC returns entries with a valid gateway token", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = stsIssuer.fetchMock as never;
+  globalThis.fetch = authGatewayFetch as never;
 
   try {
-    const env = createStsEnv({
+    const env = stsEnv({
       DB: createDbMock({ settings: [{ key: "ai_response_model", value: "xai/grok-4.3" }] }),
     });
     const response = await worker.fetch(
-      rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}, await stsIssuer.signToken()),
+      rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}, await signToken()),
       env,
       {} as never,
     );
@@ -1583,24 +1540,21 @@ test("config list RPC returns entries with a valid gateway token", async () => {
 
 test("chat RPC returns a model response for a mention-style prompt", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = stsIssuer.fetchMock as never;
-  const aiCalls: Array<{ model: unknown; input: Record<string, unknown> }> = [];
+  globalThis.fetch = authGatewayFetch as never;
 
   try {
-    const env = createStsEnv({
+    const aiHarness = createAigatewayEnv({
+      complete: (request) => ({ content: "Short answer.", model: request.model }),
+    });
+    const env = stsEnv({
       DB: createDbMock({}),
-      AI: {
-        run: async (model: unknown, input: unknown) => {
-          aiCalls.push({ model, input: input as Record<string, unknown> });
-          return { response: "Short answer." };
-        },
-      },
+      ...aiHarness.env,
     });
     const response = await worker.fetch(
       rpcRequest(
         "/ragbot.v1.ChatService/Chat",
         { prompt: "anyone know how queues work" },
-        await stsIssuer.signToken(),
+        await signToken(),
       ),
       env,
       {} as never,
@@ -1614,9 +1568,8 @@ test("chat RPC returns a model response for a mention-style prompt", async () =>
       totalDurationMs: string;
     };
     assert.equal(body.responseText, "Short answer.");
-    assert.equal(aiCalls.length, 1);
-    const messages = aiCalls[0].input.messages as Array<{ role: string; content: string }>;
-    assert.equal(messages.at(-1)?.content, "[jack] anyone know how queues work");
+    assert.equal(aiHarness.completeCalls.length, 1);
+    assert.equal(aiHarness.completeCalls[0].messages.at(-1)?.content, "[jack] anyone know how queues work");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1624,29 +1577,24 @@ test("chat RPC returns a model response for a mention-style prompt", async () =>
 
 test("stream chat RPC streams model deltas and a final chunk", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = stsIssuer.fetchMock as never;
+  globalThis.fetch = authGatewayFetch as never;
 
   try {
-    const env = createStsEnv({
+    const aiHarness = createAigatewayEnv({
+      stream: () => ({
+        deltas: ["Hel", "lo"],
+        final: { content: "Hello", model: "workers-ai/@cf/meta/llama-3.1-8b-instruct" },
+      }),
+    });
+    const env = stsEnv({
       DB: createDbMock({}),
-      AI: {
-        run: async () =>
-          new ReadableStream({
-            start(controller) {
-              const encoder = new TextEncoder();
-              controller.enqueue(encoder.encode('data: {"response":"Hel"}\n\n'));
-              controller.enqueue(encoder.encode('data: {"response":"lo"}\n\n'));
-              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-              controller.close();
-            },
-          }),
-      },
+      ...aiHarness.env,
     });
     const response = await worker.fetch(
       streamingRpcRequest(
         "/ragbot.v1.ChatService/StreamChat",
         { prompt: "stream this please" },
-        await stsIssuer.signToken(),
+        await signToken(),
       ),
       env,
       {} as never,
@@ -1667,11 +1615,11 @@ test("stream chat RPC streams model deltas and a final chunk", async () => {
 
 test("gateway start RPC requires STS auth and forwards to the durable object", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = stsIssuer.fetchMock as never;
+  globalThis.fetch = authGatewayFetch as never;
   let doFetchCalls = 0;
 
   try {
-    const env = createStsEnv({
+    const env = stsEnv({
       DB: createDbMock({}),
       DISCORD_GATEWAY: {
         idFromName: () => "id",
@@ -1693,7 +1641,7 @@ test("gateway start RPC requires STS auth and forwards to the durable object", a
     assert.equal(doFetchCalls, 0);
 
     const authorized = await worker.fetch(
-      rpcRequest("/ragbot.v1.GatewayControlService/StartGateway", {}, await stsIssuer.signToken()),
+      rpcRequest("/ragbot.v1.GatewayControlService/StartGateway", {}, await signToken()),
       env,
       {} as never,
     );
@@ -1706,11 +1654,11 @@ test("gateway start RPC requires STS auth and forwards to the durable object", a
 
 test("admin RPCs enforce per-method scopes from the token", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = stsIssuer.fetchMock as never;
+  globalThis.fetch = authGatewayFetch as never;
 
   try {
-    const env = createStsEnv({ DB: createDbMock({}) });
-    const narrowToken = await stsIssuer.signToken({ scope: "ragbot/ConfigService.ListConfig" });
+    const env = stsEnv({ DB: createDbMock({}) });
+    const narrowToken = await signToken({ scope: "ragbot/ConfigService.ListConfig" });
 
     const allowed = await worker.fetch(
       rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}, narrowToken),
@@ -1736,17 +1684,17 @@ test("admin RPCs enforce per-method scopes from the token", async () => {
 
 test("config update RPC writes the setting and reports the new entry", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = stsIssuer.fetchMock as never;
+  globalThis.fetch = authGatewayFetch as never;
 
   try {
-    const env = createStsEnv({
+    const env = stsEnv({
       DB: createDbMock({ settings: [{ key: "ai_temperature", value: "0.5" }] }),
     });
     const response = await worker.fetch(
       rpcRequest(
         "/ragbot.v1.ConfigService/UpdateConfig",
         { key: "ai_temperature", value: "0.5" },
-        await stsIssuer.signToken(),
+        await signToken(),
       ),
       env,
       {} as never,
@@ -1763,7 +1711,7 @@ test("config update RPC writes the setting and reports the new entry", async () 
       rpcRequest(
         "/ragbot.v1.ConfigService/UpdateConfig",
         { key: "not_a_key", value: "x" },
-        await stsIssuer.signToken(),
+        await signToken(),
       ),
       env,
       {} as never,

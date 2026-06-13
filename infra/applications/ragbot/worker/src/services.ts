@@ -198,7 +198,7 @@ export const registerRagbotServices = (router: ConnectRouter, env: Env) => {
           };
 
           try {
-            const result = await runChannelChat(env, chatInput);
+            const result = await runChannelChat(env, identity, chatInput);
 
             if (request.postToChannel) {
               if (!request.channelId) {
@@ -271,7 +271,7 @@ export const registerRagbotServices = (router: ConnectRouter, env: Env) => {
               totalDurationMs: number;
             } | null = null;
 
-            for await (const chunk of streamChannelChat(env, chatInput)) {
+            for await (const chunk of streamChannelChat(env, identity, chatInput)) {
               if (chunk.done) {
                 finalChunk = {
                   responseText: chunk.responseText ?? "",

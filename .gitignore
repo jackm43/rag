@@ -23,3 +23,8 @@ infra/applications/console/worker/public/app.js
 infra/applications/provider_config.json
 infra/applications/client_metadata.json
 infra/applications/*/metadata.json
+
+# Terraform local state and provider cache
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*

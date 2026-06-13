@@ -7,10 +7,14 @@
   ],
   "workers_dev": false,
   "routes": [
-    { "pattern": "ragbot.jsmunro.me", "custom_domain": true }
+    {
+      "pattern": "ragbot.jsmunro.me",
+      "custom_domain": true
+    }
   ],
   "vars": {
     "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.me",
+    "AIGATEWAY_ENDPOINT": "https://aigateway.jsmunro.me",
     "ALLOWED_GUILD_IDS": "457689460096630794",
     "OTEL_SERVICE_NAME": "ragbot"
   },
@@ -18,6 +22,10 @@
     {
       "binding": "AUTH_GATEWAY",
       "service": "auth-gateway"
+    },
+    {
+      "binding": "AIGATEWAY",
+      "service": "aigateway"
     }
   ],
   "d1_databases": [
@@ -28,9 +36,6 @@
       "preview_database_id": "97005495-76d4-49af-ab5f-1c130e54ee2a"
     }
   ],
-  "ai": {
-    "binding": "AI"
-  },
   "observability": {
     "logs": {
       "enabled": true,

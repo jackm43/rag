@@ -1,4 +1,5 @@
 import { runChatModel, withTimeout } from "../ai";
+import { selfIdentity } from "../connector";
 import { loadConfig, type BotConfig } from "../config";
 import {
   editOriginalInteractionResponse,
@@ -164,13 +165,15 @@ const generateRoast = async (
   // collides with a recent roast we still return the LLM's words rather than a
   // canned fallback. The fallback pool is a last resort for total model failure.
   let lastModelLine: string | null = null;
+  const identity = await selfIdentity(env);
 
   for (let attempt = 0; attempt < ROAST_ATTEMPTS; attempt += 1) {
     let sanitized: string | null = null;
     try {
-      const text = await withTimeout(
+      const result = await withTimeout(
         runChatModel(
           env,
+          identity,
           config,
           [
             {
@@ -187,7 +190,7 @@ const generateRoast = async (
         ROAST_TIMEOUT_MS,
       );
 
-      const trimmed = text.trim();
+      const trimmed = result.content.trim();
       sanitized = trimmed ? sanitizeRoastLine(trimmed.slice(0, 180), targetDisplayName) : null;
     } catch (error) {
       logger.debug("roast_attempt_failed", { attempt, error: errorMessage(error) });

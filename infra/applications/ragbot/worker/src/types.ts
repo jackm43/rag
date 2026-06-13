@@ -70,6 +70,8 @@ export interface Env {
   DISCORD_BOT_TOKEN: string;
   AUTH_GATEWAY_URL?: string;
   AUTH_GATEWAY?: Fetcher;
+  AIGATEWAY_ENDPOINT?: string;
+  AIGATEWAY?: Fetcher;
   ALLOWED_GUILD_IDS?: string;
   // Service credential pushed by `platy deploy`; used to authenticate trace
   // export to the gateway.
@@ -81,7 +83,6 @@ export interface Env {
   OTEL_EXPORTER_OTLP_HEADERS?: string;
   DISCORD_GATEWAY: DurableObjectNamespace;
   DB: D1Database;
-  AI: Ai;
   AI_JOBS: Queue<AiJob>;
 }
 

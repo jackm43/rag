@@ -1,27 +1,11 @@
 import type { BotConfig } from "./config";
+import { chatServiceClient } from "./connector";
 import type { Env } from "./types";
+import type { Identity } from "../../../../sdk/ts/src";
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
-};
-
-type ChatResult = {
-  response?: string;
-  choices?: Array<{ message?: { content?: string | null } }>;
-};
-
-const isWorkersAiModel = (model: string) => model.startsWith("@cf/");
-
-const extractText = (result: unknown): string => {
-  if (typeof result === "string") {
-    return result;
-  }
-  const chat = result as ChatResult;
-  if (typeof chat?.response === "string") {
-    return chat.response;
-  }
-  return chat?.choices?.[0]?.message?.content ?? "";
 };
 
 const looksLikeSpeakerLine = (line: string) => {
@@ -60,92 +44,71 @@ export type ChatOptions = {
   temperature?: number;
 };
 
-const chatInput = (
+export type ChatModelResult = {
+  content: string;
+  model: string;
+  durationMs: number;
+};
+
+export type ChatStreamChunk =
+  | { done: false; delta: string }
+  | { done: true; content: string; model: string; durationMs: number };
+
+const toGatewayModel = (model: string): string =>
+  model.startsWith("@cf/") ? `workers-ai/${model}` : model;
+
+const completionRequest = (
   config: BotConfig,
   messages: ChatMessage[],
   options: ChatOptions,
-  stream: boolean,
-) => {
-  const model = options.model ?? config.responseModel;
-  const maxTokens = options.maxTokens ?? config.maxTokens;
-  const temperature = options.temperature ?? config.temperature;
-  if (isWorkersAiModel(model)) {
-    return { model, input: { messages, max_tokens: maxTokens, temperature, stream } };
-  }
-  return { model, input: { messages, max_completion_tokens: maxTokens, temperature } };
-};
-
-const aiRunOptions = (config: BotConfig) =>
-  config.gatewayId ? { gateway: { id: config.gatewayId } } : undefined;
-
-export async function* parseWorkersAiStream(stream: ReadableStream): AsyncGenerator<string> {
-  const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
-  let buffer = "";
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (value) {
-        buffer += value;
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith("data:")) {
-            continue;
-          }
-          const payload = trimmed.slice(5).trim();
-          if (payload === "[DONE]") {
-            return;
-          }
-          try {
-            const parsed = JSON.parse(payload) as { response?: string };
-            if (typeof parsed.response === "string" && parsed.response.length > 0) {
-              yield parsed.response;
-            }
-          } catch {
-            continue;
-          }
-        }
-      }
-      if (done) {
-        break;
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-}
+) => ({
+  model: toGatewayModel(options.model ?? config.responseModel),
+  messages,
+  maxTokens: options.maxTokens ?? config.maxTokens,
+  temperature: options.temperature ?? config.temperature,
+});
 
 export const runChatModel = async (
   env: Env,
+  identity: Identity,
   config: BotConfig,
   messages: ChatMessage[],
   options: ChatOptions = {},
-): Promise<string> => {
-  const { model, input } = chatInput(config, messages, options, false);
-  const result = await env.AI.run(model as never, input as never, aiRunOptions(config) as never);
-  return extractText(result);
+): Promise<ChatModelResult> => {
+  const response = await chatServiceClient(env, identity).complete(
+    completionRequest(config, messages, options),
+  );
+  return {
+    content: response.content,
+    model: response.model,
+    durationMs: Number(response.durationMs),
+  };
 };
 
 export async function* streamChatModel(
   env: Env,
+  identity: Identity,
   config: BotConfig,
   messages: ChatMessage[],
   options: ChatOptions = {},
-): AsyncGenerator<string> {
-  const { model, input } = chatInput(config, messages, options, true);
-  if (!isWorkersAiModel(model)) {
-    yield await runChatModel(env, config, messages, options);
-    return;
+): AsyncGenerator<ChatStreamChunk> {
+  const stream = chatServiceClient(env, identity).streamComplete(
+    completionRequest(config, messages, options),
+  );
+  for await (const chunk of stream) {
+    if (chunk.done) {
+      yield {
+        done: true,
+        content: chunk.content,
+        model: chunk.model,
+        durationMs: Number(chunk.durationMs),
+      };
+      return;
+    }
+    if (chunk.delta) {
+      yield { done: false, delta: chunk.delta };
+    }
   }
-
-  const result = await env.AI.run(model as never, input as never, aiRunOptions(config) as never);
-  const stream = result as unknown;
-  if (stream && typeof stream === "object" && "getReader" in stream) {
-    yield* parseWorkersAiStream(stream as ReadableStream);
-    return;
-  }
-  yield extractText(result);
 }
 
 export const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
