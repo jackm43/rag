@@ -4,7 +4,7 @@ import { loadConfig, type BotConfig } from "./config";
 import { fetchBotRoleIds, fetchChannelMessages, fetchMessage, postChannelMessage } from "./discord";
 import { rejectDisallowedGuild } from "./guild";
 import { errorMessage, logger, type Identity } from "../../../../sdk/ts/src";
-import type { AiChannelJob, AiJob, DiscordMessage, Env } from "./types";
+import type { AiChannelJob, AiJob, ChannelPromptSource, DiscordMessage, Env } from "./types";
 
 const MAX_DISCORD_MESSAGE_LENGTH = 1900;
 const MAX_HISTORY_ENTRY_LENGTH = 600;
@@ -61,18 +61,24 @@ export const extractReplyToBotPrompt = (
   return prompt.length > 0 ? prompt : null;
 };
 
+export type ChannelPrompt = {
+  prompt: string;
+  source: ChannelPromptSource;
+};
+
 export const resolveChannelPrompt = (
   message: ChannelPromptMessage,
   botUserId: string,
   referencedAuthorId?: string,
   applicationId?: string,
   botRoleIds?: readonly string[],
-) => {
+): ChannelPrompt | null => {
   if (messageMentionsBot(message, botUserId, applicationId, botRoleIds)) {
     const prompt = stripMentionTokens(message.content ?? "");
-    return prompt.length > 0 ? prompt : null;
+    return prompt.length > 0 ? { prompt, source: "mention" } : null;
   }
-  return extractReplyToBotPrompt(message.content ?? "", referencedAuthorId, botUserId);
+  const prompt = extractReplyToBotPrompt(message.content ?? "", referencedAuthorId, botUserId);
+  return prompt ? { prompt, source: "reply" } : null;
 };
 
 const claimChannelMessageJob = async (env: Env, messageId: string, channelId: string) => {
@@ -184,7 +190,8 @@ export const handleGatewayMessageCreate = async (
     botUserId,
     requesterUserId: message.author?.id,
     requesterUsername: message.author?.username,
-    prompt,
+    prompt: prompt.prompt,
+    promptSource: prompt.source,
     replyMessageId,
     replyContext,
   });
@@ -255,6 +262,9 @@ const buildConversation = async (env: Env, config: BotConfig, job: AiChannelJob)
   return messages;
 };
 
+const channelChatModel = (config: BotConfig, promptSource?: ChannelPromptSource) =>
+  promptSource === "mention" ? config.mentionModel : config.responseModel;
+
 export type ChannelChatInput = {
   kind?: "channel" | "rpc";
   channelId?: string;
@@ -263,6 +273,7 @@ export type ChannelChatInput = {
   requesterUserId?: string;
   requesterUsername?: string;
   prompt: string;
+  promptSource?: ChannelPromptSource;
   replyMessageId?: string;
   replyContext?: string;
 };
@@ -303,15 +314,17 @@ export async function* streamChannelChat(
     requesterUserId: input.requesterUserId,
     requesterUsername: input.requesterUsername,
     prompt,
+    promptSource: input.promptSource,
     replyMessageId: input.replyMessageId,
     replyContext: input.replyContext,
   };
 
   const conversation = await buildConversation(env, config, job);
+  const chatModel = channelChatModel(config, input.promptSource);
   const aiStartedAt = Date.now();
   let rawText = "";
-  let resolvedModel = config.responseModel;
-  for await (const chunk of streamChatModel(env, identity, config, conversation)) {
+  let resolvedModel = chatModel;
+  for await (const chunk of streamChatModel(env, identity, config, conversation, { model: chatModel })) {
     if (chunk.done) {
       rawText = chunk.content;
       resolvedModel = chunk.model;
@@ -358,13 +371,15 @@ export const runChannelChat = async (
     requesterUserId: input.requesterUserId,
     requesterUsername: input.requesterUsername,
     prompt,
+    promptSource: input.promptSource,
     replyMessageId: input.replyMessageId,
     replyContext: input.replyContext,
   };
 
   const conversation = await buildConversation(env, config, job);
+  const chatModel = channelChatModel(config, input.promptSource);
   const aiStartedAt = Date.now();
-  const result = await runChatModel(env, identity, config, conversation);
+  const result = await runChatModel(env, identity, config, conversation, { model: chatModel });
   const aiDurationMs = Date.now() - aiStartedAt;
   const text = sanitizeAiText(result.content);
   const responseText =

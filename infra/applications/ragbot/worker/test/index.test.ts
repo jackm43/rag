@@ -474,19 +474,19 @@ test("bot mention parser accepts prompts after the bot mention", () => {
 });
 
 test("bot mention parser accepts leading mentions from Discord metadata alone", () => {
-  assert.equal(
+  assert.deepEqual(
     resolveChannelPrompt(
       { content: "hey", mentions: [{ id: "bot-user-id" }] },
       "bot-user-id",
     ),
-    "hey",
+    { prompt: "hey", source: "mention" },
   );
-  assert.equal(
+  assert.deepEqual(
     resolveChannelPrompt(
       { content: "<@other-id> hey", mentions: [{ id: "bot-user-id" }] },
       "bot-user-id",
     ),
-    "hey",
+    { prompt: "hey", source: "mention" },
   );
 });
 
@@ -498,13 +498,13 @@ test("reply-to-bot parser accepts prompts without a leading mention", () => {
 });
 
 test("channel prompt resolver prefers a leading mention over a reply", () => {
-  assert.equal(
+  assert.deepEqual(
     resolveChannelPrompt({ content: "<@bot-user-id> hi" }, "bot-user-id", "bot-user-id"),
-    "hi",
+    { prompt: "hi", source: "mention" },
   );
-  assert.equal(
+  assert.deepEqual(
     resolveChannelPrompt({ content: "just a reply" }, "bot-user-id", "bot-user-id"),
-    "just a reply",
+    { prompt: "just a reply", source: "reply" },
   );
   assert.equal(
     resolveChannelPrompt({ content: "just a reply" }, "bot-user-id", "other-user-id"),
@@ -513,25 +513,25 @@ test("channel prompt resolver prefers a leading mention over a reply", () => {
 });
 
 test("channel prompt resolver accepts application id mentions", () => {
-  assert.equal(
+  assert.deepEqual(
     resolveChannelPrompt({ content: "<@app-id> hey" }, "bot-user-id", undefined, "app-id"),
-    "hey",
+    { prompt: "hey", source: "mention" },
   );
 });
 
 test("channel prompt resolver accepts numeric mention ids from Discord metadata", () => {
   const id = "1234567890123456";
-  assert.equal(
+  assert.deepEqual(
     resolveChannelPrompt(
       { content: "hey", mentions: [{ id: Number(id) as unknown as string }] },
       id,
     ),
-    "hey",
+    { prompt: "hey", source: "mention" },
   );
 });
 
 test("channel prompt resolver accepts mentions of a role the bot holds", () => {
-  assert.equal(
+  assert.deepEqual(
     resolveChannelPrompt(
       { content: "<@&bot-role-id> how u doin", mention_roles: ["bot-role-id"] },
       "bot-user-id",
@@ -539,7 +539,7 @@ test("channel prompt resolver accepts mentions of a role the bot holds", () => {
       undefined,
       ["bot-role-id"],
     ),
-    "how u doin",
+    { prompt: "how u doin", source: "mention" },
   );
   assert.equal(
     resolveChannelPrompt(
@@ -551,11 +551,11 @@ test("channel prompt resolver accepts mentions of a role the bot holds", () => {
     ),
     null,
   );
-  assert.equal(
+  assert.deepEqual(
     resolveChannelPrompt({ content: "<@&bot-role-id> how u doin" }, "bot-user-id", undefined, undefined, [
       "bot-role-id",
     ]),
-    "how u doin",
+    { prompt: "how u doin", source: "mention" },
   );
 });
 
@@ -591,6 +591,7 @@ test("gateway message create enqueues jobs for a leading mention", async () => {
       requesterUserId: "1",
       requesterUsername: "alice",
       prompt: "hey",
+      promptSource: "mention",
       replyMessageId: undefined,
       replyContext: undefined,
     },
@@ -629,6 +630,7 @@ test("gateway message create enqueues jobs when the bot is mentioned mid-message
       requesterUserId: "1",
       requesterUsername: "alice",
       prompt: "hey what's up",
+      promptSource: "mention",
       replyMessageId: undefined,
       replyContext: undefined,
     },
@@ -680,6 +682,7 @@ test("gateway message create enqueues jobs when the bot's role is mentioned", as
         requesterUserId: "1",
         requesterUsername: "alice",
         prompt: "how u doin",
+        promptSource: "mention",
         replyMessageId: undefined,
         replyContext: undefined,
       },
@@ -750,6 +753,7 @@ test("gateway message create enqueues reply-to-bot jobs without a mention", asyn
       requesterUserId: "1",
       requesterUsername: "._jak",
       prompt: "keep the banter going",
+      promptSource: "reply",
       replyMessageId: "bot-message-id",
       replyContext: "Replied-to message from ragbot:\nprevious bot reply",
     },
@@ -835,6 +839,7 @@ test("gateway message create enqueues a raw channel AI job", async () => {
       requesterUserId: "1",
       requesterUsername: "alice",
       prompt: "Explain queues",
+      promptSource: "mention",
       replyMessageId: undefined,
       replyContext: undefined,
     },
@@ -878,6 +883,7 @@ test("gateway message create includes replied-to message content in the job", as
       requesterUserId: "1",
       requesterUsername: "alice",
       prompt: "Summarize this",
+      promptSource: "mention",
       replyMessageId: "referenced-message-id",
       replyContext: "Replied-to message from bob:\nWorkers queues deliver AI jobs asynchronously.",
     },
@@ -951,6 +957,7 @@ test("gateway message create fetches referenced messages when Discord omits inli
         requesterUserId: "1",
         requesterUsername: "alice",
         prompt: "what does this say",
+        promptSource: "mention",
         replyMessageId: "referenced-message-id",
         replyContext:
           "Replied-to message from bob:\nThis label says approved for launch.\nAttachment: label.png (image/png) https://cdn.discordapp.com/attachments/label.png",
@@ -1341,6 +1348,62 @@ test("sanitizeAiText strips leading fake speaker-colon lines from model output",
     sanitizeAiText(raw),
     "Hey, your grammar is more broken than your audio quality.",
   );
+});
+
+test("queue handler uses mention model for @ragbot prompts and response model for replies", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("{}", { status: 200 });
+
+  try {
+    const aiHarness = createAigatewayEnv({
+      complete: (request) => ({ content: "ok", model: request.model }),
+    });
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      DB: createDbMock({
+        settings: [
+          { key: "ai_response_model", value: "@cf/meta/llama-3.1-8b-instruct" },
+          { key: "ai_mention_model", value: "xai/grok-4.3" },
+        ],
+      }),
+      ...aiHarness.env,
+    });
+
+    await worker.queue({
+      messages: [
+        {
+          body: {
+            kind: "channel",
+            channelId: "channel-id",
+            prompt: "Explain queues",
+            promptSource: "mention",
+          },
+          ack: () => undefined,
+          retry: () => {
+            throw new Error("message should not be retried");
+          },
+        },
+        {
+          body: {
+            kind: "channel",
+            channelId: "channel-id",
+            prompt: "keep going",
+            promptSource: "reply",
+          },
+          ack: () => undefined,
+          retry: () => {
+            throw new Error("message should not be retried");
+          },
+        },
+      ],
+    } as never, env);
+
+    assert.equal(aiHarness.completeCalls.length, 2);
+    assert.equal(aiHarness.completeCalls[0].model, "xai/grok-4.3");
+    assert.equal(aiHarness.completeCalls[1].model, "workers-ai/@cf/meta/llama-3.1-8b-instruct");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("queue handler uses a configured partner model and parses the OpenAI response shape", async () => {

@@ -22,6 +22,8 @@ export type DiscordInteraction = {
   };
 };
 
+export type ChannelPromptSource = "mention" | "reply";
+
 export type AiChannelJob = {
   kind: "channel" | "rpc";
   channelId: string;
@@ -30,6 +32,7 @@ export type AiChannelJob = {
   requesterUserId?: string;
   requesterUsername?: string;
   prompt: string;
+  promptSource?: ChannelPromptSource;
   replyMessageId?: string;
   replyContext?: string;
 };
