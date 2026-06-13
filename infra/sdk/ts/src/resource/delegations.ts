@@ -1,4 +1,7 @@
 import type { Identity } from "../identity";
+import type { ServiceCredential } from "../oauth2/credential";
+import { exchangeToken } from "../oauth2/exchange";
+import { TOKEN_TYPE_SERVICE_CREDENTIAL } from "../oauth2/sts";
 import { logger } from "../logger";
 import { scopeMatches } from "./scope";
 
@@ -51,6 +54,7 @@ export const delegationGraphFromDiscovery = (document: DiscoveryDocument): Deleg
 };
 
 const CACHE_TTL_MS = 300_000;
+const DISCOVER_SCOPE = "idp/DiscoveryService.Discover";
 
 type CacheEntry = {
   graph: DelegationGraph;
@@ -59,27 +63,74 @@ type CacheEntry = {
 
 const cache = new Map<string, CacheEntry>();
 
-// Fetch the delegation graph from gateway discovery, cached per issuer. On
-// fetch failure a stale graph is preferred over rejecting all chained
-// requests; with no graph at all the caller must fail closed.
-export const delegationGraph = async (
+export type DelegationGraphSource = {
+  issuer: string;
+  gatewayFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  credential?: ServiceCredential;
+};
+
+const discoverDocument = async (
   issuer: string,
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  gatewayFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  credential?: ServiceCredential,
+): Promise<DiscoveryDocument> => {
+  const base = issuer.replace(/\/$/, "");
+  let accessToken = "";
+  if (credential) {
+    const minted = await exchangeToken(
+      base,
+      {
+        subjectToken: `${credential.clientId}:${credential.clientSecret}`,
+        subjectTokenType: TOKEN_TYPE_SERVICE_CREDENTIAL,
+        audience: "idp",
+        scopes: [DISCOVER_SCOPE],
+      },
+      gatewayFetch,
+    );
+    if (!minted?.accessToken) {
+      throw new Error("discover token exchange refused");
+    }
+    accessToken = minted.accessToken;
+  } else {
+    throw new Error("delegation graph requires a service credential");
+  }
+  const response = await gatewayFetch(`${base}/idp.v1.DiscoveryService/Discover`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+      "connect-protocol-version": "1",
+    },
+    body: "{}",
+  });
+  if (!response.ok) {
+    throw new Error(`discover returned ${response.status}`);
+  }
+  return (await response.json()) as DiscoveryDocument;
+};
+
+// Fetch the delegation graph from the protected gateway Discover RPC, cached
+// per issuer. On fetch failure a stale graph is preferred over rejecting all
+// chained requests; with no graph at all the caller must fail closed.
+export const delegationGraph = async (
+  source: string | DelegationGraphSource,
+  legacyFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
 ): Promise<DelegationGraph | null> => {
-  const url = `${issuer.replace(/\/$/, "")}/api/discovery`;
-  const entry = cache.get(url);
+  const config: DelegationGraphSource =
+    typeof source === "string"
+      ? { issuer: source, gatewayFetch: legacyFetch }
+      : source;
+  const issuer = config.issuer.replace(/\/$/, "");
+  const gatewayFetch = config.gatewayFetch ?? fetch;
+  const entry = cache.get(issuer);
   const now = Date.now();
   if (entry && now - entry.fetchedAt < CACHE_TTL_MS) {
     return entry.graph;
   }
   try {
-    const response = await (fetchImpl ?? fetch)(url);
-    if (!response.ok) {
-      throw new Error(`discovery returned ${response.status}`);
-    }
-    const document = (await response.json()) as DiscoveryDocument;
+    const document = await discoverDocument(issuer, gatewayFetch, config.credential);
     const graph = delegationGraphFromDiscovery(document);
-    cache.set(url, { graph, fetchedAt: now });
+    cache.set(issuer, { graph, fetchedAt: now });
     return graph;
   } catch (error) {
     logger.warn("delegation_graph_fetch_failed", {

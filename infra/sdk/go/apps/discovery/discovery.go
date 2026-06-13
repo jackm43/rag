@@ -192,6 +192,11 @@ type Application struct {
 	ProviderOAuth               *secrets.ClientCredential `json:"provider_oauth,omitempty"`
 }
 
+type BootstrapDocument struct {
+	Endpoints Endpoints    `json:"endpoints"`
+	Oidc      OidcProvider `json:"oidc"`
+}
+
 type Document struct {
 	Issuer                string         `json:"issuer"`
 	JwksURI               string         `json:"jwks_uri"`
@@ -250,22 +255,22 @@ func (d *Document) Application(name string) (*Application, error) {
 	return nil, fmt.Errorf("application %s is not registered with the gateway", name)
 }
 
-func Fetch(ctx context.Context, client *http.Client, gatewayURL string) (*Document, error) {
-	url := strings.TrimRight(gatewayURL, "/") + "/api/discovery"
+func FetchBootstrap(ctx context.Context, client *http.Client, gatewayURL string) (*BootstrapDocument, error) {
+	url := strings.TrimRight(gatewayURL, "/") + "/api/discovery?view=bootstrap"
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("gateway discovery: %w", err)
+		return nil, fmt.Errorf("gateway bootstrap discovery: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
 		detail := strings.TrimSpace(string(body))
 		if detail == "" {
-			return nil, fmt.Errorf("gateway discovery failed with status %d", response.StatusCode)
+			return nil, fmt.Errorf("gateway bootstrap discovery failed with status %d", response.StatusCode)
 		}
 		if response.StatusCode == http.StatusNotFound && strings.Contains(detail, "1042") {
 			return nil, fmt.Errorf(
@@ -275,14 +280,14 @@ func Fetch(ctx context.Context, client *http.Client, gatewayURL string) (*Docume
 		}
 		if response.StatusCode == http.StatusForbidden && strings.Contains(detail, "1050") {
 			return nil, fmt.Errorf(
-				"gateway discovery blocked by Cloudflare Access (error 1050); apply infra/terraform to create workers.dev bypass Access apps, or disable deny_unmatched_requests",
+				"gateway bootstrap discovery blocked by Cloudflare Access (error 1050); apply infra/terraform to create workers.dev bypass Access apps, or disable deny_unmatched_requests",
 			)
 		}
-		return nil, fmt.Errorf("gateway discovery failed with status %d: %s", response.StatusCode, detail)
+		return nil, fmt.Errorf("gateway bootstrap discovery failed with status %d: %s", response.StatusCode, detail)
 	}
-	document := &Document{}
+	document := &BootstrapDocument{}
 	if err := json.NewDecoder(response.Body).Decode(document); err != nil {
-		return nil, fmt.Errorf("gateway discovery decode: %w", err)
+		return nil, fmt.Errorf("gateway bootstrap discovery decode: %w", err)
 	}
 	return document, nil
 }

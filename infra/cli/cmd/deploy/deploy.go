@@ -25,22 +25,25 @@ const deployConcurrency = 4
 
 func Command() *cobra.Command {
 	force := false
+	pushSecrets := false
 	cmd := &cobra.Command{
 		Use:   "deploy [app...]",
-		Short: "Deploy workers from applications.yaml with 1Password secrets",
+		Short: "Deploy workers from applications.yaml",
 		Long: "Deploys the workers declared in " + manifest.RelativePath + " (all when no app is named).\n" +
-			"Application secrets declared in the manifest are resolved through 1Password and\n" +
-			"pushed to each worker; terraform client metadata is synced into the gateway config.\n" +
-			"Applications whose inputs are unchanged since the last deploy are skipped.",
+			"Worker code and config are hashed against .platy/deploy-state.json; unchanged\n" +
+			"applications are skipped unless --force is set. Terraform client metadata is\n" +
+			"synced into the gateway wrangler config before deploy.\n" +
+			"Use --push-secrets to resolve 1Password manifest secrets and run wrangler secret bulk.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return run(cmd.Context(), args, force)
+			return run(cmd.Context(), args, force, pushSecrets)
 		},
 	}
-	cmd.Flags().BoolVar(&force, "force", false, "deploy even when no inputs changed since the last deploy")
+	cmd.Flags().BoolVar(&force, "force", false, "deploy and push secrets even when inputs are unchanged")
+	cmd.Flags().BoolVar(&pushSecrets, "push-secrets", false, "resolve manifest secrets and push them with wrangler secret bulk")
 	return cmd
 }
 
-func run(ctx context.Context, names []string, force bool) error {
+func run(ctx context.Context, names []string, force, pushSecrets bool) error {
 	root := platform.RepoRoot()
 	loaded := manifest.Load(root)
 	if len(names) == 0 {
@@ -63,6 +66,7 @@ func run(ctx context.Context, names []string, force bool) error {
 
 	var mu sync.Mutex
 	deployed := []string{}
+	secretsPushed := []string{}
 	skipped := []string{}
 
 	// Service bindings can only reference workers that already exist, so a
@@ -75,7 +79,7 @@ func run(ctx context.Context, names []string, force bool) error {
 		for _, name := range wave {
 			app := loaded.Application(name)
 			group.Go(func() error {
-				didDeploy, err := deployApplication(groupCtx, root, name, app, wranglerEnv, apiToken, state, force)
+				didDeploy, didPushSecrets, err := deployApplication(groupCtx, root, name, app, wranglerEnv, apiToken, state, force, pushSecrets)
 				if err != nil {
 					return err
 				}
@@ -83,7 +87,11 @@ func run(ctx context.Context, names []string, force bool) error {
 				defer mu.Unlock()
 				if didDeploy {
 					deployed = append(deployed, name)
-				} else {
+				}
+				if didPushSecrets {
+					secretsPushed = append(secretsPushed, name)
+				}
+				if !didDeploy && !didPushSecrets {
 					skipped = append(skipped, name)
 				}
 				return nil
@@ -94,17 +102,10 @@ func run(ctx context.Context, names []string, force bool) error {
 		}
 	}
 
-	for _, name := range names {
-		app := loaded.Application(name)
-		for _, hook := range app.PostDeploy {
-			if err := runPostDeploy(ctx, name, app, hook); err != nil {
-				return err
-			}
-		}
-	}
 	sort.Strings(deployed)
+	sort.Strings(secretsPushed)
 	sort.Strings(skipped)
-	output.PrintJSON(map[string]any{"deployed": deployed, "skipped": skipped})
+	output.PrintJSON(map[string]any{"deployed": deployed, "secrets_pushed": secretsPushed, "skipped": skipped})
 	return nil
 }
 
@@ -115,53 +116,78 @@ func deployApplication(
 	env []string,
 	apiToken string,
 	state *stateStore,
-	force bool,
-) (bool, error) {
-	resolved, err := app.ResolveSecrets(ctx)
+	force, pushSecrets bool,
+) (bool, bool, error) {
+	deployHash, err := computeDeployHash(root, name, app)
 	if err != nil {
-		return false, fmt.Errorf("resolve secrets for %s: %w", name, err)
+		return false, false, fmt.Errorf("hash deploy inputs for %s: %w", name, err)
 	}
+	needsDeploy := force || state.hash(name) != deployHash
+
+	var resolved map[string]string
 	var providerOAuth map[string]string
-	if name == "idp" {
-		providerOAuth = cmdapp.ResolvedProviderOAuthClients(ctx, root)
-	}
 	clientID := ""
-	if document := platform.CredentialDocument(root, name); document != nil && document.Credential != nil {
-		clientID = document.Credential.ClientID
+	secretsHash := ""
+	needsSecrets := false
+	if pushSecrets {
+		resolved, err = app.ResolveSecrets(ctx)
+		if err != nil {
+			return false, false, fmt.Errorf("resolve secrets for %s: %w", name, err)
+		}
+		if name == "idp" {
+			providerOAuth = cmdapp.ResolvedProviderOAuthClients(ctx, root)
+		}
+		if document := platform.CredentialDocument(root, name); document != nil && document.Credential != nil {
+			clientID = document.Credential.ClientID
+		}
+		secretsHash = computeSecretsHash(resolved, providerOAuth, clientID)
+		needsSecrets = force || state.secretsHash(name) != secretsHash
 	}
-	hash, err := computeHash(root, name, app, resolved, providerOAuth, clientID)
-	if err != nil {
-		return false, fmt.Errorf("hash deploy inputs for %s: %w", name, err)
-	}
-	if !force && state.hash(name) == hash {
+
+	if !needsDeploy && !needsSecrets {
 		output.Logger.Info("deploy skipped, no changes", "app", name, "worker", app.Worker)
-		return false, nil
+		return false, false, nil
 	}
 
 	out := newPrefixWriter(name)
 	defer out.Flush()
-	output.Logger.Info("deploying worker", "app", name, "worker", app.Worker, "config", app.Config)
-	if err := wrangler.Run(root, env, "", out, "deploy", "-c", app.Config); err != nil {
-		return false, fmt.Errorf("deploy %s: %w", name, err)
-	}
-	if err := pushWorkerSecrets(root, name, app, env, out, resolved); err != nil {
-		return false, err
-	}
-	if name == "idp" {
-		if err := cmdapp.PushProviderOAuthClients(root, env, out, providerOAuth); err != nil {
-			return false, fmt.Errorf("push provider oauth secrets: %w", err)
+
+	if needsDeploy {
+		output.Logger.Info("deploying worker", "app", name, "worker", app.Worker, "config", app.Config)
+		if err := wrangler.Run(root, env, "", out, "deploy", "-c", app.Config); err != nil {
+			return false, false, fmt.Errorf("deploy %s: %w", name, err)
+		}
+		reconcileRoutes(apiToken, root, name, app)
+		if err := state.recordDeploy(name, deployHash); err != nil {
+			return false, false, fmt.Errorf("record deploy state for %s: %w", name, err)
+		}
+		for _, hook := range app.PostDeploy {
+			if err := runPostDeploy(ctx, name, app, hook); err != nil {
+				return false, false, err
+			}
 		}
 	}
-	if !app.Internal {
-		if err := pushServiceCredential(ctx, root, name, app, env, out); err != nil {
-			return false, err
+
+	if needsSecrets {
+		if err := pushWorkerSecrets(root, name, app, env, out, resolved); err != nil {
+			return needsDeploy, false, err
+		}
+		if name == "idp" {
+			if err := cmdapp.PushProviderOAuthClients(root, env, out, providerOAuth); err != nil {
+				return needsDeploy, false, fmt.Errorf("push provider oauth secrets: %w", err)
+			}
+		}
+		if !app.Internal {
+			if err := pushServiceCredential(ctx, root, name, app, env, out); err != nil {
+				return needsDeploy, false, err
+			}
+		}
+		if err := state.recordSecrets(name, secretsHash); err != nil {
+			return needsDeploy, false, fmt.Errorf("record secrets state for %s: %w", name, err)
 		}
 	}
-	reconcileRoutes(apiToken, root, name, app)
-	if err := state.record(name, hash); err != nil {
-		return false, fmt.Errorf("record deploy state for %s: %w", name, err)
-	}
-	return true, nil
+
+	return needsDeploy, needsSecrets, nil
 }
 
 func wranglerDeployEnv(ctx context.Context, root string) ([]string, string) {

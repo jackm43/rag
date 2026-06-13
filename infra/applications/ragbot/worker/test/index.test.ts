@@ -15,6 +15,8 @@ import {
   createAigatewayEnv,
   GATEWAY_ISSUER,
   signToken,
+  TEST_SERVICE_CLIENT_ID,
+  TEST_SERVICE_CLIENT_SECRET,
   type AiCompleteRequest,
 } from "./aigateway-mock.ts";
 
@@ -61,6 +63,9 @@ const createEnv = (publicKeyHex: string, overrides: Record<string, unknown> = {}
 const stsEnv = (overrides: Record<string, unknown> = {}) =>
   createEnv("unused", {
     AUTH_GATEWAY_URL: GATEWAY_ISSUER,
+    AUTH_GATEWAY: { fetch: authGatewayFetch },
+    SERVICE_CLIENT_ID: TEST_SERVICE_CLIENT_ID,
+    SERVICE_CLIENT_SECRET: TEST_SERVICE_CLIENT_SECRET,
     ...overrides,
   });
 

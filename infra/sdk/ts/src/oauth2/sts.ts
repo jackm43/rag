@@ -1,6 +1,7 @@
 import { jwtVerify } from "jose";
 
 import type { Identity, IdentityKind } from "../identity";
+import type { ServiceCredential } from "./credential";
 import { remoteJwks } from "./jwks";
 
 export const TOKEN_TYPE_ACCESS_TOKEN = "urn:ietf:params:oauth:token-type:access_token";
@@ -14,6 +15,7 @@ export type StsVerifierConfig = {
   // Transport for gateway-hosted verification material (JWKS, delegation
   // discovery). Workers pass the auth gateway service binding here.
   gatewayFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  serviceCredential?: ServiceCredential;
 };
 
 type ActClaim = { sub?: string; act?: ActClaim };

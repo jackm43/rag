@@ -83,6 +83,7 @@ export const connectorToken = async (config: ConnectorConfig, identity: Identity
       issuer: config.gatewayUrl.replace(/\/$/, ""),
       audience: config.application,
       gatewayFetch: config.gatewayFetch,
+      serviceCredential: config.credential,
     },
     identity.subject,
   );

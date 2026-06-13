@@ -45,7 +45,24 @@ const signToken = (claims: {
 let mintToken: () => Promise<string> = () => signToken({ aud: "aigateway", sub: "nobody" });
 let exchangeCalls = 0;
 
-const gatewayFetch: typeof fetch = async (input) => {
+const bootstrapDiscovery = {
+  endpoints: {
+    token_exchange: `${issuer}/oauth/token`,
+    token_revoke: `${issuer}/oauth/revoke`,
+    introspect: `${issuer}/oauth/introspect`,
+    discovery: `${issuer}/api/discovery`,
+    jwks: `${issuer}/.well-known/jwks.json`,
+  },
+  oidc: {
+    issuer: "https://access.test",
+    client_id: "access-client",
+    authorization_endpoint: "https://access.test/authorization",
+    token_endpoint: "https://access.test/token",
+    jwks_endpoint: "https://access.test/jwks",
+  },
+};
+
+const gatewayFetch: typeof fetch = async (input, init) => {
   const url = String(input instanceof Request ? input.url : input);
   if (url === `${issuer}/.well-known/jwks.json`) {
     return new Response(JSON.stringify({ keys: [jwk] }), {
@@ -53,7 +70,16 @@ const gatewayFetch: typeof fetch = async (input) => {
       headers: { "content-type": "application/json" },
     });
   }
+  if (url === `${issuer}/api/discovery?view=bootstrap`) {
+    return new Response(JSON.stringify(bootstrapDiscovery), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
   if (url === `${issuer}/api/discovery`) {
+    return new Response(JSON.stringify({ error: "unauthenticated" }), { status: 401 });
+  }
+  if (url === `${issuer}/idp.v1.DiscoveryService/Discover`) {
     return new Response(JSON.stringify(discovery), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -69,7 +95,12 @@ const gatewayFetch: typeof fetch = async (input) => {
   return new Response("not found", { status: 404 });
 };
 
-const verifierConfig = { issuer, audience: "aigateway", gatewayFetch };
+const verifierConfig = {
+  issuer,
+  audience: "aigateway",
+  gatewayFetch,
+  serviceCredential: { clientId: "svc_chat_abc", clientSecret: "secret" },
+};
 
 test("verifyMintedToken accepts a gateway-signed token with a delegated chain", async () => {
   const token = await signToken({

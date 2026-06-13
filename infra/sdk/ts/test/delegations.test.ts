@@ -107,20 +107,34 @@ test("deeper hops may have consumed a gateway session token (aud idp)", () => {
 
 test("delegationGraph caches per issuer and serves stale on fetch failure", async () => {
   let calls = 0;
-  const fetchImpl = async () => {
-    calls += 1;
-    if (calls > 1) {
-      throw new Error("network down");
+  const credential = { clientId: "svc_deploy_abc", clientSecret: "secret" };
+  const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.endsWith("/oauth/token")) {
+      calls += 1;
+      return new Response(
+        JSON.stringify({ access_token: "discover-token", expires_in: 300, scope: "idp/DiscoveryService.Discover" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
-    return new Response(JSON.stringify(discovery), { status: 200 });
+    if (url.endsWith("/idp.v1.DiscoveryService/Discover")) {
+      if (calls > 1) {
+        throw new Error("network down");
+      }
+      return new Response(JSON.stringify(discovery), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response("not found", { status: 404 });
   };
 
-  const first = await delegationGraph("https://gw.test", fetchImpl);
+  const first = await delegationGraph({ issuer: "https://gw.test", gatewayFetch: fetchImpl, credential });
   assert.ok(first?.has("deploy"));
-  const second = await delegationGraph("https://gw.test", fetchImpl);
+  const second = await delegationGraph({ issuer: "https://gw.test", gatewayFetch: fetchImpl, credential });
   assert.equal(second, first);
   assert.equal(calls, 1);
 
-  const failed = await delegationGraph("https://gw-other.test", fetchImpl);
+  const failed = await delegationGraph({ issuer: "https://gw-other.test", gatewayFetch: fetchImpl, credential });
   assert.equal(failed, null);
 });

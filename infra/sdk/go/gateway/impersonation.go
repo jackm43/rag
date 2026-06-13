@@ -15,10 +15,7 @@ func impersonationTokenKey(gatewayURL, application string) string {
 	return "impersonation|" + strings.TrimRight(gatewayURL, "/") + "|" + application
 }
 
-func teamDomainFromDiscovery(document *discovery.Document) (string, error) {
-	if document.Provider.Boundary.TeamDomain != "" {
-		return document.Provider.Boundary.TeamDomain, nil
-	}
+func teamDomainFromDiscovery(document *discovery.BootstrapDocument) (string, error) {
 	issuer := strings.TrimRight(document.Oidc.Issuer, "/")
 	if idx := strings.Index(issuer, "/cdn-cgi/access/sso/oidc/"); idx > 0 {
 		return issuer[:idx], nil
@@ -26,7 +23,7 @@ func teamDomainFromDiscovery(document *discovery.Document) (string, error) {
 	return "", fmt.Errorf("gateway discovery has no access team domain")
 }
 
-func impersonationOAuthConfig(document *discovery.Document, clientID string) (oauth2.Config, error) {
+func impersonationOAuthConfig(document *discovery.BootstrapDocument, clientID string) (oauth2.Config, error) {
 	teamDomain, err := teamDomainFromDiscovery(document)
 	if err != nil {
 		return oauth2.Config{}, err
@@ -51,7 +48,7 @@ func (s *Session) ImpersonationToken(ctx context.Context, application string, fo
 	if document.ImpersonationAccessClientID == "" {
 		return "", fmt.Errorf("application %s has no impersonation access app; run platy app register %s", application, application)
 	}
-	discovered, err := s.Discovery(ctx)
+	discovered, err := s.Bootstrap(ctx)
 	if err != nil {
 		return "", err
 	}

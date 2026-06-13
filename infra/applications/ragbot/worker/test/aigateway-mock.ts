@@ -112,7 +112,35 @@ export const createAigatewayTestHarness = await (async () => {
     if (url === `${GATEWAY_ISSUER}/.well-known/jwks.json`) {
       return Response.json({ keys: [jwk] });
     }
+    if (url === `${GATEWAY_ISSUER}/api/discovery?view=bootstrap`) {
+      return Response.json({
+        endpoints: {
+          token_exchange: `${GATEWAY_ISSUER}/oauth/token`,
+          token_revoke: `${GATEWAY_ISSUER}/oauth/revoke`,
+          introspect: `${GATEWAY_ISSUER}/oauth/introspect`,
+          discovery: `${GATEWAY_ISSUER}/api/discovery`,
+          jwks: `${GATEWAY_ISSUER}/.well-known/jwks.json`,
+        },
+        oidc: {
+          issuer: "https://access.test",
+          client_id: "access-client",
+          authorization_endpoint: "https://access.test/authorization",
+          token_endpoint: "https://access.test/token",
+          jwks_endpoint: "https://access.test/jwks",
+        },
+      });
+    }
     if (url === `${GATEWAY_ISSUER}/api/discovery`) {
+      return new Response(JSON.stringify({ error: "unauthenticated" }), { status: 401 });
+    }
+    if (url.endsWith("/idp.v1.DiscoveryService/Discover")) {
+      const headers = new Headers(init?.headers);
+      if (input instanceof Request) {
+        input.headers.forEach((value, key) => headers.set(key, value));
+      }
+      if (!headers.get("authorization")) {
+        return new Response("unauthenticated", { status: 401 });
+      }
       return Response.json(discovery);
     }
     if (url === `${GATEWAY_ISSUER}/oauth/token`) {

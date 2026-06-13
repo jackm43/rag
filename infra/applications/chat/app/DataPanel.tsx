@@ -60,16 +60,9 @@ const DATA_APIS: DataApi[] = [
   },
   {
     label: "Applications & registrations",
-    application: "gateway",
-    path: "/api/discovery",
-    run: async (auth) => {
-      const response = await auth.gatewayGet("/api/discovery");
-      const text = await response.text();
-      if (!response.ok) {
-        throw new Error(text || `request failed (${response.status})`);
-      }
-      return JSON.parse(text) as unknown;
-    },
+    application: "idp",
+    path: "/idp.v1.DiscoveryService/Discover",
+    run: (auth) => idp.discoveryServiceClient(auth).discover({}),
   },
 ];
 

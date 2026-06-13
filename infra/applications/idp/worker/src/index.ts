@@ -13,7 +13,6 @@ import {
   authorizeIntrospectionCaller,
   buildAuthorizationServerMetadata,
   buildBootstrapDiscovery,
-  buildDiscovery,
   createGatewaySession,
   exchangeGatewayToken,
   introspectToken,
@@ -62,7 +61,7 @@ const oauthResponse = (body: unknown, status = 200, extraHeaders?: Record<string
 
 // A missing or malformed DPoP proof is an RFC 9449 protocol error, not a bad
 // grant: answer 401 with a DPoP challenge so clients retry with a proof.
-class DpopRequiredError extends Error {}
+class DpopRequiredError extends Error { }
 
 const oauthErrorCode = (error: unknown): { error: string; status: number; description: string } => {
   if (!(error instanceof ConnectError)) {
@@ -175,46 +174,6 @@ const handleBootstrapDiscovery = (env: Env): Response => {
       token_endpoint: discovered.oidc.tokenEndpoint,
       jwks_endpoint: discovered.oidc.jwksEndpoint,
     },
-  });
-};
-
-const handleDiscovery = async (env: Env): Promise<Response> => {
-  const discovered = await buildDiscovery(env);
-  return jsonResponse({
-    issuer: discovered.issuer,
-    jwks_uri: discovered.jwksUri,
-    authorization_server_metadata: `${discovered.issuer}/.well-known/oauth-authorization-server`,
-    openid_configuration: `${discovered.issuer}/.well-known/openid-configuration`,
-    token_exchange_endpoint: discovered.endpoints.tokenExchange,
-    endpoints: {
-      token_exchange: discovered.endpoints.tokenExchange,
-      token_revoke: discovered.endpoints.tokenRevoke,
-      introspect: discovered.endpoints.introspect,
-      discovery: discovered.endpoints.discovery,
-      jwks: discovered.endpoints.jwks,
-    },
-    oidc: {
-      issuer: discovered.oidc.issuer,
-      client_id: discovered.oidc.clientId,
-      authorization_endpoint: discovered.oidc.authorizationEndpoint,
-      token_endpoint: discovered.oidc.tokenEndpoint,
-      jwks_endpoint: discovered.oidc.jwksEndpoint,
-    },
-    provider: discovered.provider,
-    applications: discovered.applications.map((app) => ({
-      name: app.name,
-      audience: app.audience,
-      endpoint: app.endpoint,
-      description: app.description,
-      resources: app.resources,
-      delegations: app.delegations,
-      provider: app.provider,
-      trust_boundary: app.trustBoundary,
-      access: app.access,
-      impersonation_access_client_id: app.impersonationAccessClientId,
-      created_at: Number(app.createdAt),
-      updated_at: Number(app.updatedAt),
-    })),
   });
 };
 
@@ -398,7 +357,17 @@ export default {
       if (url.searchParams.get("view") === "bootstrap") {
         return withCors(handleBootstrapDiscovery(env), cors);
       }
-      return withCors(await handleDiscovery(env), cors);
+      return withCors(
+        jsonResponse(
+          {
+            error: "unauthenticated",
+            error_description:
+              "full discovery requires authentication; use idp.v1.DiscoveryService.Discover or ?view=bootstrap",
+          },
+          401,
+        ),
+        cors,
+      );
     }
 
     if (url.pathname === "/oauth/token" && request.method === "POST") {

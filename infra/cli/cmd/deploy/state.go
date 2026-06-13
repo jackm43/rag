@@ -20,8 +20,9 @@ import (
 const stateRelativePath = ".platy/deploy-state.json"
 
 type applicationState struct {
-	Hash       string    `json:"hash"`
-	DeployedAt time.Time `json:"deployed_at"`
+	Hash        string    `json:"hash"`
+	SecretsHash string    `json:"secrets_hash,omitempty"`
+	DeployedAt  time.Time `json:"deployed_at"`
 }
 
 type deployState struct {
@@ -61,10 +62,33 @@ func (s *stateStore) hash(name string) string {
 	return s.state.Applications[name].Hash
 }
 
-func (s *stateStore) record(name, hash string) error {
+func (s *stateStore) secretsHash(name string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.state.Applications[name] = applicationState{Hash: hash, DeployedAt: time.Now().UTC()}
+	return s.state.Applications[name].SecretsHash
+}
+
+func (s *stateStore) recordDeploy(name, hash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry := s.state.Applications[name]
+	entry.Hash = hash
+	entry.DeployedAt = time.Now().UTC()
+	s.state.Applications[name] = entry
+	return s.persistLocked()
+}
+
+func (s *stateStore) recordSecrets(name, hash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry := s.state.Applications[name]
+	entry.SecretsHash = hash
+	entry.DeployedAt = time.Now().UTC()
+	s.state.Applications[name] = entry
+	return s.persistLocked()
+}
+
+func (s *stateStore) persistLocked() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return err
 	}
@@ -81,18 +105,9 @@ var hashSkipDirs = map[string]bool{
 	".git":         true,
 }
 
-// computeHash digests every input that affects a deployed worker: the
-// wrangler config, the worker source directory, the application's generated
-// code, the shared TS SDK sources, the resolved secret values, and the
-// service-credential client id. Secret values only contribute to the digest;
-// they are never written anywhere.
-func computeHash(
-	root, name string,
-	app *manifest.Application,
-	resolvedSecrets map[string]string,
-	providerOAuth map[string]string,
-	serviceClientID string,
-) (string, error) {
+// computeDeployHash digests worker code and config inputs: the wrangler
+// config, worker source, generated application code, and shared TS SDK.
+func computeDeployHash(root, name string, app *manifest.Application) (string, error) {
 	digest := sha256.New()
 
 	configPath := filepath.Join(root, filepath.FromSlash(app.Config))
@@ -137,10 +152,19 @@ func computeHash(
 		digest.Write([]byte{0})
 	}
 
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+func computeSecretsHash(
+	resolvedSecrets map[string]string,
+	providerOAuth map[string]string,
+	serviceClientID string,
+) string {
+	digest := sha256.New()
 	writeHashMap(digest, "secrets", resolvedSecrets)
 	writeHashMap(digest, "provider_oauth", providerOAuth)
 	writeHashField(digest, "service_client_id", serviceClientID)
-	return hex.EncodeToString(digest.Sum(nil)), nil
+	return hex.EncodeToString(digest.Sum(nil))
 }
 
 func collectFiles(dir string, files map[string]bool) error {

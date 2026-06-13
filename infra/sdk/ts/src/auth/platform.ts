@@ -19,9 +19,13 @@ export const platformAuthenticator = (env: PlatformAuthEnv, audience: string): A
   const gatewayFetch = env.AUTH_GATEWAY
     ? (input: RequestInfo | URL, init?: RequestInit) => env.AUTH_GATEWAY!.fetch(input, init)
     : undefined;
-  const verify = { jwksUrl: `${issuer}/.well-known/jwks.json`, gatewayFetch };
-  const authenticators: Authenticator[] = [stsAuthenticator({ issuer, audience, ...verify })];
   const credential = serviceCredentialFromEnv(env);
+  const verify = {
+    jwksUrl: `${issuer}/.well-known/jwks.json`,
+    gatewayFetch,
+    serviceCredential: credential ?? undefined,
+  };
+  const authenticators: Authenticator[] = [stsAuthenticator({ issuer, audience, ...verify })];
   if (credential) {
     authenticators.push(
       sessionChainAuthenticator({ gatewayUrl: issuer, audience, credential, verify, fetch: gatewayFetch }),

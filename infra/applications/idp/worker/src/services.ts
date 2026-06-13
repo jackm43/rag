@@ -1168,9 +1168,16 @@ export const registerServices = (router: ConnectRouter, env: Env) => {
     ),
   );
 
-  router.service(DiscoveryService, {
-    discover: async () => buildDiscovery(env),
-  });
+  router.service(
+    DiscoveryService,
+    protect(
+      DiscoveryService,
+      {
+        discover: async () => buildDiscovery(env),
+      },
+      policy,
+    ),
+  );
 };
 
 export const buildBootstrapDiscovery = (env: Env) => {

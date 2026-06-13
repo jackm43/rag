@@ -38,6 +38,7 @@ type Session struct {
 	credentialResolver CredentialResolver
 
 	mu              sync.Mutex
+	bootstrap       *discovery.BootstrapDocument
 	discovery       *discovery.Document
 	discoveryClient *discovery.Client
 	appTokens       map[string]*oauthclient.TokenSet
@@ -99,22 +100,54 @@ func (s *Session) logger() *slog.Logger {
 	return slog.Default()
 }
 
-func (s *Session) Discovery(ctx context.Context) (*discovery.Document, error) {
+func (s *Session) Bootstrap(ctx context.Context) (*discovery.BootstrapDocument, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.discovery != nil {
-		return s.discovery, nil
+	if s.bootstrap != nil {
+		return s.bootstrap, nil
 	}
-	document, err := discovery.Fetch(ctx, s.httpClient, s.gatewayURL)
+	document, err := discovery.FetchBootstrap(ctx, s.httpClient, s.gatewayURL)
 	if err != nil {
 		return nil, err
 	}
-	s.discovery = document
+	s.bootstrap = document
 	return document, nil
+}
+
+func (s *Session) Discovery(ctx context.Context) (*discovery.Document, error) {
+	s.mu.Lock()
+	if s.discovery != nil {
+		document := s.discovery
+		s.mu.Unlock()
+		return document, nil
+	}
+	s.mu.Unlock()
+	document, err := s.fetchDiscover(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.discovery = document
+	s.mu.Unlock()
+	return document, nil
+}
+
+func (s *Session) fetchDiscover(ctx context.Context) (*discovery.Document, error) {
+	client := idpv1connect.NewDiscoveryServiceClient(
+		s.httpClient,
+		s.gatewayURL,
+		connect.WithInterceptors(s.UserAuthInterceptor()),
+	)
+	response, err := client.Discover(ctx, connect.NewRequest(&idpv1.DiscoverRequest{}))
+	if err != nil {
+		return nil, fmt.Errorf("gateway discover: %w", err)
+	}
+	return discovery.DocumentFromDiscover(response.Msg), nil
 }
 
 func (s *Session) InvalidateDiscovery() {
 	s.mu.Lock()
+	s.bootstrap = nil
 	s.discovery = nil
 	if s.discoveryClient != nil {
 		s.discoveryClient.Invalidate()
@@ -123,19 +156,19 @@ func (s *Session) InvalidateDiscovery() {
 }
 
 func (s *Session) oidcFlow(ctx context.Context) (*oauthclient.BrowserFlow, error) {
-	discovered, err := s.Discovery(ctx)
+	bootstrap, err := s.Bootstrap(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if discovered.Oidc.ClientID == "" {
+	if bootstrap.Oidc.ClientID == "" {
 		return nil, fmt.Errorf("gateway has no OIDC provider configured")
 	}
 	return &oauthclient.BrowserFlow{
 		Config: oauth2.Config{
-			ClientID: discovered.Oidc.ClientID,
+			ClientID: bootstrap.Oidc.ClientID,
 			Endpoint: oauth2.Endpoint{
-				AuthURL:  discovered.Oidc.AuthorizationEndpoint,
-				TokenURL: discovered.Oidc.TokenEndpoint,
+				AuthURL:  bootstrap.Oidc.AuthorizationEndpoint,
+				TokenURL: bootstrap.Oidc.TokenEndpoint,
 			},
 			Scopes: []string{"openid", "email", "profile"},
 		},
@@ -190,17 +223,17 @@ func tokenSetFromOAuth(tokens oauthTokenResponse) *oauthclient.TokenSet {
 }
 
 func (s *Session) tokenEndpoint(ctx context.Context) string {
-	discovered, err := s.Discovery(ctx)
-	if err == nil && discovered.Endpoints.TokenExchange != "" {
-		return discovered.Endpoints.TokenExchange
+	bootstrap, err := s.Bootstrap(ctx)
+	if err == nil && bootstrap.Endpoints.TokenExchange != "" {
+		return bootstrap.Endpoints.TokenExchange
 	}
 	return s.gatewayURL + "/oauth/token"
 }
 
 func (s *Session) revocationEndpoint(ctx context.Context) string {
-	discovered, err := s.Discovery(ctx)
-	if err == nil && discovered.Endpoints.TokenRevoke != "" {
-		return discovered.Endpoints.TokenRevoke
+	bootstrap, err := s.Bootstrap(ctx)
+	if err == nil && bootstrap.Endpoints.TokenRevoke != "" {
+		return bootstrap.Endpoints.TokenRevoke
 	}
 	return s.gatewayURL + "/oauth/revoke"
 }
@@ -673,8 +706,9 @@ func (s *Session) UserAuthInterceptor() connect.Interceptor {
 }
 
 // DiscoveryClient returns the GraphQL discovery client for the registered
-// discovery application, resolving its endpoint from the gateway bootstrap
-// document and authenticating with an STS token for the discovery audience.
+// discovery application, resolving its endpoint from the authenticated
+// gateway registry and authenticating with an STS token for the discovery
+// audience.
 func (s *Session) DiscoveryClient(ctx context.Context) (*discovery.Client, error) {
 	document, err := s.Discovery(ctx)
 	if err != nil {

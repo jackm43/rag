@@ -11,8 +11,24 @@ const env = {
 } as unknown as Parameters<typeof worker.fetch>[1];
 
 const ctx = {
-  waitUntil() {},
+  waitUntil() { },
 } as unknown as ExecutionContext;
+
+test("oauth discovery bootstrap is public but full discovery requires authentication", async () => {
+  const bootstrap = await worker.fetch(new Request("https://auth.example/api/discovery?view=bootstrap"), env, ctx);
+  assert.equal(bootstrap.status, 200);
+  const body = (await bootstrap.json()) as { endpoints?: { token_exchange?: string }; oidc?: { client_id?: string } };
+  assert.ok(body.endpoints?.token_exchange);
+  assert.ok(body.oidc?.client_id);
+
+  const full = await worker.fetch(new Request("https://auth.example/api/discovery"), env, ctx);
+  assert.equal(full.status, 401);
+  assert.deepEqual(await full.json(), {
+    error: "unauthenticated",
+    error_description:
+      "full discovery requires authentication; use idp.v1.DiscoveryService.Discover or ?view=bootstrap",
+  });
+});
 
 test("oauth token endpoint requires form-encoded requests", async () => {
   const response = await worker.fetch(

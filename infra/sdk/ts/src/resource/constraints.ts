@@ -42,7 +42,11 @@ export const requireExpectedActorChain = async (
   if (!identity || identity.actorChain.length === 0) {
     return identity;
   }
-  const graph = await delegationGraph(config.issuer, config.gatewayFetch);
+  const graph = await delegationGraph({
+    issuer: config.issuer,
+    gatewayFetch: config.gatewayFetch,
+    credential: config.serviceCredential,
+  });
   const refusal = graph
     ? actorChainRefusal(identity, config.audience, graph)
     : "delegation graph unavailable";
