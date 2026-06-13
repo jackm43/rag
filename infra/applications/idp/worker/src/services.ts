@@ -36,7 +36,7 @@ import {
   type RequestDescriptor,
 } from "../../../../sdk/ts/src";
 import { signToken } from "./keys";
-import { verifyGatewayStsToken } from "./sts-verify";
+import { verifyGatewayStsToken, verifyGatewayTokenClaims } from "./sts-verify";
 import {
   audit,
   createServiceClient,
@@ -364,7 +364,13 @@ export type GatewaySessionTokens = {
   refreshToken: string;
   refreshExpiresIn: bigint;
   tokenType: string;
+  scope: string;
 };
+
+// User sessions are full-trust principals: the granted scope is the platform
+// wildcard. Keeping it here (rather than hardcoded at the HTTP layer) means the
+// token response always reports the scope the session token actually carries.
+export const SESSION_SCOPE = "*";
 
 const resolveSubject = async (
   env: Env,
@@ -465,7 +471,7 @@ const sessionAccessToken = async (env: Env, session: Session): Promise<string> =
     iss: issuer(env),
     sub: session.subject,
     aud: "idp",
-    scope: "*",
+    scope: SESSION_SCOPE,
     kind: "user",
     sid: session.id,
     cnf: { jkt: session.jkt },
@@ -489,6 +495,7 @@ const sessionTokensMessage = async (
   refreshToken,
   refreshExpiresIn: BigInt(Math.max(session.refreshExpiresAt - Math.floor(Date.now() / 1000), 0)),
   tokenType: "DPoP",
+  scope: SESSION_SCOPE,
 });
 
 export const createGatewaySession = async (
@@ -721,10 +728,59 @@ export const gatewayEndpoints = (env: Env) => {
   return {
     tokenExchange: `${base}/oauth/token`,
     tokenRevoke: `${base}/oauth/revoke`,
-    introspect: `${base}/idp.v1.IdentityService/Introspect`,
+    introspect: `${base}/oauth/introspect`,
     discovery: `${base}/api/discovery`,
     jwks: jwksUrl(env),
   };
+};
+
+export const INTROSPECTION_SCOPE = "idp/IdentityService.Introspect";
+
+// RFC 7662 introspection of a presented token. The caller is authenticated and
+// scope-checked by the HTTP handler; here we verify the gateway signature and
+// shape the standard response. An invalid, expired, or foreign token is simply
+// inactive rather than an error.
+export const introspectToken = async (
+  env: Env,
+  token: string,
+): Promise<Record<string, unknown>> => {
+  const claims = token ? await verifyGatewayTokenClaims(env, token) : null;
+  if (!claims) {
+    return { active: false };
+  }
+  const cnf = claims.cnf as { jkt?: unknown } | undefined;
+  const response: Record<string, unknown> = {
+    active: true,
+    token_type: cnf?.jkt ? "DPoP" : "Bearer",
+  };
+  const copy = (key: string) => {
+    if (claims[key] !== undefined) {
+      response[key] = claims[key];
+    }
+  };
+  for (const key of ["sub", "aud", "iss", "exp", "iat", "scope", "jti", "email", "sid", "act", "cnf", "kind"]) {
+    copy(key);
+  }
+  return response;
+};
+
+// Caller authentication for the introspection endpoint: a gateway-issued token
+// (audience idp) belonging to an allowed user with the introspect scope.
+export const authorizeIntrospectionCaller = async (
+  env: Env,
+  headers: Headers,
+  request: RequestDescriptor,
+): Promise<boolean> => {
+  try {
+    const identity = await gatewayAuthenticator(env)(headers, request);
+    if (!identity || !isAllowedUser(env, identity)) {
+      return false;
+    }
+    return hasScope(identity, INTROSPECTION_SCOPE);
+  } catch {
+    // Fail closed: any verification or configuration error means not authorized.
+    return false;
+  }
 };
 
 export const registerServices = (router: ConnectRouter, env: Env) => {
@@ -1167,12 +1223,14 @@ export const buildAuthorizationServerMetadata = async (env: Env) => {
     introspection_endpoint: discovered.endpoints.introspect,
     revocation_endpoint: discovered.endpoints.tokenRevoke,
     response_types_supported: ["code"],
+    response_modes_supported: ["query"],
     grant_types_supported: [
       "authorization_code",
       "refresh_token",
       "urn:ietf:params:oauth:grant-type:token-exchange",
     ],
     token_endpoint_auth_methods_supported: ["none", "client_secret_basic", "client_secret_post"],
+    revocation_endpoint_auth_methods_supported: ["none"],
     code_challenge_methods_supported: ["S256"],
     scopes_supported: Array.from(scopes).sort(),
     token_endpoint_auth_signing_alg_values_supported: ["ES256"],

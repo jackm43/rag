@@ -26,6 +26,9 @@ export type PlatformRpcWorkerConfig<Env extends PlatformRpcWorkerEnv> = {
     methods?: string;
     headers?: string;
   };
+  // OAuth scopes this resource server accepts, advertised in RFC 9728
+  // protected-resource metadata. Optional; omitted from the document when empty.
+  scopes?: string[];
 };
 
 type CachedHandler<Env> = {
@@ -123,11 +126,32 @@ export const createPlatformRpcWorker = <Env extends PlatformRpcWorkerEnv>(
       if (request.method === "OPTIONS") {
         return new Response(null, { status: 204, headers: cors });
       }
+      const url = new URL(request.url);
+      // RFC 9728: every RPC worker is an OAuth protected resource. Authors get
+      // this document for free; clients discover the authorization server (the
+      // gateway) and the DPoP requirement without per-app wiring.
+      if (url.pathname === "/.well-known/oauth-protected-resource" && request.method === "GET") {
+        const gatewayUrl = String(env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, "");
+        const metadata: Record<string, unknown> = {
+          resource: url.origin,
+          resource_name: config.serviceName,
+          bearer_methods_supported: ["header"],
+          dpop_signing_alg_values_supported: ["ES256"],
+          dpop_bound_access_tokens_required: true,
+        };
+        if (gatewayUrl) {
+          metadata.authorization_servers = [gatewayUrl];
+        }
+        if (config.scopes && config.scopes.length > 0) {
+          metadata.scopes_supported = config.scopes;
+        }
+        return withHeaders(jsonResponse(metadata), cors);
+      }
       const rpc = await handler(env)(request, ctx);
       if (rpc) {
         return withHeaders(rpc, cors);
       }
-      if (new URL(request.url).pathname === "/" && request.method === "GET") {
+      if (url.pathname === "/" && request.method === "GET") {
         return withHeaders(new Response("ok"), cors);
       }
       return withHeaders(jsonResponse({ error: "not found" }, 404), cors);

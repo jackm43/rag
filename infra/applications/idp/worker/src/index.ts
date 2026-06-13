@@ -10,11 +10,13 @@ import {
 import { getJwks } from "./keys";
 import { completeProviderOAuthCallback } from "./provider-oauth";
 import {
+  authorizeIntrospectionCaller,
   buildAuthorizationServerMetadata,
   buildBootstrapDiscovery,
   buildDiscovery,
   createGatewaySession,
   exchangeGatewayToken,
+  introspectToken,
   refreshGatewaySession,
   registerServices,
 } from "./services";
@@ -47,15 +49,20 @@ const jsonResponse = (body: unknown, status = 200) =>
     headers: { "content-type": "application/json" },
   });
 
-const oauthResponse = (body: unknown, status = 200) =>
+const oauthResponse = (body: unknown, status = 200, extraHeaders?: Record<string, string>) =>
   new Response(JSON.stringify(body), {
     status,
     headers: {
       "content-type": "application/json",
       "cache-control": "no-store",
       pragma: "no-cache",
+      ...extraHeaders,
     },
   });
+
+// A missing or malformed DPoP proof is an RFC 9449 protocol error, not a bad
+// grant: answer 401 with a DPoP challenge so clients retry with a proof.
+class DpopRequiredError extends Error {}
 
 const oauthErrorCode = (error: unknown): { error: string; status: number; description: string } => {
   if (!(error instanceof ConnectError)) {
@@ -68,7 +75,7 @@ const oauthErrorCode = (error: unknown): { error: string; status: number; descri
     case Code.Unauthenticated:
       return { error: "invalid_grant", status: 400, description };
     case Code.PermissionDenied:
-      return { error: "invalid_scope", status: 403, description };
+      return { error: "access_denied", status: 403, description };
     case Code.NotFound:
       return { error: "invalid_target", status: 400, description };
     case Code.FailedPrecondition:
@@ -104,10 +111,17 @@ const tokenEndpointRequest = (request: Request): RequestDescriptor => ({
 const requireOAuthDpop = async (request: Request): Promise<string> => {
   const proof = await verifyDpopProof(request.headers, tokenEndpointRequest(request));
   if (!proof) {
-    throw new ConnectError("valid DPoP proof required", Code.Unauthenticated);
+    throw new DpopRequiredError();
   }
   return proof.jkt;
 };
+
+const dpopChallengeResponse = (description: string): Response =>
+  oauthResponse(
+    { error: "invalid_dpop_proof", error_description: description },
+    401,
+    { "www-authenticate": 'DPoP error="invalid_dpop_proof", algs="ES256"' },
+  );
 
 // Web clients (Module 3) run the session and token-exchange flows from the
 // browser, so the gateway must answer CORS preflight and echo allowed origins.
@@ -248,7 +262,7 @@ const handleOAuthToken = async (env: Env, request: Request): Promise<Response> =
         token_type: tokens.tokenType,
         expires_in: Number(tokens.expiresIn),
         refresh_token: tokens.refreshToken,
-        scope: "*",
+        scope: tokens.scope,
       });
     }
 
@@ -264,7 +278,7 @@ const handleOAuthToken = async (env: Env, request: Request): Promise<Response> =
         token_type: tokens.tokenType,
         expires_in: Number(tokens.expiresIn),
         refresh_token: tokens.refreshToken,
-        scope: "*",
+        scope: tokens.scope,
       });
     }
 
@@ -301,6 +315,9 @@ const handleOAuthToken = async (env: Env, request: Request): Promise<Response> =
       400,
     );
   } catch (error) {
+    if (error instanceof DpopRequiredError) {
+      return dpopChallengeResponse("a valid DPoP proof is required for this grant");
+    }
     const mapped = oauthErrorCode(error);
     return oauthResponse(
       { error: mapped.error, error_description: mapped.description },
@@ -321,8 +338,40 @@ const handleOAuthRevoke = async (env: Env, request: Request): Promise<Response> 
   if (!token) {
     return oauthResponse({ error: "invalid_request", error_description: "token is required" }, 400);
   }
-  await revokeSession(env, token);
-  return oauthResponse({});
+  // RFC 7009: only refresh tokens are revocable here. A hint of access_token (or
+  // any unknown token) is a no-op success, and revoking an invalid token still
+  // returns 200 with an empty body so clients cannot probe token validity.
+  if ((params.get("token_type_hint") ?? "refresh_token") === "refresh_token") {
+    await revokeSession(env, token);
+  }
+  return new Response(null, {
+    status: 200,
+    headers: { "cache-control": "no-store", pragma: "no-cache" },
+  });
+};
+
+const handleOAuthIntrospect = async (env: Env, request: Request): Promise<Response> => {
+  if (!/^application\/x-www-form-urlencoded\b/i.test(request.headers.get("content-type") ?? "")) {
+    return oauthResponse(
+      { error: "invalid_request", error_description: "introspection requests must use application/x-www-form-urlencoded" },
+      400,
+    );
+  }
+  const authorized = await authorizeIntrospectionCaller(
+    env,
+    request.headers,
+    tokenEndpointRequest(request),
+  );
+  if (!authorized) {
+    return oauthResponse(
+      { error: "invalid_token", error_description: "introspection requires an authorized caller" },
+      401,
+      { "www-authenticate": 'Bearer error="invalid_token"' },
+    );
+  }
+  const params = new URLSearchParams(await request.text());
+  const token = params.get("token") ?? "";
+  return oauthResponse(await introspectToken(env, token));
 };
 
 export default {
@@ -358,6 +407,10 @@ export default {
 
     if (url.pathname === "/oauth/revoke" && request.method === "POST") {
       return withCors(await handleOAuthRevoke(env, request), cors);
+    }
+
+    if (url.pathname === "/oauth/introspect" && request.method === "POST") {
+      return withCors(await handleOAuthIntrospect(env, request), cors);
     }
 
     if (url.pathname === "/v1/traces" && request.method === "POST") {
