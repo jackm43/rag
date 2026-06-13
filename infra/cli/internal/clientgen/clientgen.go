@@ -116,7 +116,6 @@ func renderService(app string, services []serviceBinding, extra string) string {
 	b.WriteString("  connectorServiceClient,\n")
 	b.WriteString("  type ConnectorConfig,\n")
 	b.WriteString("  type Identity,\n")
-	b.WriteString("  type ProxyTarget,\n")
 	b.WriteString("} from \"../../../sdk/ts/src\";\n\n")
 	fmt.Fprintf(&b, "export const APPLICATION = %q;\n", app)
 	fmt.Fprintf(&b, "export const RPC_PREFIX = \"/%s.v1.\";\n\n", app)
@@ -128,11 +127,6 @@ func renderService(app string, services []serviceBinding, extra string) string {
 		fmt.Fprintf(&b, "): Client<typeof %s> =>\n", service.Name)
 		fmt.Fprintf(&b, "  connectorServiceClient({ ...connection, application: APPLICATION }, identity, %s);\n\n", service.Name)
 	}
-	b.WriteString("export const proxyTarget = (target: { endpoint: string; scopes?: string[]; fetch?: typeof fetch }): ProxyTarget => ({\n")
-	b.WriteString("  prefix: RPC_PREFIX,\n")
-	b.WriteString("  application: APPLICATION,\n")
-	b.WriteString("  ...target,\n")
-	b.WriteString("});\n")
 	b.WriteString(extra)
 	return b.String()
 }

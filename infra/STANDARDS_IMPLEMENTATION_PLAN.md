@@ -177,6 +177,21 @@ application authors write only business logic.
   imports; consolidate the duplicate `proxyTarget`/`proxyTargetFor`; and
   reorganize `sdk/ts/src` into `oauth2/` and `resource/` per the target layout.
 
+Landed in this pass: the SDK `platformAuthenticator(env, audience)` helper now
+owns all worker auth wiring (issuer/JWKS/STS/session-chain), adopted by the
+ragbot, aigateway, deploy, cloudflare, and discovery workers;
+`TrustZoneWebAuth.bootstrap()` collapses the browser init/callback/refresh
+sequence (adopted by chat and console); and the dead generated `proxyTarget`
+duplication was removed in favour of the SDK `proxyTargetFor`.
+
+Remaining (deliberately deferred as high-churn / low consumer value): npm
+workspace package names and the `sdk/ts/src` `oauth2/`/`resource/` directory
+reorganization (broad import churn across Go interop, six workers, and two
+frontends); generated per-app worker entrypoints with an `idp` hybrid variant
+(the gateway and ragbot workers are HTTP+RPC hybrids, not pure RPC);
+manifest-driven generated target accessors replacing `connector.ts`;
+per-application client namespacing; and React `AuthProvider`/`useAuth` bindings.
+
 ## Work Completed In This Pass
 
 - Added standards-shaped gateway metadata builders and well-known routes.

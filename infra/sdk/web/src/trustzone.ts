@@ -47,6 +47,19 @@ export type TrustZoneWebAuthOptions = {
   sameOrigin?: string[];
 };
 
+export type BootstrapOptions = TrustZoneWebAuthOptions & {
+  // Path the OIDC provider redirects back to. Defaults to "/callback".
+  callbackPath?: string;
+  // When false, a missing session resolves to "unauthenticated" instead of
+  // starting an interactive login redirect.
+  interactive?: boolean;
+};
+
+export type BootstrapResult = {
+  auth: TrustZoneWebAuth;
+  status: EnsureResult;
+};
+
 // Thrown when the session is gone and the caller must route back through
 // ensureAuthenticated().
 export class NeedsLoginError extends Error {
@@ -218,6 +231,24 @@ export class TrustZoneWebAuth {
   constructor(discoveryUrl: string, options: TrustZoneWebAuthOptions = {}) {
     this.discoveryUrl = discoveryUrl;
     this.sameOrigin = options.sameOrigin ?? [];
+  }
+
+  // bootstrap is the one-call page entry: fetch discovery and load the device
+  // key (init), complete the OIDC callback when on the callback route, then
+  // recover or refresh the session (ensureAuthenticated). Pages branch on the
+  // returned status: "login_redirect" means navigation has started (stop
+  // rendering); otherwise render using the returned auth instance.
+  static async bootstrap(discoveryUrl: string, options: BootstrapOptions = {}): Promise<BootstrapResult> {
+    const { callbackPath = "/callback", interactive = true, ...authOptions } = options;
+    const auth = new TrustZoneWebAuth(discoveryUrl, authOptions);
+    await auth.init();
+    if (location.pathname === callbackPath) {
+      await auth.handleRedirect();
+      history.replaceState(null, "", "/");
+      return { auth, status: auth.isAuthenticated() ? "active" : "unauthenticated" };
+    }
+    const status = await auth.ensureAuthenticated({ interactive });
+    return { auth, status };
   }
 
   private rewrite(url: string): string {

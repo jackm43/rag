@@ -2,15 +2,12 @@ import { Code, ConnectError, type ConnectRouter } from "@connectrpc/connect";
 
 import { ChatService } from "../../server/aigateway/v1/chat_service_pb";
 import {
-  anyAuthenticator,
   errorMessage,
   logger,
   parseTraceparent,
+  platformAuthenticator,
   protect,
   requireIdentity,
-  serviceCredentialFromEnv,
-  sessionChainAuthenticator,
-  stsAuthenticator,
   type AuthPolicy,
   type Tracer,
 } from "../../../../sdk/ts/src";
@@ -64,30 +61,12 @@ const toConnectError = (error: unknown): ConnectError => {
 };
 
 export const registerAiGatewayServices = (router: ConnectRouter, env: Env, tracer: Tracer) => {
-  const issuer = (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, "");
-  const verify = {
-    jwksUrl: `${issuer}/.well-known/jwks.json`,
-    gatewayFetch: env.AUTH_GATEWAY ? (input: RequestInfo | URL, init?: RequestInit) => env.AUTH_GATEWAY!.fetch(input, init) : undefined,
-  };
-  // Two ways in: a normal audience-scoped STS token (CLI, chained services),
-  // or a DPoP-bound gateway session token from a dumb browser client — the
-  // worker then mints its own audience token via client-credentials chaining
-  // (sessionChainAuthenticator), so the browser never handles audiences or
-  // secrets.
-  const credential = serviceCredentialFromEnv(env);
-  const authenticators = [stsAuthenticator({ issuer, audience: "aigateway", ...verify })];
-  if (credential) {
-    authenticators.push(
-      sessionChainAuthenticator({
-        gatewayUrl: issuer,
-        audience: "aigateway",
-        credential,
-        verify,
-        fetch: env.AUTH_GATEWAY ? (input, init) => env.AUTH_GATEWAY!.fetch(input, init) : undefined,
-      }),
-    );
-  }
-  const policy: AuthPolicy = { authenticate: anyAuthenticator(...authenticators) };
+  // Accepts a normal audience-scoped STS token (CLI, chained services) and,
+  // because this worker carries a service credential, a DPoP-bound gateway
+  // session token from a dumb browser client (the SDK mints the audience token
+  // via client-credentials chaining). All issuer/JWKS/credential wiring lives
+  // in the SDK helper.
+  const policy: AuthPolicy = { authenticate: platformAuthenticator(env, "aigateway") };
   const connectors = buildConnectors(env, tracer);
 
   router.service(

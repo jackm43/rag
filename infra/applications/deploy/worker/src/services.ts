@@ -1,22 +1,12 @@
 import type { ConnectRouter } from "@connectrpc/connect";
 
 import { DeployService } from "../../server/deploy/v1/deploy_service_pb";
-import { logger, protect, requireIdentity, stsAuthenticator, type AuthPolicy } from "../../../../sdk/ts/src";
+import { logger, platformAuthenticator, protect, requireIdentity, type AuthPolicy } from "../../../../sdk/ts/src";
 import { workerServiceClient } from "./connector";
 import type { Env } from "./types";
 
 export const registerDeployServices = (router: ConnectRouter, env: Env) => {
-  const issuer = (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, "");
-  const policy: AuthPolicy = {
-    authenticate: stsAuthenticator({
-      issuer,
-      audience: "deploy",
-      jwksUrl: `${issuer}/.well-known/jwks.json`,
-      gatewayFetch: env.AUTH_GATEWAY
-        ? (input, init) => env.AUTH_GATEWAY!.fetch(input, init)
-        : undefined,
-    }),
-  };
+  const policy: AuthPolicy = { authenticate: platformAuthenticator(env, "deploy") };
 
   router.service(
     DeployService,

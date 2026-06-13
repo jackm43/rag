@@ -10,7 +10,6 @@ import {
   connectorServiceClient,
   type ConnectorConfig,
   type Identity,
-  type ProxyTarget,
 } from "../../../sdk/ts/src";
 
 export const APPLICATION = "idp";
@@ -48,9 +47,4 @@ export const traceServiceClient = (
 ): Client<typeof TraceService> =>
   connectorServiceClient({ ...connection, application: APPLICATION }, identity, TraceService);
 
-export const proxyTarget = (target: { endpoint: string; scopes?: string[]; fetch?: typeof fetch }): ProxyTarget => ({
-  prefix: RPC_PREFIX,
-  application: APPLICATION,
-  ...target,
-});
 

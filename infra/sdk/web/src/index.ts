@@ -1,6 +1,8 @@
 export {
   TrustZoneWebAuth,
   NeedsLoginError,
+  type BootstrapOptions,
+  type BootstrapResult,
   type SessionState,
   type EnsureResult,
   type DiscoveryApplication,

@@ -6,7 +6,6 @@ import {
   connectorServiceClient,
   type ConnectorConfig,
   type Identity,
-  type ProxyTarget,
 } from "../../../sdk/ts/src";
 
 export const APPLICATION = "discovery";
@@ -20,11 +19,6 @@ export const discoveryServiceClient = (
 ): Client<typeof DiscoveryService> =>
   connectorServiceClient({ ...connection, application: APPLICATION }, identity, DiscoveryService);
 
-export const proxyTarget = (target: { endpoint: string; scopes?: string[]; fetch?: typeof fetch }): ProxyTarget => ({
-  prefix: RPC_PREFIX,
-  application: APPLICATION,
-  ...target,
-});
 
 export * from "../graphql";
 

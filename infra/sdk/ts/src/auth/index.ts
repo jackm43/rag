@@ -22,3 +22,4 @@ export {
   type WebBffTarget,
 } from "./web-bff";
 export { sessionChainAuthenticator, type SessionChainConfig } from "./sessionchain";
+export { platformAuthenticator, type PlatformAuthEnv } from "./platform";
