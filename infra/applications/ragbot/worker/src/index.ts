@@ -6,7 +6,7 @@ import {
   serviceCredentialFromEnv,
   traceRpc,
   tracerFromEnv,
-} from "../../../../sdk/ts/src";
+} from "@platy/sdk";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
 import { DiscordGateway } from "./gateway";

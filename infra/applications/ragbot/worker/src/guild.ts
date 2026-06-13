@@ -1,4 +1,4 @@
-import { logger } from "../../../../sdk/ts/src";
+import { logger } from "@platy/sdk";
 import type { Env } from "./types";
 
 export const parseAllowedGuildIds = (raw: string | undefined): Set<string> | null => {

@@ -2,7 +2,7 @@
 import type { Client } from "@connectrpc/connect";
 
 import { ChatService } from "../server/aigateway/v1/chat_service_pb";
-import { webClient, type BrowserAuth, type WebClientOptions } from "../../../sdk/web/src";
+import { webClient, type BrowserAuth, type WebClientOptions } from "@platy/web";
 
 export const APPLICATION = "aigateway";
 

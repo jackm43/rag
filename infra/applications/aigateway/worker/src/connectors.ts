@@ -6,7 +6,7 @@ import {
   type Identity,
   type SpanContext,
   type Tracer,
-} from "../../../../sdk/ts/src";
+} from "@platy/sdk";
 import type { ToolCall, ToolDefinition, UpstreamMessage } from "./gateway";
 import type { Env } from "./types";
 

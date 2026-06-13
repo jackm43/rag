@@ -12,7 +12,12 @@
       "@cloudflare/workers-types"
     ],
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@platy/sdk": ["infra/sdk/ts/src/index.ts"],
+      "@platy/web": ["infra/sdk/web/src/index.ts"]
+    }
   },
   "include": [
     "infra/sdk/ts/src/**/*.ts",

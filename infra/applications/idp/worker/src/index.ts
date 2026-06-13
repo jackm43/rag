@@ -6,7 +6,7 @@ import {
   tracerFromEnv,
   verifyDpopProof,
   type RequestDescriptor,
-} from "../../../../sdk/ts/src";
+} from "@platy/sdk";
 import { getJwks } from "./keys";
 import { completeProviderOAuthCallback } from "./provider-oauth";
 import {

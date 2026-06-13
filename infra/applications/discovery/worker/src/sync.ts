@@ -9,7 +9,7 @@ import {
   serviceCredentialFromEnv,
   TOKEN_TYPE_SERVICE_CREDENTIAL,
   type Identity,
-} from "../../../../sdk/ts/src";
+} from "@platy/sdk";
 import type { DiscoveryStore, RegistrySnapshot, SyncStateView } from "./data";
 import type { Env } from "./types";
 

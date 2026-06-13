@@ -6,7 +6,12 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@platy/web": ["src/index.ts"],
+      "@platy/sdk": ["../ts/src/index.ts"]
+    }
   },
   "include": ["src/**/*.ts", "../../applications/*/web/**/*.ts"]
 }

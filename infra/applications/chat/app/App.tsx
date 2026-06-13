@@ -8,7 +8,7 @@ import {
   registerChatInstance,
   type ChatInstance,
   type BrowserAuth,
-} from "../../../sdk/web/src";
+} from "@platy/web";
 
 import { DataPanel } from "./DataPanel";
 import { LiveTraces } from "./LiveTraces";

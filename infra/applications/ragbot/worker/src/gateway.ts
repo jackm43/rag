@@ -1,4 +1,4 @@
-import { errorMessage, logger } from "../../../../sdk/ts/src";
+import { errorMessage, logger } from "@platy/sdk";
 import { fetchBotUserId } from "./discord";
 import { handleGatewayMessageCreate } from "./mention";
 import type { DiscordMessage, Env } from "./types";

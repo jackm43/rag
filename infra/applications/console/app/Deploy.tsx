@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { BrowserAuth } from "../../../sdk/web/src";
+import type { BrowserAuth } from "@platy/web";
 
 // Deploy view: lists worker scripts via the deploy application (chained
 // through the BFF). The deploy service uploads prebuilt bundles

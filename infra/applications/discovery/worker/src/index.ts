@@ -1,4 +1,4 @@
-import { createPlatformRpcWorker, errorMessage, logger } from "../../../../sdk/ts/src";
+import { createPlatformRpcWorker, errorMessage, logger } from "@platy/sdk";
 import { d1Store } from "./data";
 import { registerDiscoveryServices } from "./services";
 import { selfIdentity, syncRegistry } from "./sync";

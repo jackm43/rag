@@ -3,7 +3,7 @@ import { selfIdentity } from "./connector";
 import { loadConfig, type BotConfig } from "./config";
 import { fetchBotRoleIds, fetchChannelMessages, fetchMessage, postChannelMessage } from "./discord";
 import { rejectDisallowedGuild } from "./guild";
-import { errorMessage, logger, type Identity } from "../../../../sdk/ts/src";
+import { errorMessage, logger, type Identity } from "@platy/sdk";
 import type { AiChannelJob, AiJob, ChannelPromptSource, DiscordMessage, Env } from "./types";
 
 const MAX_DISCORD_MESSAGE_LENGTH = 1900;

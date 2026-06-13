@@ -1,4 +1,4 @@
-import { createPlatformRpcWorker } from "../../../../sdk/ts/src";
+import { createPlatformRpcWorker } from "@platy/sdk";
 import { registerDeployServices } from "./services";
 import type { Env } from "./types";
 

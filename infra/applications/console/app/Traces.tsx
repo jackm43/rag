@@ -6,7 +6,7 @@ import {
   registerChatInstance,
   type ChatInstance,
   type BrowserAuth,
-} from "../../../sdk/web/src";
+} from "@platy/web";
 
 // Trace views over the gateway's TraceService: a recent-trace list with
 // per-trace waterfall detail, and a live tail (server-streaming RPC) that

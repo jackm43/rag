@@ -34,7 +34,7 @@ import {
   type Authenticator,
   type Identity,
   type RequestDescriptor,
-} from "../../../../sdk/ts/src";
+} from "@platy/sdk";
 import { signToken } from "./keys";
 import { verifyGatewayStsToken, verifyGatewayTokenClaims } from "./sts-verify";
 import {

@@ -7,7 +7,7 @@ import {
   protect,
   requireIdentity,
   type AuthPolicy,
-} from "../../../../sdk/ts/src";
+} from "@platy/sdk";
 import { d1Store } from "./data";
 import { executeQuery } from "./graphql";
 import { syncRegistry } from "./sync";

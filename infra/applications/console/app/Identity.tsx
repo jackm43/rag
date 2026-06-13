@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { BrowserAuth } from "../../../sdk/web/src";
+import type { BrowserAuth } from "@platy/web";
 
 // Identity view: who the gateway thinks this session is (Introspect on the
 // session token) plus the local session state held by the web auth SDK.

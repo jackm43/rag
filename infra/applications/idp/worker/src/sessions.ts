@@ -1,4 +1,4 @@
-import { logger, type Identity } from "../../../../sdk/ts/src";
+import { logger, type Identity } from "@platy/sdk";
 import { audit, secretHash, secretHashMatches } from "./registry";
 import type { Env } from "./types";
 

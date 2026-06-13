@@ -1,6 +1,6 @@
 import { Code, ConnectError } from "@connectrpc/connect";
 
-import { providerApiClient, type Identity, type PlatformClient } from "../../../../sdk/ts/src";
+import { providerApiClient, type Identity, type PlatformClient } from "@platy/sdk";
 import type { Env } from "./types";
 
 export const API_BASE_URL = "https://api.cloudflare.com/client/v4";

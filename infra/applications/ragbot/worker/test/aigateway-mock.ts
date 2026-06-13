@@ -1,6 +1,6 @@
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 
-import { TOKEN_TYPE_SERVICE_CREDENTIAL } from "../../../../sdk/ts/src";
+import { TOKEN_TYPE_SERVICE_CREDENTIAL } from "@platy/sdk";
 
 export const GATEWAY_ISSUER = "https://auth-gateway.example.com";
 export const TEST_SERVICE_CLIENT_ID = "svc_ragbot_test";

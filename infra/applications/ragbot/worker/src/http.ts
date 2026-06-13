@@ -1,4 +1,4 @@
-import { secretsMatch, verifySignedWebhook } from "../../../../sdk/ts/src";
+import { secretsMatch, verifySignedWebhook } from "@platy/sdk";
 
 import type { DiscordInteraction } from "./types";
 

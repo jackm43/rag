@@ -7,7 +7,7 @@ import {
   serviceCredentialFromEnv,
   TOKEN_TYPE_SERVICE_CREDENTIAL,
   type Identity,
-} from "../../../../sdk/ts/src";
+} from "@platy/sdk";
 import type { Env } from "./types";
 
 export const AIGATEWAY_CHAT_SCOPES = [

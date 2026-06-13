@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { BrowserAuth } from "../../../sdk/web/src";
+import { BrowserAuth } from "@platy/web";
 
 import { App } from "./App";
 

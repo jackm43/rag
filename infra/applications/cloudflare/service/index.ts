@@ -7,7 +7,7 @@ import {
   connectorServiceClient,
   type ConnectorConfig,
   type Identity,
-} from "../../../sdk/ts/src";
+} from "@platy/sdk";
 
 export const APPLICATION = "cloudflare";
 export const RPC_PREFIX = "/cloudflare.v1.";

@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { BrowserAuth } from "../../../sdk/web/src";
+import type { BrowserAuth } from "@platy/web";
 
 // Read-only data + platform APIs callable from the page. Connect entries go
 // same-origin through the chat BFF (session token + DPoP proof; the worker

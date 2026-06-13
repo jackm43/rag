@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { BrowserAuth } from "../../../sdk/web/src";
+import type { BrowserAuth } from "@platy/web";
 
 // Ragbot runtime configuration: list with inline editing (update / reset to
 // default) through the BFF-chained ConfigService, plus the Discord gateway

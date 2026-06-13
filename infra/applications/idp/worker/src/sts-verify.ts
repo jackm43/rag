@@ -1,6 +1,6 @@
 import { createLocalJWKSet, jwtVerify } from "jose";
 
-import { actorChainFromClaim, verifyStsToken, type Identity } from "../../../../sdk/ts/src";
+import { actorChainFromClaim, verifyStsToken, type Identity } from "@platy/sdk";
 import { getJwks } from "./keys";
 import type { Env } from "./types";
 

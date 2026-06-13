@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "infra/sdk/ts",
+    "infra/sdk/web"
+  ],
   "scripts": {
     "dev": "go run jsmunro.me/platy/cli dev vars ragbot && wrangler dev -c infra/applications/ragbot/worker/wrangler.jsonc",
     "deploy": "wrangler deploy -c infra/applications/ragbot/worker/wrangler.jsonc",

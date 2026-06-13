@@ -1,7 +1,7 @@
 import { Code, ConnectError } from "@connectrpc/connect";
 
 import { workerServiceClient as cloudflareWorkerServiceClient } from "../../../cloudflare/service";
-import { serviceConnection, type Identity } from "../../../../sdk/ts/src";
+import { serviceConnection, type Identity } from "@platy/sdk";
 import type { Env } from "./types";
 
 export const CLOUDFLARE_WORKER_SCOPES = [

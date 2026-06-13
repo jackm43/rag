@@ -1,7 +1,7 @@
 import type { JsonObject } from "@bufbuild/protobuf";
 import { Code, ConnectError } from "@connectrpc/connect";
 
-import type { PlatformClient } from "../../../../sdk/ts/src/client/fetch";
+import type { PlatformClient } from "@platy/sdk";
 import type {
   DeployWorkerRequest,
   ListWorkersRequest,

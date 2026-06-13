@@ -1,7 +1,7 @@
 import type { BotConfig } from "./config";
 import { chatServiceClient } from "./connector";
 import type { Env } from "./types";
-import type { Identity } from "../../../../sdk/ts/src";
+import type { Identity } from "@platy/sdk";
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant";

@@ -1,7 +1,7 @@
 import type { ConnectRouter } from "@connectrpc/connect";
 
 import { DeployService } from "../../server/deploy/v1/deploy_service_pb";
-import { logger, platformAuthenticator, protect, requireIdentity, type AuthPolicy } from "../../../../sdk/ts/src";
+import { logger, platformAuthenticator, protect, requireIdentity, type AuthPolicy } from "@platy/sdk";
 import { workerServiceClient } from "./connector";
 import type { Env } from "./types";
 

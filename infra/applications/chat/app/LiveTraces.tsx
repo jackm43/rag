@@ -6,7 +6,7 @@ import {
   registerChatInstance,
   type ChatInstance,
   type BrowserAuth,
-} from "../../../sdk/web/src";
+} from "@platy/web";
 
 // Live trace flow: a server-streaming RPC (idp.v1.TraceService/StreamTraces)
 // pushes spans as the gateway ingests them. Every browser request roots a

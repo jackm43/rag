@@ -1,7 +1,7 @@
 import { Code, ConnectError } from "@connectrpc/connect";
 import { createLocalJWKSet, jwtVerify } from "jose";
 
-import { logger } from "../../../../sdk/ts/src";
+import { logger } from "@platy/sdk";
 import { getJwks, signToken } from "./keys";
 import { getApplication } from "./registry";
 import { verifyGatewayStsToken } from "./sts-verify";

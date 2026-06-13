@@ -6,7 +6,7 @@ import {
   connectorServiceClient,
   type ConnectorConfig,
   type Identity,
-} from "../../../sdk/ts/src";
+} from "@platy/sdk";
 
 export const APPLICATION = "discovery";
 export const RPC_PREFIX = "/discovery.v1.";

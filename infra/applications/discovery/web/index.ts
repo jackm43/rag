@@ -2,7 +2,7 @@
 import type { Client } from "@connectrpc/connect";
 
 import { DiscoveryService } from "../server/discovery/v1/discovery_service_pb";
-import { webClient, type BrowserAuth, type WebClientOptions } from "../../../sdk/web/src";
+import { webClient, type BrowserAuth, type WebClientOptions } from "@platy/web";
 
 export const APPLICATION = "discovery";
 

@@ -11,7 +11,7 @@ import {
   connectorServiceClient,
   type ConnectorConfig,
   type Identity,
-} from "../../../sdk/ts/src";
+} from "@platy/sdk";
 
 export const APPLICATION = "ragbot";
 export const RPC_PREFIX = "/ragbot.v1.";

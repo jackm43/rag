@@ -116,7 +116,7 @@ func renderService(app string, services []serviceBinding, extra string) string {
 	b.WriteString("  connectorServiceClient,\n")
 	b.WriteString("  type ConnectorConfig,\n")
 	b.WriteString("  type Identity,\n")
-	b.WriteString("} from \"../../../sdk/ts/src\";\n\n")
+	b.WriteString("} from \"@platy/sdk\";\n\n")
 	fmt.Fprintf(&b, "export const APPLICATION = %q;\n", app)
 	fmt.Fprintf(&b, "export const RPC_PREFIX = \"/%s.v1.\";\n\n", app)
 	b.WriteString("export type Connection = Omit<ConnectorConfig, \"application\">;\n\n")
@@ -138,7 +138,7 @@ func renderWeb(app string, services []serviceBinding, extra string) string {
 	for _, service := range services {
 		fmt.Fprintf(&b, "import { %s } from %q;\n", service.Name, service.ImportPath)
 	}
-	b.WriteString("import { webClient, type BrowserAuth, type WebClientOptions } from \"../../../sdk/web/src\";\n\n")
+	b.WriteString("import { webClient, type BrowserAuth, type WebClientOptions } from \"@platy/web\";\n\n")
 	fmt.Fprintf(&b, "export const APPLICATION = %q;\n\n", app)
 	for _, service := range services {
 		fmt.Fprintf(&b, "export const %s = (\n", service.FactoryName)

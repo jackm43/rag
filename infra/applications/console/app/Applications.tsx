@@ -9,7 +9,7 @@ import {
   type ApplicationInfo,
   type SyncState,
 } from "../../discovery/web";
-import type { BrowserAuth } from "../../../sdk/web/src";
+import type { BrowserAuth } from "@platy/web";
 
 // Application registry view: browse from the discovery GraphQL read model,
 // mutate through the gateway's RegistryService (same-origin zone routes), and

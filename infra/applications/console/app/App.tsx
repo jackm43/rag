@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { discoveryServiceClient } from "../../discovery/web";
-import type { BrowserAuth } from "../../../sdk/web/src";
+import type { BrowserAuth } from "@platy/web";
 
 import { Applications } from "./Applications";
 import { Config } from "./Config";

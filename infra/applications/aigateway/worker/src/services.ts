@@ -10,7 +10,7 @@ import {
   requireIdentity,
   type AuthPolicy,
   type Tracer,
-} from "../../../../sdk/ts/src";
+} from "@platy/sdk";
 import { assistantToolCallMessage, buildConnectors, runToolCalls } from "./connectors";
 import {
   complete,

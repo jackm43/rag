@@ -15,7 +15,7 @@ import {
   protect,
   requireIdentity,
   type AuthPolicy,
-} from "../../../../sdk/ts/src";
+} from "@platy/sdk";
 import { CONFIG_DEFAULTS, deleteSetting, getSettings, isConfigKey, setSetting } from "./config";
 import { postChannelMessage } from "./discord";
 import { recordChannelChatInteraction, runChannelChat, streamChannelChat, type ChannelChatInput } from "./mention";
