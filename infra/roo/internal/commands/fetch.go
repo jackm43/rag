@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -10,7 +11,7 @@ import (
 
 	"jsmunro.me/platy/roo/internal/output"
 	"jsmunro.me/platy/sdk/client"
-	oauthclient "jsmunro.me/platy/sdk/oauth2/client"
+	"jsmunro.me/platy/sdk/oauth2/oauthclient"
 )
 
 func FetchCommand() *cobra.Command {
@@ -49,7 +50,7 @@ func runFetch(ctx context.Context, target, data string, stream, streamJSON bool)
 	if err != nil {
 		output.Fail("%v", err)
 	}
-	c := requestClient()
+	c := requestClient(ctx)
 	if parsed.AppOnly() {
 		app, err := c.Session.Application(ctx, parsed.Application)
 		if err != nil {
@@ -87,15 +88,15 @@ func invokeWithProviderAuth(ctx context.Context, c *client.Client, application, 
 	if err == nil {
 		return decoded, nil
 	}
-	url, ok := client.IsProviderAuthorizationError(err)
-	if !ok {
+	var provErr *client.ProviderAuthorizationError
+	if !errors.As(err, &provErr) {
 		return nil, err
 	}
 	if _, err := c.Session.UserToken(ctx, false); err != nil {
 		return nil, fmt.Errorf("gateway authentication: %w", err)
 	}
-	output.Logger.Info("provider authorization required", "application", application, "url", url)
-	oauthclient.OpenBrowser(output.Logger, url)
+	output.Logger.Info("provider authorization required", "application", application, "url", provErr.AuthorizeURL)
+	oauthclient.OpenBrowser(output.Logger, provErr.AuthorizeURL)
 	output.Logger.Info("complete authorization in the browser; waiting for provider grant")
 	const attempts = 90
 	for attempt := 1; attempt <= attempts; attempt++ {
@@ -104,7 +105,7 @@ func invokeWithProviderAuth(ctx context.Context, c *client.Client, application, 
 		if err == nil {
 			return decoded, nil
 		}
-		if _, still := client.IsProviderAuthorizationError(err); !still {
+		if !errors.As(err, &provErr) {
 			return nil, err
 		}
 		if attempt%15 == 0 {

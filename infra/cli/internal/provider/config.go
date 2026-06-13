@@ -24,7 +24,11 @@ func LoadConfig(root string) ProviderConfig {
 		output.Fail("decode %s: %v", ConfigRelativePath, err)
 	}
 	if len(config.Organization.TrustZones) == 0 {
-		config.Organization = LoadOrganization(root)
+		organization, err := LoadOrganization(root)
+		if err != nil {
+			output.Fail("%v", err)
+		}
+		config.Organization = organization
 	}
 	for tier, provisioned := range config.TrustZoneProvisioned {
 		zone, ok := config.Organization.TrustZones[tier]

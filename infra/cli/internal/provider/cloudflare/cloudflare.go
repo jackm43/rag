@@ -12,14 +12,14 @@ import (
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/provider/core"
 	cfcloud "jsmunro.me/platy/sdk/extensions/cloudflare"
-	oauthclient "jsmunro.me/platy/sdk/oauth2/client"
+	"jsmunro.me/platy/sdk/oauth2/oauthclient"
 )
 
 type cloudflareProvider struct {
 	client *cf.Client
 }
 
-func New(apiToken string) (core.IdentityProxy, error) {
+func New(apiToken string) (core.OAuthClientProvisioner, error) {
 	if strings.TrimSpace(apiToken) == "" {
 		return nil, fmt.Errorf("cloudflare api token is required")
 	}

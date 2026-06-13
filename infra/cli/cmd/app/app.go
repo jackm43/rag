@@ -301,7 +301,7 @@ func registerApplication(
 		output.Logger.Info("skipping impersonation access app (impersonatable: false)", "application", name)
 	}
 	providerOAuthClientID, providerOAuth := provisionProviderOAuth(ctx, name, app, providerConfig)
-	s := platform.Session()
+	s := platform.Session(ctx)
 	response, err := s.RegistryClient().RegisterApplication(ctx, connect.NewRequest(&idpv1.RegisterApplicationRequest{
 		Name:                        name,
 		Endpoint:                    endpoint,
@@ -343,7 +343,7 @@ func registerApplication(
 	} else {
 		output.Logger.Info("application has a registered client but no local credential; run platy app rotate-client", "application", name)
 	}
-	document := applications.Document(response.Msg.Application, s.GatewayURL, credential, providerOAuth, fullNames)
+	document := applications.Document(response.Msg.Application, s.GatewayURL(), credential, providerOAuth, fullNames)
 	applications.MergeRepoMetadata(root, document)
 	applications.WriteRepoMetadata(root, document)
 	syncGatewayProviderOAuthVars(root)
@@ -355,7 +355,7 @@ func registerApplication(
 			output.Logger.Info("provider oauth clients not pushed to gateway; run platy deploy idp", "error", err)
 		}
 	}
-	platform.Session().InvalidateDiscovery()
+	platform.Session(ctx).InvalidateDiscovery()
 	return map[string]any{
 		"application": applications.JSON(response.Msg.Application),
 		"credential":  credential,
@@ -374,7 +374,7 @@ func Sync(ctx context.Context, prune bool) {
 }
 
 func List(ctx context.Context) {
-	response, err := platform.Session().RegistryClient().ListApplications(ctx, connect.NewRequest(&idpv1.ListApplicationsRequest{}))
+	response, err := platform.Session(ctx).RegistryClient().ListApplications(ctx, connect.NewRequest(&idpv1.ListApplicationsRequest{}))
 	if err != nil {
 		output.Fail("list applications: %v", err)
 	}
@@ -387,7 +387,7 @@ func List(ctx context.Context) {
 }
 
 func Get(ctx context.Context, name string) {
-	response, err := platform.Session().RegistryClient().GetApplication(ctx, connect.NewRequest(&idpv1.GetApplicationRequest{Name: name}))
+	response, err := platform.Session(ctx).RegistryClient().GetApplication(ctx, connect.NewRequest(&idpv1.GetApplicationRequest{Name: name}))
 	if err != nil {
 		output.Fail("get application: %v", err)
 	}
@@ -395,7 +395,7 @@ func Get(ctx context.Context, name string) {
 }
 
 func Delete(ctx context.Context, name string) {
-	response, err := platform.Session().RegistryClient().DeleteApplication(ctx, connect.NewRequest(&idpv1.DeleteApplicationRequest{Name: name}))
+	response, err := platform.Session(ctx).RegistryClient().DeleteApplication(ctx, connect.NewRequest(&idpv1.DeleteApplicationRequest{Name: name}))
 	if err != nil {
 		output.Fail("delete application: %v", err)
 	}
@@ -410,7 +410,7 @@ func RotateClient(ctx context.Context, name string) {
 	root := platform.RepoRoot()
 	loaded := manifest.Load(root)
 	provider := loaded.Application(name).Provider()
-	s := platform.Session()
+	s := platform.Session(ctx)
 	response, err := s.RegistryClient().RegisterClient(ctx, connect.NewRequest(&idpv1.RegisterClientRequest{Application: name}))
 	if err != nil {
 		output.Fail("rotate client: %v", err)
@@ -420,7 +420,7 @@ func RotateClient(ctx context.Context, name string) {
 	if err != nil {
 		output.Fail("application metadata: %v", err)
 	}
-	registered.GatewayURL = s.GatewayURL
+	registered.GatewayURL = s.GatewayURL()
 	registered.Credential = credential
 	applications.MergeRepoMetadata(root, registered)
 	applications.WriteRepoMetadata(root, registered)

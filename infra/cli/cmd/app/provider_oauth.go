@@ -33,7 +33,7 @@ func provisionProviderOAuth(
 		output.Fail("provider oauth client: %v", err)
 	}
 	callbackURL := strings.TrimRight(platform.DefaultGatewayURL, "/")
-	if gatewayURL := platform.Session().GatewayURL; gatewayURL != "" {
+	if gatewayURL := platform.Session(ctx).GatewayURL(); gatewayURL != "" {
 		callbackURL = strings.TrimRight(gatewayURL, "/")
 	}
 	clientID, clientSecret, _, err := proxy.EnsureApplicationOAuthClient(
@@ -113,7 +113,7 @@ func RotateProviderOAuth(ctx context.Context, name string) {
 	if err != nil {
 		output.Fail("store provider oauth credential: %v", err)
 	}
-	registered, err := platform.Session().Application(ctx, name)
+	registered, err := platform.Session(ctx).Application(ctx, name)
 	if err != nil {
 		output.Fail("application metadata: %v", err)
 	}
@@ -146,7 +146,7 @@ func resolveProviderOAuthCredential(ctx context.Context, root, name string, app 
 		return nil
 	}
 	if document.ProviderOAuthClientID == "" {
-		registered, err := platform.Session().RegistryClient().GetApplication(ctx, connect.NewRequest(&idpv1.GetApplicationRequest{Name: name}))
+		registered, err := platform.Session(ctx).RegistryClient().GetApplication(ctx, connect.NewRequest(&idpv1.GetApplicationRequest{Name: name}))
 		if err != nil || registered.Msg.Application.GetProviderOauthClientId() == "" {
 			return nil
 		}

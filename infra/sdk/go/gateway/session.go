@@ -20,8 +20,8 @@ import (
 	"jsmunro.me/platy/sdk/apps/discovery"
 	"jsmunro.me/platy/sdk/httpclient"
 	"jsmunro.me/platy/sdk/identity"
-	oauthclient "jsmunro.me/platy/sdk/oauth2/client"
-	"jsmunro.me/platy/sdk/oauth2/client/dpop"
+	"jsmunro.me/platy/sdk/oauth2/oauthclient"
+	"jsmunro.me/platy/sdk/oauth2/oauthclient/dpop"
 	"jsmunro.me/platy/sdk/oauth2/token"
 	"jsmunro.me/platy/sdk/secrets"
 )
@@ -29,13 +29,13 @@ import (
 type CredentialResolver func(ctx context.Context, application string) (*secrets.ClientCredential, error)
 
 type Session struct {
-	GatewayURL         string
-	Store              oauthclient.TokenStore
-	Dpop               *dpop.Key
-	HTTPClient         *http.Client
-	Logger             *slog.Logger
-	RotateDeviceKey    func(context.Context) (*dpop.Key, error)
-	CredentialResolver CredentialResolver
+	gatewayURL         string
+	store              oauthclient.TokenStore
+	deviceKey          *dpop.Key
+	httpClient         *http.Client
+	log                *slog.Logger
+	rotateDeviceKey    func(context.Context) (*dpop.Key, error)
+	credentialResolver CredentialResolver
 
 	mu              sync.Mutex
 	discovery       *discovery.Document
@@ -43,19 +43,58 @@ type Session struct {
 	appTokens       map[string]*oauthclient.TokenSet
 }
 
-func NewSession(gatewayURL string, store oauthclient.TokenStore, logger *slog.Logger) *Session {
-	return &Session{
-		GatewayURL: strings.TrimRight(gatewayURL, "/"),
-		Store:      store,
-		HTTPClient: httpclient.Default(),
-		Logger:     logger,
-		appTokens:  map[string]*oauthclient.TokenSet{},
+// Option configures a Session at construction. The session is fully built by
+// NewSession; callers no longer reach in and mutate fields afterwards.
+type Option func(*Session)
+
+// WithLogger sets the structured logger.
+func WithLogger(logger *slog.Logger) Option {
+	return func(s *Session) { s.log = logger }
+}
+
+// WithHTTPClient overrides the default trust-aware HTTP client.
+func WithHTTPClient(client *http.Client) Option {
+	return func(s *Session) {
+		if client != nil {
+			s.httpClient = client
+		}
 	}
 }
 
+// WithDeviceKey binds a device DPoP key and an optional rotation function used
+// when the gateway forces re-binding.
+func WithDeviceKey(key *dpop.Key, rotate func(context.Context) (*dpop.Key, error)) Option {
+	return func(s *Session) {
+		s.deviceKey = key
+		s.rotateDeviceKey = rotate
+	}
+}
+
+// WithCredentialResolver supplies the service-credential lookup used for
+// chained and service-only token exchanges.
+func WithCredentialResolver(resolver CredentialResolver) Option {
+	return func(s *Session) { s.credentialResolver = resolver }
+}
+
+func NewSession(gatewayURL string, store oauthclient.TokenStore, opts ...Option) *Session {
+	s := &Session{
+		gatewayURL: strings.TrimRight(gatewayURL, "/"),
+		store:      store,
+		httpClient: httpclient.Default(),
+		appTokens:  map[string]*oauthclient.TokenSet{},
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// GatewayURL is the normalized gateway base URL this session talks to.
+func (s *Session) GatewayURL() string { return s.gatewayURL }
+
 func (s *Session) logger() *slog.Logger {
-	if s.Logger != nil {
-		return s.Logger
+	if s.log != nil {
+		return s.log
 	}
 	return slog.Default()
 }
@@ -66,7 +105,7 @@ func (s *Session) Discovery(ctx context.Context) (*discovery.Document, error) {
 	if s.discovery != nil {
 		return s.discovery, nil
 	}
-	document, err := discovery.Fetch(ctx, s.HTTPClient, s.GatewayURL)
+	document, err := discovery.Fetch(ctx, s.httpClient, s.gatewayURL)
 	if err != nil {
 		return nil, err
 	}
@@ -101,23 +140,23 @@ func (s *Session) oidcFlow(ctx context.Context) (*oauthclient.BrowserFlow, error
 			Scopes: []string{"openid", "email", "profile"},
 		},
 		Logger:     s.logger(),
-		HTTPClient: s.HTTPClient,
+		HTTPClient: s.httpClient,
 	}, nil
 }
 
 func (s *Session) userTokenKey() string {
-	return "session|" + s.GatewayURL
+	return "session|" + s.gatewayURL
 }
 
 func (s *Session) dpopProof(target, accessToken string) (string, error) {
-	if s.Dpop == nil {
+	if s.deviceKey == nil {
 		return "", fmt.Errorf("session has no device key for DPoP proofs")
 	}
 	proofURL := target
 	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
-		proofURL = s.GatewayURL + target
+		proofURL = s.gatewayURL + target
 	}
-	return s.Dpop.ProofWithAccessToken(http.MethodPost, proofURL, accessToken)
+	return s.deviceKey.ProofWithAccessToken(http.MethodPost, proofURL, accessToken)
 }
 
 func (s *Session) attachDpopForToken(header http.Header, target, accessToken string) error {
@@ -155,7 +194,7 @@ func (s *Session) tokenEndpoint(ctx context.Context) string {
 	if err == nil && discovered.Endpoints.TokenExchange != "" {
 		return discovered.Endpoints.TokenExchange
 	}
-	return s.GatewayURL + "/oauth/token"
+	return s.gatewayURL + "/oauth/token"
 }
 
 func (s *Session) revocationEndpoint(ctx context.Context) string {
@@ -163,7 +202,7 @@ func (s *Session) revocationEndpoint(ctx context.Context) string {
 	if err == nil && discovered.Endpoints.TokenRevoke != "" {
 		return discovered.Endpoints.TokenRevoke
 	}
-	return s.GatewayURL + "/oauth/revoke"
+	return s.gatewayURL + "/oauth/revoke"
 }
 
 func (s *Session) oauthPost(
@@ -181,12 +220,12 @@ func (s *Session) oauthPost(
 	if authToken != "" {
 		request.Header.Set("Authorization", "Bearer "+authToken)
 	}
-	if s.Dpop != nil {
+	if s.deviceKey != nil {
 		if err := s.attachDpopForToken(request.Header, endpoint, dpopAccessToken); err != nil {
 			return oauthTokenResponse{}, err
 		}
 	}
-	response, err := s.HTTPClient.Do(request)
+	response, err := s.httpClient.Do(request)
 	if err != nil {
 		return oauthTokenResponse{}, err
 	}
@@ -235,7 +274,7 @@ func (s *Session) refreshSession(ctx context.Context, refreshToken string) (*oau
 }
 
 func (s *Session) revokeCachedSession(ctx context.Context) {
-	cached := s.Store.Get(ctx, s.userTokenKey())
+	cached := s.store.Get(ctx, s.userTokenKey())
 	if cached != nil && cached.RefreshToken != "" {
 		endpoint := s.revocationEndpoint(ctx)
 		request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(url.Values{
@@ -246,7 +285,7 @@ func (s *Session) revokeCachedSession(ctx context.Context) {
 			s.logger().Debug("session revocation failed", "error", err)
 		} else {
 			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			if response, err := s.HTTPClient.Do(request); err != nil {
+			if response, err := s.httpClient.Do(request); err != nil {
 				s.logger().Debug("session revocation failed", "error", err)
 			} else {
 				_ = response.Body.Close()
@@ -258,7 +297,7 @@ func (s *Session) revokeCachedSession(ctx context.Context) {
 			}
 		}
 	}
-	if err := s.Store.Delete(ctx, s.userTokenKey()); err != nil {
+	if err := s.store.Delete(ctx, s.userTokenKey()); err != nil {
 		s.logger().Debug("clear cached session tokens failed", "error", err)
 	}
 	s.mu.Lock()
@@ -268,12 +307,12 @@ func (s *Session) revokeCachedSession(ctx context.Context) {
 
 func (s *Session) login(ctx context.Context) (*oauthclient.TokenSet, error) {
 	s.revokeCachedSession(ctx)
-	if s.RotateDeviceKey != nil {
-		key, err := s.RotateDeviceKey(ctx)
+	if s.rotateDeviceKey != nil {
+		key, err := s.rotateDeviceKey(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("rotate device key: %w", err)
 		}
-		s.Dpop = key
+		s.deviceKey = key
 	}
 	flow, err := s.oidcFlow(ctx)
 	if err != nil {
@@ -287,7 +326,7 @@ func (s *Session) login(ctx context.Context) (*oauthclient.TokenSet, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.Store.Put(ctx, s.userTokenKey(), tokens); err != nil {
+	if err := s.store.Put(ctx, s.userTokenKey(), tokens); err != nil {
 		return nil, err
 	}
 	return tokens, nil
@@ -295,14 +334,14 @@ func (s *Session) login(ctx context.Context) (*oauthclient.TokenSet, error) {
 
 func (s *Session) UserToken(ctx context.Context, forceLogin bool) (string, error) {
 	if !forceLogin {
-		cached := s.Store.Get(ctx, s.userTokenKey())
+		cached := s.store.Get(ctx, s.userTokenKey())
 		if cached.Valid(30 * time.Second) {
 			return cached.AccessToken, nil
 		}
 		if cached.Refreshable(30 * time.Second) {
 			refreshed, err := s.refreshSession(ctx, cached.RefreshToken)
 			if err == nil {
-				if err := s.Store.Put(ctx, s.userTokenKey(), refreshed); err != nil {
+				if err := s.store.Put(ctx, s.userTokenKey(), refreshed); err != nil {
 					return "", err
 				}
 				return refreshed.AccessToken, nil
@@ -323,7 +362,7 @@ func (s *Session) Logout(ctx context.Context) error {
 }
 
 func (s *Session) IdentityClient() idpv1connect.IdentityServiceClient {
-	return idpv1connect.NewIdentityServiceClient(s.HTTPClient, s.GatewayURL)
+	return idpv1connect.NewIdentityServiceClient(s.httpClient, s.gatewayURL)
 }
 
 func (s *Session) Introspect(ctx context.Context) (*idpv1.IntrospectResponse, error) {
@@ -336,8 +375,8 @@ func (s *Session) Introspect(ctx context.Context) (*idpv1.IntrospectResponse, er
 		interceptor = s.UserAuthInterceptor()
 	}
 	client := idpv1connect.NewIdentityServiceClient(
-		s.HTTPClient,
-		s.GatewayURL,
+		s.httpClient,
+		s.gatewayURL,
 		connect.WithInterceptors(interceptor),
 	)
 	response, err := client.Introspect(ctx, connect.NewRequest(&idpv1.IntrospectRequest{}))
@@ -348,7 +387,7 @@ func (s *Session) Introspect(ctx context.Context) (*idpv1.IntrospectResponse, er
 }
 
 func (s *Session) RegistryClient() idpv1connect.RegistryServiceClient {
-	return idpv1connect.NewRegistryServiceClient(s.HTTPClient, s.GatewayURL, connect.WithInterceptors(s.UserAuthInterceptor()))
+	return idpv1connect.NewRegistryServiceClient(s.httpClient, s.gatewayURL, connect.WithInterceptors(s.UserAuthInterceptor()))
 }
 
 func (s *Session) AppToken(ctx context.Context, audience string) (string, error) {
@@ -383,7 +422,7 @@ func (s *Session) directAppToken(ctx context.Context, audience string) (string, 
 }
 
 func (s *Session) ChainedAppToken(ctx context.Context, serviceApp, audience string, scopes []string) (string, error) {
-	if s.CredentialResolver == nil {
+	if s.credentialResolver == nil {
 		return "", fmt.Errorf("service impersonation requires a credential resolver")
 	}
 	cacheKey := "chain:" + serviceApp + ":" + audience
@@ -409,7 +448,7 @@ func (s *Session) ChainedAppToken(ctx context.Context, serviceApp, audience stri
 	if err != nil {
 		return "", fmt.Errorf("subject token for %s: %w", serviceApp, err)
 	}
-	credential, err := s.CredentialResolver(ctx, serviceApp)
+	credential, err := s.credentialResolver(ctx, serviceApp)
 	if err != nil {
 		return "", fmt.Errorf("resolve %s service credential: %w", serviceApp, err)
 	}
@@ -435,7 +474,7 @@ func (s *Session) ChainedAppToken(ctx context.Context, serviceApp, audience stri
 }
 
 func (s *Session) ServiceAppToken(ctx context.Context, serviceApp, audience string, scopes []string) (string, error) {
-	if s.CredentialResolver == nil {
+	if s.credentialResolver == nil {
 		return "", fmt.Errorf("service authentication requires a credential resolver")
 	}
 	cacheKey := "svc:" + serviceApp + ":" + audience
@@ -445,7 +484,7 @@ func (s *Session) ServiceAppToken(ctx context.Context, serviceApp, audience stri
 	if cached.Valid(15 * time.Second) {
 		return cached.AccessToken, nil
 	}
-	credential, err := s.CredentialResolver(ctx, serviceApp)
+	credential, err := s.credentialResolver(ctx, serviceApp)
 	if err != nil {
 		return "", fmt.Errorf("resolve %s service credential: %w", serviceApp, err)
 	}
@@ -641,7 +680,7 @@ func (s *Session) DiscoveryClient(ctx context.Context) (*discovery.Client, error
 	client := discovery.NewClient(app.Endpoint, func(ctx context.Context) (string, error) {
 		return s.directAppToken(ctx, audience)
 	})
-	client.HTTPClient = s.HTTPClient
+	client.HTTPClient = s.httpClient
 	client.Logger = s.logger()
 	s.discoveryClient = client
 	return client, nil
@@ -669,7 +708,7 @@ func (s *Session) Application(ctx context.Context, name string) (*discovery.Appl
 		}
 		return nil, err
 	}
-	app.GatewayURL = s.GatewayURL
+	app.GatewayURL = s.gatewayURL
 	if fallbackErr == nil && app.ImpersonationAccessClientID == "" {
 		app.ImpersonationAccessClientID = fallback.ImpersonationAccessClientID
 	}
@@ -687,7 +726,7 @@ func (s *Session) Applications(ctx context.Context) ([]*discovery.Application, e
 		apps := make([]*discovery.Application, 0, len(document.Applications))
 		for index := range document.Applications {
 			app := document.Applications[index]
-			app.GatewayURL = s.GatewayURL
+			app.GatewayURL = s.gatewayURL
 			apps = append(apps, &app)
 		}
 		return apps
@@ -703,7 +742,7 @@ func (s *Session) Applications(ctx context.Context) ([]*discovery.Application, e
 		return fallback(), nil
 	}
 	for _, app := range apps {
-		app.GatewayURL = s.GatewayURL
+		app.GatewayURL = s.gatewayURL
 	}
 	return apps, nil
 }

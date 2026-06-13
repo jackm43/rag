@@ -75,14 +75,23 @@ func (e *ClientError) Error() string {
 	return fmt.Sprintf("%s failed with status %d", e.Target, e.Status)
 }
 
-// IsProviderAuthorizationError recognizes a provider-connector refusal that
-// carries an authorize URL the caller must visit to store a provider grant.
-func IsProviderAuthorizationError(err error) (string, bool) {
-	clientErr, ok := err.(*ClientError)
-	if !ok {
-		return "", false
-	}
-	record, _ := clientErr.Body.(map[string]any)
+// ProviderAuthorizationError is a typed provider-connector refusal: the caller
+// must visit AuthorizeURL to store a provider grant, then retry. Callers match
+// it with errors.As rather than parsing error strings.
+type ProviderAuthorizationError struct {
+	Application  string
+	AuthorizeURL string
+}
+
+func (e *ProviderAuthorizationError) Error() string {
+	return fmt.Sprintf("provider authorization required for %s: %s", e.Application, e.AuthorizeURL)
+}
+
+// providerAuthorizationURL extracts the authorize URL from a connector refusal
+// body. The wire contract is the Connect error message prefix; the parsing is
+// confined here so consumers only ever see the typed error.
+func providerAuthorizationURL(body any) (string, bool) {
+	record, _ := body.(map[string]any)
 	message, _ := record["message"].(string)
 	const prefix = "provider authorization required: "
 	if !strings.HasPrefix(message, prefix) {
@@ -105,6 +114,9 @@ func (c *Client) Invoke(ctx context.Context, target, body string) (any, error) {
 	}
 	decoded := response.Decoded()
 	if !response.OK() {
+		if authorizeURL, ok := providerAuthorizationURL(decoded); ok {
+			return nil, &ProviderAuthorizationError{Application: parsed.Application, AuthorizeURL: authorizeURL}
+		}
 		return nil, &ClientError{Target: target, Status: response.StatusCode, Body: decoded}
 	}
 	return decoded, nil

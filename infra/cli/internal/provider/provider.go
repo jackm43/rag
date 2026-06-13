@@ -10,18 +10,18 @@ import (
 )
 
 type (
-	Name                 = core.Name
-	TrustBoundary        = core.TrustBoundary
-	IdentityProvider     = core.IdentityProvider
-	AccessGroup          = core.AccessGroup
-	PostureCheck         = core.PostureCheck
-	PosturePolicy        = core.PosturePolicy
-	ProviderConfig       = core.ProviderConfig
-	IdentityProxy        = core.IdentityProxy
-	TrustZoneProvisioned = core.TrustZoneProvisioned
-	TrustZoneSpec        = core.TrustZoneSpec
-	OrganizationSpec     = core.OrganizationSpec
-	OrganizationPolicy   = core.OrganizationPolicy
+	Name                   = core.Name
+	TrustBoundary          = core.TrustBoundary
+	IdentityProvider       = core.IdentityProvider
+	AccessGroup            = core.AccessGroup
+	PostureCheck           = core.PostureCheck
+	PosturePolicy          = core.PosturePolicy
+	ProviderConfig         = core.ProviderConfig
+	OAuthClientProvisioner = core.OAuthClientProvisioner
+	TrustZoneProvisioned   = core.TrustZoneProvisioned
+	TrustZoneSpec          = core.TrustZoneSpec
+	OrganizationSpec       = core.OrganizationSpec
+	OrganizationPolicy     = core.OrganizationPolicy
 )
 
 const (
@@ -67,7 +67,7 @@ func ParseName(raw string) (Name, error) {
 	}
 }
 
-func Resolve(ctx context.Context, name Name, apiToken string) (IdentityProxy, error) {
+func Resolve(ctx context.Context, name Name, apiToken string) (OAuthClientProvisioner, error) {
 	switch name {
 	case Cloudflare:
 		return cloudflare.New(apiToken)

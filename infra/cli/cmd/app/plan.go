@@ -126,7 +126,7 @@ func messageListsEqual[M proto.Message](desired, actual []M) bool {
 }
 
 func registeredApplications(ctx context.Context) map[string]*idpv1.Application {
-	response, err := platform.Session().RegistryClient().ListApplications(ctx, connect.NewRequest(&idpv1.ListApplicationsRequest{}))
+	response, err := platform.Session(ctx).RegistryClient().ListApplications(ctx, connect.NewRequest(&idpv1.ListApplicationsRequest{}))
 	if err != nil {
 		output.Fail("list applications: %v", err)
 	}

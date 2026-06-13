@@ -60,7 +60,7 @@ func SyncToGateway(ctx context.Context, config ProviderConfig) error {
 	if err != nil {
 		return err
 	}
-	s := platform.Session()
+	s := platform.Session(ctx)
 	_, err = s.RegistryClient().UpsertProviderConfig(ctx, connect.NewRequest(&idpv1.UpsertProviderConfigRequest{
 		ConfigJson: string(data),
 	}))

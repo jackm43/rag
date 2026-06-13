@@ -10,7 +10,10 @@ import (
 
 func TestLoadOrganization(t *testing.T) {
 	root := filepath.Join("..", "..", "..", "..", "..")
-	policy := LoadOrganization(root)
+	policy, err := LoadOrganization(root)
+	if err != nil {
+		t.Fatalf("load organization: %v", err)
+	}
 	if policy.Organization.Name != "jsmunro" {
 		t.Fatalf("organization name = %q, want jsmunro", policy.Organization.Name)
 	}
@@ -71,7 +74,10 @@ func TestNormalizeTrustZone(t *testing.T) {
 
 func TestOrganizationGroupSpecs(t *testing.T) {
 	root := filepath.Join("..", "..", "..", "..", "..")
-	policy := LoadOrganization(root)
+	policy, err := LoadOrganization(root)
+	if err != nil {
+		t.Fatalf("load organization: %v", err)
+	}
 	specs := policy.GroupSpecs()
 	if _, ok := specs[GroupEnrolled]; !ok {
 		t.Fatalf("group specs missing %q", GroupEnrolled)

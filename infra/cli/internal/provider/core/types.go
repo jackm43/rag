@@ -49,7 +49,10 @@ type ProviderConfig struct {
 	Organization         OrganizationPolicy              `json:"organization,omitempty"`
 }
 
-type IdentityProxy interface {
+// OAuthClientProvisioner is the dynamic, post-Terraform provider surface the
+// CLI still owns: per-application confidential OAuth client lifecycle. All
+// static Cloudflare configuration now lives in infra/terraform.
+type OAuthClientProvisioner interface {
 	EnsureApplicationOAuthClient(
 		ctx context.Context,
 		boundary TrustBoundary,

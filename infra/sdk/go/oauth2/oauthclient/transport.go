@@ -1,9 +1,9 @@
-package client
+package oauthclient
 
 import (
 	"net/http"
 
-	"jsmunro.me/platy/sdk/oauth2/client/dpop"
+	"jsmunro.me/platy/sdk/oauth2/oauthclient/dpop"
 )
 
 type Transport struct {

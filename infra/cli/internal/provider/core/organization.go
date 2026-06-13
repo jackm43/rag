@@ -7,8 +7,6 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
-
-	"jsmunro.me/platy/cli/internal/output"
 )
 
 const OrganizationRelativePath = "infra/applications/organization.yaml"
@@ -115,15 +113,15 @@ func OrganizationPath(root string) string {
 	return filepath.Join(root, filepath.FromSlash(OrganizationRelativePath))
 }
 
-func LoadOrganization(root string) OrganizationPolicy {
+func LoadOrganization(root string) (OrganizationPolicy, error) {
 	path := OrganizationPath(root)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		output.Fail("read %s: %v", OrganizationRelativePath, err)
+		return OrganizationPolicy{}, fmt.Errorf("read %s: %w", OrganizationRelativePath, err)
 	}
 	document := OrganizationDocument{}
 	if err := yaml.Unmarshal(data, &document); err != nil {
-		output.Fail("decode %s: %v", OrganizationRelativePath, err)
+		return OrganizationPolicy{}, fmt.Errorf("decode %s: %w", OrganizationRelativePath, err)
 	}
 	policy := OrganizationPolicy{
 		Organization: document.Organization,
@@ -132,9 +130,9 @@ func LoadOrganization(root string) OrganizationPolicy {
 	}
 	policy.normalize()
 	if err := policy.validate(); err != nil {
-		output.Fail("%v", err)
+		return OrganizationPolicy{}, err
 	}
-	return policy
+	return policy, nil
 }
 
 func (p *OrganizationPolicy) normalize() {

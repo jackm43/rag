@@ -15,9 +15,8 @@ import (
 	"jsmunro.me/platy/sdk/apps/discovery"
 	"jsmunro.me/platy/sdk/client"
 	"jsmunro.me/platy/sdk/gateway"
-	"jsmunro.me/platy/sdk/httpclient"
-	oauthclient "jsmunro.me/platy/sdk/oauth2/client"
-	"jsmunro.me/platy/sdk/oauth2/client/dpop"
+	"jsmunro.me/platy/sdk/oauth2/oauthclient"
+	"jsmunro.me/platy/sdk/oauth2/oauthclient/dpop"
 	"jsmunro.me/platy/sdk/secrets"
 )
 
@@ -147,14 +146,17 @@ func NewSession(ctx context.Context, logger *slog.Logger) (*gateway.Session, err
 	if rootErr != nil {
 		root = ""
 	}
-	session := gateway.NewSession(GatewayURL(root), store, logger)
-	session.Dpop = key
-	session.RotateDeviceKey = func(ctx context.Context) (*dpop.Key, error) {
-		return dpop.Rotate(ctx, service, username, secrets.FileProvider)
-	}
-	session.CredentialResolver = func(ctx context.Context, application string) (*secrets.ClientCredential, error) {
-		return ResolveApplicationServiceCredential(ctx, service, root, application)
-	}
+	session := gateway.NewSession(
+		GatewayURL(root),
+		store,
+		gateway.WithLogger(logger),
+		gateway.WithDeviceKey(key, func(ctx context.Context) (*dpop.Key, error) {
+			return dpop.Rotate(ctx, service, username, secrets.FileProvider)
+		}),
+		gateway.WithCredentialResolver(func(ctx context.Context, application string) (*secrets.ClientCredential, error) {
+			return ResolveApplicationServiceCredential(ctx, service, root, application)
+		}),
+	)
 	return session, nil
 }
 
@@ -163,7 +165,5 @@ func NewClient(ctx context.Context, logger *slog.Logger) (*client.Client, error)
 	if err != nil {
 		return nil, err
 	}
-	c := client.New(session)
-	c.HTTPClient = httpclient.Default()
-	return c, nil
+	return client.New(session), nil
 }
