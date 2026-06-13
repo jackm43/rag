@@ -64,41 +64,60 @@ const createDbMock = (options: {
   roasts?: Array<{ roast_text: string }>;
   ragCount?: number;
   reportCount?: number;
+  answeredMessageIds?: Set<string>;
   onBatch?: (statements: Array<{ sql: string; args: unknown[] }>) => void;
-}) => ({
-  batch: async (statements: Array<{ sql: string; args: unknown[] }>) => {
-    options.onBatch?.(statements);
-  },
-  prepare: (sql: string) => {
-    const runner = (args: unknown[]) => ({
-      sql,
-      args,
-      run: async () => {
-        if (sql.includes("rag_settings")) {
-          return { results: options.settings ?? [] };
-        }
-        if (sql.includes("rag_roasts")) {
-          return { results: options.roasts ?? [] };
-        }
-        return { results: undefined };
-      },
-      first: async () => {
-        if (sql.includes("SELECT rag_count")) {
-          return { rag_count: options.ragCount ?? 1 };
-        }
-        if (sql.includes("SELECT COUNT")) {
-          return { report_count: options.reportCount ?? 1 };
-        }
-        return null;
-      },
-      all: async () => ({ results: [], meta: {} }),
-    });
-    return {
-      ...runner([]),
-      bind: (...args: unknown[]) => runner(args),
-    };
-  },
-});
+}) => {
+  const claimedMessageIds = new Set<string>();
+  return {
+    batch: async (statements: Array<{ sql: string; args: unknown[] }>) => {
+      options.onBatch?.(statements);
+    },
+    prepare: (sql: string) => {
+      const runner = (args: unknown[]) => ({
+        sql,
+        args,
+        run: async () => {
+          if (sql.includes("rag_message_jobs")) {
+            const messageId = String(args[0]);
+            if (claimedMessageIds.has(messageId)) {
+              return { meta: { changes: 0 } };
+            }
+            claimedMessageIds.add(messageId);
+            return { meta: { changes: 1 } };
+          }
+          if (sql.includes("INSERT INTO rag_ai_interactions")) {
+            return { meta: { changes: 1 } };
+          }
+          if (sql.includes("rag_settings")) {
+            return { results: options.settings ?? [] };
+          }
+          if (sql.includes("rag_roasts")) {
+            return { results: options.roasts ?? [] };
+          }
+          return { results: undefined };
+        },
+        first: async () => {
+          if (sql.includes("rag_ai_interactions") && sql.includes("status = 'ok'")) {
+            const messageId = String(args[0]);
+            return options.answeredMessageIds?.has(messageId) ? { id: 1 } : null;
+          }
+          if (sql.includes("SELECT rag_count")) {
+            return { rag_count: options.ragCount ?? 1 };
+          }
+          if (sql.includes("SELECT COUNT")) {
+            return { report_count: options.reportCount ?? 1 };
+          }
+          return null;
+        },
+        all: async () => ({ results: [], meta: {} }),
+      });
+      return {
+        ...runner([]),
+        bind: (...args: unknown[]) => runner(args),
+      };
+    },
+  };
+};
 
 test("GET / returns ok", async () => {
   const keyPair = nacl.sign.keyPair();
@@ -538,6 +557,7 @@ test("channel prompt resolver accepts mentions of a role the bot holds", () => {
 test("gateway message create enqueues jobs for a leading mention", async () => {
   const queuedJobs: unknown[] = [];
   const env = createEnv("unused", {
+    DB: createDbMock({}),
     AI_JOBS: {
       send: async (job: unknown) => {
         queuedJobs.push(job);
@@ -575,6 +595,7 @@ test("gateway message create enqueues jobs for a leading mention", async () => {
 test("gateway message create enqueues jobs when the bot is mentioned mid-message", async () => {
   const queuedJobs: unknown[] = [];
   const env = createEnv("unused", {
+    DB: createDbMock({}),
     AI_JOBS: {
       send: async (job: unknown) => {
         queuedJobs.push(job);
@@ -621,6 +642,7 @@ test("gateway message create enqueues jobs when the bot's role is mentioned", as
   try {
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
+      DB: createDbMock({}),
       AI_JOBS: {
         send: async (job: unknown) => {
           queuedJobs.push(job);
@@ -662,9 +684,34 @@ test("gateway message create enqueues jobs when the bot's role is mentioned", as
   }
 });
 
+test("gateway message create skips duplicate jobs for the same message id", async () => {
+  const queuedJobs: unknown[] = [];
+  const env = createEnv("unused", {
+    DB: createDbMock({}),
+    AI_JOBS: {
+      send: async (job: unknown) => {
+        queuedJobs.push(job);
+      },
+    },
+  });
+  const message = {
+    id: "message-id",
+    channel_id: "channel-id",
+    content: "<@bot-user-id> hey",
+    mentions: [{ id: "bot-user-id" }],
+    author: { id: "1", username: "alice" },
+  };
+
+  await handleGatewayMessageCreate(message, env, "bot-user-id");
+  await handleGatewayMessageCreate(message, env, "bot-user-id");
+
+  assert.equal(queuedJobs.length, 1);
+});
+
 test("gateway message create enqueues reply-to-bot jobs without a mention", async () => {
   const queuedJobs: unknown[] = [];
   const env = createEnv("unused", {
+    DB: createDbMock({}),
     AI_JOBS: {
       send: async (job: unknown) => {
         queuedJobs.push(job);
@@ -755,6 +802,7 @@ test("gateway message create ignores guilds outside the allowlist", async () => 
 test("gateway message create enqueues a raw channel AI job", async () => {
   const queuedJobs: unknown[] = [];
   const env = createEnv("unused", {
+    DB: createDbMock({}),
     AI_JOBS: {
       send: async (job: unknown) => {
         queuedJobs.push(job);
@@ -791,6 +839,7 @@ test("gateway message create enqueues a raw channel AI job", async () => {
 test("gateway message create includes replied-to message content in the job", async () => {
   const queuedJobs: unknown[] = [];
   const env = createEnv("unused", {
+    DB: createDbMock({}),
     AI_JOBS: {
       send: async (job: unknown) => {
         queuedJobs.push(job);
@@ -855,6 +904,7 @@ test("gateway message create fetches referenced messages when Discord omits inli
   try {
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
+      DB: createDbMock({}),
       AI_JOBS: {
         send: async (job: unknown) => {
           queuedJobs.push(job);
@@ -1233,6 +1283,49 @@ test("queue handler posts model output without stripping mentions", async () => 
     assert.deepEqual(JSON.parse(String(fetchCalls[0].init?.body)), {
       content: "Hello <@123456789012345678> there 123456789012345678",
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("queue handler skips jobs when the source message was already answered", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("fetch should not be called");
+  };
+
+  try {
+    let acked = false;
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      DB: createDbMock({ answeredMessageIds: new Set(["trigger-id"]) }),
+      AI: {
+        run: () => {
+          throw new Error("AI should not be called");
+        },
+      },
+    });
+    const message = {
+      body: {
+        kind: "channel",
+        channelId: "channel-id",
+        messageId: "trigger-id",
+        botUserId: "bot-user-id",
+        requesterUserId: "1",
+        requesterUsername: "alice",
+        prompt: "hey",
+      },
+      ack: () => {
+        acked = true;
+      },
+      retry: () => {
+        throw new Error("message should not be retried");
+      },
+    };
+
+    await worker.queue({ messages: [message] } as never, env);
+
+    assert.equal(acked, true);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -29,6 +29,12 @@ CREATE TABLE IF NOT EXISTS rag_settings (
 
 DROP TABLE IF EXISTS oauth_refresh_tokens;
 
+CREATE TABLE IF NOT EXISTS rag_message_jobs (
+  message_id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS rag_ai_interactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kind TEXT NOT NULL,
@@ -45,3 +51,5 @@ CREATE TABLE IF NOT EXISTS rag_ai_interactions (
   error_message TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_rag_ai_interactions_message_status ON rag_ai_interactions(message_id, status);
