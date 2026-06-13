@@ -2,14 +2,17 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { BrowserAuth } from "@platy/web";
+import { AuthProvider } from "@platy/web/react";
 
 import { App } from "./App";
 
-const mount = (auth: BrowserAuth, signedIn: boolean) => {
+const mount = (auth: BrowserAuth) => {
   const root = createRoot(document.getElementById("root")!);
   root.render(
     <StrictMode>
-      <App auth={auth} signedIn={signedIn} />
+      <AuthProvider auth={auth}>
+        <App />
+      </AuthProvider>
     </StrictMode>,
   );
 };
@@ -26,7 +29,7 @@ const mount = (auth: BrowserAuth, signedIn: boolean) => {
     if (status === "login_redirect") {
       return;
     }
-    mount(auth, auth.isAuthenticated());
+    mount(auth);
   } catch (err) {
     document.getElementById("root")!.textContent = `startup error: ${(err as Error).message}`;
   }

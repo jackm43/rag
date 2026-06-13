@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { BrowserAuth } from "@platy/web";
+import { useAuth } from "@platy/web/react";
 
 // Deploy view: lists worker scripts via the deploy application (chained
 // through the BFF). The deploy service uploads prebuilt bundles
@@ -10,7 +10,8 @@ import type { BrowserAuth } from "@platy/web";
 
 type WorkerInfo = { name?: string; modifiedOn?: string };
 
-export function Deploy({ auth, signedIn }: { auth: BrowserAuth; signedIn: boolean }) {
+export function Deploy() {
+  const { auth, signedIn } = useAuth();
   const [workers, setWorkers] = useState<WorkerInfo[]>([]);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);

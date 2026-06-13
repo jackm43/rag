@@ -5,8 +5,8 @@ import {
   gatewayClient,
   registerChatInstance,
   type ChatInstance,
-  type BrowserAuth,
 } from "@platy/web";
+import { useAuth } from "@platy/web/react";
 
 // Trace views over the gateway's TraceService: a recent-trace list with
 // per-trace waterfall detail, and a live tail (server-streaming RPC) that
@@ -143,7 +143,8 @@ function Waterfall({ spans }: { spans: SpanRow[] }) {
   );
 }
 
-export function Traces({ auth, signedIn }: { auth: BrowserAuth; signedIn: boolean }) {
+export function Traces() {
+  const { auth, signedIn } = useAuth();
   const [summaries, setSummaries] = useState<TraceSummary[]>([]);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [detailSpans, setDetailSpans] = useState<SpanRow[]>([]);

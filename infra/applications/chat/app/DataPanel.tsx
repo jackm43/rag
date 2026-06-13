@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { BrowserAuth } from "@platy/web";
+import { useAuth } from "@platy/web/react";
 
 // Read-only data + platform APIs callable from the page. Connect entries go
 // same-origin through the chat BFF (session token + DPoP proof; the worker
@@ -72,15 +72,8 @@ const DATA_APIS: DataApi[] = [
   },
 ];
 
-export function DataPanel({
-  auth,
-  signedIn,
-  wide = false,
-}: {
-  auth: BrowserAuth;
-  signedIn: boolean;
-  wide?: boolean;
-}) {
+export function DataPanel({ wide = false }: { wide?: boolean }) {
+  const { auth, signedIn } = useAuth();
   const [selected, setSelected] = useState(0);
   const [param, setParam] = useState("");
   const [busy, setBusy] = useState(false);

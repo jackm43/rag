@@ -9,7 +9,7 @@ import {
   type ApplicationInfo,
   type SyncState,
 } from "../../discovery/web";
-import type { BrowserAuth } from "@platy/web";
+import { useAuth } from "@platy/web/react";
 
 // Application registry view: browse from the discovery GraphQL read model,
 // mutate through the gateway's RegistryService (same-origin zone routes), and
@@ -34,14 +34,11 @@ const formatTime = (seconds: number): string =>
   seconds > 0 ? new Date(seconds * 1000).toISOString().replace("T", " ").slice(0, 19) : "-";
 
 export function Applications({
-  auth,
-  signedIn,
   discovery,
 }: {
-  auth: BrowserAuth;
-  signedIn: boolean;
   discovery: Client<typeof DiscoveryService> | null;
 }) {
+  const { auth, signedIn } = useAuth();
   const [apps, setApps] = useState<ApplicationInfo[]>([]);
   const [detail, setDetail] = useState<ApplicationInfo | null>(null);
   const [sync, setSync] = useState<SyncState | null>(null);

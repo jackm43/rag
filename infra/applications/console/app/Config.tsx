@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { BrowserAuth } from "@platy/web";
+import { useAuth } from "@platy/web/react";
 
 // Ragbot runtime configuration: list with inline editing (update / reset to
 // default) through the BFF-chained ConfigService, plus the Discord gateway
@@ -8,7 +8,8 @@ import type { BrowserAuth } from "@platy/web";
 
 type ConfigEntry = { key: string; value?: string; defaultValue?: string; overridden?: boolean };
 
-export function Config({ auth, signedIn }: { auth: BrowserAuth; signedIn: boolean }) {
+export function Config() {
+  const { auth, signedIn } = useAuth();
   const [entries, setEntries] = useState<ConfigEntry[]>([]);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);

@@ -5,8 +5,8 @@ import {
   gatewayClient,
   registerChatInstance,
   type ChatInstance,
-  type BrowserAuth,
 } from "@platy/web";
+import { useAuth } from "@platy/web/react";
 
 // Live trace flow: a server-streaming RPC (idp.v1.TraceService/StreamTraces)
 // pushes spans as the gateway ingests them. Every browser request roots a
@@ -60,7 +60,8 @@ const spanDepth = (span: LiveSpan, byId: Map<string, LiveSpan>): number => {
   return depth;
 };
 
-export function LiveTraces({ auth, signedIn }: { auth: BrowserAuth; signedIn: boolean }) {
+export function LiveTraces() {
+  const { auth, signedIn } = useAuth();
   const [running, setRunning] = useState(false);
   const [traces, setTraces] = useState<LiveTrace[]>([]);
   const [selected, setSelected] = useState<string | null>(null);

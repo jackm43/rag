@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { discovery } from "../../discovery/web";
-import type { BrowserAuth } from "@platy/web";
+import { useAuth } from "@platy/web/react";
 
 import { Applications } from "./Applications";
 import { Config } from "./Config";
@@ -21,13 +21,13 @@ const VIEWS: { id: View; label: string }[] = [
   { id: "identity", label: "Identity" },
 ];
 
-export function App({ auth, signedIn: initialSignedIn }: { auth: BrowserAuth; signedIn: boolean }) {
-  const [signedIn, setSignedIn] = useState(initialSignedIn);
+export function App() {
+  const { auth, signedIn, signIn, signOut } = useAuth();
   const [view, setView] = useState<View>("applications");
 
   // One discovery client for the whole console; the generated factory binds
   // the session transport, so it only needs the initialized auth.
-  const discovery = useMemo(() => {
+  const discoveryClient = useMemo(() => {
     try {
       return discovery.discoveryServiceClient(auth);
     } catch {
@@ -41,7 +41,6 @@ export function App({ auth, signedIn: initialSignedIn }: { auth: BrowserAuth; si
   useEffect(
     () =>
       auth.onSessionChange((state) => {
-        setSignedIn(state.status === "active");
         if (state.status === "needs_login") {
           void auth.ensureAuthenticated();
         }
@@ -56,16 +55,9 @@ export function App({ auth, signedIn: initialSignedIn }: { auth: BrowserAuth; si
         <div className="session">
           <span className={`status${signedIn ? " active" : ""}`}>{signedIn ? "signed in" : "signed out"}</span>
           {signedIn ? (
-            <button
-              onClick={async () => {
-                await auth.logout();
-                setSignedIn(false);
-              }}
-            >
-              Sign out
-            </button>
+            <button onClick={() => void signOut()}>Sign out</button>
           ) : (
-            <button onClick={() => void auth.promptSignIn()}>Sign in</button>
+            <button onClick={() => void signIn()}>Sign in</button>
           )}
         </div>
       </header>
@@ -84,14 +76,12 @@ export function App({ auth, signedIn: initialSignedIn }: { auth: BrowserAuth; si
         </nav>
 
         <section className="content">
-          {view === "applications" ? (
-            <Applications auth={auth} signedIn={signedIn} discovery={discovery} />
-          ) : null}
-          {view === "delegations" ? <Delegations signedIn={signedIn} discovery={discovery} /> : null}
-          {view === "deploy" ? <Deploy auth={auth} signedIn={signedIn} /> : null}
-          {view === "config" ? <Config auth={auth} signedIn={signedIn} /> : null}
-          {view === "traces" ? <Traces auth={auth} signedIn={signedIn} /> : null}
-          {view === "identity" ? <Identity auth={auth} signedIn={signedIn} /> : null}
+          {view === "applications" ? <Applications discovery={discoveryClient} /> : null}
+          {view === "delegations" ? <Delegations discovery={discoveryClient} /> : null}
+          {view === "deploy" ? <Deploy /> : null}
+          {view === "config" ? <Config /> : null}
+          {view === "traces" ? <Traces /> : null}
+          {view === "identity" ? <Identity /> : null}
         </section>
       </main>
     </>

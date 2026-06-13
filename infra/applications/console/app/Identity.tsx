@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { BrowserAuth } from "@platy/web";
+import { useAuth } from "@platy/web/react";
 
 // Identity view: who the gateway thinks this session is (Introspect on the
 // session token) plus the local session state held by the web auth SDK.
@@ -17,7 +17,8 @@ type Introspection = {
   scopes?: string[];
 };
 
-export function Identity({ auth, signedIn }: { auth: BrowserAuth; signedIn: boolean }) {
+export function Identity() {
+  const { auth, signedIn } = useAuth();
   const [intro, setIntro] = useState<Introspection | null>(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
