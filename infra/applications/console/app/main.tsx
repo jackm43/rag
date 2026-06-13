@@ -24,7 +24,7 @@ const mount = (auth: BrowserAuth) => {
   // discovery, the OIDC callback, and silent refresh / login redirect.
   try {
     const { auth, status } = await BrowserAuth.bootstrap(`${location.origin}/api/discovery`, {
-      sameOrigin: ["gateway", "deploy", "discovery", "ragbot"],
+      sameOrigin: ["gateway", "idp", "deploy", "discovery", "ragbot"],
     });
     if (status === "login_redirect") {
       return;

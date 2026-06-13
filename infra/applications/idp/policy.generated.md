@@ -9,7 +9,7 @@
 - Provider auth: ``
 - Impersonatable: `true`
 - Service client generated: `true`
-- Web client generated: `false`
+- Web client generated: `true`
 
 ## Resources
 

@@ -24,7 +24,7 @@ const mount = (auth: BrowserAuth) => {
   // callback, and silent refresh / login redirect.
   try {
     const { auth, status } = await BrowserAuth.bootstrap(`${location.origin}/api/discovery`, {
-      sameOrigin: ["gateway", "aigateway", "ragbot"],
+      sameOrigin: ["gateway", "idp", "aigateway", "ragbot"],
     });
     if (status === "login_redirect") {
       return;

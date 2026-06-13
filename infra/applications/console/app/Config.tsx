@@ -1,10 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { ragbot } from "../../ragbot/web";
 import { useAuth } from "@platy/web/react";
-
-// Ragbot runtime configuration: list with inline editing (update / reset to
-// default) through the BFF-chained ConfigService, plus the Discord gateway
-// health snapshot.
 
 type ConfigEntry = { key: string; value?: string; defaultValue?: string; overridden?: boolean };
 
@@ -17,23 +14,15 @@ export function Config() {
   const [draft, setDraft] = useState("");
   const [health, setHealth] = useState("");
 
-  const call = async (path: string, body: unknown): Promise<string> => {
-    const response = await auth.call("ragbot", path, body);
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(text || `request failed (${response.status})`);
-    }
-    return text;
-  };
+  const configClient = useMemo(() => ragbot.configServiceClient(auth), [auth]);
+  const gatewayClient = useMemo(() => ragbot.gatewayControlServiceClient(auth), [auth]);
 
   const load = async () => {
     setBusy(true);
     setNote("loading");
     try {
-      const body = JSON.parse(await call("/ragbot.v1.ConfigService/ListConfig", {})) as {
-        entries?: ConfigEntry[];
-      };
-      setEntries(body.entries ?? []);
+      const result = await configClient.listConfig({});
+      setEntries(result.entries ?? []);
       setNote("");
     } catch (err) {
       setNote((err as Error).message);
@@ -44,8 +33,8 @@ export function Config() {
 
   const loadHealth = async () => {
     try {
-      const body = await call("/ragbot.v1.GatewayControlService/GetHealth", {});
-      setHealth(JSON.stringify(JSON.parse(body), null, 2));
+      const result = await gatewayClient.getHealth({});
+      setHealth(JSON.stringify(result, null, 2));
     } catch (err) {
       setHealth((err as Error).message);
     }
@@ -62,7 +51,7 @@ export function Config() {
   const save = async (key: string) => {
     setBusy(true);
     try {
-      await call("/ragbot.v1.ConfigService/UpdateConfig", { key, value: draft });
+      await configClient.updateConfig({ key, value: draft });
       setEditing(null);
       await load();
     } catch (err) {
@@ -75,7 +64,7 @@ export function Config() {
   const reset = async (key: string) => {
     setBusy(true);
     try {
-      await call("/ragbot.v1.ConfigService/ResetConfig", { key });
+      await configClient.resetConfig({ key });
       setEditing(null);
       await load();
     } catch (err) {

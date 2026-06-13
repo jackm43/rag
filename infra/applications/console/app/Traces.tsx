@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { TraceService } from "../../idp/server/idp/v1/trace_service_pb";
+import { idp } from "../../idp/web";
+import type { TraceSummary } from "../../idp/server/idp/v1/trace_service_pb";
 import {
-  gatewayClient,
   registerChatInstance,
   type ChatInstance,
 } from "@platy/web";
@@ -24,18 +24,6 @@ type SpanRow = {
   status: string;
   error: string;
   attributes: Record<string, unknown>;
-};
-
-type TraceSummary = {
-  traceId: string;
-  root?: string;
-  service?: string;
-  actor?: string;
-  clientInstance?: string;
-  start?: string;
-  durationMs?: number | string;
-  status?: string;
-  spans?: number;
 };
 
 type LiveTrace = {
@@ -145,6 +133,7 @@ function Waterfall({ spans }: { spans: SpanRow[] }) {
 
 export function Traces() {
   const { auth, signedIn } = useAuth();
+  const traceClient = useMemo(() => idp.traceServiceClient(auth), [auth]);
   const [summaries, setSummaries] = useState<TraceSummary[]>([]);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [detailSpans, setDetailSpans] = useState<SpanRow[]>([]);
@@ -163,13 +152,8 @@ export function Traces() {
     setBusy(true);
     setNote("loading");
     try {
-      const response = await auth.gatewayCall("/idp.v1.TraceService/ListTraces", { limit: 50 });
-      const text = await response.text();
-      if (!response.ok) {
-        throw new Error(text || `request failed (${response.status})`);
-      }
-      const body = JSON.parse(text) as { traces?: TraceSummary[] };
-      setSummaries(body.traces ?? []);
+      const result = await traceClient.listTraces({ limit: 50 });
+      setSummaries(result.traces ?? []);
       setNote("");
     } catch (err) {
       setNote((err as Error).message);
@@ -192,8 +176,7 @@ export function Traces() {
     setDetailId(traceId);
     setDetailSpans([]);
     try {
-      const client = gatewayClient(auth, TraceService);
-      const result = await client.getTrace({ traceId });
+      const result = await traceClient.getTrace({ traceId });
       setDetailSpans(result.spans.map(parseSpan).sort((a, b) => a.startMs - b.startMs));
     } catch (err) {
       setNote((err as Error).message);
@@ -217,9 +200,8 @@ export function Traces() {
     while (!abort.signal.aborted) {
       try {
         setLiveNote("streaming");
-        const client = gatewayClient(
+        const client = idp.traceServiceClient(
           auth,
-          TraceService,
           tracingIdentity.current ? { headers: tracingIdentity.current.headers } : {},
         );
         for await (const message of client.streamTraces({}, { signal: abort.signal })) {

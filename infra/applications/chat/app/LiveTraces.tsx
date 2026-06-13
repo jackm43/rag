@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
-import { TraceService } from "../../idp/server/idp/v1/trace_service_pb";
+import { idp } from "../../idp/web";
 import {
-  gatewayClient,
   registerChatInstance,
   type ChatInstance,
 } from "@platy/web";
@@ -91,9 +90,8 @@ export function LiveTraces() {
     while (!abort.signal.aborted) {
       try {
         setNote("streaming");
-        const client = gatewayClient(
+        const client = idp.traceServiceClient(
           auth,
-          TraceService,
           tracingIdentity.current ? { headers: tracingIdentity.current.headers } : {},
         );
         for await (const message of client.streamTraces({}, { signal: abort.signal })) {
