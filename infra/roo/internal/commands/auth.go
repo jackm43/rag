@@ -37,7 +37,7 @@ func LoginCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			s := session()
+			s := session(ctx)
 			if _, err := s.UserToken(ctx, true); err != nil {
 				output.Fail("login: %v", err)
 			}
@@ -57,11 +57,11 @@ func LogoutCommand() *cobra.Command {
 		Short: "Revoke the gateway session and clear cached tokens",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			s := session()
+			s := session(cmd.Context())
 			if err := s.Logout(cmd.Context()); err != nil {
 				output.Fail("logout: %v", err)
 			}
-			output.PrintJSON(map[string]any{"ok": true, "cleared": s.GatewayURL})
+			output.PrintJSON(map[string]any{"ok": true, "cleared": s.GatewayURL()})
 			return nil
 		},
 	}
@@ -75,7 +75,7 @@ func IntrospectCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := withImpersonation(cmd.Context(), as)
-			response, err := session().Introspect(ctx)
+			response, err := session(ctx).Introspect(ctx)
 			if err != nil {
 				output.Fail("introspect: %v", err)
 			}
@@ -104,7 +104,7 @@ func ImpersonateCommand() *cobra.Command {
 }
 
 func impersonateAuthorize(ctx context.Context, application string) error {
-	token, err := session().ImpersonationToken(ctx, application, true)
+	token, err := session(ctx).ImpersonationToken(ctx, application, true)
 	if err != nil {
 		output.Fail("impersonate authorize: %v", err)
 	}

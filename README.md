@@ -14,7 +14,7 @@ Cloudflare Worker Discord bot for rag tracking and mention-triggered AI replies.
 - Service APIs: protobuf-first Connect-RPC services (`infra/proto`, generated code in `infra/applications`)
 - AI Gateway service: `infra/applications/aigateway/worker` worker exposing `aigateway.v1.ChatService` — proxies chat completions to a Cloudflare AI Gateway with unified billing and an injected `cf-aig-authorization` token; callable by other apps (delegation) and the CLI (`./platy fetch aigateway.ChatService.Complete`, optionally `--as <app>`)
 - Web chat client: `infra/applications/chat` React app (`chat.jsmunro.me`) with the browser auth SDK (DPoP via Web Crypto, OIDC PKCE, per-audience STS) and a Connect-Web streaming chat UI over the AI Gateway service (`npm run chat:build` bundles it)
-- Infrastructure: `platy bootstrap` (Go CLI + cloudflare-go) creates the Access OIDC application, policy, and Cloudflare OAuth client directly via the Cloudflare API
+- Infrastructure: `infra/terraform` (Cloudflare provider v5) manages the static Cloudflare resources — Zero Trust organization settings, Access groups/policies/applications (including the Auth Gateway OIDC app and per-application impersonation apps), device posture, D1 databases, and queues; the `platy` CLI keeps the dynamic surface (provider OAuth clients, registry sync, deploys)
 - Discord integration:
   - Interactions webhook
   - REST API for command registration, message posting, and channel history
@@ -55,10 +55,10 @@ flowchart TD
   CB --> DResp2[Discord Interaction Response]
 
   Admin[platy CLI] -->|authorization code + PKCE via GitHub IdP| CFA[Cloudflare Access OIDC]
-  CFA -->|access token| Admin
-  Admin -->|"CreateSession + DPoP proof"| GW[auth gateway worker]
+  CFA -->|authorization code| Admin
+  Admin -->|"POST /oauth/token authorization_code + DPoP proof"| GW[auth gateway worker]
   GW -->|device-bound session + rotating refresh token| Admin
-  Admin -->|"ExchangeToken (RFC 8693) + DPoP"| GW
+  Admin -->|"POST /oauth/token token-exchange (RFC 8693) + DPoP"| GW
   GW -->|STS token aud=ragbot| Admin
   Admin -->|Connect-RPC + Bearer| AA[ragbot.v1 services]
   AA -->|verify via gateway JWKS| GW
@@ -131,7 +131,7 @@ flowchart TD
 
 Runtime config is stored in the D1 `rag_settings` table with code defaults in
 `src/config.ts`, and managed through the `ragbot.v1.ConfigService` RPCs or the
-`platy` CLI. See `AGENTS.md` for the key list, bootstrap steps, and CLI usage.
+`platy` CLI. See `AGENTS.md` for the key list, terraform setup, and CLI usage.
 
 ## Local and Deploy Commands
 

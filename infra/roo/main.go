@@ -11,8 +11,9 @@ import (
 	"jsmunro.me/platy/roo/internal/output"
 )
 
-func main() {
-	slog.SetDefault(output.Logger)
+// RootCommand assembles the full roo command tree. Exposed so docs generation
+// (roo docs) and tests can build the same tree main() runs.
+func RootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "roo",
 		Short:         "Consumer CLI for authenticating with the platform and invoking registered applications",
@@ -27,8 +28,14 @@ func main() {
 		commands.DiscoverCommand(),
 		commands.MetadataCommand(),
 		commands.FetchCommand(),
+		commands.DocsCommand(),
 	)
-	if err := root.ExecuteContext(context.Background()); err != nil {
+	return root
+}
+
+func main() {
+	slog.SetDefault(output.Logger)
+	if err := RootCommand().ExecuteContext(context.Background()); err != nil {
 		output.Logger.Error(err.Error())
 		os.Exit(1)
 	}

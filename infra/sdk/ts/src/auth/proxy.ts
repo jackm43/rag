@@ -1,11 +1,11 @@
-import { requireSenderConstraint } from "../authz/constraints";
+import { requireSenderConstraint } from "../resource/constraints";
 import { connectorToken } from "../client/connector";
-import type { ServiceCredential } from "../client/exchange";
+import type { ServiceCredential } from "../oauth2/exchange";
 import type { Identity } from "../identity";
 import { errorMessage, logger } from "../logger";
 import { principalFromIdentity } from "../identity";
 import { annotateSpan, traceHeaders } from "../otel";
-import { verifyStsToken, type StsVerifierConfig } from "../verify/sts";
+import { verifyStsToken, type StsVerifierConfig } from "../oauth2/sts";
 import { bearerToken } from "./authenticators";
 
 // sessionProxy is the confidential web client (BFF) pattern: the web

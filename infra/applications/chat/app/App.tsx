@@ -2,13 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Client } from "@connectrpc/connect";
 
 import { ChatService } from "../../aigateway/server/aigateway/v1/chat_service_pb";
-import { client as aigatewayClient } from "../../aigateway/web";
+import { aigateway } from "../../aigateway/web";
 import {
   CLIENT_INSTANCE_HEADER,
   registerChatInstance,
   type ChatInstance,
-  type TrustZoneWebAuth,
-} from "../../../sdk/web/src";
+} from "@platy/web";
+import { useAuth } from "@platy/web/react";
 
 import { DataPanel } from "./DataPanel";
 import { LiveTraces } from "./LiveTraces";
@@ -28,8 +28,8 @@ const costLabel = (m: ModelInfo): string =>
     ? `$${(m.costIn * 1e6).toFixed(2)}/M in · $${(m.costOut * 1e6).toFixed(2)}/M out`
     : "included";
 
-export function App({ auth, signedIn: initialSignedIn }: { auth: TrustZoneWebAuth; signedIn: boolean }) {
-  const [signedIn, setSignedIn] = useState(initialSignedIn);
+export function App() {
+  const { auth, signedIn, signIn, signOut } = useAuth();
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [total, setTotal] = useState(0);
   const [model, setModel] = useState(DEFAULT_MODEL);
@@ -54,7 +54,7 @@ export function App({ auth, signedIn: initialSignedIn }: { auth: TrustZoneWebAut
     let client = clients.current.get(chatId);
     if (!client) {
       const headers = instances.current.get(chatId)?.headers ?? { [CLIENT_INSTANCE_HEADER]: chatId };
-      client = aigatewayClient(auth, ChatService, { headers });
+      client = aigateway.chatServiceClient(auth, { headers });
       clients.current.set(chatId, client);
     }
     return client;
@@ -97,7 +97,6 @@ export function App({ auth, signedIn: initialSignedIn }: { auth: TrustZoneWebAut
   useEffect(
     () =>
       auth.onSessionChange((state) => {
-        setSignedIn(state.status === "active");
         if (state.status === "needs_login") {
           clients.current.clear();
           void auth.ensureAuthenticated();
@@ -189,8 +188,7 @@ export function App({ auth, signedIn: initialSignedIn }: { auth: TrustZoneWebAut
           {signedIn ? (
             <button
               onClick={async () => {
-                await auth.logout();
-                setSignedIn(false);
+                await signOut();
                 clients.current.clear();
                 setChats([]);
                 setActiveId(null);
@@ -199,7 +197,7 @@ export function App({ auth, signedIn: initialSignedIn }: { auth: TrustZoneWebAut
               Sign out
             </button>
           ) : (
-            <button onClick={() => void auth.promptSignIn()}>Sign in</button>
+            <button onClick={() => void signIn()}>Sign in</button>
           )}
         </div>
       </header>
@@ -301,10 +299,10 @@ export function App({ auth, signedIn: initialSignedIn }: { auth: TrustZoneWebAut
             </form>
           </div>
 
-          <LiveTraces auth={auth} signedIn={signedIn} />
+          <LiveTraces />
         </div>
 
-        <DataPanel auth={auth} signedIn={signedIn} wide />
+        <DataPanel wide />
       </main>
     </>
   );

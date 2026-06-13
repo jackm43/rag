@@ -4,6 +4,7 @@ import type { Client } from "@connectrpc/connect";
 import type { DiscoveryService } from "../../discovery/server/discovery/v1/discovery_service_pb";
 
 import { delegationGraphQuery, queryDiscovery, type DelegationEdge } from "../../discovery/web";
+import { useAuth } from "@platy/web/react";
 
 // Delegation graph view: a bipartite SVG rendering of the registry's
 // delegation edges (acting application on the left, target audience on the
@@ -16,12 +17,11 @@ const SVG_WIDTH = 720;
 const PAD_TOP = 12;
 
 export function Delegations({
-  signedIn,
   discovery,
 }: {
-  signedIn: boolean;
   discovery: Client<typeof DiscoveryService> | null;
 }) {
+  const { signedIn } = useAuth();
   const [edges, setEdges] = useState<DelegationEdge[]>([]);
   const [note, setNote] = useState("");
   const [selected, setSelected] = useState<number | null>(null);

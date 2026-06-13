@@ -11,11 +11,11 @@ import { LeaderboardService } from "../../server/ragbot/v1/leaderboard_service_p
 import {
   errorMessage,
   logger,
+  platformAuthenticator,
   protect,
   requireIdentity,
-  stsAuthenticator,
   type AuthPolicy,
-} from "../../../../sdk/ts/src";
+} from "@platy/sdk";
 import { CONFIG_DEFAULTS, deleteSetting, getSettings, isConfigKey, setSetting } from "./config";
 import { postChannelMessage } from "./discord";
 import { recordChannelChatInteraction, runChannelChat, streamChannelChat, type ChannelChatInput } from "./mention";
@@ -50,17 +50,7 @@ const callGatewayControl = async (env: Env, path: string, method: string) => {
 };
 
 export const registerRagbotServices = (router: ConnectRouter, env: Env) => {
-  const issuer = (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, "");
-  const policy: AuthPolicy = {
-    authenticate: stsAuthenticator({
-      issuer,
-      audience: "ragbot",
-      jwksUrl: `${issuer}/.well-known/jwks.json`,
-      gatewayFetch: env.AUTH_GATEWAY
-        ? (input, init) => env.AUTH_GATEWAY!.fetch(input, init)
-        : undefined,
-    }),
-  };
+  const policy: AuthPolicy = { authenticate: platformAuthenticator(env, "ragbot") };
 
   router.service(
     ConfigService,

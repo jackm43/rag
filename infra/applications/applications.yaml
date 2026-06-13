@@ -11,6 +11,7 @@ applications:
     # Generated worker-to-worker client: applications call gateway services
     # (client identity registration, tracing) through typed factories.
     service_client: true
+    web_client: true
     access:
       allowed_groups: [admins]
       allowed_idps: [github]
@@ -23,6 +24,7 @@ applications:
     secret_provider: 1password
     trust_zone: tier2
     service_client: true
+    web_client: true
     secrets:
       DISCORD_APPLICATION_ID: op://mqrwrig24fxs3ssywmf3pxwqgy/ragbot/ApplicationId
       DISCORD_PUBLIC_KEY: op://mqrwrig24fxs3ssywmf3pxwqgy/ragbot/PublicKey
@@ -184,6 +186,7 @@ applications:
     secret_provider: 1password
     trust_zone: tier2
     service_client: true
+    web_client: true
     delegations:
       - audience: cloudflare
         scopes:

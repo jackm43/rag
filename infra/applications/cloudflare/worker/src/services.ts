@@ -2,7 +2,7 @@ import { Code, ConnectError, type ConnectRouter } from "@connectrpc/connect";
 
 import { DeviceService } from "../../server/cloudflare/v1/device_service_pb";
 import { WorkerService } from "../../server/cloudflare/v1/worker_service_pb";
-import { logger, protect, requireIdentity, stsAuthenticator, type AuthPolicy } from "../../../../sdk/ts/src";
+import { logger, platformAuthenticator, protect, requireIdentity, type AuthPolicy } from "@platy/sdk";
 import { cloudflareApiClient } from "./api";
 import { deleteDevice, getDevice, listDevices, revokeDevice } from "./devices";
 import { deployWorker, listWorkers } from "./workers";
@@ -17,17 +17,7 @@ const requireDeviceId = (deviceId: string): string => {
 };
 
 export const registerCloudflareServices = (router: ConnectRouter, env: Env) => {
-  const issuer = (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, "");
-  const policy: AuthPolicy = {
-    authenticate: stsAuthenticator({
-      issuer,
-      audience: "cloudflare",
-      jwksUrl: `${issuer}/.well-known/jwks.json`,
-      gatewayFetch: env.AUTH_GATEWAY
-        ? (input, init) => env.AUTH_GATEWAY!.fetch(input, init)
-        : undefined,
-    }),
-  };
+  const policy: AuthPolicy = { authenticate: platformAuthenticator(env, "cloudflare") };
 
   router.service(
     DeviceService,

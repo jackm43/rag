@@ -13,7 +13,7 @@ func DiscoverCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			s := session()
+			s := session(ctx)
 			document, err := s.Discovery(ctx)
 			if err != nil {
 				output.Fail("discover: %v", err)
@@ -31,10 +31,8 @@ func DiscoverCommand() *cobra.Command {
 			output.PrintLines(
 				"issuer            "+document.Issuer,
 				"jwks              "+document.JwksURI,
-				"token exchange    "+document.Endpoints.TokenExchange,
-				"session create    "+document.Endpoints.SessionCreate,
-				"session refresh   "+document.Endpoints.SessionRefresh,
-				"session revoke    "+document.Endpoints.SessionRevoke,
+				"token endpoint    "+document.Endpoints.TokenExchange,
+				"token revoke      "+document.Endpoints.TokenRevoke,
 				"introspect        "+document.Endpoints.Introspect,
 				"oidc issuer       "+document.Oidc.Issuer,
 				"oidc authorize    "+document.Oidc.AuthorizationEndpoint,
@@ -63,7 +61,7 @@ func MetadataCommand() *cobra.Command {
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			s := session()
+			s := session(ctx)
 			if len(args) == 1 {
 				app, err := s.Application(ctx, args[0])
 				if err != nil {

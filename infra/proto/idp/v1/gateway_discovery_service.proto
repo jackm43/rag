@@ -16,9 +16,7 @@ message DiscoverRequest {}
 
 message Endpoints {
   string token_exchange = 1;
-  string session_create = 2;
-  string session_refresh = 3;
-  string session_revoke = 4;
+  string token_revoke = 2;
   string introspect = 5;
   string discovery = 6;
   string jwks = 7;

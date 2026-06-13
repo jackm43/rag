@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"jsmunro.me/platy/sdk/gateway"
+	"jsmunro.me/platy/sdk/httpclient"
 	"jsmunro.me/platy/sdk/trace"
 )
 
@@ -29,7 +30,7 @@ type Client struct {
 func New(session *gateway.Session) *Client {
 	return &Client{
 		Session:    session,
-		HTTPClient: http.DefaultClient,
+		HTTPClient: httpclient.Default(),
 	}
 }
 

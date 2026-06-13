@@ -1,4 +1,5 @@
 node_modules
+infra/roo/docs/roo_*
 .wrangler
 dist
 *.log
@@ -19,7 +20,7 @@ infra/applications/*/server/
 infra/applications/chat/worker/public/app.js
 infra/applications/console/worker/public/app.js
 
-# Bootstrap and registration outputs (regenerate with platy bootstrap / platy app sync)
+# Terraform metadata and registration outputs (regenerate with terraform apply / platy app sync)
 infra/applications/provider_config.json
 infra/applications/client_metadata.json
 infra/applications/*/metadata.json

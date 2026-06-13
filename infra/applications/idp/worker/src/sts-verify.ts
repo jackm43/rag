@@ -1,6 +1,6 @@
 import { createLocalJWKSet, jwtVerify } from "jose";
 
-import { actorChainFromClaim, verifyStsToken, type Identity } from "../../../../sdk/ts/src";
+import { actorChainFromClaim, verifyStsToken, type Identity } from "@platy/sdk";
 import { getJwks } from "./keys";
 import type { Env } from "./types";
 
@@ -40,6 +40,26 @@ const identityFromStsPayload = (payload: Record<string, unknown>): Identity | nu
     cnfJkt: typeof cnf?.jkt === "string" ? cnf.jkt : null,
     sessionId: typeof payload.sid === "string" ? payload.sid : null,
   };
+};
+
+// Introspection verifies the gateway's own signature and issuer without binding
+// to a single audience, so an authorized caller can introspect any token the
+// gateway minted. Returns the decoded claims or null when the token is invalid,
+// expired, or not signed by this gateway.
+export const verifyGatewayTokenClaims = async (
+  env: Env,
+  token: string,
+): Promise<Record<string, unknown> | null> => {
+  const jwks = await localSigningJwks(env);
+  if (!jwks) {
+    return null;
+  }
+  try {
+    const { payload } = await jwtVerify(token, jwks, { issuer: issuer(env) });
+    return payload as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 };
 
 export const verifyGatewayStsToken = async (

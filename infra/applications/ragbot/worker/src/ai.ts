@@ -1,7 +1,7 @@
 import type { BotConfig } from "./config";
-import { chatServiceClient } from "./connector";
+import { targets } from "../../targets";
 import type { Env } from "./types";
-import type { Identity } from "../../../../sdk/ts/src";
+import type { Identity } from "@platy/sdk";
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -75,7 +75,7 @@ export const runChatModel = async (
   messages: ChatMessage[],
   options: ChatOptions = {},
 ): Promise<ChatModelResult> => {
-  const response = await chatServiceClient(env, identity).complete(
+  const response = await targets(env, identity).aigateway.chatService().complete(
     completionRequest(config, messages, options),
   );
   return {
@@ -92,7 +92,7 @@ export async function* streamChatModel(
   messages: ChatMessage[],
   options: ChatOptions = {},
 ): AsyncGenerator<ChatStreamChunk> {
-  const stream = chatServiceClient(env, identity).streamComplete(
+  const stream = targets(env, identity).aigateway.chatService().streamComplete(
     completionRequest(config, messages, options),
   );
   for await (const chunk of stream) {

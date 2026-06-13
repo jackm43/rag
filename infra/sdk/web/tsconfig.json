@@ -4,9 +4,22 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@platy/web": ["src/index.ts"],
+      "@platy/web/react": ["src/react.tsx"],
+      "@platy/sdk": ["../ts/src/index.ts"],
+      "@platy/sdk/oauth2/dpop": ["../ts/src/oauth2/dpop.ts"]
+    }
   },
-  "include": ["src/**/*.ts", "../../applications/*/web/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "../../applications/*/web/**/*.ts",
+    "../../applications/*/app/**/*.tsx"
+  ]
 }

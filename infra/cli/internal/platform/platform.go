@@ -12,16 +12,16 @@ import (
 
 const DefaultGatewayURL = sdkplatform.DefaultGatewayURL
 
-func Session() *gateway.Session {
-	session, err := sdkplatform.NewSession(context.Background(), output.Logger)
+func Session(ctx context.Context) *gateway.Session {
+	session, err := sdkplatform.NewSession(ctx, output.Logger)
 	if err != nil {
 		output.Fail("gateway session: %v", err)
 	}
 	return session
 }
 
-func Client() *client.Client {
-	c, err := sdkplatform.NewClient(context.Background(), output.Logger)
+func Client(ctx context.Context) *client.Client {
+	c, err := sdkplatform.NewClient(ctx, output.Logger)
 	if err != nil {
 		output.Fail("request client: %v", err)
 	}
@@ -44,7 +44,7 @@ func RepoRoot() string {
 // discovery application after registry mutations. Best effort: failures are
 // logged, never fatal.
 func SyncDiscovery(ctx context.Context) {
-	state, err := Session().SyncDiscovery(ctx)
+	state, err := Session(ctx).SyncDiscovery(ctx)
 	if err != nil {
 		output.Logger.Warn("discovery sync failed; the read model may be stale", "error", err)
 		return

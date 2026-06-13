@@ -12,7 +12,12 @@
       "@cloudflare/workers-types"
     ],
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@platy/sdk": ["infra/sdk/ts/src/index.ts"],
+      "@platy/web": ["infra/sdk/web/src/index.ts"]
+    }
   },
   "include": [
     "infra/sdk/ts/src/**/*.ts",
@@ -20,6 +25,7 @@
     "infra/applications/ragbot/worker/scripts/**/*.ts",
     "infra/applications/**/server/**/*.ts",
     "infra/applications/**/service/**/*.ts",
+    "infra/applications/**/targets/**/*.ts",
     "infra/applications/discovery/graphql/**/*.ts"
   ]
 }

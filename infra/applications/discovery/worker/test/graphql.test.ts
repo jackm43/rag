@@ -63,10 +63,8 @@ const gateway: GatewayView = {
   issuer: "https://auth-gateway.example.com",
   jwksUri: "https://auth-gateway.example.com/.well-known/jwks.json",
   endpoints: {
-    tokenExchange: "https://auth-gateway.example.com/idp.v1.IdentityService/ExchangeToken",
-    sessionCreate: "https://auth-gateway.example.com/idp.v1.IdentityService/CreateSession",
-    sessionRefresh: "https://auth-gateway.example.com/idp.v1.IdentityService/RefreshSession",
-    sessionRevoke: "https://auth-gateway.example.com/idp.v1.IdentityService/RevokeSession",
+    tokenExchange: "https://auth-gateway.example.com/oauth/token",
+    tokenRevoke: "https://auth-gateway.example.com/oauth/revoke",
     introspect: "https://auth-gateway.example.com/idp.v1.IdentityService/Introspect",
     discovery: "https://auth-gateway.example.com/api/discovery",
     jwks: "https://auth-gateway.example.com/.well-known/jwks.json",

@@ -1,6 +1,6 @@
 import { exportJWK, generateKeyPair, importJWK, SignJWT, type JWK } from "jose";
 
-import { errorMessage, logger } from "../../../../sdk/ts/src";
+import { errorMessage, logger } from "@platy/sdk";
 import type { Env } from "./types";
 
 const ROTATION_SECONDS = 7 * 24 * 60 * 60;

@@ -1,5 +1,5 @@
 import { runChatModel, withTimeout } from "../ai";
-import { selfIdentity } from "../connector";
+import { selfIdentity } from "../self";
 import { loadConfig, type BotConfig } from "../config";
 import {
   editOriginalInteractionResponse,
@@ -7,7 +7,7 @@ import {
   type InteractionMessageData,
 } from "../discord";
 import { jsonResponse } from "../http";
-import { errorMessage, logger } from "../../../../../sdk/ts/src";
+import { errorMessage, logger } from "@platy/sdk";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
   DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,

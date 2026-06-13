@@ -1,6 +1,6 @@
 import { create } from "@bufbuild/protobuf";
 
-import type { PlatformClient } from "../../../../sdk/ts/src/client/fetch";
+import type { PlatformClient } from "@platy/sdk";
 
 import {
   DeviceRegistrationSummarySchema,

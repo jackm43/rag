@@ -20,13 +20,11 @@ type OidcProvider struct {
 }
 
 type Endpoints struct {
-	TokenExchange  string `json:"token_exchange"`
-	SessionCreate  string `json:"session_create"`
-	SessionRefresh string `json:"session_refresh"`
-	SessionRevoke  string `json:"session_revoke"`
-	Introspect     string `json:"introspect"`
-	Discovery      string `json:"discovery"`
-	Jwks           string `json:"jwks"`
+	TokenExchange string `json:"token_exchange"`
+	TokenRevoke   string `json:"token_revoke"`
+	Introspect    string `json:"introspect"`
+	Discovery     string `json:"discovery"`
+	Jwks          string `json:"jwks"`
 }
 
 type TrustBoundary struct {
@@ -277,7 +275,7 @@ func Fetch(ctx context.Context, client *http.Client, gatewayURL string) (*Docume
 		}
 		if response.StatusCode == http.StatusForbidden && strings.Contains(detail, "1050") {
 			return nil, fmt.Errorf(
-				"gateway discovery blocked by Cloudflare Access (error 1050); run platy bootstrap to create workers.dev bypass Access apps, or disable deny_unmatched_requests",
+				"gateway discovery blocked by Cloudflare Access (error 1050); apply infra/terraform to create workers.dev bypass Access apps, or disable deny_unmatched_requests",
 			)
 		}
 		return nil, fmt.Errorf("gateway discovery failed with status %d: %s", response.StatusCode, detail)

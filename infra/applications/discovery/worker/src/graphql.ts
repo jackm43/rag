@@ -41,9 +41,7 @@ type DelegationEdge {
 
 type GatewayEndpoints {
   tokenExchange: String!
-  sessionCreate: String!
-  sessionRefresh: String!
-  sessionRevoke: String!
+  tokenRevoke: String!
   introspect: String!
   discovery: String!
   jwks: String!

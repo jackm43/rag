@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Client } from "@connectrpc/connect";
 
 import type { DiscoveryService } from "../../discovery/server/discovery/v1/discovery_service_pb";
@@ -9,7 +9,8 @@ import {
   type ApplicationInfo,
   type SyncState,
 } from "../../discovery/web";
-import type { TrustZoneWebAuth } from "../../../sdk/web/src";
+import { idp } from "../../idp/web";
+import { useAuth } from "@platy/web/react";
 
 // Application registry view: browse from the discovery GraphQL read model,
 // mutate through the gateway's RegistryService (same-origin zone routes), and
@@ -34,14 +35,12 @@ const formatTime = (seconds: number): string =>
   seconds > 0 ? new Date(seconds * 1000).toISOString().replace("T", " ").slice(0, 19) : "-";
 
 export function Applications({
-  auth,
-  signedIn,
   discovery,
 }: {
-  auth: TrustZoneWebAuth;
-  signedIn: boolean;
   discovery: Client<typeof DiscoveryService> | null;
 }) {
+  const { auth, signedIn } = useAuth();
+  const registryClient = useMemo(() => idp.registryServiceClient(auth), [auth]);
   const [apps, setApps] = useState<ApplicationInfo[]>([]);
   const [detail, setDetail] = useState<ApplicationInfo | null>(null);
   const [sync, setSync] = useState<SyncState | null>(null);
@@ -102,28 +101,13 @@ export function Applications({
     }
   };
 
-  const callRegistry = async (path: string, body: unknown): Promise<string> => {
-    const response = await auth.gatewayCall(path, body);
-    const text = await response.text();
-    let rendered = text;
-    try {
-      rendered = JSON.stringify(JSON.parse(text), null, 2);
-    } catch {
-      // Non-JSON body: show as-is.
-    }
-    if (!response.ok) {
-      throw new Error(rendered || `request failed (${response.status})`);
-    }
-    return rendered;
-  };
-
   const register = async () => {
     setBusy(true);
     setActionResult("");
     try {
       const body = JSON.parse(registerBody) as Record<string, unknown>;
-      const result = await callRegistry("/idp.v1.RegistryService/RegisterApplication", body);
-      setActionResult(result);
+      const result = await registryClient.registerApplication(body);
+      setActionResult(JSON.stringify(result, null, 2));
       setRegisterOpen(false);
       await load();
     } catch (err) {
@@ -138,8 +122,8 @@ export function Applications({
     setBusy(true);
     setActionResult("");
     try {
-      const result = await callRegistry("/idp.v1.RegistryService/DeleteApplication", { name });
-      setActionResult(result);
+      const result = await registryClient.deleteApplication({ name });
+      setActionResult(JSON.stringify(result, null, 2));
       if (selected === name) {
         setSelected(null);
         setDetail(null);

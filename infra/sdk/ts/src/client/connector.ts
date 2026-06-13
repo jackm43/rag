@@ -2,12 +2,12 @@ import { createClient as createConnectClient, type Client, type Interceptor, typ
 import { createConnectTransport } from "@connectrpc/connect-web";
 import type { DescService } from "@bufbuild/protobuf";
 
-import { verifyMintedToken } from "../authz/minted";
+import { verifyMintedToken } from "../resource/minted";
 import type { Identity } from "../identity";
 import { errorMessage, logger } from "../logger";
 import { traceHeaders } from "../otel";
 import { ttlCache } from "./cache";
-import { chainExchange, serviceCredentialFromEnv, type ServiceCredential } from "./exchange";
+import { chainExchange, serviceCredentialFromEnv, type ServiceCredential } from "../oauth2/exchange";
 import { createClient, type PlatformClient } from "./fetch";
 
 // A connector is the standard outbound integration with another trust zone

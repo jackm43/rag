@@ -1,4 +1,4 @@
-import { bearerToken, logger, type SpanData } from "../../../../sdk/ts/src";
+import { bearerToken, logger, type SpanData } from "@platy/sdk";
 import { verifyServiceClient } from "./registry";
 import type { Env } from "./types";
 

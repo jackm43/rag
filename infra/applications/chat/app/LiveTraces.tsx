@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 
-import { TraceService } from "../../idp/server/idp/v1/trace_service_pb";
+import { idp } from "../../idp/web";
 import {
-  gatewayClient,
   registerChatInstance,
   type ChatInstance,
-  type TrustZoneWebAuth,
-} from "../../../sdk/web/src";
+} from "@platy/web";
+import { useAuth } from "@platy/web/react";
 
 // Live trace flow: a server-streaming RPC (idp.v1.TraceService/StreamTraces)
 // pushes spans as the gateway ingests them. Every browser request roots a
@@ -60,7 +59,8 @@ const spanDepth = (span: LiveSpan, byId: Map<string, LiveSpan>): number => {
   return depth;
 };
 
-export function LiveTraces({ auth, signedIn }: { auth: TrustZoneWebAuth; signedIn: boolean }) {
+export function LiveTraces() {
+  const { auth, signedIn } = useAuth();
   const [running, setRunning] = useState(false);
   const [traces, setTraces] = useState<LiveTrace[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -90,9 +90,8 @@ export function LiveTraces({ auth, signedIn }: { auth: TrustZoneWebAuth; signedI
     while (!abort.signal.aborted) {
       try {
         setNote("streaming");
-        const client = gatewayClient(
+        const client = idp.traceServiceClient(
           auth,
-          TraceService,
           tracingIdentity.current ? { headers: tracingIdentity.current.headers } : {},
         );
         for await (const message of client.streamTraces({}, { signal: abort.signal })) {

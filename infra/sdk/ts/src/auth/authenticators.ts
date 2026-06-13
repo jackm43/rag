@@ -1,8 +1,8 @@
-import { requireExpectedActorChain, requireSenderConstraint } from "../authz/constraints";
+import { requireExpectedActorChain, requireSenderConstraint } from "../resource/constraints";
 import type { Identity } from "../identity";
-import type { RequestDescriptor } from "../verify/dpop";
-import { verifyOidcToken, type OidcProviderConfig } from "../verify/oidc";
-import { verifyStsToken, type StsVerifierConfig } from "../verify/sts";
+import type { RequestDescriptor } from "../oauth2/dpop";
+import { verifyOidcToken, type OidcProviderConfig } from "../oauth2/oidc";
+import { verifyStsToken, type StsVerifierConfig } from "../oauth2/sts";
 
 export type Authenticator = (
   headers: Headers,

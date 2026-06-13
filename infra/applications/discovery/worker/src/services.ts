@@ -3,11 +3,11 @@ import { Code, ConnectError, type ConnectRouter } from "@connectrpc/connect";
 import { DiscoveryService } from "../../server/discovery/v1/discovery_service_pb";
 import {
   logger,
+  platformAuthenticator,
   protect,
   requireIdentity,
-  stsAuthenticator,
   type AuthPolicy,
-} from "../../../../sdk/ts/src";
+} from "@platy/sdk";
 import { d1Store } from "./data";
 import { executeQuery } from "./graphql";
 import { syncRegistry } from "./sync";
@@ -33,17 +33,7 @@ const parseVariables = (variablesJson: string): Record<string, unknown> | undefi
 };
 
 export const registerDiscoveryServices = (router: ConnectRouter, env: Env) => {
-  const issuer = (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, "");
-  const policy: AuthPolicy = {
-    authenticate: stsAuthenticator({
-      issuer,
-      audience: "discovery",
-      jwksUrl: `${issuer}/.well-known/jwks.json`,
-      gatewayFetch: env.AUTH_GATEWAY
-        ? (input, init) => env.AUTH_GATEWAY!.fetch(input, init)
-        : undefined,
-    }),
-  };
+  const policy: AuthPolicy = { authenticate: platformAuthenticator(env, "discovery") };
   const store = d1Store(env.DB);
 
   router.service(

@@ -1,9 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import type { TrustZoneWebAuth } from "../../../sdk/web/src";
-
-// Identity view: who the gateway thinks this session is (Introspect on the
-// session token) plus the local session state held by the web auth SDK.
+import { idp } from "../../idp/web";
+import { useAuth } from "@platy/web/react";
 
 type Principal = {
   kind?: string;
@@ -17,21 +15,20 @@ type Introspection = {
   scopes?: string[];
 };
 
-export function Identity({ auth, signedIn }: { auth: TrustZoneWebAuth; signedIn: boolean }) {
+export function Identity() {
+  const { auth, signedIn } = useAuth();
   const [intro, setIntro] = useState<Introspection | null>(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const identityClient = useMemo(() => idp.identityServiceClient(auth), [auth]);
 
   const load = async () => {
     setBusy(true);
     setNote("loading");
     try {
-      const response = await auth.gatewayCall("/idp.v1.IdentityService/Introspect", {});
-      const text = await response.text();
-      if (!response.ok) {
-        throw new Error(text || `request failed (${response.status})`);
-      }
-      setIntro(JSON.parse(text) as Introspection);
+      const result = await identityClient.introspect({});
+      setIntro({ principal: result.principal, scopes: result.scopes });
       setNote("");
     } catch (err) {
       setNote((err as Error).message);

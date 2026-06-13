@@ -8,7 +8,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"jsmunro.me/platy/sdk/apps/discovery"
-	oauthclient "jsmunro.me/platy/sdk/oauth2/client"
+	"jsmunro.me/platy/sdk/oauth2/oauthclient"
 )
 
 func impersonationTokenKey(gatewayURL, application string) string {
@@ -62,9 +62,9 @@ func (s *Session) ImpersonationToken(ctx context.Context, application string, fo
 	flow := &oauthclient.BrowserFlow{
 		Config:     config,
 		Logger:     s.logger(),
-		HTTPClient: s.HTTPClient,
+		HTTPClient: s.httpClient,
 	}
-	token, err := flow.Token(ctx, s.Store, impersonationTokenKey(s.GatewayURL, application), forceLogin, nil)
+	token, err := flow.Token(ctx, s.store, impersonationTokenKey(s.gatewayURL, application), forceLogin, nil)
 	if err != nil {
 		return "", fmt.Errorf("impersonation authorization for %s: %w", application, err)
 	}

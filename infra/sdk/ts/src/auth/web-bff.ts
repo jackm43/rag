@@ -1,9 +1,36 @@
-import { ClientIdentityService } from "../../../../applications/idp/server/idp/v1/client_identity_service_pb";
-import { serviceClient } from "../../../../applications/idp/service";
-import { serviceCredentialFromEnv } from "../credential";
+import type { ConnectorConfig } from "../client/connector";
+import type { Identity } from "../identity";
+import { serviceCredentialFromEnv } from "../oauth2/credential";
 import { annotateSpan, gatewayTraceExporter, traceRpc, tracerFromEnv } from "../otel";
 import { logger } from "../logger";
 import { sessionProxy, verifySessionRequest, type ProxyTarget } from "./proxy";
+
+// Injected client-identity registrar. The generated idp service client
+// (idp.clientIdentityServiceClient) is structurally assignable; injecting it
+// keeps the SDK from depending on generated application code.
+export type ClientIdentityRegistrar = (
+  connection: Omit<ConnectorConfig, "application">,
+  identity: Identity,
+) => {
+  registerClientIdentity(request: {
+    application: string;
+    instanceId: string;
+    publicJwk: string;
+    kind: string;
+  }): Promise<{
+    identity?: {
+      instanceId: string;
+      application: string;
+      subject: string;
+      email: string;
+      kind: string;
+      jkt: string;
+      createdAt: bigint | number;
+      expiresAt: bigint | number;
+    };
+    identityToken: string;
+  }>;
+};
 
 const REGISTER_SCOPE = "idp/ClientIdentityService.RegisterClientIdentity";
 const INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -32,6 +59,9 @@ export type WebBffConfig = {
   targets: WebBffTarget[];
   defaultInstanceKind?: string;
   registerPath?: string;
+  // When set, /client/chats registers a per-instance client identity through
+  // this factory (the generated idp client). Omit to disable registration.
+  registerClient?: ClientIdentityRegistrar;
 };
 
 export const proxyTargetFor = (
@@ -62,6 +92,7 @@ const readBinding = (env: WebBffEnv & Record<string, unknown>, key: string | und
 const registerInstance = async (
   app: string,
   defaultKind: string,
+  registerClient: ClientIdentityRegistrar,
   config: {
     gatewayUrl: string;
     verify?: { jwksUrl: string; gatewayFetch?: typeof fetch };
@@ -92,7 +123,7 @@ const registerInstance = async (
   }
   const actor = identity.email ?? identity.subject;
   try {
-    const idp = serviceClient(
+    const idp = registerClient(
       {
         endpoint: config.gatewayUrl,
         gatewayUrl: config.gatewayUrl,
@@ -102,7 +133,6 @@ const registerInstance = async (
         fetch: config.gatewayFetch,
       },
       identity,
-      ClientIdentityService,
     );
     const result = await idp.registerClientIdentity({
       application: app,
@@ -204,10 +234,11 @@ export const createWebBffWorker = (config: WebBffConfig) => {
         gatewayFetch: bindingFetch(env.AUTH_GATEWAY),
         targets,
       });
+      const registerClient = config.registerClient;
       handler = traceRpc(tracer, async (request) => {
         const url = new URL(request.url);
-        if (url.pathname === registerPath && request.method === "POST") {
-          return registerInstance(config.app, defaultKind, {
+        if (registerClient && url.pathname === registerPath && request.method === "POST") {
+          return registerInstance(config.app, defaultKind, registerClient, {
             gatewayUrl: issuer,
             verify,
             credential,

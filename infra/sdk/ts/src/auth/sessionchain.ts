@@ -1,9 +1,9 @@
-import { requireSenderConstraint } from "../authz/constraints";
-import { verifyMintedToken } from "../authz/minted";
+import { requireSenderConstraint } from "../resource/constraints";
+import { verifyMintedToken } from "../resource/minted";
 import { ttlCache } from "../client/cache";
-import { chainExchange, type ServiceCredential } from "../client/exchange";
+import { chainExchange, type ServiceCredential } from "../oauth2/exchange";
 import type { Identity } from "../identity";
-import { verifyStsToken, type StsVerifierConfig } from "../verify/sts";
+import { verifyStsToken, type StsVerifierConfig } from "../oauth2/sts";
 import { bearerToken, type Authenticator } from "./authenticators";
 
 export type SessionChainConfig = {

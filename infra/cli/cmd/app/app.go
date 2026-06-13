@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,7 +14,6 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 
 	idpv1 "jsmunro.me/platy/applications/idp/client/idp/v1"
-	"jsmunro.me/platy/cli/cmd/bootstrap"
 	"jsmunro.me/platy/cli/internal/applications"
 	"jsmunro.me/platy/cli/internal/bffgen"
 	"jsmunro.me/platy/cli/internal/display"
@@ -231,21 +229,6 @@ func manifestDelegations(app *manifest.Application) []*idpv1.Delegation {
 	return delegations
 }
 
-func loadProviderConfig(root string) provider.ProviderConfig {
-	data, err := os.ReadFile(bootstrap.ProviderConfigPath(root))
-	if err != nil {
-		output.Fail("read provider config: run platy bootstrap first")
-	}
-	config := provider.ProviderConfig{}
-	if err := json.Unmarshal(data, &config); err != nil {
-		output.Fail("decode provider config: %v", err)
-	}
-	if len(config.Organization.TrustZones) == 0 {
-		config.Organization = provider.LoadOrganization(root)
-	}
-	return config
-}
-
 func manifestTrustBoundary(app *manifest.Application, config provider.ProviderConfig) *idpv1.TrustBoundary {
 	boundary := config.Boundary
 	if app.TrustBoundary.AccountID != "" {
@@ -310,16 +293,15 @@ func registerApplication(
 	if !hasProto {
 		output.Logger.Info("no proto package; registering client-only application", "application", name)
 	}
-	providerConfig := loadProviderConfig(root)
+	providerConfig := provider.LoadConfig(root)
 	impersonationClientID := ""
 	if app.AllowsImpersonation() {
-		impersonationClientID = provisionImpersonationAccessClientID(ctx, name, app, providerConfig)
+		impersonationClientID = impersonationAccessClientID(name, providerConfig)
 	} else {
 		output.Logger.Info("skipping impersonation access app (impersonatable: false)", "application", name)
 	}
-	provisionClientOnlyWebAccess(ctx, name, app, endpoint, hasProto, providerConfig)
 	providerOAuthClientID, providerOAuth := provisionProviderOAuth(ctx, name, app, providerConfig)
-	s := platform.Session()
+	s := platform.Session(ctx)
 	response, err := s.RegistryClient().RegisterApplication(ctx, connect.NewRequest(&idpv1.RegisterApplicationRequest{
 		Name:                        name,
 		Endpoint:                    endpoint,
@@ -361,7 +343,7 @@ func registerApplication(
 	} else {
 		output.Logger.Info("application has a registered client but no local credential; run platy app rotate-client", "application", name)
 	}
-	document := applications.Document(response.Msg.Application, s.GatewayURL, credential, providerOAuth, fullNames)
+	document := applications.Document(response.Msg.Application, s.GatewayURL(), credential, providerOAuth, fullNames)
 	applications.MergeRepoMetadata(root, document)
 	applications.WriteRepoMetadata(root, document)
 	syncGatewayProviderOAuthVars(root)
@@ -373,7 +355,7 @@ func registerApplication(
 			output.Logger.Info("provider oauth clients not pushed to gateway; run platy deploy idp", "error", err)
 		}
 	}
-	platform.Session().InvalidateDiscovery()
+	platform.Session(ctx).InvalidateDiscovery()
 	return map[string]any{
 		"application": applications.JSON(response.Msg.Application),
 		"credential":  credential,
@@ -384,19 +366,15 @@ func Sync(ctx context.Context, prune bool) {
 	root := platform.RepoRoot()
 	loaded := manifest.Load(root)
 	results := SyncApplications(ctx, root, loaded, nil, prune)
-	if config, err := os.ReadFile(bootstrap.ProviderConfigPath(root)); err == nil {
-		providerConfig := provider.ProviderConfig{}
-		if err := json.Unmarshal(config, &providerConfig); err == nil {
-			if err := provider.SyncToGateway(ctx, providerConfig); err != nil {
-				output.Logger.Info("provider config not synced to gateway", "error", err)
-			}
-		}
+	providerConfig := provider.LoadConfig(root)
+	if err := provider.SyncToGateway(ctx, providerConfig); err != nil {
+		output.Logger.Info("provider config not synced to gateway", "error", err)
 	}
 	output.PrintJSON(results)
 }
 
 func List(ctx context.Context) {
-	response, err := platform.Session().RegistryClient().ListApplications(ctx, connect.NewRequest(&idpv1.ListApplicationsRequest{}))
+	response, err := platform.Session(ctx).RegistryClient().ListApplications(ctx, connect.NewRequest(&idpv1.ListApplicationsRequest{}))
 	if err != nil {
 		output.Fail("list applications: %v", err)
 	}
@@ -409,7 +387,7 @@ func List(ctx context.Context) {
 }
 
 func Get(ctx context.Context, name string) {
-	response, err := platform.Session().RegistryClient().GetApplication(ctx, connect.NewRequest(&idpv1.GetApplicationRequest{Name: name}))
+	response, err := platform.Session(ctx).RegistryClient().GetApplication(ctx, connect.NewRequest(&idpv1.GetApplicationRequest{Name: name}))
 	if err != nil {
 		output.Fail("get application: %v", err)
 	}
@@ -417,7 +395,7 @@ func Get(ctx context.Context, name string) {
 }
 
 func Delete(ctx context.Context, name string) {
-	response, err := platform.Session().RegistryClient().DeleteApplication(ctx, connect.NewRequest(&idpv1.DeleteApplicationRequest{Name: name}))
+	response, err := platform.Session(ctx).RegistryClient().DeleteApplication(ctx, connect.NewRequest(&idpv1.DeleteApplicationRequest{Name: name}))
 	if err != nil {
 		output.Fail("delete application: %v", err)
 	}
@@ -432,7 +410,7 @@ func RotateClient(ctx context.Context, name string) {
 	root := platform.RepoRoot()
 	loaded := manifest.Load(root)
 	provider := loaded.Application(name).Provider()
-	s := platform.Session()
+	s := platform.Session(ctx)
 	response, err := s.RegistryClient().RegisterClient(ctx, connect.NewRequest(&idpv1.RegisterClientRequest{Application: name}))
 	if err != nil {
 		output.Fail("rotate client: %v", err)
@@ -442,7 +420,7 @@ func RotateClient(ctx context.Context, name string) {
 	if err != nil {
 		output.Fail("application metadata: %v", err)
 	}
-	registered.GatewayURL = s.GatewayURL
+	registered.GatewayURL = s.GatewayURL()
 	registered.Credential = credential
 	applications.MergeRepoMetadata(root, registered)
 	applications.WriteRepoMetadata(root, registered)

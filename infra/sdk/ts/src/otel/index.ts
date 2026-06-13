@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { errorMessage, logger } from "../logger";
-import type { RpcHandler } from "../router";
+import type { RpcHandler } from "../resource/router";
 
 // Minimal OpenTelemetry tracing for workers: W3C traceparent propagation,
 // spans with attributes/status, and OTLP/HTTP JSON export. Every span is also

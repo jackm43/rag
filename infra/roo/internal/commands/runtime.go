@@ -9,16 +9,16 @@ import (
 	"jsmunro.me/platy/sdk/platform"
 )
 
-func session() *gateway.Session {
-	s, err := platform.NewSession(context.Background(), output.Logger)
+func session(ctx context.Context) *gateway.Session {
+	s, err := platform.NewSession(ctx, output.Logger)
 	if err != nil {
 		output.Fail("gateway session: %v", err)
 	}
 	return s
 }
 
-func requestClient() *client.Client {
-	c, err := platform.NewClient(context.Background(), output.Logger)
+func requestClient(ctx context.Context) *client.Client {
+	c, err := platform.NewClient(ctx, output.Logger)
 	if err != nil {
 		output.Fail("request client: %v", err)
 	}

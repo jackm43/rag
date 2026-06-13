@@ -1,6 +1,6 @@
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 
-import { TOKEN_TYPE_SERVICE_CREDENTIAL } from "../../../../sdk/ts/src";
+import { TOKEN_TYPE_SERVICE_CREDENTIAL } from "@platy/sdk";
 
 export const GATEWAY_ISSUER = "https://auth-gateway.example.com";
 export const TEST_SERVICE_CLIENT_ID = "svc_ragbot_test";
@@ -115,26 +115,20 @@ export const createAigatewayTestHarness = await (async () => {
     if (url === `${GATEWAY_ISSUER}/api/discovery`) {
       return Response.json(discovery);
     }
-    if (url === `${GATEWAY_ISSUER}/idp.v1.IdentityService/ExchangeToken`) {
-      const body = JSON.parse(String(init?.body ?? "{}")) as {
-        audience?: string;
-        subjectToken?: string;
-        subjectTokenType?: string;
-        actorToken?: string;
-        scopes?: string[];
-      };
-      const audience = body.audience ?? "ragbot";
+    if (url === `${GATEWAY_ISSUER}/oauth/token`) {
+      const body = new URLSearchParams(String(init?.body ?? ""));
+      const audience = body.get("audience") ?? "ragbot";
       const requestedScopes =
-        body.scopes && body.scopes.length > 0 ? body.scopes : [`${audience}/*`];
+        (body.get("scope") ?? "").trim() ? (body.get("scope") ?? "").trim().split(/\s+/) : [`${audience}/*`];
       let subject = TEST_SERVICE_CLIENT_ID;
       let act: string | undefined;
-      if (body.subjectTokenType === TOKEN_TYPE_SERVICE_CREDENTIAL) {
+      if (body.get("subject_token_type") === TOKEN_TYPE_SERVICE_CREDENTIAL) {
         subject = TEST_SERVICE_CLIENT_ID;
-      } else if (body.subjectToken) {
-        subject = jwtSubject(body.subjectToken);
+      } else if (body.get("subject_token")) {
+        subject = jwtSubject(body.get("subject_token") ?? "");
       }
-      if (body.actorToken) {
-        act = body.actorToken.split(":")[0];
+      if (body.get("actor_token")) {
+        act = (body.get("actor_token") ?? "").split(":")[0];
       }
       const accessToken = await signToken({
         audience,
@@ -144,9 +138,9 @@ export const createAigatewayTestHarness = await (async () => {
         act,
       });
       return Response.json({
-        accessToken,
-        expiresIn: 300,
-        scopes: requestedScopes,
+        access_token: accessToken,
+        expires_in: 300,
+        scope: requestedScopes.join(" "),
       });
     }
     return new Response("{}", { status: 200 });

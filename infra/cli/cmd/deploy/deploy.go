@@ -30,7 +30,7 @@ func Command() *cobra.Command {
 		Short: "Deploy workers from applications.yaml with 1Password secrets",
 		Long: "Deploys the workers declared in " + manifest.RelativePath + " (all when no app is named).\n" +
 			"Application secrets declared in the manifest are resolved through 1Password and\n" +
-			"pushed to each worker; bootstrap metadata is synced into the gateway config.\n" +
+			"pushed to each worker; terraform client metadata is synced into the gateway config.\n" +
 			"Applications whose inputs are unchanged since the last deploy are skipped.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return run(cmd.Context(), args, force)
@@ -54,7 +54,7 @@ func run(ctx context.Context, names []string, force bool) error {
 	output.Logger.Info("reconciling application registry from manifest before deploy")
 	cmdapp.SyncApplications(ctx, root, loaded, names, false)
 	wranglerEnv, apiToken := wranglerDeployEnv(ctx, root)
-	wrangler.InjectBootstrapVars(root, loaded)
+	wrangler.InjectGatewayVars(root, loaded)
 
 	state, err := loadState(root)
 	if err != nil {
@@ -166,7 +166,10 @@ func deployApplication(
 
 func wranglerDeployEnv(ctx context.Context, root string) ([]string, string) {
 	env := os.Environ()
-	organization := provider.LoadOrganization(root)
+	organization, err := provider.LoadOrganization(root)
+	if err != nil {
+		output.Fail("%v", err)
+	}
 	token := secrets.ResolveCloudflareAPIToken(ctx, "", organization.CloudflareAPITokenRef())
 	if token != "" {
 		env = append(env, "CLOUDFLARE_API_TOKEN="+token)
@@ -216,7 +219,7 @@ func pushServiceCredential(ctx context.Context, root, name string, app *manifest
 func runPostDeploy(ctx context.Context, name string, app *manifest.Application, hook string) error {
 	switch hook {
 	case "gateway-start":
-		_, err := platform.Client().Invoke(ctx, name+".GatewayControlService.StartGateway", "{}")
+		_, err := platform.Client(ctx).Invoke(ctx, name+".GatewayControlService.StartGateway", "{}")
 		if err != nil {
 			return fmt.Errorf("post-deploy %s: %w", hook, err)
 		}

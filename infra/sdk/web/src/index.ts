@@ -1,12 +1,14 @@
 export {
-  TrustZoneWebAuth,
+  BrowserAuth,
   NeedsLoginError,
+  type BootstrapOptions,
+  type BootstrapResult,
   type SessionState,
   type EnsureResult,
   type DiscoveryApplication,
   type DiscoveryConfig,
-  type TrustZoneWebAuthOptions,
-} from "./trustzone";
+  type BrowserAuthOptions,
+} from "./browser-auth";
 export {
   gatewayClient,
   gatewayTransport,

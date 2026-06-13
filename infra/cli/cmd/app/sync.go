@@ -11,13 +11,14 @@ import (
 	"jsmunro.me/platy/cli/internal/manifest"
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/platform"
+	"jsmunro.me/platy/cli/internal/provider"
 )
 
 func SyncApplications(ctx context.Context, root string, loaded *manifest.Manifest, names []string, prune bool) map[string]any {
 	if len(names) == 0 {
 		names = loaded.Names()
 	}
-	providerConfig := loadProviderConfig(root)
+	providerConfig := provider.LoadConfig(root)
 	registered := registeredApplications(ctx)
 	results := map[string]any{}
 	for _, name := range names {
@@ -37,7 +38,7 @@ func SyncApplications(ctx context.Context, root string, loaded *manifest.Manifes
 	if prune {
 		results = pruneOrphanedApplications(ctx, root, loaded, registered, results)
 	}
-	platform.Session().InvalidateDiscovery()
+	platform.Session(ctx).InvalidateDiscovery()
 	platform.SyncDiscovery(ctx)
 	return results
 }
@@ -49,7 +50,7 @@ func pruneOrphanedApplications(
 	_ map[string]*idpv1.Application,
 	results map[string]any,
 ) map[string]any {
-	response, err := platform.Session().RegistryClient().ListApplications(ctx, connect.NewRequest(&idpv1.ListApplicationsRequest{}))
+	response, err := platform.Session(ctx).RegistryClient().ListApplications(ctx, connect.NewRequest(&idpv1.ListApplicationsRequest{}))
 	if err != nil {
 		output.Fail("list applications: %v", err)
 	}
@@ -60,7 +61,7 @@ func pruneOrphanedApplications(
 		if _, declared := loaded.Applications[registered.Name]; declared {
 			continue
 		}
-		if _, err := platform.Session().RegistryClient().DeleteApplication(
+		if _, err := platform.Session(ctx).RegistryClient().DeleteApplication(
 			ctx,
 			connect.NewRequest(&idpv1.DeleteApplicationRequest{Name: registered.Name}),
 		); err != nil {

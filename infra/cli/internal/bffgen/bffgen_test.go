@@ -34,11 +34,17 @@ func TestScopeRoute(t *testing.T) {
 func TestRenderWorker(t *testing.T) {
 	source := renderWorker("chat", []proxyTarget{
 		{Audience: "aigateway", Binding: "AIGATEWAY", Endpoint: "AIGATEWAY_ENDPOINT"},
-	})
+	}, true)
 	if !strings.Contains(source, `app: "chat"`) {
 		t.Fatal("missing app name")
 	}
 	if !strings.Contains(source, `createWebBffWorker`) {
 		t.Fatal("missing factory call")
+	}
+	if !strings.Contains(source, `registerClient: idp.clientIdentityServiceClient`) {
+		t.Fatal("missing client identity registrar injection")
+	}
+	if strings.Contains(renderWorker("console", nil, false), `registerClient`) {
+		t.Fatal("registerClient should be omitted when not delegated")
 	}
 }

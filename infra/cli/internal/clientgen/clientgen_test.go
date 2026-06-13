@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"jsmunro.me/platy/cli/internal/manifest"
 )
 
 func TestExtraExportsGraphQLWhenPresent(t *testing.T) {
@@ -24,30 +26,65 @@ func TestExtraExportsGraphQLWhenPresent(t *testing.T) {
 }
 
 func TestRenderServiceTemplate(t *testing.T) {
-	content, err := renderTemplate("service", "ragbot", "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	content := renderService("ragbot", []serviceBinding{{
+		Name:        "ConfigService",
+		FactoryName: "configServiceClient",
+		ImportPath:  "../server/ragbot/v1/config_service_pb",
+	}}, "")
 	if !strings.Contains(content, `export const APPLICATION = "ragbot"`) {
 		t.Fatal("missing application constant")
 	}
 	if !strings.Contains(content, `export const RPC_PREFIX = "/ragbot.v1."`) {
 		t.Fatal("missing rpc prefix")
 	}
-	if !strings.Contains(content, "serviceClient") {
-		t.Fatal("missing generic service client")
+	if !strings.Contains(content, "configServiceClient") {
+		t.Fatal("missing named service client")
+	}
+	if strings.Contains(content, "serviceClient = <") {
+		t.Fatal("generic service client should not be generated")
 	}
 }
 
 func TestRenderWebTemplate(t *testing.T) {
-	content, err := renderTemplate("web", "aigateway", "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	content := renderWeb("aigateway", []serviceBinding{{
+		Name:        "ChatService",
+		FactoryName: "chatServiceClient",
+		ImportPath:  "../server/aigateway/v1/chat_service_pb",
+	}}, "")
 	if !strings.Contains(content, `export const APPLICATION = "aigateway"`) {
 		t.Fatal("missing application constant")
 	}
-	if !strings.Contains(content, "export const client") {
-		t.Fatal("missing generic web client")
+	if !strings.Contains(content, "chatServiceClient") {
+		t.Fatal("missing named web client")
+	}
+}
+
+func TestRenderPolicy(t *testing.T) {
+	content := renderPolicy("ragbot", manifest.Application{
+		Description:   "Discord bot",
+		Endpoint:      "https://ragbot.example",
+		Worker:        "ragbot-worker",
+		ServiceClient: true,
+		Delegations: []manifest.Delegation{{
+			Audience: "aigateway",
+			Scopes:   []string{"aigateway/ChatService.Complete"},
+		}},
+		Secrets: map[string]string{"DISCORD_BOT_TOKEN": "op://redacted"},
+	}, []serviceBinding{{
+		Name: "ConfigService",
+		Methods: []methodBinding{{
+			Name:  "ListConfig",
+			Scope: "ragbot/ConfigService.ListConfig",
+		}},
+	}})
+	for _, want := range []string{
+		"# ragbot Policy",
+		"`ragbot/ConfigService.ListConfig`",
+		"`aigateway/ChatService.Complete`",
+		"`DISCORD_BOT_TOKEN`",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("policy missing %q:\n%s", want, content)
+		}
 	}
 }

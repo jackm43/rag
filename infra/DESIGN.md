@@ -327,12 +327,10 @@ sequenceDiagram
     B->>IAP: SSO login + email allowlist
     IAP-->>B: redirect to loopback with code
     B-->>CLI: code (state verified, one request only)
-    CLI->>IAP: token_endpoint (code + PKCE verifier)
-    IAP-->>CLI: upstream access token (used once, never stored)
     CLI->>CLI: load or generate ES256 device key
-    CLI->>GW: CreateSession(upstream token) + DPoP proof
+    CLI->>GW: POST /oauth/token (authorization_code + PKCE verifier) + DPoP proof
     GW-->>CLI: access token (5 min, cnf.jkt) + rotating refresh token
-    Note over CLI,GW: thereafter: RefreshSession(RT) + DPoP proof rotates the RT.<br/>Reusing a rotated RT revokes the session → forced browser login.
+    Note over CLI,GW: thereafter: POST /oauth/token (refresh_token) + DPoP proof rotates the RT.<br/>Reusing a rotated RT revokes the session → forced browser login.
 ```
 
 ### Session refresh and rotation
@@ -424,7 +422,7 @@ AI Gateway application (Module 14b). It implements this module directly:
   `applications.yaml`; `platy dev generate` then emits
   `infra/applications/<app>/web/index.ts`, a typed factory per Connect
   service (e.g. `createChatServiceClient(auth)`) bound through the SDK
-  factory. Pages stay dumb clients: construct `TrustZoneWebAuth`, call
+  factory. Pages stay dumb clients: construct `BrowserAuth`, call
   `ensureAuthenticated()`, build the generated client, render data.
 - `infra/applications/chat/app/App.tsx` + `main.tsx` are a React UI on exactly that
   pattern, streaming responses token by token over the Connect protocol
@@ -447,7 +445,7 @@ Three platform changes support browser clients:
    same-origin and CORS never applies (CORS headers remain for workers.dev
    callers). `workers_dev` must stay explicitly true on routed workers.
 2. **Server-side code exchange.** The browser sends the OIDC authorization
-   code (plus PKCE verifier) to `CreateSession`; the gateway completes the
+   code (plus PKCE verifier) to `/oauth/token`; the gateway completes the
    token exchange against the identity proxy server-side, because the proxy's
    token endpoint does not permit browser CORS.
 3. **The dumb-client (session-chain) pattern.** The browser is a pure public
@@ -502,13 +500,13 @@ sequenceDiagram
 
     B->>W: ChatService/StreamComplete<br/>DPoP session token + per-request proof (ath)
     W->>W: verify DPoP binding + session (aud = idp)
-    W->>GW: ExchangeToken(subject = session, actor = chat credential,<br/>audience = aigateway)
+    W->>GW: POST /oauth/token token-exchange<br/>subject = session, actor = chat credential,<br/>audience = aigateway
     GW->>GW: check chat's delegation grant; audit
     GW-->>W: token { sub: user, aud: aigateway, act: { sub: app:chat } }
     W->>AI: forward RPC over service binding with minted token
     AI->>AI: stsAuthenticator: iss, aud, exp, signature, scope
     Note over AI: model requests the ragbot tool
-    AI->>GW: ExchangeToken(subject = inbound token, actor = aigateway credential,<br/>audience = ragbot)
+    AI->>GW: POST /oauth/token token-exchange<br/>subject = inbound token, actor = aigateway credential,<br/>audience = ragbot
     GW-->>AI: token { sub: user, aud: ragbot,<br/>act: { sub: app:aigateway, act: { sub: app:chat } } }
     AI->>RB: LeaderboardService.ListTotals
     RB-->>AI: totals
@@ -557,7 +555,7 @@ WebAuthn-based session binding is the planned upgrade (Module 15).
 ### Frontend auth SDK interface
 
 ```
-interface TrustZoneWebAuth {
+interface BrowserAuth {
     // One-time setup; reads discovery, opens or resumes a session.
     init(opts: { discoveryUrl: string }): Promise<SessionState>
 
@@ -690,12 +688,11 @@ compromise is bounded by what the gateway agreed to issue it.
 
 ### Token exchange (STS)
 
-Endpoint: `POST /<idp-service>/ExchangeToken` (also reachable through the
-generated RPC surface; the gateway's own API is itself a registered
-application).
+Endpoint: `POST /oauth/token` with
+`grant_type=urn:ietf:params:oauth:grant-type:token-exchange`.
 
 ```
-request ExchangeTokenRequest {
+form parameters {
     grant_type           = "urn:ietf:params:oauth:grant-type:token-exchange"
     subject_token        : string      # who the token is FOR
     subject_token_type   : enum {
@@ -1382,7 +1379,7 @@ subject instead) - the audit distinction matters.
 flow chained_call(inbound_token, target_audience, scopes):
     # inbound_token: the STS token this service received (subject)
     # service credential: this service's own identity (actor)
-    new = gateway.ExchangeToken(
+    new = oauth_token_exchange(
         subject_token       = inbound_token,
         subject_token_type  = gateway_sts_token,
         actor_token         = client_id + client_secret (resolved by ref),
@@ -1405,7 +1402,7 @@ Gateway validation order:
 
 ```mermaid
 flowchart TD
-    REQ["ExchangeToken<br/>subject token + actor credential<br/>+ audience + scopes"] --> S{subject token valid?<br/>own issuance, unexpired}
+    REQ["/oauth/token token-exchange<br/>subject token + actor credential<br/>+ audience + scopes"] --> S{subject token valid?<br/>own issuance, unexpired}
     S -- no --> DENY["hard deny<br/>(audited with reason)"]
     S -- yes --> A{actor credential valid?<br/>resolves to registered app}
     A -- no --> DENY
@@ -1621,7 +1618,7 @@ flow ambient_identity():
            att = fetch platform identity token
                  (e.g. CI OIDC token endpoint, runtime metadata endpoint,
                   with audience = gateway issuer)
-           return gateway.ExchangeToken(
+           return oauth_token_exchange(
                subject_token      = att,
                subject_token_type = federated_attestation,
                audience           = target)
@@ -2267,7 +2264,7 @@ connector tool calls over chained identity; **client instance identity**
 (Module 4) gives browser instances gateway-signed, optionally key-bound
 sub-identities; **tracing** (Module 14b) gives every RPC identity-annotated
 spans with a gateway-backed store and live viewer; and the gateway-side OIDC
-code exchange is in place (`CreateSession` completes the upstream exchange
+code exchange is in place (`/oauth/token` completes the upstream exchange
 server-side, so browser CORS against the IdP token endpoint never applies).
 
 ### Hardening backlog (designed above, not yet in code)
@@ -2296,4 +2293,3 @@ possession, explicit delegation, references over values, audit everything -
 do not change as these land. Each item strengthens an existing principle
 rather than introducing a new kind of trust, which is the test every future
 addition must pass.
-

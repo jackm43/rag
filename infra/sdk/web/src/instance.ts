@@ -1,4 +1,4 @@
-import type { TrustZoneWebAuth } from "./trustzone";
+import type { BrowserAuth } from "./browser-auth";
 
 // Chat session client SDK: each chat conversation is a federated client
 // identity. The page generates a non-extractable ES256 key for the chat,
@@ -43,7 +43,7 @@ const generateInstanceKey = async (): Promise<{ privateKey: CryptoKey; publicJwk
 };
 
 export const registerChatInstance = async (
-  auth: TrustZoneWebAuth,
+  auth: BrowserAuth,
   options: { path?: string; kind?: string } = {},
 ): Promise<ChatInstance> => {
   const key = await generateInstanceKey();

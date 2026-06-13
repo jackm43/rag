@@ -12,20 +12,23 @@ External references:
 ```
 infra/proto/
   buf.yaml                 # buf module (lint STANDARD, breaking FILE)
-  platy/                   # shared platform contracts (not an application)
-    oauth/v1/              # package oauth.v1 — RFC OAuth/OIDC message shapes
   <app>/                   # one directory per registered application
     v1/                    # package <app>.v1 — RPC surface for that worker
       types.proto          # optional: shared messages for this app only
       foo_service.proto    # one service (+ its request/response messages) per file
 ```
 
+OAuth/OIDC and DPoP wire shapes are not modelled as protobuf: the gateway
+serves them as standards-shaped HTTP (RFC 8414/8693/9449/7009/7662/9728) and the
+SDKs verify them directly, so there is no shared `platy/` proto package today.
+Add one only if a contract must be shared across applications (see
+[Adding shared platform messages](#adding-shared-platform-messages-platy)).
+
 Generated output (do not edit by hand):
 
-| Source | Go client (Connect) | TypeScript server (protobuf-es) |
-|--------|---------------------|----------------------------------|
-| `platy/` | `infra/sdk/proto/client/` | `infra/sdk/proto/server/` |
-| `<app>/` | `infra/applications/<app>/client/` | `infra/applications/<app>/server/` |
+| Source | Go client (Connect) | TypeScript server (protobuf-es) | Platform bindings |
+|--------|---------------------|----------------------------------|-------------------|
+| `<app>/` | `infra/applications/<app>/client/` | `infra/applications/<app>/server/` | `service/`, `web/`, `policy.generated.md` |
 
 The application name in `infra/applications/applications.yaml`, the proto directory name (`infra/proto/<app>/`), and the protobuf package prefix (`<app>.v1`) must all match. `platy dev generate` and `platy app register` assume this 1:1 mapping.
 
@@ -36,11 +39,11 @@ Hand-written runtime libraries live separately under `infra/sdk/go/`, `infra/sdk
 Follow the [style guide](https://protobuf.dev/programming-guides/style/) unless noted below.
 
 - **Files**: `lower_snake_case.proto`. Prefer `<service_name>_service.proto` for RPC services.
-- **Packages**: `lower_snake_case` dotted paths; application packages are `<app>.v1`. Shared platform packages live under `platy/` (e.g. `oauth.v1`).
+- **Packages**: `lower_snake_case` dotted paths; application packages are `<app>.v1`. Shared platform packages, if ever needed, live under `platy/`.
 - **Messages / services**: `TitleCase` (`ChatRequest`, `IdentityService`).
 - **Fields**: `snake_case`. Repeated fields use plural names (`repeated string scopes`).
 - **Enums** (when needed): type `TitleCase`, values `UPPER_SNAKE_CASE` with a `*_UNSPECIFIED = 0` first value.
-- **Imports**: use fully qualified paths for other packages (`import "platy/oauth/v1/token.proto";`). For messages in another file of the same package, still add an explicit import (`import "idp/v1/types.proto";`).
+- **Imports**: use fully qualified paths for other packages (`import "idp/v1/types.proto";`). For messages in another file of the same package, still add an explicit import.
 - **One service per file** ([1-1-1 rule](https://protobuf.dev/best-practices/dos-donts/#define-message-types-in-separate-files)): put the `service` block and its dedicated request/response messages together. Extract shared messages into `types.proto` (or similar) when multiple services in the same app reuse them.
 - **Evolution**: never reuse field numbers; `reserved` deleted fields and enum values; do not change field types; avoid `required`; prefer `optional` or `repeated` with documented API contracts in comments.
 
@@ -49,24 +52,21 @@ Run `buf build infra/proto` and `buf lint infra/proto` before opening a PR.
 ## Code generation
 
 ```bash
-# all applications + platy shared schemas
+# all applications
 ./infra/scripts/generate.sh
 
-# one application (platy is always regenerated first when using the full script;
-# for a single app, run platy then the app)
-./infra/scripts/generate.sh platy idp
+# one application
+./infra/scripts/generate.sh idp
 
 # protobuf + typed web/service client wrappers
 platy dev generate <app>
 ```
 
-`generate.sh` copies `platy/oauth` generated stubs into `infra/applications/idp/client|server/platy/oauth/v1/` so the auth gateway worker can import oauth types beside its own `idp/v1` generated code without treating oauth as a deployable application.
-
 ## Adding a new application
 
 1. **Create protos** under `infra/proto/<app>/v1/`. Start with one `*_service.proto` file per RPC service. Set `package <app>.v1;`.
 2. **Declare the application** in `infra/applications/applications.yaml` (endpoint, worker, wrangler config path, delegations, `web_client` / `service_client` flags, secrets, provider settings).
-3. **Implement the worker** at `infra/applications/<app>/worker/`. Import generated handlers from `../server/<app>/v1/*_pb` and mount them behind the SDK `protect` middleware.
+3. **Implement the worker** at `infra/applications/<app>/worker/`. Normal RPC workers use the SDK worker wrapper and put business handlers in `src/services.ts`.
 4. **Generate code**: `platy app register <app>` (or `platy app sync`) registers the audience, resources, scopes, and delegations in the gateway registry, issues service credentials, and runs codegen.
 5. **Deploy**: `platy deploy <app>`.
 
@@ -85,12 +85,15 @@ Do not add RPC methods by editing generated `*_pb.ts` / `*.pb.go` files.
 
 ## Adding shared platform messages (`platy/`)
 
-Use `infra/proto/platy/` only for contracts shared across applications that are not owned by a single worker — today `oauth/v1` (token exchange, session lifecycle, OIDC metadata shapes).
+There are no shared `platy/` protos today: OAuth/OIDC/DPoP are HTTP standards
+served by the gateway, not protobuf contracts. Add `infra/proto/platy/` only if
+a message type must genuinely be shared across multiple applications and is not
+owned by a single worker.
 
-- Package names stay short (`oauth.v1`), not `platy.oauth.v1`, so RPC signatures stay stable when imported by `idp.v1`.
+- Keep package names short (e.g. `foo.v1`, not `platy.foo.v1`) so RPC signatures stay stable when imported by an application package.
 - File paths include `platy/` so codegen and imports distinguish platform types from application types.
 - Do not add a `platy` entry to `applications.yaml`; nothing deploys as the `platy` application.
-- After changing `platy/`, run `./infra/scripts/generate.sh platy` and regenerate any importer (`idp` at minimum).
+- Re-add a generation step for the `platy` tree in `generate.sh` (it was removed when the tree became empty) and regenerate any importer.
 
 ## Importing third-party protobuf
 
@@ -135,8 +138,8 @@ Four locations, four roles. None of them is a 1:1 mirror of `infra/proto/` — e
 
 | Layer | Location | Question it answers |
 |-------|----------|---------------------|
-| Contracts | `infra/proto/platy/`, `infra/proto/<app>/` | What messages and RPCs exist on the wire? |
-| Generated bindings | `infra/sdk/proto/`, `infra/applications/<app>/client\|server/` | What are the typed stubs for those contracts? |
+| Contracts | `infra/proto/<app>/` | What messages and RPCs exist on the wire? |
+| Generated bindings | `infra/applications/<app>/client\|server/` | What are the typed stubs for those contracts? |
 | Go CLI SDK | `infra/sdk/go/` | How do `platy` / `roo` authenticate, discover, and call RPCs? |
 | Worker SDK | `infra/sdk/ts/`, `infra/sdk/web/` | How do workers and browsers verify tokens, enforce policy, and chain identity? |
 
@@ -146,11 +149,11 @@ Generated application code never lives under `infra/sdk/go/`. That tree is hand-
 
 Top-level packages are grouped by **role**, not by proto directory name. Think in four buckets:
 
-**Platform** — cross-cutting runtime used by every CLI; maps conceptually to `platy/` protos and the auth gateway (`idp`):
+**Platform** — cross-cutting runtime used by every CLI; maps conceptually to the auth gateway (`idp`):
 
 | Package | Role | Proto / generated counterpart |
 |---------|------|--------------------------------|
-| `oauth2/client`, `oauth2/token` | Browser PKCE, DPoP, token store, transport | `platy/oauth/v1` wire messages (generated in `infra/sdk/proto/`) |
+| `oauth2/oauthclient`, `oauth2/token` | Browser PKCE, DPoP, token store, transport | OAuth/OIDC/DPoP HTTP standards (no protobuf) |
 | `gateway/` | Gateway session, STS exchange, impersonation | `idp/v1` Connect clients in `applications/idp/client/` |
 | `identity/` | Structured logging for principals and token exchange | `idp.v1.Principal` shape (helpers only, not generated) |
 | `secrets/` | 1Password + file secret providers | none |
@@ -220,7 +223,7 @@ Workers do not import `infra/sdk/go/`. The TS layout is policy- and connector-or
 
 ### Web SDK (`infra/sdk/web/`)
 
-Browser-only: DPoP session (`TrustZoneWebAuth`), `webTransport` / `webClient` factories bound to generated `applications/<app>/web` clients.
+Browser-only: DPoP session (`BrowserAuth`), `webTransport` / `webClient` factories bound to generated `applications/<app>/web` clients.
 
 ### Outbound clients (shared, not per-app)
 
@@ -228,8 +231,8 @@ Every caller uses one shared client stack. Per-application directories under `in
 
 | Runtime | Shared library | Generated per app | Call pattern |
 |---------|----------------|-------------------|--------------|
-| Workers (TS) | `infra/sdk/ts/src/client/` — `serviceConnection`, `connectorServiceClient`, `chainExchange`, `createClient` | `applications/<app>/service/index.ts` | `createFooServiceClient(serviceConnection(env, target), identity)` |
-| Browsers | `infra/sdk/web/` — `webClient`, `webTransport` | `applications/<app>/web/index.ts` | `createFooServiceClient(auth, options)` |
+| Workers (TS) | `infra/sdk/ts/src/client/` — `serviceConnection`, `connectorServiceClient`, `chainExchange`, `createClient` | `applications/<app>/service/index.ts` | `fooServiceClient(serviceConnection(env, target), identity)` |
+| Browsers | `infra/sdk/web/` — `webClient`, `webTransport` | `applications/<app>/web/index.ts` | `fooServiceClient(auth, options)` |
 | CLI (Go) | `infra/sdk/go/client/` — discovery-driven `Call` / `StreamCall` for `roo fetch`; `gateway.Session` for token exchange and impersonation | `applications/idp/client/` (gateway RPCs only) | `roo fetch …` |
 | External HTTP APIs | `infra/sdk/ts/src/provider/` — `providerApiClient` | none | OAuth or static token injection on outbound fetch |
 
@@ -240,6 +243,9 @@ Cross-cutting behaviour lives only in the shared libraries:
 - emit `rpc_client` / `rpc_client_failed` boundary logs
 - propagate trace context
 
+Generated client bindings are named per service. Do not call a generic service
+descriptor from application code when a named generated factory exists.
+
 **Do not** hand-write a new HTTP or Connect client inside an application worker. Wire `serviceConnection` once, import the generated factory, call the RPC.
 
 **Do not** regenerate or copy connector logic into `applications/<app>/service` — `platy dev generate` already emits the factory list from proto services.
@@ -248,7 +254,7 @@ Cross-cutting behaviour lives only in the shared libraries:
 
 ### Rules
 
-- Wire shapes live in `.proto`; generated stubs in `applications/` or `sdk/proto/`; runtime behaviour in `infra/sdk/`.
+- Wire shapes live in `.proto`; generated stubs in `applications/<app>/client|server/`; runtime behaviour in `infra/sdk/`.
 - Do not hand-write request/response structs that codegen already provides.
 - Do not add generated `.pb.go` / `_pb.ts` files under `infra/sdk/go/` or `infra/sdk/ts/`.
 - When adding a new **platform** concern shared by CLIs, add under the platform bucket (or `oauth2/` if it is OAuth-client runtime).
@@ -261,6 +267,6 @@ Cross-cutting behaviour lives only in the shared libraries:
 - [ ] `package <app>.v1;`
 - [ ] `buf build` / `buf lint` clean
 - [ ] `platy dev generate <app>`
-- [ ] Worker handler behind `protect` + `traceRpc`
+- [ ] Worker mounted through `createPlatformRpcWorker` or `createWebBffWorker`
 - [ ] `platy app sync` when the gateway must know new methods/scopes
 - [ ] `npm run check`, `go vet jsmunro.me/platy/sdk/...`, relevant worker tests

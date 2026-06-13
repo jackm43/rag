@@ -1,34 +1,27 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import type { TrustZoneWebAuth } from "../../../sdk/web/src";
-
-// Deploy view: lists worker scripts via the deploy application (chained
-// through the BFF). The deploy service uploads prebuilt bundles
-// (DeployService.DeployWorker takes the module contents), so building and
-// redeploying from source stays a CLI concern; this view is the inspection
-// surface.
+import { deploy } from "../../deploy/web";
+import { useAuth } from "@platy/web/react";
 
 type WorkerInfo = { name?: string; modifiedOn?: string };
 
-export function Deploy({ auth, signedIn }: { auth: TrustZoneWebAuth; signedIn: boolean }) {
+export function Deploy() {
+  const { auth, signedIn } = useAuth();
   const [workers, setWorkers] = useState<WorkerInfo[]>([]);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [raw, setRaw] = useState("");
 
+  const deployClient = useMemo(() => deploy.deployServiceClient(auth), [auth]);
+
   const load = async () => {
     setBusy(true);
     setNote("loading");
     try {
-      const response = await auth.call("deploy", "/deploy.v1.DeployService/ListWorkers", {});
-      const text = await response.text();
-      if (!response.ok) {
-        throw new Error(text || `request failed (${response.status})`);
-      }
-      const body = JSON.parse(text) as { workers?: WorkerInfo[] };
-      setWorkers(body.workers ?? []);
-      setRaw(JSON.stringify(body, null, 2));
+      const result = await deployClient.listWorkers({});
+      setWorkers(result.workers ?? []);
+      setRaw(JSON.stringify(result, null, 2));
       setNote("");
     } catch (err) {
       setNote((err as Error).message);
