@@ -52,6 +52,7 @@ export class DiscordGateway {
   private resumeGatewayUrl: string | null = null;
   private botUserId: string | null = null;
   private heartbeatAcknowledged = true;
+  private messageChain: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly state: DurableObjectState,
@@ -147,7 +148,11 @@ export class DiscordGateway {
     const webSocket = new WebSocket(this.resumeGatewayUrl ?? DISCORD_GATEWAY_URL);
     this.webSocket = webSocket;
     webSocket.addEventListener("message", (event) => {
-      void this.handleMessage(event);
+      this.messageChain = this.messageChain
+        .then(() => this.handleMessage(event))
+        .catch((error) => {
+          logger.error("gateway_message_failed", { error: errorMessage(error) });
+        });
     });
     webSocket.addEventListener("close", () => {
       this.clearHeartbeat();

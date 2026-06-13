@@ -74,6 +74,24 @@ export const resolveChannelPrompt = (
   return extractReplyToBotPrompt(message.content ?? "", referencedAuthorId, botUserId);
 };
 
+const claimChannelMessageJob = async (env: Env, messageId: string, channelId: string) => {
+  const result = await env.DB.prepare(
+    "INSERT INTO rag_message_jobs (message_id, channel_id) VALUES (?, ?) ON CONFLICT(message_id) DO NOTHING",
+  )
+    .bind(messageId, channelId)
+    .run();
+  return (result.meta?.changes ?? 0) > 0;
+};
+
+const channelMessageAlreadyAnswered = async (env: Env, messageId: string) => {
+  const row = await env.DB.prepare(
+    "SELECT id FROM rag_ai_interactions WHERE message_id = ? AND status = 'ok' LIMIT 1",
+  )
+    .bind(messageId)
+    .first<{ id: number }>();
+  return row !== null;
+};
+
 const formatReplyContext = (message: DiscordMessage) => {
   const parts: string[] = [];
   const content = message.content?.trim();
@@ -147,6 +165,15 @@ export const handleGatewayMessageCreate = async (
   if (referencedMessage) {
     replyContext = formatReplyContext(referencedMessage) ?? undefined;
     replyMessageId = referencedMessage.id;
+  }
+
+  const claimed = await claimChannelMessageJob(env, message.id, message.channel_id);
+  if (!claimed) {
+    logger.info("ai_job_duplicate_skipped", {
+      channelId: message.channel_id,
+      messageId: message.id,
+    });
+    return;
   }
 
   await env.AI_JOBS.send({
@@ -406,6 +433,15 @@ const recordAiInteraction = async (
 export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) => {
   const startedAt = Date.now();
   const job = message.body;
+  if (job.kind === "channel" && job.messageId && (await channelMessageAlreadyAnswered(env, job.messageId))) {
+    logger.info("ai_job_already_answered", {
+      channelId: job.channelId,
+      messageId: job.messageId,
+    });
+    message.ack();
+    return;
+  }
+
   let model = "unknown";
   let aiDurationMs: number | null = null;
   let content: string | null = null;
