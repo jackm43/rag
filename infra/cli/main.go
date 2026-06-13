@@ -14,8 +14,9 @@ import (
 	"jsmunro.me/platy/cli/internal/output"
 )
 
-func main() {
-	slog.SetDefault(output.Logger)
+// RootCommand assembles the full platy command tree. Exposed so docs
+// generation (platy dev docs) and tests can build the same tree main() runs.
+func RootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "platy",
 		Short:         "Platform management CLI for the application registry and deploys",
@@ -28,7 +29,12 @@ func main() {
 		cmddeploy.Command(),
 		cmddev.Command(),
 	)
-	if err := root.ExecuteContext(context.Background()); err != nil {
+	return root
+}
+
+func main() {
+	slog.SetDefault(output.Logger)
+	if err := RootCommand().ExecuteContext(context.Background()); err != nil {
 		output.Logger.Error(err.Error())
 		os.Exit(1)
 	}

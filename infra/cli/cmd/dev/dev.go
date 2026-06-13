@@ -9,6 +9,7 @@ import (
 	"regexp"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/cobra/doc"
 
 	"jsmunro.me/platy/cli/internal/manifest"
 	"jsmunro.me/platy/cli/internal/output"
@@ -48,6 +49,22 @@ func Command() *cobra.Command {
 			Short: "Regenerate protobuf code and typed client bindings (default: all proto packages)",
 			RunE: func(cmd *cobra.Command, args []string) error {
 				return generate(args)
+			},
+		},
+		&cobra.Command{
+			Use:   "docs",
+			Short: "Generate the platy CLI reference docs (markdown) into infra/cli/docs",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				dir := filepath.Join(root(), "infra", "cli", "docs")
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					return fmt.Errorf("create docs dir: %w", err)
+				}
+				if err := doc.GenMarkdownTree(cmd.Root(), dir); err != nil {
+					return fmt.Errorf("generate cli docs: %w", err)
+				}
+				output.Logger.Info("generated cli reference docs", "dir", dir)
+				return nil
 			},
 		},
 		&cobra.Command{
