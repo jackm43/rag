@@ -74,6 +74,45 @@ tracing.
    is no generated request/error taxonomy per application. Adopt OpenTelemetry
    semantic conventions for HTTP/RPC and keep identity attributes consistent.
 
+9. Gateway OAuth endpoints are standards-shaped but not standards-correct.
+   `/oauth/token` and `/oauth/revoke` exist with OAuth error bodies, but
+   introspection is Connect-RPC only (custom `{ principal, scopes }`) while
+   metadata advertises it as the introspection endpoint; revocation returns
+   JSON `{}` with no client auth and ignores `token_type_hint`; protected
+   resource metadata (RFC 9728) is absent; authorization-server metadata mixes
+   a gateway `issuer` with a Cloudflare Access `authorization_endpoint` and omits
+   several required fields; missing-DPoP maps to `invalid_grant` rather than a
+   `401` DPoP challenge; and session grants return `scope: "*"`. Addressed by
+   Phase 7 in [STANDARDS_IMPLEMENTATION_PLAN.md](./STANDARDS_IMPLEMENTATION_PLAN.md).
+
+10. The Go SDK has idiom and structure debt.
+    Two packages named `client` force an `oauthclient` alias everywhere;
+    `gateway.Session` exposes mutable fields patched after construction;
+    several stores swallow errors and return nil; `IsProviderAuthorizationError`
+    parses error-message prefixes; and `output.Fail`/`os.Exit` live inside
+    library functions, making the SDK hard to embed. Addressed by Phase 8.
+
+11. Connect/gRPC behaviour is inconsistent at the edges.
+    The gateway streaming interceptor logs (rather than returns) outbound
+    decorate failures, so a stream can proceed unauthenticated; the
+    `platy/oauth/v1/oidc.proto` messages are defined but unused (metadata is
+    built imperatively); and plain HTTP routes return ad hoc error bodies.
+    Addressed by Phase 9.
+
+12. Application authors still hand-wire too much in TypeScript.
+    Worker auth (issuer, JWKS, authenticators) is duplicated per worker;
+    `serviceConnection` leaks env shape; generated factories collide by name
+    across apps; the browser still hits raw Connect paths where a web client is
+    missing; and there is no one-call browser bootstrap or route guard. Addressed
+    by Phase 10.
+
+13. Static infrastructure now lives in Terraform, not the CLI.
+    `infra/terraform` is the source of truth for the static Cloudflare surface
+    (Zero Trust, Access policies/apps, OIDC app, impersonation/bypass apps, D1,
+    queues). The CLI keeps only the dynamic surface (provider OAuth clients,
+    registry sync, deploy), which shrinks the former Cloudflare-shaped
+    `IdentityProxy` to the provider-OAuth surface (see Phase 8).
+
 ## Target Patterns
 
 - `platy app create <name>` scaffolds proto, manifest, worker entrypoint,
@@ -96,7 +135,11 @@ tracing.
 
 ## References
 
+- RFC 7009: OAuth 2.0 Token Revocation.
+- RFC 7662: OAuth 2.0 Token Introspection.
 - RFC 8414: OAuth 2.0 Authorization Server Metadata.
 - RFC 8693: OAuth 2.0 Token Exchange.
 - RFC 9449: OAuth 2.0 Demonstrating Proof of Possession.
+- RFC 9728: OAuth 2.0 Protected Resource Metadata.
 - OpenID Connect Discovery 1.0.
+- Go module layout and package conventions (https://go.dev/doc/modules/layout).

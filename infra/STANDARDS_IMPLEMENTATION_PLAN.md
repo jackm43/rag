@@ -83,6 +83,100 @@ old client contracts are deleted when a stronger standard surface exists.
   `identity_exchanged`, `identity_exchange_refused`, `rpc_client`,
   `rpc_client_failed`, and `stream_completed`.
 
+## Phase 7: OAuth/OIDC RFC Correctness
+
+Extends Phase 1. Closes the gap between "standards-shaped" and "standards-correct"
+on the gateway. See [STANDARDS_REVIEW.md](./STANDARDS_REVIEW.md) findings 9-12.
+
+- Add a real RFC 7662 `POST /oauth/introspect` returning
+  `{ active, sub, exp, scope, cnf, token_type, ... }` with client authentication.
+  Today introspection is Connect-RPC only (custom `{ principal, scopes }`) yet
+  authorization-server metadata advertises it as the introspection endpoint.
+- Harden RFC 7009 `/oauth/revoke`: return an empty `200` body (not JSON `{}`),
+  require client authentication, and honor `token_type_hint` (the Go client
+  already sends it; the server ignores it).
+- Emit RFC 9728 protected-resource metadata
+  (`/.well-known/oauth-protected-resource`) from every application worker,
+  owned by `createPlatformRpcWorker` so application authors get it for free.
+- RFC 8414 correctness: reconcile `issuer` (gateway) versus
+  `authorization_endpoint` (Cloudflare Access) into a coherent model; add the
+  missing `*_auth_methods_supported` and `response_modes_supported` fields; and
+  either issue ID tokens or stop serving `/.well-known/openid-configuration` as
+  OIDC discovery.
+- DPoP error semantics (extends Phase 2): a missing or invalid proof must return
+  `401` with `WWW-Authenticate: DPoP error="invalid_dpop_proof"` (and
+  `use_dpop_nonce` where applicable), not `invalid_grant`.
+- Session grants must return the granted scope, not a hardcoded `scope: "*"`.
+- Map gateway refusals to correct OAuth error codes
+  (`invalid_dpop_proof`, `access_denied`) instead of leaking internal refusal
+  strings into `error_description`.
+
+## Phase 8: Go SDK Idiom and Package Structure
+
+Aligns the Go SDK with idiomatic Go and the documented `infra/sdk/go/` layout.
+See [STANDARDS_REVIEW.md](./STANDARDS_REVIEW.md) finding 13.
+
+- Resolve the duplicate `client` package collision (`sdk/client` versus
+  `sdk/oauth2/client`, aliased `oauthclient` at every import) by renaming the
+  OAuth client package.
+- Give `gateway.Session` a functional-options constructor and stop exporting
+  mutable fields; fold the post-construction patching currently in
+  `platform.NewSession` into options.
+- Default `client.New`'s `HTTPClient` to `httpclient.Default()` instead of
+  silently relying on `http.DefaultClient`.
+- Replace error-swallowing returns (`TokenStore.Get`, `SecretStore.read`,
+  `CredentialDocument` return nil/`{}` on failure) with typed/sentinel errors,
+  and replace the string-prefix `IsProviderAuthorizationError` with a Connect
+  error detail or typed error.
+- Push `output.Fail`/`os.Exit` out of library functions (`LoadOrganization`,
+  `platform.RepoRoot`) into the command layer so the SDK is composable; return
+  errors instead.
+- Propagate the cobra command context instead of `context.Background()` in
+  `cli/internal/platform.Session()` and `roo`.
+- Slim and rename `IdentityProxy` now that Terraform owns static provisioning:
+  the interface should expose only the dynamic provider-OAuth surface, not the
+  15-method Cloudflare-shaped bootstrap surface that was deleted in the
+  Terraform reversal.
+- Normalize the bootstrap-versus-GraphQL JSON tag mismatch on the discovery
+  DTOs (`created_at` vs `createdAt` on one struct).
+
+## Phase 9: gRPC/Connect Consistency
+
+- Fix streaming auth to fail closed: outbound decorate failures on the gateway
+  streaming interceptor are logged rather than returned, so a streaming RPC can
+  proceed without auth headers.
+- Decide proto-first metadata: either build authorization-server metadata from
+  the `platy/oauth/v1/oidc.proto` messages (currently defined but unused, built
+  imperatively) or delete the proto.
+- Standardize worker non-RPC error bodies and remove Connect-envelope leakage on
+  plain HTTP routes.
+- Document the discovery-driven generic Go `client.Call` (manual Connect
+  framing) versus generated stubs tradeoff; optionally generate per-app Go
+  Connect clients for `roo fetch`.
+
+## Phase 10: Consumer Interface Simplification (TS/Web)
+
+Extends Phases 3-4 toward the [TARGET_STATE.md](./TARGET_STATE.md) outcome that
+application authors write only business logic.
+
+- Have `createPlatformRpcWorker` own auth wiring (issuer, JWKS, `stsAuthenticator`,
+  `sessionChainAuthenticator`) from manifest/generated config so handlers are
+  business-only; generate per-app worker entrypoints, including a hybrid variant
+  for the OAuth+RPC `idp` worker and adoption by `ragbot`.
+- Generate typed target accessors from manifest delegations to replace the
+  hand-written `connector.ts` files and the need to know `serviceConnection`
+  env shape (binding names, `*_ENDPOINT`, scope strings).
+- Namespace generated clients per application to remove factory-name collisions
+  (`ragbot` and `aigateway` both export `chatServiceClient`); move toward
+  `ragbot.client(auth, ConfigService)`.
+- Generate a `ragbot` web client and replace the raw `auth.call` Connect paths
+  in `infra/applications/chat/app/DataPanel.tsx`.
+- Add `TrustZoneWebAuth.bootstrap()` one-call init plus route guards and React
+  bindings (completes Phase 4).
+- Introduce npm workspace package names to replace deep `../../../../sdk/ts/src`
+  imports; consolidate the duplicate `proxyTarget`/`proxyTargetFor`; and
+  reorganize `sdk/ts/src` into `oauth2/` and `resource/` per the target layout.
+
 ## Work Completed In This Pass
 
 - Added standards-shaped gateway metadata builders and well-known routes.
@@ -99,3 +193,10 @@ old client contracts are deleted when a stronger standard surface exists.
 - Generated `policy.generated.md` for proto-backed applications from proto
   services plus `applications.yaml`.
 - Migrated worker and browser callers to the generated named client factories.
+- Integrated the Terraform reversal: `infra/terraform` now owns the static
+  Cloudflare surface (Zero Trust settings, Access policies/apps, the OIDC app,
+  impersonation and bypass apps, D1, queues) and the CLI keeps only the dynamic
+  surface (provider OAuth clients, registry sync, deploy). Removed `platy
+  bootstrap`, the `cfauth` package, the Cloudflare `organization.go`
+  provisioning, and `webclient_access.go`; updated `AGENTS.md`/`README.md`
+  accordingly.

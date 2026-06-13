@@ -35,11 +35,11 @@ func Run(root string, env []string, stdin string, out io.Writer, args ...string)
 	return command.Run()
 }
 
-func InjectBootstrapVars(root string, loaded *manifest.Manifest) {
+func InjectGatewayVars(root string, loaded *manifest.Manifest) {
 	metadataPath := filepath.Join(root, "infra", "applications", "client_metadata.json")
 	data, err := os.ReadFile(metadataPath)
 	if err != nil {
-		output.Logger.Debug("no bootstrap metadata to inject", "path", metadataPath)
+		output.Logger.Debug("no client metadata to inject; run terraform -chdir=infra/terraform apply", "path", metadataPath)
 		return
 	}
 	decoded := struct {
@@ -57,7 +57,7 @@ func InjectBootstrapVars(root string, loaded *manifest.Manifest) {
 	}
 	gatewayConfig := filepath.Join(root, filepath.FromSlash(loaded.Application("idp").Config))
 	if err := manifest.SetWranglerVars(gatewayConfig, vars); err != nil {
-		output.Fail("inject bootstrap vars: %v", err)
+		output.Fail("inject gateway vars: %v", err)
 	}
-	output.Logger.Info("synced gateway wrangler vars from bootstrap metadata", "path", gatewayConfig)
+	output.Logger.Info("synced gateway wrangler vars from client metadata", "path", gatewayConfig)
 }

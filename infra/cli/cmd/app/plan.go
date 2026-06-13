@@ -144,7 +144,7 @@ func registeredApplications(ctx context.Context) map[string]*idpv1.Application {
 func Plan(ctx context.Context) int {
 	root := platform.RepoRoot()
 	loaded := manifest.Load(root)
-	providerConfig := loadProviderConfig(root)
+	providerConfig := provider.LoadConfig(root)
 	registered := registeredApplications(ctx)
 
 	lines := []string{}

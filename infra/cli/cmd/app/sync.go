@@ -11,13 +11,14 @@ import (
 	"jsmunro.me/platy/cli/internal/manifest"
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/platform"
+	"jsmunro.me/platy/cli/internal/provider"
 )
 
 func SyncApplications(ctx context.Context, root string, loaded *manifest.Manifest, names []string, prune bool) map[string]any {
 	if len(names) == 0 {
 		names = loaded.Names()
 	}
-	providerConfig := loadProviderConfig(root)
+	providerConfig := provider.LoadConfig(root)
 	registered := registeredApplications(ctx)
 	results := map[string]any{}
 	for _, name := range names {

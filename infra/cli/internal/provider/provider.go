@@ -10,35 +10,18 @@ import (
 )
 
 type (
-	Name                     = core.Name
-	TrustBoundary            = core.TrustBoundary
-	TrustBoundaryHints       = core.TrustBoundaryHints
-	IdentityProvider         = core.IdentityProvider
-	AccessGroup              = core.AccessGroup
-	PostureCheck             = core.PostureCheck
-	PosturePolicy            = core.PosturePolicy
-	ApplicationAccess        = core.ApplicationAccess
-	AccessApplicationSpec    = core.AccessApplicationSpec
-	AccessApplication        = core.AccessApplication
-	BootstrapOptions         = core.BootstrapOptions
-	BootstrapResult          = core.BootstrapResult
-	ProviderConfig           = core.ProviderConfig
-	IdentityProxy            = core.IdentityProxy
-	EnsureOrganizationInput  = core.EnsureOrganizationInput
-	ZeroTrustSettings        = core.ZeroTrustSettings
-	ZeroTrustGatewaySettings = core.ZeroTrustGatewaySettings
-	ZeroTrustDeviceSettings  = core.ZeroTrustDeviceSettings
-	AccessPolicySpec         = core.AccessPolicySpec
-	AccessPolicyMFAConfig    = core.AccessPolicyMFAConfig
-	EnrollStaffPolicy        = core.EnrollStaffPolicy
-	EnrollContractorPolicy   = core.EnrollContractorPolicy
-	EnrollOnSuccess          = core.EnrollOnSuccess
-	EnrollOnRevoke           = core.EnrollOnRevoke
-	EnrollPolicy             = core.EnrollPolicy
-	TrustZoneProvisioned     = core.TrustZoneProvisioned
-	TrustZoneSpec            = core.TrustZoneSpec
-	OrganizationSpec         = core.OrganizationSpec
-	OrganizationPolicy       = core.OrganizationPolicy
+	Name                 = core.Name
+	TrustBoundary        = core.TrustBoundary
+	IdentityProvider     = core.IdentityProvider
+	AccessGroup          = core.AccessGroup
+	PostureCheck         = core.PostureCheck
+	PosturePolicy        = core.PosturePolicy
+	ProviderConfig       = core.ProviderConfig
+	IdentityProxy        = core.IdentityProxy
+	TrustZoneProvisioned = core.TrustZoneProvisioned
+	TrustZoneSpec        = core.TrustZoneSpec
+	OrganizationSpec     = core.OrganizationSpec
+	OrganizationPolicy   = core.OrganizationPolicy
 )
 
 const (
@@ -52,18 +35,6 @@ const (
 	GroupAdmins   = core.GroupAdmins
 	GroupUsers    = core.GroupUsers
 	GroupEnrolled = core.GroupEnrolled
-
-	PolicyPlatformAdmins       = core.PolicyPlatformAdmins
-	PolicyWorkersDevBypass     = core.PolicyWorkersDevBypass
-	PolicyDevicePosture        = core.PolicyDevicePosture
-	PolicyPostureRuleName      = core.PolicyPostureRuleName
-	PolicyEnrollStaff          = core.PolicyEnrollStaff
-	PolicyEnrollContractorRBI  = core.PolicyEnrollContractorRBI
-	PolicyEnrollContractorWarp = core.PolicyEnrollContractorWarp
-	PolicyCriticalAccess       = core.PolicyCriticalAccess
-	PolicyRootJIT              = core.PolicyRootJIT
-	PostureCheckWARP           = core.PostureCheckWARP
-	EnrollAppName              = core.EnrollAppName
 )
 
 var (
@@ -103,29 +74,4 @@ func Resolve(ctx context.Context, name Name, apiToken string) (IdentityProxy, er
 	default:
 		return nil, fmt.Errorf("no implementation for provider %q", name)
 	}
-}
-
-func ProviderConfigFromBootstrap(result *BootstrapResult, organization OrganizationPolicy) ProviderConfig {
-	return ProviderConfig{
-		Boundary:          result.Boundary,
-		IdentityProviders: result.IdentityProviders,
-		Groups:            result.Groups,
-		EmailAllowlist:    result.EmailAllowlist,
-		Posture:           result.Posture,
-		Organization:      organization,
-	}
-}
-
-func ParseEmailAllowlist(raw string) []string {
-	if raw == "" {
-		return nil
-	}
-	emails := []string{}
-	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' }) {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			emails = append(emails, part)
-		}
-	}
-	return emails
 }

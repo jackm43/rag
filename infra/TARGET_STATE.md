@@ -23,11 +23,16 @@ SDK-owned.
   tokens.
 - Logs and traces follow one taxonomy and OpenTelemetry-compatible attribute
   names, with platform identity fields consistently namespaced.
+- Static Cloudflare infrastructure (Zero Trust, Access policies/apps, the OIDC
+  app, impersonation/bypass apps, D1, queues) is declared in `infra/terraform`
+  and derived from the manifests; the CLI owns only the dynamic surface
+  (provider OAuth clients, registry sync, deploy).
 
 ## Target Repo Structure
 
 ```text
 infra/
+  terraform/                     # static Cloudflare infra (Zero Trust, Access, D1, queues)
   proto/
     platy/
       oauth/v1/                  # OAuth/OIDC/DPoP wire shapes

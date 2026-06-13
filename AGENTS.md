@@ -8,7 +8,7 @@ service (`infra/cli/internal/secrets`) using the 1Password provider
 (`OP_SERVICE_ACCOUNT_TOKEN` or desktop app via `OP_ACCOUNT`).
 
 - `infra/applications/applications.yaml` — per-application worker secrets (e.g. ragbot Discord tokens)
-- `infra/applications/organization.yaml` — organization secrets (e.g. `cloudflare_api_token` for bootstrap and deploy)
+- `infra/applications/organization.yaml` — organization secrets (e.g. `cloudflare_api_token` for deploy and provider OAuth provisioning)
 
 Local wrangler dev writes resolved values to `.dev.vars` via `platy dev vars`.
 Deploy pushes resolved worker secrets with `wrangler secret bulk`.
@@ -108,20 +108,54 @@ go build -o platy jsmunro.me/platy/cli
 
 Override the gateway URL with `PLATY_GATEWAY_URL`.
 
-## Bootstrap (replaces Terraform)
+## Static Infrastructure (Terraform)
 
-One-time setup with an API token that includes at least:
-- Access: Apps and Policies Write (creates the Access for SaaS OIDC app and email policy)
-- Account Read (resolves the Cloudflare account from the token)
-- OAuth Clients Write (used by `platy app register` to provision per-application confidential provider OAuth clients for `provider_auth: oauth` applications)
+All static Cloudflare configuration lives in `infra/terraform` (provider v5):
+Zero Trust organization settings (MFA, gateway TLS/inspection, device
+settings), the `admins` Access group, the WARP posture rule, all reusable
+Access policies (Platform admins, device posture, workers.dev bypass, the
+tier0-tier3 trust zone policies, the enroll policies), the `Auth Gateway`
+Access for SaaS OIDC application (PKCE public client, refresh tokens),
+per-application `platy-impersonate-<app>` SaaS apps, workers.dev bypass apps
+(`auth-gateway`, `deploy`, `cloudflare`), web-client bypass apps for
+client-only applications (`chat`, `console`), the `Platy Enroll` app, the D1
+databases, and the queues. The configuration derives application sets from
+`infra/applications/applications.yaml` and trust zone policy inputs from
+`infra/applications/organization.yaml`, so manifest changes flow into the next
+apply. Existing resources were adopted with `import` blocks in
+`infra/terraform/imports.tf`.
 
-Create or edit the token at https://dash.cloudflare.com/profile/api-tokens, then:
+Apply with an API token that includes at least Access: Apps and Policies
+Write, Account Read, D1 Write, Queues Write, Zero Trust Write, and OAuth
+Clients Write (the last is used by `platy app register`, not Terraform).
+Create or edit the token at https://dash.cloudflare.com/profile/api-tokens,
+then:
 
-Bootstrap also creates public bypass Access applications for
-`auth-gateway.<subdomain>.workers.dev` and `deploy.<subdomain>.workers.dev`.
-That is required when the account has `deny_unmatched_requests` enabled (error 1050
-on unprotected workers.dev hostnames). `ragbot-worker` already had a bypass app;
-the gateway and deploy workers need the same treatment.
+```bash
+CLOUDFLARE_API_TOKEN=$(op read "op://Services/Cloudflare User API Token/password") \
+  terraform -chdir=infra/terraform apply
+```
+
+The apply also writes two gitignored metadata files consumed by the CLI:
+`infra/applications/provider_config.json` (trust boundary, identity providers,
+groups, posture, impersonation Access client ids per application, provisioned
+trust zone policy ids) and `infra/applications/client_metadata.json`
+(`wrangler_vars` with `ACCESS_TEAM_DOMAIN`/`ACCESS_OIDC_CLIENT_ID`, synced
+into `infra/applications/idp/worker/wrangler.jsonc` by `platy deploy`).
+`platy app register` reads impersonation client ids from the provider config
+instead of calling the Cloudflare API; adding an impersonatable application
+requires a terraform apply first. `platy manage provider sync` uploads the
+provider config to the gateway registry.
+
+The CLI keeps only the post-deployment, dynamic Cloudflare surface: the
+per-application confidential provider OAuth clients (creation during
+`platy app register`, rotation via `platy app rotate-provider-oauth` — secret
+capture and 1Password delivery do not fit Terraform), worker deploys and
+secret pushes through wrangler, and stale zone route deletion.
+
+The workers.dev bypass Access applications are required when the account has
+`deny_unmatched_requests` enabled (error 1050 on unprotected workers.dev
+hostnames).
 
 `platy deploy` reconciles zone routes after each worker deploy: any route still naming the worker but absent from its wrangler config is deleted and logged (wrangler itself never removes routes). All workers serve on custom domains only (`workers_dev: false` everywhere):
 `auth-gateway.jsmunro.me`, `aigateway.jsmunro.me`, `ragbot.jsmunro.me`,
@@ -129,28 +163,13 @@ the gateway and deploy workers need the same treatment.
 applications in `applications.yaml`. The Discord interactions endpoint points
 at `https://ragbot.jsmunro.me/`.
 
-```bash
-./platy bootstrap
-```
-
-Bootstrap resolves the Cloudflare API token from `--cf-api-token`,
-`CLOUDFLARE_API_TOKEN`, or `organization.secrets.cloudflare_api_token`. It
-finds the GitHub identity provider, creates the `Auth Gateway` Access for SaaS
-OIDC application (PKCE public client, refresh tokens, policy allowing only
-`jack@jsmunro.me`), prints the values for `infra/applications/idp/worker/wrangler.jsonc` vars
-(`ACCESS_TEAM_DOMAIN`, `ACCESS_OIDC_CLIENT_ID`), and writes the same JSON to
-`infra/applications/client_metadata.json`. Pass
-`--team-id`, `--team-name`, and/or `--team-domain` when the token can access
-multiple Zero Trust organizations; when only one identifier is given, bootstrap
-resolves the rest from the Cloudflare API. Account id is resolved from the
-token automatically.
-
 ## Application Registration and Codegen
 
 Applications are declared in `infra/applications/applications.yaml` (name,
 description, endpoint, worker name, wrangler config path, secret provider,
 delegations, post-deploy hooks, `impersonatable` — default true; set false for
-target-only services so registration skips the Cloudflare Access app — and the
+target-only services so no impersonation Access app is expected (Terraform
+derives the impersonation app set from the same flag) — and the
 provider-connector fields: `provider_auth: oauth` with `provider_api_scopes`
 provisions a confidential provider OAuth client during registration and pushes
 the gateway's `PROVIDER_OAUTH_CLIENTS` secret on register/sync, while
@@ -163,18 +182,21 @@ Adding a new application:
    (endpoint, worker, config; delegations for any application it will chain
    into; `provider_auth` + `provider_api_scopes` if it proxies an external
    provider; `service_client: true`/`web_client: true` for typed callers).
-2. `./platy app register <app>` — registers audience/resources/scopes/
+2. `terraform -chdir=infra/terraform apply` — provisions the impersonation
+   Access app (or web-client bypass app for client-only applications) and
+   refreshes the provider config metadata the CLI reads.
+3. `./platy app register <app>` — registers audience/resources/scopes/
    delegations, issues the service credential into 1Password, provisions the
    provider OAuth client when `provider_auth: oauth`, and generates code.
-3. Implement the worker: generated handlers from
+4. Implement the worker: generated handlers from
    `infra/applications/<app>/server` behind `protect` (with `stsAuthenticator`
    pointed at the gateway service binding), `traceRpc` +
    `gatewayTraceExporter` for the boundary standard, `serviceConnection` +
    generated service clients for outbound hops, `providerApiClient` for
    provider calls.
-4. `./platy deploy <app>` — resolves secrets, deploys, pushes
+5. `./platy deploy <app>` — resolves secrets, deploys, pushes
    `SERVICE_CLIENT_ID`/`SERVICE_CLIENT_SECRET`, reconciles zone routes.
-5. `./platy fetch <app>.<Service>.<Method>` to verify end to end.
+6. `./platy fetch <app>.<Service>.<Method>` to verify end to end.
 
 Then for registration alone:
 
@@ -281,7 +303,7 @@ go build jsmunro.me/platy/cli/... jsmunro.me/platy/sdk/... jsmunro.me/platy/appl
 ```
 
 Deploy workers (resolves manifest `op://` references through the 1Password SDK,
-syncs bootstrap metadata into the gateway wrangler vars, deploys every worker
+syncs terraform client metadata into the gateway wrangler vars, deploys every worker
 in `infra/applications/applications.yaml`, pushes service credentials as
 worker secrets, and runs post-deploy hooks such as starting the Discord
 gateway):
