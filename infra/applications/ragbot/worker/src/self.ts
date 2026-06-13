@@ -1,35 +1,14 @@
-import { Code, ConnectError } from "@connectrpc/connect";
-
-import { chatServiceClient as aigatewayChatServiceClient } from "../../../aigateway/service";
 import {
   exchangeToken,
-  serviceConnection,
   serviceCredentialFromEnv,
   TOKEN_TYPE_SERVICE_CREDENTIAL,
   type Identity,
 } from "@platy/sdk";
 import type { Env } from "./types";
 
-export const AIGATEWAY_CHAT_SCOPES = [
-  "aigateway/ChatService.Complete",
-  "aigateway/ChatService.StreamComplete",
-] as const;
-
-export const aigatewayConnection = (env: Env) =>
-  serviceConnection(env, {
-    endpoint: env.AIGATEWAY_ENDPOINT,
-    binding: env.AIGATEWAY,
-    scopes: [...AIGATEWAY_CHAT_SCOPES],
-  });
-
-export const chatServiceClient = (env: Env, identity: Identity) => {
-  const connection = aigatewayConnection(env);
-  if (!connection) {
-    throw new ConnectError("aigateway connector is not configured", Code.FailedPrecondition);
-  }
-  return aigatewayChatServiceClient(connection, identity);
-};
-
+// Queue-driven channel chat has no caller to chain: the worker acts as itself
+// by exchanging its service credential for a gateway-issued subject token for
+// its own audience, which downstream connectors then chain like any caller.
 export const selfIdentity = async (env: Env): Promise<Identity> => {
   const credential = serviceCredentialFromEnv(env);
   if (!credential) {
@@ -43,9 +22,7 @@ export const selfIdentity = async (env: Env): Promise<Identity> => {
       subjectTokenType: TOKEN_TYPE_SERVICE_CREDENTIAL,
       audience: "ragbot",
     },
-    env.AUTH_GATEWAY
-      ? (input, init) => env.AUTH_GATEWAY!.fetch(input, init)
-      : undefined,
+    env.AUTH_GATEWAY ? (input, init) => env.AUTH_GATEWAY!.fetch(input, init) : undefined,
   );
   if (!minted) {
     throw new Error("self token exchange refused");

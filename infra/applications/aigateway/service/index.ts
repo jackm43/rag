@@ -13,10 +13,8 @@ export const RPC_PREFIX = "/aigateway.v1.";
 
 export type Connection = Omit<ConnectorConfig, "application">;
 
-export const chatServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof ChatService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, ChatService);
-
+export const aigateway = {
+  chatServiceClient: (connection: Connection, identity: Identity): Client<typeof ChatService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, ChatService),
+};
 

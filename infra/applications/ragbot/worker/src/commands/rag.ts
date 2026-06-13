@@ -1,5 +1,5 @@
 import { runChatModel, withTimeout } from "../ai";
-import { selfIdentity } from "../connector";
+import { selfIdentity } from "../self";
 import { loadConfig, type BotConfig } from "../config";
 import {
   editOriginalInteractionResponse,

@@ -1,31 +1,16 @@
-import { Code, ConnectError } from "@connectrpc/connect";
-
 import type { DiscoverResponse } from "../../../idp/server/idp/v1/gateway_discovery_service_pb";
-import { discoveryServiceClient as idpDiscoveryServiceClient } from "../../../idp/service";
 import {
   exchangeToken,
   logger,
-  serviceConnection,
   serviceCredentialFromEnv,
   TOKEN_TYPE_SERVICE_CREDENTIAL,
   type Identity,
 } from "@platy/sdk";
+import { targets } from "../../targets";
 import type { DiscoveryStore, RegistrySnapshot, SyncStateView } from "./data";
 import type { Env } from "./types";
 
 export const DISCOVER_SCOPE = "idp/DiscoveryService.Discover";
-
-const gatewayDiscoveryClient = (env: Env, identity: Identity) => {
-  const connection = serviceConnection(env, {
-    endpoint: env.AUTH_GATEWAY_URL,
-    binding: env.AUTH_GATEWAY,
-    scopes: [DISCOVER_SCOPE],
-  });
-  if (!connection) {
-    throw new ConnectError("gateway connector is not configured", Code.FailedPrecondition);
-  }
-  return idpDiscoveryServiceClient(connection, identity);
-};
 
 // The cron path has no caller to chain: the worker acts as itself by
 // exchanging its service credential for a gateway-issued subject token, which
@@ -128,7 +113,7 @@ export const syncRegistry = async (
   store: DiscoveryStore,
   identity: Identity,
 ): Promise<SyncStateView> => {
-  const response = await gatewayDiscoveryClient(env, identity).discover({});
+  const response = await targets(env, identity).idp.discoveryService().discover({});
   const state = await store.replace(snapshotFromDiscovery(response));
   logger.info("discovery_synced", {
     applications: state.applications,

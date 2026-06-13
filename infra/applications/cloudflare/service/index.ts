@@ -14,16 +14,10 @@ export const RPC_PREFIX = "/cloudflare.v1.";
 
 export type Connection = Omit<ConnectorConfig, "application">;
 
-export const deviceServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof DeviceService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, DeviceService);
-
-export const workerServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof WorkerService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, WorkerService);
-
+export const cloudflare = {
+  deviceServiceClient: (connection: Connection, identity: Identity): Client<typeof DeviceService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, DeviceService),
+  workerServiceClient: (connection: Connection, identity: Identity): Client<typeof WorkerService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, WorkerService),
+};
 

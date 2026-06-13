@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { discoveryServiceClient } from "../../discovery/web";
+import { discovery } from "../../discovery/web";
 import type { BrowserAuth } from "@platy/web";
 
 import { Applications } from "./Applications";
@@ -29,7 +29,7 @@ export function App({ auth, signedIn: initialSignedIn }: { auth: BrowserAuth; si
   // the session transport, so it only needs the initialized auth.
   const discovery = useMemo(() => {
     try {
-      return discoveryServiceClient(auth);
+      return discovery.discoveryServiceClient(auth);
     } catch {
       return null;
     }

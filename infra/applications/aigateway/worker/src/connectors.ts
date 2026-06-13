@@ -1,12 +1,12 @@
-import { leaderboardServiceClient as ragbotLeaderboardServiceClient } from "../../../ragbot/service";
 import {
   errorMessage,
   logger,
-  serviceConnection,
+  serviceCredentialFromEnv,
   type Identity,
   type SpanContext,
   type Tracer,
 } from "@platy/sdk";
+import { targets } from "../../targets";
 import type { ToolCall, ToolDefinition, UpstreamMessage } from "./gateway";
 import type { Env } from "./types";
 
@@ -23,15 +23,6 @@ export type Connectors = {
   invoke(identity: Identity, call: ToolCall, parent: SpanContext | null): Promise<string>;
 };
 
-const RAGBOT_SCOPE = "ragbot/LeaderboardService.ListTotals";
-
-const ragbotConnection = (env: Env) =>
-  serviceConnection(env, {
-    endpoint: env.RAGBOT_ENDPOINT,
-    binding: env.RAGBOT,
-    scopes: [RAGBOT_SCOPE],
-  });
-
 const boundedInt = (value: unknown, fallback: number, max: number): number => {
   const parsed = typeof value === "number" ? Math.trunc(value) : Number.parseInt(String(value ?? ""), 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -44,8 +35,8 @@ export const buildConnectors = (env: Env, tracer: Tracer): Connectors => {
   const tools: ToolDefinition[] = [];
   const handlers = new Map<string, ToolHandler>();
 
-  const ragbot = ragbotConnection(env);
-  if (ragbot) {
+  const ragbotAvailable = Boolean(env.RAGBOT_ENDPOINT && serviceCredentialFromEnv(env));
+  if (ragbotAvailable) {
     tools.push({
       type: "function",
       function: {
@@ -62,7 +53,7 @@ export const buildConnectors = (env: Env, tracer: Tracer): Connectors => {
       },
     });
     handlers.set("ragbot_leaderboard", (identity, args) =>
-      ragbotLeaderboardServiceClient(ragbot, identity).listTotals({
+      targets(env, identity).ragbot.leaderboardService().listTotals({
         limit: boundedInt(args.limit, 10, 50),
       }),
     );

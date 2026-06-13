@@ -1,5 +1,5 @@
 import { runChatModel, sanitizeAiText, streamChatModel, type ChatMessage } from "./ai";
-import { selfIdentity } from "./connector";
+import { selfIdentity } from "./self";
 import { loadConfig, type BotConfig } from "./config";
 import { fetchBotRoleIds, fetchChannelMessages, fetchMessage, postChannelMessage } from "./discord";
 import { rejectDisallowedGuild } from "./guild";

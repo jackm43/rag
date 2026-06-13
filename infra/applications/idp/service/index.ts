@@ -17,34 +17,16 @@ export const RPC_PREFIX = "/idp.v1.";
 
 export type Connection = Omit<ConnectorConfig, "application">;
 
-export const clientIdentityServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof ClientIdentityService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, ClientIdentityService);
-
-export const discoveryServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof DiscoveryService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, DiscoveryService);
-
-export const identityServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof IdentityService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, IdentityService);
-
-export const registryServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof RegistryService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, RegistryService);
-
-export const traceServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof TraceService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, TraceService);
-
+export const idp = {
+  clientIdentityServiceClient: (connection: Connection, identity: Identity): Client<typeof ClientIdentityService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, ClientIdentityService),
+  discoveryServiceClient: (connection: Connection, identity: Identity): Client<typeof DiscoveryService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, DiscoveryService),
+  identityServiceClient: (connection: Connection, identity: Identity): Client<typeof IdentityService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, IdentityService),
+  registryServiceClient: (connection: Connection, identity: Identity): Client<typeof RegistryService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, RegistryService),
+  traceServiceClient: (connection: Connection, identity: Identity): Client<typeof TraceService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, TraceService),
+};
 

@@ -18,40 +18,18 @@ export const RPC_PREFIX = "/ragbot.v1.";
 
 export type Connection = Omit<ConnectorConfig, "application">;
 
-export const chatServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof ChatService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, ChatService);
-
-export const configServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof ConfigService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, ConfigService);
-
-export const databaseServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof DatabaseService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, DatabaseService);
-
-export const gatewayControlServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof GatewayControlService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, GatewayControlService);
-
-export const interactionServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof InteractionService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, InteractionService);
-
-export const leaderboardServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof LeaderboardService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, LeaderboardService);
-
+export const ragbot = {
+  chatServiceClient: (connection: Connection, identity: Identity): Client<typeof ChatService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, ChatService),
+  configServiceClient: (connection: Connection, identity: Identity): Client<typeof ConfigService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, ConfigService),
+  databaseServiceClient: (connection: Connection, identity: Identity): Client<typeof DatabaseService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, DatabaseService),
+  gatewayControlServiceClient: (connection: Connection, identity: Identity): Client<typeof GatewayControlService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, GatewayControlService),
+  interactionServiceClient: (connection: Connection, identity: Identity): Client<typeof InteractionService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, InteractionService),
+  leaderboardServiceClient: (connection: Connection, identity: Identity): Client<typeof LeaderboardService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, LeaderboardService),
+};
 

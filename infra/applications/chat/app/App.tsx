@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Client } from "@connectrpc/connect";
 
 import { ChatService } from "../../aigateway/server/aigateway/v1/chat_service_pb";
-import { chatServiceClient as aigatewayChatServiceClient } from "../../aigateway/web";
+import { aigateway } from "../../aigateway/web";
 import {
   CLIENT_INSTANCE_HEADER,
   registerChatInstance,
@@ -54,7 +54,7 @@ export function App({ auth, signedIn: initialSignedIn }: { auth: BrowserAuth; si
     let client = clients.current.get(chatId);
     if (!client) {
       const headers = instances.current.get(chatId)?.headers ?? { [CLIENT_INSTANCE_HEADER]: chatId };
-      client = aigatewayChatServiceClient(auth, { headers });
+      client = aigateway.chatServiceClient(auth, { headers });
       clients.current.set(chatId, client);
     }
     return client;

@@ -13,12 +13,10 @@ export const RPC_PREFIX = "/discovery.v1.";
 
 export type Connection = Omit<ConnectorConfig, "application">;
 
-export const discoveryServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof DiscoveryService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, DiscoveryService);
-
+export const discovery = {
+  discoveryServiceClient: (connection: Connection, identity: Identity): Client<typeof DiscoveryService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, DiscoveryService),
+};
 
 export * from "../graphql";
 

@@ -13,10 +13,8 @@ export const RPC_PREFIX = "/deploy.v1.";
 
 export type Connection = Omit<ConnectorConfig, "application">;
 
-export const deployServiceClient = (
-  connection: Connection,
-  identity: Identity,
-): Client<typeof DeployService> =>
-  connectorServiceClient({ ...connection, application: APPLICATION }, identity, DeployService);
-
+export const deploy = {
+  deployServiceClient: (connection: Connection, identity: Identity): Client<typeof DeployService> =>
+    connectorServiceClient({ ...connection, application: APPLICATION }, identity, DeployService),
+};
 

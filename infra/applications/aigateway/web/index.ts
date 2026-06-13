@@ -6,9 +6,8 @@ import { webClient, type BrowserAuth, type WebClientOptions } from "@platy/web";
 
 export const APPLICATION = "aigateway";
 
-export const chatServiceClient = (
-  auth: BrowserAuth,
-  options?: WebClientOptions,
-): Client<typeof ChatService> => webClient(auth, APPLICATION, ChatService, options);
-
+export const aigateway = {
+  chatServiceClient: (auth: BrowserAuth, options?: WebClientOptions): Client<typeof ChatService> =>
+    webClient(auth, APPLICATION, ChatService, options),
+};
 

@@ -6,11 +6,10 @@ import { webClient, type BrowserAuth, type WebClientOptions } from "@platy/web";
 
 export const APPLICATION = "discovery";
 
-export const discoveryServiceClient = (
-  auth: BrowserAuth,
-  options?: WebClientOptions,
-): Client<typeof DiscoveryService> => webClient(auth, APPLICATION, DiscoveryService, options);
-
+export const discovery = {
+  discoveryServiceClient: (auth: BrowserAuth, options?: WebClientOptions): Client<typeof DiscoveryService> =>
+    webClient(auth, APPLICATION, DiscoveryService, options),
+};
 
 export * from "../graphql";
 

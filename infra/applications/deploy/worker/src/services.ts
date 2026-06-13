@@ -2,7 +2,7 @@ import type { ConnectRouter } from "@connectrpc/connect";
 
 import { DeployService } from "../../server/deploy/v1/deploy_service_pb";
 import { logger, platformAuthenticator, protect, requireIdentity, type AuthPolicy } from "@platy/sdk";
-import { workerServiceClient } from "./connector";
+import { targets } from "../../targets";
 import type { Env } from "./types";
 
 export const registerDeployServices = (router: ConnectRouter, env: Env) => {
@@ -19,7 +19,7 @@ export const registerDeployServices = (router: ConnectRouter, env: Env) => {
             script: request.scriptName,
             actor: identity.email ?? identity.subject,
           });
-          const result = await workerServiceClient(env, identity).deployWorker({
+          const result = await targets(env, identity).cloudflare.workerService().deployWorker({
             scriptName: request.scriptName,
             mainModule: request.mainModule,
             modules: request.modules.map((module) => ({
@@ -39,7 +39,7 @@ export const registerDeployServices = (router: ConnectRouter, env: Env) => {
         },
         listWorkers: async (_request, context) => {
           const identity = requireIdentity(context);
-          const result = await workerServiceClient(env, identity).listWorkers({});
+          const result = await targets(env, identity).cloudflare.workerService().listWorkers({});
           return {
             workers: result.workers.map((worker) => ({
               name: worker.name,
