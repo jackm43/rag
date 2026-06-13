@@ -150,10 +150,25 @@ func tlsHint(err error) string {
 }
 
 func (f *BrowserFlow) Login(ctx context.Context) (*TokenSet, error) {
+	code, verifier, _, err := f.AuthorizeCode(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	config := f.Config
+	config.RedirectURL = RedirectURL
+	token, err := config.Exchange(f.oauthContext(ctx), code, oauth2.VerifierOption(verifier))
+	if err != nil {
+		return nil, fmt.Errorf("authorization code exchange: %w%s", err, tlsHint(err))
+	}
+	return tokenSet(token, f.Config.Scopes), nil
+}
+
+func (f *BrowserFlow) AuthorizeCode(ctx context.Context) (code string, verifier string, redirectURL string, err error) {
 	config := f.Config
 	config.RedirectURL = RedirectURL
 
-	verifier := oauth2.GenerateVerifier()
+	verifier = oauth2.GenerateVerifier()
 	state := randomState()
 	authURL := config.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier))
 
@@ -173,14 +188,9 @@ func (f *BrowserFlow) Login(ctx context.Context) (*TokenSet, error) {
 
 	res := <-codeCh
 	if res.err != nil {
-		return nil, res.err
+		return "", "", "", res.err
 	}
-
-	token, err := config.Exchange(f.oauthContext(ctx), res.code, oauth2.VerifierOption(verifier))
-	if err != nil {
-		return nil, fmt.Errorf("authorization code exchange: %w%s", err, tlsHint(err))
-	}
-	return tokenSet(token, f.Config.Scopes), nil
+	return res.code, verifier, RedirectURL, nil
 }
 
 func (f *BrowserFlow) Refresh(ctx context.Context, refreshToken string, priorScopes []string) (*TokenSet, error) {

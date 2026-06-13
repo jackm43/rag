@@ -59,10 +59,10 @@ const gatewayFetch: typeof fetch = async (input) => {
       headers: { "content-type": "application/json" },
     });
   }
-  if (url === `${issuer}/idp.v1.IdentityService/ExchangeToken`) {
+  if (url === `${issuer}/oauth/token`) {
     exchangeCalls += 1;
     return new Response(
-      JSON.stringify({ accessToken: await mintToken(), expiresIn: 300, scopes: [] }),
+      JSON.stringify({ access_token: await mintToken(), expires_in: 300, scope: "" }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
   }

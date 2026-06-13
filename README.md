@@ -55,10 +55,10 @@ flowchart TD
   CB --> DResp2[Discord Interaction Response]
 
   Admin[platy CLI] -->|authorization code + PKCE via GitHub IdP| CFA[Cloudflare Access OIDC]
-  CFA -->|access token| Admin
-  Admin -->|"CreateSession + DPoP proof"| GW[auth gateway worker]
+  CFA -->|authorization code| Admin
+  Admin -->|"POST /oauth/token authorization_code + DPoP proof"| GW[auth gateway worker]
   GW -->|device-bound session + rotating refresh token| Admin
-  Admin -->|"ExchangeToken (RFC 8693) + DPoP"| GW
+  Admin -->|"POST /oauth/token token-exchange (RFC 8693) + DPoP"| GW
   GW -->|STS token aud=ragbot| Admin
   Admin -->|Connect-RPC + Bearer| AA[ragbot.v1 services]
   AA -->|verify via gateway JWKS| GW

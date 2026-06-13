@@ -34,9 +34,7 @@ export type DelegationEdgeView = {
 
 export type GatewayEndpointsView = {
   tokenExchange: string;
-  sessionCreate: string;
-  sessionRefresh: string;
-  sessionRevoke: string;
+  tokenRevoke: string;
   introspect: string;
   discovery: string;
   jwks: string;

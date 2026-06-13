@@ -22,10 +22,10 @@ infra/proto/
 
 Generated output (do not edit by hand):
 
-| Source | Go client (Connect) | TypeScript server (protobuf-es) |
-|--------|---------------------|----------------------------------|
-| `platy/` | `infra/sdk/proto/client/` | `infra/sdk/proto/server/` |
-| `<app>/` | `infra/applications/<app>/client/` | `infra/applications/<app>/server/` |
+| Source | Go client (Connect) | TypeScript server (protobuf-es) | Platform bindings |
+|--------|---------------------|----------------------------------|-------------------|
+| `platy/` | `infra/sdk/proto/client/` | `infra/sdk/proto/server/` | none |
+| `<app>/` | `infra/applications/<app>/client/` | `infra/applications/<app>/server/` | `service/`, `web/`, `policy.generated.md` |
 
 The application name in `infra/applications/applications.yaml`, the proto directory name (`infra/proto/<app>/`), and the protobuf package prefix (`<app>.v1`) must all match. `platy dev generate` and `platy app register` assume this 1:1 mapping.
 
@@ -40,7 +40,7 @@ Follow the [style guide](https://protobuf.dev/programming-guides/style/) unless 
 - **Messages / services**: `TitleCase` (`ChatRequest`, `IdentityService`).
 - **Fields**: `snake_case`. Repeated fields use plural names (`repeated string scopes`).
 - **Enums** (when needed): type `TitleCase`, values `UPPER_SNAKE_CASE` with a `*_UNSPECIFIED = 0` first value.
-- **Imports**: use fully qualified paths for other packages (`import "platy/oauth/v1/token.proto";`). For messages in another file of the same package, still add an explicit import (`import "idp/v1/types.proto";`).
+- **Imports**: use fully qualified paths for other packages (`import "idp/v1/types.proto";`). For messages in another file of the same package, still add an explicit import.
 - **One service per file** ([1-1-1 rule](https://protobuf.dev/best-practices/dos-donts/#define-message-types-in-separate-files)): put the `service` block and its dedicated request/response messages together. Extract shared messages into `types.proto` (or similar) when multiple services in the same app reuse them.
 - **Evolution**: never reuse field numbers; `reserved` deleted fields and enum values; do not change field types; avoid `required`; prefer `optional` or `repeated` with documented API contracts in comments.
 
@@ -66,7 +66,7 @@ platy dev generate <app>
 
 1. **Create protos** under `infra/proto/<app>/v1/`. Start with one `*_service.proto` file per RPC service. Set `package <app>.v1;`.
 2. **Declare the application** in `infra/applications/applications.yaml` (endpoint, worker, wrangler config path, delegations, `web_client` / `service_client` flags, secrets, provider settings).
-3. **Implement the worker** at `infra/applications/<app>/worker/`. Import generated handlers from `../server/<app>/v1/*_pb` and mount them behind the SDK `protect` middleware.
+3. **Implement the worker** at `infra/applications/<app>/worker/`. Normal RPC workers use the SDK worker wrapper and put business handlers in `src/services.ts`.
 4. **Generate code**: `platy app register <app>` (or `platy app sync`) registers the audience, resources, scopes, and delegations in the gateway registry, issues service credentials, and runs codegen.
 5. **Deploy**: `platy deploy <app>`.
 
@@ -228,8 +228,8 @@ Every caller uses one shared client stack. Per-application directories under `in
 
 | Runtime | Shared library | Generated per app | Call pattern |
 |---------|----------------|-------------------|--------------|
-| Workers (TS) | `infra/sdk/ts/src/client/` — `serviceConnection`, `connectorServiceClient`, `chainExchange`, `createClient` | `applications/<app>/service/index.ts` | `createFooServiceClient(serviceConnection(env, target), identity)` |
-| Browsers | `infra/sdk/web/` — `webClient`, `webTransport` | `applications/<app>/web/index.ts` | `createFooServiceClient(auth, options)` |
+| Workers (TS) | `infra/sdk/ts/src/client/` — `serviceConnection`, `connectorServiceClient`, `chainExchange`, `createClient` | `applications/<app>/service/index.ts` | `fooServiceClient(serviceConnection(env, target), identity)` |
+| Browsers | `infra/sdk/web/` — `webClient`, `webTransport` | `applications/<app>/web/index.ts` | `fooServiceClient(auth, options)` |
 | CLI (Go) | `infra/sdk/go/client/` — discovery-driven `Call` / `StreamCall` for `roo fetch`; `gateway.Session` for token exchange and impersonation | `applications/idp/client/` (gateway RPCs only) | `roo fetch …` |
 | External HTTP APIs | `infra/sdk/ts/src/provider/` — `providerApiClient` | none | OAuth or static token injection on outbound fetch |
 
@@ -239,6 +239,9 @@ Cross-cutting behaviour lives only in the shared libraries:
 - attach the minted STS token (and DPoP where required)
 - emit `rpc_client` / `rpc_client_failed` boundary logs
 - propagate trace context
+
+Generated client bindings are named per service. Do not call a generic service
+descriptor from application code when a named generated factory exists.
 
 **Do not** hand-write a new HTTP or Connect client inside an application worker. Wire `serviceConnection` once, import the generated factory, call the RPC.
 
@@ -261,6 +264,6 @@ Cross-cutting behaviour lives only in the shared libraries:
 - [ ] `package <app>.v1;`
 - [ ] `buf build` / `buf lint` clean
 - [ ] `platy dev generate <app>`
-- [ ] Worker handler behind `protect` + `traceRpc`
+- [ ] Worker mounted through `createPlatformRpcWorker` or `createWebBffWorker`
 - [ ] `platy app sync` when the gateway must know new methods/scopes
 - [ ] `npm run check`, `go vet jsmunro.me/platy/sdk/...`, relevant worker tests

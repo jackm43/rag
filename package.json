@@ -22,7 +22,7 @@
     "chat:build": "esbuild infra/applications/chat/app/main.tsx --bundle --format=esm --jsx=automatic --minify --define:process.env.NODE_ENV='\"production\"' --outfile=infra/applications/chat/worker/public/app.js",
     "console:build": "esbuild infra/applications/console/app/main.tsx --bundle --format=esm --jsx=automatic --minify --define:process.env.NODE_ENV='\"production\"' --outfile=infra/applications/console/worker/public/app.js",
     "check": "tsc --noEmit && tsc -p infra/sdk/web",
-    "test": "node --test --import tsx infra/applications/ragbot/worker/test/*.test.ts infra/applications/discovery/worker/test/*.test.ts infra/sdk/ts/test/*.test.ts",
+    "test": "node --test --import tsx infra/applications/ragbot/worker/test/*.test.ts infra/applications/discovery/worker/test/*.test.ts infra/applications/idp/worker/test/*.test.ts infra/sdk/ts/test/*.test.ts",
     "register:commands": "go run jsmunro.me/platy/cli dev register-commands",
     "d1:migrate:local": "wrangler d1 execute ragbot --local -c infra/applications/ragbot/worker/wrangler.jsonc --file=./infra/applications/ragbot/worker/schema.sql"
   },

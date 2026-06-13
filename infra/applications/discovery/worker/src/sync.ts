@@ -1,8 +1,7 @@
 import { Code, ConnectError } from "@connectrpc/connect";
 
 import type { DiscoverResponse } from "../../../idp/server/idp/v1/gateway_discovery_service_pb";
-import { DiscoveryService } from "../../../idp/server/idp/v1/gateway_discovery_service_pb";
-import { serviceClient } from "../../../idp/service";
+import { discoveryServiceClient as idpDiscoveryServiceClient } from "../../../idp/service";
 import {
   exchangeToken,
   logger,
@@ -25,7 +24,7 @@ const gatewayDiscoveryClient = (env: Env, identity: Identity) => {
   if (!connection) {
     throw new ConnectError("gateway connector is not configured", Code.FailedPrecondition);
   }
-  return serviceClient(connection, identity, DiscoveryService);
+  return idpDiscoveryServiceClient(connection, identity);
 };
 
 // The cron path has no caller to chain: the worker acts as itself by
@@ -93,9 +92,7 @@ export const snapshotFromDiscovery = (response: DiscoverLike): RegistrySnapshot 
   endpoints: response.endpoints
     ? {
       tokenExchange: response.endpoints.tokenExchange ?? "",
-      sessionCreate: response.endpoints.sessionCreate ?? "",
-      sessionRefresh: response.endpoints.sessionRefresh ?? "",
-      sessionRevoke: response.endpoints.sessionRevoke ?? "",
+      tokenRevoke: response.endpoints.tokenRevoke ?? "",
       introspect: response.endpoints.introspect ?? "",
       discovery: response.endpoints.discovery ?? "",
       jwks: response.endpoints.jwks ?? "",

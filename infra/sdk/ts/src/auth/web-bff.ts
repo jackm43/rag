@@ -1,5 +1,4 @@
-import { ClientIdentityService } from "../../../../applications/idp/server/idp/v1/client_identity_service_pb";
-import { serviceClient } from "../../../../applications/idp/service";
+import { clientIdentityServiceClient } from "../../../../applications/idp/service";
 import { serviceCredentialFromEnv } from "../credential";
 import { annotateSpan, gatewayTraceExporter, traceRpc, tracerFromEnv } from "../otel";
 import { logger } from "../logger";
@@ -92,7 +91,7 @@ const registerInstance = async (
   }
   const actor = identity.email ?? identity.subject;
   try {
-    const idp = serviceClient(
+    const idp = clientIdentityServiceClient(
       {
         endpoint: config.gatewayUrl,
         gatewayUrl: config.gatewayUrl,
@@ -102,7 +101,6 @@ const registerInstance = async (
         fetch: config.gatewayFetch,
       },
       identity,
-      ClientIdentityService,
     );
     const result = await idp.registerClientIdentity({
       application: app,

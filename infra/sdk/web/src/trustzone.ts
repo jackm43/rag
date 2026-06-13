@@ -61,6 +61,11 @@ export class NeedsLoginError extends Error {
 type StoredKey = { privateKey: CryptoKey; publicJwk: JsonWebKey };
 
 type SessionTokens = { accessToken: string; refreshToken: string; expiresIn?: number | string };
+type OAuthTokenResponse = {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number | string;
+};
 
 const b64url = (bytes: ArrayBuffer | Uint8Array): string => {
   let binary = "";
@@ -165,13 +170,16 @@ const createDpopProof = async (
 
 // ---- gateway helpers -----------------------------------------------------
 
-const connectPost = async <T>(url: string, body: unknown, dpopProof?: string): Promise<T> => {
+const oauthPost = async <T>(
+  url: string,
+  params: URLSearchParams,
+  dpopProof?: string,
+): Promise<T> => {
   const headers: Record<string, string> = {
-    "content-type": "application/json",
-    "connect-protocol-version": "1",
+    "content-type": "application/x-www-form-urlencoded",
   };
   if (dpopProof) headers.dpop = dpopProof;
-  const response = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  const response = await fetch(url, { method: "POST", headers, body: params.toString() });
   const text = await response.text();
   let parsed: unknown = null;
   try {
@@ -181,7 +189,8 @@ const connectPost = async <T>(url: string, body: unknown, dpopProof?: string): P
   }
   if (!response.ok) {
     const message =
-      (parsed as { message?: string } | null)?.message ??
+      (parsed as { error_description?: string; message?: string } | null)?.error_description ??
+      (parsed as { error_description?: string; message?: string } | null)?.message ??
       `request to ${url} failed (${response.status})`;
     const error = new Error(message) as Error & { status: number };
     error.status = response.status;
@@ -189,6 +198,12 @@ const connectPost = async <T>(url: string, body: unknown, dpopProof?: string): P
   }
   return parsed as T;
 };
+
+const sessionTokensFromOAuth = (response: OAuthTokenResponse): SessionTokens => ({
+  accessToken: response.access_token,
+  refreshToken: response.refresh_token ?? "",
+  expiresIn: response.expires_in,
+});
 
 export class TrustZoneWebAuth {
   private readonly discoveryUrl: string;
@@ -332,30 +347,37 @@ export class TrustZoneWebAuth {
     if (!code || !returnedState || returnedState !== expectedState || !verifier) {
       throw new Error("invalid authorization callback");
     }
-    // The gateway completes the PKCE token exchange server-side (the identity
-    // proxy's token endpoint does not allow browser CORS) and returns a
-    // device-bound session in the same call.
-    const url = this.requireConfig().endpoints.session_create;
+    // The gateway completes the upstream PKCE token exchange server-side and
+    // returns a DPoP-bound gateway session from the OAuth token endpoint.
+    const url = this.requireConfig().endpoints.token_exchange;
     const proof = await createDpopProof(this.requireKey(), "POST", url);
-    const result = await connectPost<{ tokens: SessionTokens }>(
+    const result = await oauthPost<OAuthTokenResponse>(
       url,
-      {
-        authorizationCode: code,
-        codeVerifier: verifier,
-        redirectUri: `${location.origin}/callback`,
-      },
+      new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        code_verifier: verifier,
+        redirect_uri: `${location.origin}/callback`,
+      }),
       proof,
     );
-    await this.storeSession(result.tokens);
+    await this.storeSession(sessionTokensFromOAuth(result));
     sessionStorage.removeItem(LOGIN_GUARD);
     return this.state();
   }
 
   private async refresh(refreshToken: string): Promise<void> {
-    const url = this.requireConfig().endpoints.session_refresh;
+    const url = this.requireConfig().endpoints.token_exchange;
     const proof = await createDpopProof(this.requireKey(), "POST", url);
-    const result = await connectPost<{ tokens: SessionTokens }>(url, { refreshToken }, proof);
-    await this.storeSession(result.tokens);
+    const result = await oauthPost<OAuthTokenResponse>(
+      url,
+      new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+      }),
+      proof,
+    );
+    await this.storeSession(sessionTokensFromOAuth(result));
   }
 
   private async storeSession(tokens: SessionTokens): Promise<void> {
@@ -492,9 +514,13 @@ export class TrustZoneWebAuth {
     const refresh = await idbGet<{ value: string }>(REFRESH_ID);
     if (refresh?.value) {
       try {
-        await connectPost(this.requireConfig().endpoints.session_revoke, {
-          refreshToken: refresh.value,
-        });
+        await oauthPost(
+          this.requireConfig().endpoints.token_revoke,
+          new URLSearchParams({
+            token: refresh.value,
+            token_type_hint: "refresh_token",
+          }),
+        );
       } catch {
         // best effort
       }

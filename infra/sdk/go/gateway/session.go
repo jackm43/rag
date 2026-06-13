@@ -2,9 +2,12 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -14,7 +17,6 @@ import (
 
 	idpv1 "jsmunro.me/platy/applications/idp/client/idp/v1"
 	"jsmunro.me/platy/applications/idp/client/idp/v1/idpv1connect"
-	oauthv1 "jsmunro.me/platy/applications/idp/client/platy/oauth/v1"
 	"jsmunro.me/platy/sdk/apps/discovery"
 	"jsmunro.me/platy/sdk/httpclient"
 	"jsmunro.me/platy/sdk/identity"
@@ -23,8 +25,6 @@ import (
 	"jsmunro.me/platy/sdk/oauth2/token"
 	"jsmunro.me/platy/sdk/secrets"
 )
-
-const identityServicePath = "/idp.v1.IdentityService/"
 
 type CredentialResolver func(ctx context.Context, application string) (*secrets.ClientCredential, error)
 
@@ -109,15 +109,19 @@ func (s *Session) userTokenKey() string {
 	return "session|" + s.GatewayURL
 }
 
-func (s *Session) dpopProof(procedure string) (string, error) {
+func (s *Session) dpopProof(target, accessToken string) (string, error) {
 	if s.Dpop == nil {
 		return "", fmt.Errorf("session has no device key for DPoP proofs")
 	}
-	return s.Dpop.Proof(http.MethodPost, s.GatewayURL+procedure)
+	proofURL := target
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		proofURL = s.GatewayURL + target
+	}
+	return s.Dpop.ProofWithAccessToken(http.MethodPost, proofURL, accessToken)
 }
 
-func (s *Session) attachDpop(header http.Header, procedure string) error {
-	proof, err := s.dpopProof(procedure)
+func (s *Session) attachDpopForToken(header http.Header, target, accessToken string) error {
+	proof, err := s.dpopProof(target, accessToken)
 	if err != nil {
 		return err
 	}
@@ -125,57 +129,133 @@ func (s *Session) attachDpop(header http.Header, procedure string) error {
 	return nil
 }
 
-func tokenSetFromSession(tokens *oauthv1.SessionTokens) *oauthclient.TokenSet {
+type oauthTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int64  `json:"expires_in"`
+	Scope        string `json:"scope"`
+}
+
+type oauthErrorResponse struct {
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description"`
+}
+
+func tokenSetFromOAuth(tokens oauthTokenResponse) *oauthclient.TokenSet {
 	now := time.Now().Unix()
 	return &oauthclient.TokenSet{
-		AccessToken:      tokens.AccessToken,
-		RefreshToken:     tokens.RefreshToken,
-		ExpiresAt:        now + tokens.ExpiresIn,
-		RefreshExpiresAt: now + tokens.RefreshExpiresIn,
+		AccessToken:  tokens.AccessToken,
+		RefreshToken: tokens.RefreshToken,
+		ExpiresAt:    now + tokens.ExpiresIn,
 	}
 }
 
-func (s *Session) createSession(ctx context.Context, subjectToken string) (*oauthclient.TokenSet, error) {
-	request := connect.NewRequest(&oauthv1.CreateSessionRequest{
-		SubjectToken:     subjectToken,
-		SubjectTokenType: token.TypeAccessToken,
-	})
-	if err := s.attachDpop(request.Header(), identityServicePath+"CreateSession"); err != nil {
-		return nil, err
+func (s *Session) tokenEndpoint(ctx context.Context) string {
+	discovered, err := s.Discovery(ctx)
+	if err == nil && discovered.Endpoints.TokenExchange != "" {
+		return discovered.Endpoints.TokenExchange
 	}
-	response, err := s.IdentityClient().CreateSession(ctx, request)
+	return s.GatewayURL + "/oauth/token"
+}
+
+func (s *Session) revocationEndpoint(ctx context.Context) string {
+	discovered, err := s.Discovery(ctx)
+	if err == nil && discovered.Endpoints.TokenRevoke != "" {
+		return discovered.Endpoints.TokenRevoke
+	}
+	return s.GatewayURL + "/oauth/revoke"
+}
+
+func (s *Session) oauthPost(
+	ctx context.Context,
+	endpoint string,
+	values url.Values,
+	authToken string,
+	dpopAccessToken string,
+) (oauthTokenResponse, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(values.Encode()))
+	if err != nil {
+		return oauthTokenResponse{}, err
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if authToken != "" {
+		request.Header.Set("Authorization", "Bearer "+authToken)
+	}
+	if s.Dpop != nil {
+		if err := s.attachDpopForToken(request.Header, endpoint, dpopAccessToken); err != nil {
+			return oauthTokenResponse{}, err
+		}
+	}
+	response, err := s.HTTPClient.Do(request)
+	if err != nil {
+		return oauthTokenResponse{}, err
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		var oauthErr oauthErrorResponse
+		_ = json.Unmarshal(body, &oauthErr)
+		if oauthErr.ErrorDescription != "" {
+			return oauthTokenResponse{}, fmt.Errorf("%s: %s", oauthErr.Error, oauthErr.ErrorDescription)
+		}
+		return oauthTokenResponse{}, fmt.Errorf("oauth request failed: %s", response.Status)
+	}
+	var tokenResponse oauthTokenResponse
+	if err := json.Unmarshal(body, &tokenResponse); err != nil {
+		return oauthTokenResponse{}, err
+	}
+	if tokenResponse.AccessToken == "" {
+		return oauthTokenResponse{}, fmt.Errorf("gateway returned no access token")
+	}
+	return tokenResponse, nil
+}
+
+func (s *Session) createSession(ctx context.Context, code, verifier, redirectURL string) (*oauthclient.TokenSet, error) {
+	response, err := s.oauthPost(ctx, s.tokenEndpoint(ctx), url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"code_verifier": {verifier},
+		"redirect_uri":  {redirectURL},
+	}, "", "")
 	if err != nil {
 		return nil, fmt.Errorf("create gateway session: %w", err)
 	}
-	if response.Msg.Tokens == nil {
-		return nil, fmt.Errorf("gateway returned no session tokens")
-	}
-	return tokenSetFromSession(response.Msg.Tokens), nil
+	return tokenSetFromOAuth(response), nil
 }
 
 func (s *Session) refreshSession(ctx context.Context, refreshToken string) (*oauthclient.TokenSet, error) {
-	request := connect.NewRequest(&oauthv1.RefreshSessionRequest{RefreshToken: refreshToken})
-	if err := s.attachDpop(request.Header(), identityServicePath+"RefreshSession"); err != nil {
-		return nil, err
-	}
-	response, err := s.IdentityClient().RefreshSession(ctx, request)
+	response, err := s.oauthPost(ctx, s.tokenEndpoint(ctx), url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refreshToken},
+	}, "", "")
 	if err != nil {
 		return nil, fmt.Errorf("refresh gateway session: %w", err)
 	}
-	if response.Msg.Tokens == nil {
-		return nil, fmt.Errorf("gateway returned no session tokens")
-	}
-	return tokenSetFromSession(response.Msg.Tokens), nil
+	return tokenSetFromOAuth(response), nil
 }
 
 func (s *Session) revokeCachedSession(ctx context.Context) {
 	cached := s.Store.Get(ctx, s.userTokenKey())
 	if cached != nil && cached.RefreshToken != "" {
-		request := connect.NewRequest(&oauthv1.RevokeSessionRequest{RefreshToken: cached.RefreshToken})
-		if _, err := s.IdentityClient().RevokeSession(ctx, request); err != nil {
+		endpoint := s.revocationEndpoint(ctx)
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(url.Values{
+			"token":           {cached.RefreshToken},
+			"token_type_hint": {"refresh_token"},
+		}.Encode()))
+		if err != nil {
 			s.logger().Debug("session revocation failed", "error", err)
 		} else {
-			s.logger().Info("revoked previous gateway session")
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if response, err := s.HTTPClient.Do(request); err != nil {
+				s.logger().Debug("session revocation failed", "error", err)
+			} else {
+				_ = response.Body.Close()
+				if response.StatusCode >= 200 && response.StatusCode < 300 {
+					s.logger().Info("revoked previous gateway session")
+				} else {
+					s.logger().Debug("session revocation failed", "status", response.Status)
+				}
+			}
 		}
 	}
 	if err := s.Store.Delete(ctx, s.userTokenKey()); err != nil {
@@ -199,11 +279,11 @@ func (s *Session) login(ctx context.Context) (*oauthclient.TokenSet, error) {
 	if err != nil {
 		return nil, err
 	}
-	upstream, err := flow.Login(ctx)
+	code, verifier, redirectURL, err := flow.AuthorizeCode(ctx)
 	if err != nil {
 		return nil, err
 	}
-	tokens, err := s.createSession(ctx, upstream.AccessToken)
+	tokens, err := s.createSession(ctx, code, verifier, redirectURL)
 	if err != nil {
 		return nil, err
 	}
@@ -390,14 +470,6 @@ func (s *Session) ServiceAppToken(ctx context.Context, serviceApp, audience stri
 	return token.AccessToken, nil
 }
 
-func (s *Session) authenticatedIdentityClient() idpv1connect.IdentityServiceClient {
-	return idpv1connect.NewIdentityServiceClient(
-		s.HTTPClient,
-		s.GatewayURL,
-		connect.WithInterceptors(s.UserAuthInterceptor()),
-	)
-}
-
 func (s *Session) exchangeToken(
 	ctx context.Context,
 	subjectToken, subjectTokenType, actorToken, actorTokenType, audience string,
@@ -405,34 +477,35 @@ func (s *Session) exchangeToken(
 	impersonationToken string,
 	authenticated bool,
 ) (*oauthclient.TokenSet, error) {
-	request := connect.NewRequest(&oauthv1.TokenExchangeRequest{
-		SubjectToken:           subjectToken,
-		SubjectTokenType:       subjectTokenType,
-		ActorToken:             actorToken,
-		ActorTokenType:         actorTokenType,
-		Audience:               audience,
-		Scopes:                 scopes,
-		RequestedTokenType:     token.TypeJWT,
-		ImpersonationToken:     impersonationToken,
-		ImpersonationTokenType: token.TypeAccessToken,
-	})
+	values := url.Values{
+		"grant_type":           {"urn:ietf:params:oauth:grant-type:token-exchange"},
+		"subject_token":        {subjectToken},
+		"subject_token_type":   {subjectTokenType},
+		"audience":             {audience},
+		"requested_token_type": {token.TypeJWT},
+	}
+	if len(scopes) > 0 {
+		values.Set("scope", strings.Join(scopes, " "))
+	}
+	if actorToken != "" {
+		values.Set("actor_token", actorToken)
+		values.Set("actor_token_type", actorTokenType)
+	}
+	if impersonationToken != "" {
+		values.Set("impersonation_token", impersonationToken)
+		values.Set("impersonation_token_type", token.TypeAccessToken)
+	}
+	authToken := ""
+	dpopAccessToken := ""
 	if authenticated {
-		if err := s.attachDpop(request.Header(), identityServicePath+"ExchangeToken"); err != nil {
-			return nil, err
-		}
 		userToken, err := s.UserToken(ctx, false)
 		if err != nil {
 			return nil, err
 		}
-		request.Header().Set("Authorization", "Bearer "+userToken)
+		authToken = userToken
+		dpopAccessToken = userToken
 	} else if subjectTokenType == token.TypeJWT && actorToken == "" {
-		if err := s.attachDpop(request.Header(), identityServicePath+"ExchangeToken"); err != nil {
-			return nil, err
-		}
-	}
-	client := s.IdentityClient()
-	if authenticated {
-		client = s.authenticatedIdentityClient()
+		dpopAccessToken = subjectToken
 	}
 	// Identity-boundary standard: every identity change is logged at the
 	// client that makes it; only the actor's client id is logged, never the
@@ -446,7 +519,7 @@ func (s *Session) exchangeToken(
 	if actorToken != "" && logActorTokenType == "" {
 		logActorTokenType = token.TypeServiceCredential
 	}
-	response, err := client.ExchangeToken(ctx, request)
+	response, err := s.oauthPost(ctx, s.tokenEndpoint(ctx), values, authToken, dpopAccessToken)
 	if err != nil {
 		s.logger().Warn("identity_exchange_refused",
 			identity.ExchangeRefusedLog(
@@ -457,12 +530,12 @@ func (s *Session) exchangeToken(
 	}
 	s.logger().Info("identity_exchanged",
 		identity.ExchangedLog(
-			audience, subjectTokenType, logActorTokenType, actorClientID, impersonation, nil, response.Msg.Scopes,
+			audience, subjectTokenType, logActorTokenType, actorClientID, impersonation, nil, strings.Fields(response.Scope),
 		)...,
 	)
 	return &oauthclient.TokenSet{
-		AccessToken: response.Msg.AccessToken,
-		ExpiresAt:   time.Now().Unix() + response.Msg.ExpiresIn,
+		AccessToken: response.AccessToken,
+		ExpiresAt:   time.Now().Unix() + response.ExpiresIn,
 	}, nil
 }
 
@@ -476,7 +549,7 @@ func (i *gatewayInterceptor) decorate(ctx context.Context, header http.Header, p
 		return err
 	}
 	header.Set("Authorization", "Bearer "+token)
-	return i.session.attachDpop(header, procedure)
+	return i.session.attachDpopForToken(header, procedure, token)
 }
 
 func (i *gatewayInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {

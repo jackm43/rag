@@ -5,6 +5,11 @@ import type { StsVerifierConfig } from "../verify/sts";
 import { principalFromIdentity } from "../identity";
 import { actorChainRefusal, delegationGraph } from "./delegations";
 
+const bearerToken = (headers: Headers): string | undefined => {
+  const match = /^bearer\s+(.+)$/i.exec(headers.get("authorization") ?? "");
+  return match?.[1]?.trim();
+};
+
 // A cnf-bound identity is only valid when the caller proves possession of
 // the bound key with a fresh DPoP proof for this exact request.
 export const requireSenderConstraint = async (
@@ -18,7 +23,7 @@ export const requireSenderConstraint = async (
   if (!request) {
     return null;
   }
-  const proof = await verifyDpopProof(headers, request);
+  const proof = await verifyDpopProof(headers, request, bearerToken(headers));
   if (!proof || proof.jkt !== identity.cnfJkt) {
     return null;
   }

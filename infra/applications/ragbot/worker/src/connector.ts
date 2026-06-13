@@ -1,7 +1,6 @@
 import { Code, ConnectError } from "@connectrpc/connect";
 
-import { ChatService } from "../../../aigateway/server/aigateway/v1/chat_service_pb";
-import { serviceClient } from "../../../aigateway/service";
+import { chatServiceClient as aigatewayChatServiceClient } from "../../../aigateway/service";
 import {
   exchangeToken,
   serviceConnection,
@@ -28,7 +27,7 @@ export const chatServiceClient = (env: Env, identity: Identity) => {
   if (!connection) {
     throw new ConnectError("aigateway connector is not configured", Code.FailedPrecondition);
   }
-  return serviceClient(connection, identity, ChatService);
+  return aigatewayChatServiceClient(connection, identity);
 };
 
 export const selfIdentity = async (env: Env): Promise<Identity> => {

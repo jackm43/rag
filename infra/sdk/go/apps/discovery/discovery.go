@@ -20,13 +20,11 @@ type OidcProvider struct {
 }
 
 type Endpoints struct {
-	TokenExchange  string `json:"token_exchange"`
-	SessionCreate  string `json:"session_create"`
-	SessionRefresh string `json:"session_refresh"`
-	SessionRevoke  string `json:"session_revoke"`
-	Introspect     string `json:"introspect"`
-	Discovery      string `json:"discovery"`
-	Jwks           string `json:"jwks"`
+	TokenExchange string `json:"token_exchange"`
+	TokenRevoke   string `json:"token_revoke"`
+	Introspect    string `json:"introspect"`
+	Discovery     string `json:"discovery"`
+	Jwks          string `json:"jwks"`
 }
 
 type TrustBoundary struct {

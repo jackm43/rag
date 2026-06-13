@@ -100,6 +100,11 @@ export {
 export { exchangeProviderAccessToken, type ProviderAccessToken } from "./provider/oauth";
 export { createRpcHandler, type RpcHandler } from "./router";
 export {
+  createPlatformRpcWorker,
+  type PlatformRpcWorkerConfig,
+  type PlatformRpcWorkerEnv,
+} from "./worker";
+export {
   accessOidcProvider,
   actorChainFromClaim,
   createDpopProof,

@@ -55,13 +55,18 @@ export const createClient = (config: ClientConfig): PlatformClient => {
     const url = resolveUrl(input);
     const method = (init.method ?? "GET").toUpperCase();
     const headers = new Headers(init.headers);
+    let bearer: string | null = null;
     if (config.token && !headers.has("authorization")) {
-      const token = await config.token();
-      if (token) {
-        headers.set("authorization", `Bearer ${token}`);
+      bearer = await config.token();
+      if (bearer) {
+        headers.set("authorization", `Bearer ${bearer}`);
       }
+    } else {
+      bearer = /^bearer\s+(.+)$/i.exec(headers.get("authorization") ?? "")?.[1]?.trim() ?? null;
     }
-    if (config.dpop) {
+    if (config.dpop && bearer) {
+      headers.set(DPOP_HEADER, await createDpopProof(config.dpop, { method, url }, bearer));
+    } else if (config.dpop) {
       headers.set(DPOP_HEADER, await createDpopProof(config.dpop, { method, url }));
     }
     await config.decorate?.(headers);
@@ -83,4 +88,3 @@ export const createClient = (config: ClientConfig): PlatformClient => {
 
   return { fetch: doFetch, call };
 };
-

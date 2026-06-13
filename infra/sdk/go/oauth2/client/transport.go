@@ -23,7 +23,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	req = req.Clone(req.Context())
 	req.Header.Set("Authorization", "Bearer "+token)
-	proof, err := t.Dpop.Proof(req.Method, req.URL.String())
+	proof, err := t.Dpop.ProofWithAccessToken(req.Method, req.URL.String(), token)
 	if err != nil {
 		return nil, err
 	}

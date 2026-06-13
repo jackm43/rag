@@ -9,7 +9,6 @@ import {
   type Application,
   type ProviderConfig as ProviderConfigMessage,
 } from "../../server/idp/v1/types_pb";
-import { type TokenExchangeRequest } from "../../server/platy/oauth/v1/token_pb";
 import { calculateJwkThumbprint, type JWK } from "jose";
 
 import {
@@ -60,7 +59,7 @@ import {
   type RegisteredApplication,
   type TrustBoundary,
 } from "./registry";
-import { consumeRefreshToken, createSession, revokeSession, type Session } from "./sessions";
+import { consumeRefreshToken, createSession, type Session } from "./sessions";
 import { exchangeProviderAccessToken } from "./provider-oauth";
 import { getTrace, listTraces, streamSpans } from "./traces";
 import { allowedEmails, type Env } from "./types";
@@ -158,8 +157,12 @@ const requestDescriptor = (context: HandlerContext): RequestDescriptor => ({
   url: context.url,
 });
 
-const requireDpopProof = async (context: HandlerContext): Promise<string> => {
-  const proof = await verifyDpopProof(context.requestHeader, requestDescriptor(context));
+const requireDpopProof = async (
+  headers: Headers,
+  request: RequestDescriptor,
+  accessToken?: string,
+): Promise<string> => {
+  const proof = await verifyDpopProof(headers, request, accessToken);
   if (!proof) {
     throw new ConnectError("valid DPoP proof required", Code.Unauthenticated);
   }
@@ -323,9 +326,49 @@ type ResolvedSubject = {
   tokenAudience: string | null;
 };
 
+export type TokenExchangeInput = {
+  subjectToken: string;
+  subjectTokenType?: string;
+  actorToken?: string;
+  actorTokenType?: string;
+  audience: string;
+  scopes: string[];
+  requestedTokenType?: string;
+  impersonationToken?: string;
+  impersonationTokenType?: string;
+};
+
+export type TokenExchangeOutput = {
+  accessToken: string;
+  issuedTokenType: string;
+  tokenType: string;
+  expiresIn: bigint;
+  scopes: string[];
+};
+
+export type GatewaySessionGrantInput = {
+  subjectToken?: string;
+  subjectTokenType?: string;
+  authorizationCode?: string;
+  codeVerifier?: string;
+  redirectUri?: string;
+};
+
+export type GatewayRefreshGrantInput = {
+  refreshToken?: string;
+};
+
+export type GatewaySessionTokens = {
+  accessToken: string;
+  expiresIn: bigint;
+  refreshToken: string;
+  refreshExpiresIn: bigint;
+  tokenType: string;
+};
+
 const resolveSubject = async (
   env: Env,
-  request: TokenExchangeRequest,
+  request: TokenExchangeInput,
   actorApplication: string | null,
 ): Promise<ResolvedSubject | null> => {
   if (!request.subjectToken) {
@@ -436,7 +479,11 @@ const sessionAccessToken = async (env: Env, session: Session): Promise<string> =
   return signToken(env, payload);
 };
 
-const sessionTokensMessage = async (env: Env, session: Session, refreshToken: string) => ({
+const sessionTokensMessage = async (
+  env: Env,
+  session: Session,
+  refreshToken: string,
+): Promise<GatewaySessionTokens> => ({
   accessToken: await sessionAccessToken(env, session),
   expiresIn: BigInt(TOKEN_LIFETIME_SECONDS),
   refreshToken,
@@ -444,13 +491,236 @@ const sessionTokensMessage = async (env: Env, session: Session, refreshToken: st
   tokenType: "DPoP",
 });
 
+export const createGatewaySession = async (
+  env: Env,
+  request: GatewaySessionGrantInput,
+  dpopJkt: string,
+): Promise<GatewaySessionTokens> => {
+  let subjectToken = request.subjectToken ?? "";
+  if (request.authorizationCode) {
+    // Server-side PKCE code exchange for browser clients.
+    subjectToken = await exchangeAuthorizationCode(env, {
+      authorizationCode: request.authorizationCode,
+      codeVerifier: request.codeVerifier ?? "",
+      redirectUri: request.redirectUri ?? "",
+    });
+  } else if (request.subjectTokenType && request.subjectTokenType !== TOKEN_TYPE_ACCESS_TOKEN) {
+    throw new ConnectError("sessions require an upstream access token", Code.InvalidArgument);
+  }
+  const identity = await verifyOidcToken(subjectToken, oidcProvider(env));
+  if (!identity) {
+    throw new ConnectError("invalid subject token", Code.Unauthenticated);
+  }
+  if (!isAllowedUser(env, identity)) {
+    throw new ConnectError("forbidden", Code.PermissionDenied);
+  }
+  const { session, refreshToken } = await createSession(env, identity, dpopJkt);
+  await audit(env, identity.email ?? identity.subject, "session_created", session.id);
+  logger.info("session_created", { subject: identity.subject, session: session.id });
+  return sessionTokensMessage(env, session, refreshToken);
+};
+
+export const refreshGatewaySession = async (
+  env: Env,
+  request: GatewayRefreshGrantInput,
+  dpopJkt: string,
+): Promise<GatewaySessionTokens> => {
+  if (!request.refreshToken) {
+    throw new ConnectError("refresh_token is required", Code.InvalidArgument);
+  }
+  const rotated = await consumeRefreshToken(env, request.refreshToken, dpopJkt);
+  if (!rotated) {
+    throw new ConnectError("invalid refresh token", Code.Unauthenticated);
+  }
+  await audit(
+    env,
+    rotated.session.email ?? rotated.session.subject,
+    "session_refreshed",
+    rotated.session.id,
+  );
+  logger.info("session_refreshed", { session: rotated.session.id });
+  return sessionTokensMessage(env, rotated.session, rotated.refreshToken);
+};
+
+export type TokenExchangeContext = {
+  headers: Headers;
+  request: RequestDescriptor;
+};
+
+export const exchangeGatewayToken = async (
+  env: Env,
+  request: TokenExchangeInput,
+  context: TokenExchangeContext,
+): Promise<TokenExchangeOutput> => {
+  let actorClientId: string | null = null;
+  let actorApplication: string | null = null;
+  if (request.actorToken) {
+    if (request.actorTokenType && request.actorTokenType !== TOKEN_TYPE_SERVICE_CREDENTIAL) {
+      throw new ConnectError("unsupported actor token type", Code.InvalidArgument);
+    }
+    const separator = request.actorToken.indexOf(":");
+    if (separator < 0) {
+      throw new ConnectError("invalid actor token", Code.Unauthenticated);
+    }
+    actorClientId = request.actorToken.slice(0, separator);
+    actorApplication = await verifyServiceClient(
+      env,
+      actorClientId,
+      request.actorToken.slice(separator + 1),
+    );
+    if (!actorApplication) {
+      throw new ConnectError("invalid actor credential", Code.Unauthenticated);
+    }
+  }
+
+  if (actorApplication) {
+    const caller = await localGatewayStsAuthenticator(env)(context.headers, context.request);
+    if (caller?.cnfJkt) {
+      if (!request.impersonationToken) {
+        throw new ConnectError("impersonation authorization required", Code.PermissionDenied);
+      }
+      const actorApp = await getApplication(env, actorApplication);
+      if (!actorApp?.impersonationAccessClientId) {
+        throw new ConnectError(
+          `application ${actorApplication} has no impersonation access app configured`,
+          Code.FailedPrecondition,
+        );
+      }
+      const impersonation = await verifyOidcToken(
+        request.impersonationToken,
+        accessOidcProvider(env.ACCESS_TEAM_DOMAIN, actorApp.impersonationAccessClientId),
+      );
+      if (!impersonation) {
+        throw new ConnectError("invalid impersonation token", Code.Unauthenticated);
+      }
+      if (
+        !caller.email ||
+        !impersonation.email ||
+        impersonation.email.toLowerCase() !== caller.email.toLowerCase()
+      ) {
+        throw new ConnectError("impersonation token identity mismatch", Code.PermissionDenied);
+      }
+      await audit(
+        env,
+        caller.email ?? caller.subject,
+        "impersonation_exchange",
+        actorApplication,
+      );
+    }
+  }
+
+  const resolved = await resolveSubject(env, request, actorApplication);
+  if (!resolved) {
+    throw new ConnectError("invalid subject token", Code.Unauthenticated);
+  }
+  const subject = resolved.identity;
+  if (!isAllowedUser(env, subject)) {
+    throw new ConnectError("forbidden", Code.PermissionDenied);
+  }
+  if (!actorApplication && subject.cnfJkt) {
+    const jkt = await requireDpopProof(context.headers, context.request, request.subjectToken);
+    if (jkt !== subject.cnfJkt) {
+      throw new ConnectError("DPoP proof does not match token binding", Code.Unauthenticated);
+    }
+  }
+
+  // An inherited actor chain is only ever trusted after re-validation
+  // against the live registry: every prior hop must still be a known
+  // service client with a delegation matching its position in the chain.
+  if (subject.actorChain.length > 0 && resolved.tokenAudience) {
+    const refusal = await actorChainRefusal(env, subject.actorChain, resolved.tokenAudience);
+    if (refusal) {
+      identityExchangeRefused({
+        audience: request.audience,
+        subject_token_type: request.subjectTokenType ?? "",
+        ...(request.actorTokenType ? { actor_token_type: request.actorTokenType } : {}),
+        ...(actorClientId ? { act: actorClientId } : {}),
+        ...(request.impersonationToken ? { impersonation: true } : {}),
+        principal: principalFromIdentity(subject),
+        reason: refusal,
+      });
+      await audit(env, subject.email ?? subject.subject, "exchange_chain_refused", refusal);
+      throw new ConnectError(refusal, Code.PermissionDenied);
+    }
+  }
+
+  const application = await getApplicationByAudience(env, request.audience);
+  if (!application) {
+    throw new ConnectError(`unknown audience ${request.audience}`, Code.NotFound);
+  }
+
+  let scopes: string[];
+  if (actorApplication) {
+    const delegation = await delegationFor(env, actorApplication, application.audience);
+    if (!delegation) {
+      throw new ConnectError(
+        `application ${actorApplication} has no delegation to audience ${application.audience}`,
+        Code.PermissionDenied,
+      );
+    }
+    const granted = delegationGrants(delegation);
+    scopes = validateScopes(application.audience, request.scopes, granted, granted);
+  } else {
+    scopes = validateScopes(application.audience, request.scopes, subject.scopes, [
+      `${application.audience}/*`,
+    ]);
+  }
+
+  const actorChain = actorClientId ? [actorClientId, ...subject.actorChain] : subject.actorChain;
+  if (actorChain.length > MAX_ACTOR_CHAIN) {
+    throw new ConnectError(
+      `actor chain exceeds maximum depth ${MAX_ACTOR_CHAIN}`,
+      Code.PermissionDenied,
+    );
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const payload: Record<string, unknown> = {
+    iss: issuer(env),
+    sub: subject.subject,
+    aud: application.audience,
+    scope: scopes.join(" "),
+    kind: subject.kind,
+    jti: crypto.randomUUID(),
+    iat: now,
+    exp: now + TOKEN_LIFETIME_SECONDS,
+  };
+  if (subject.email) {
+    payload.email = subject.email;
+  }
+  const act = nestActChain(actorChain);
+  if (act) {
+    payload.act = act;
+  }
+
+  const accessToken = await signToken(env, payload);
+  identityExchanged({
+    audience: application.audience,
+    subject_token_type: request.subjectTokenType ?? "",
+    ...(request.actorTokenType ? { actor_token_type: request.actorTokenType } : {}),
+    ...(actorClientId ? { act: actorClientId } : {}),
+    ...(request.impersonationToken ? { impersonation: true } : {}),
+    principal: principalFromIdentity({
+      kind: subject.kind,
+      subject: subject.subject,
+      email: subject.email,
+      actorChain,
+    }),
+    scopes,
+  });
+  return {
+    accessToken,
+    issuedTokenType: TOKEN_TYPE_JWT,
+    tokenType: "Bearer",
+    expiresIn: BigInt(TOKEN_LIFETIME_SECONDS),
+    scopes,
+  };
+};
+
 export const gatewayEndpoints = (env: Env) => {
   const base = issuer(env);
   return {
-    tokenExchange: `${base}/idp.v1.IdentityService/ExchangeToken`,
-    sessionCreate: `${base}/idp.v1.IdentityService/CreateSession`,
-    sessionRefresh: `${base}/idp.v1.IdentityService/RefreshSession`,
-    sessionRevoke: `${base}/idp.v1.IdentityService/RevokeSession`,
+    tokenExchange: `${base}/oauth/token`,
+    tokenRevoke: `${base}/oauth/revoke`,
     introspect: `${base}/idp.v1.IdentityService/Introspect`,
     discovery: `${base}/api/discovery`,
     jwks: jwksUrl(env),
@@ -493,222 +763,6 @@ export const registerServices = (router: ConnectRouter, env: Env) => {
           act: principal.act ?? [],
         },
         scopes: identity.scopes,
-      };
-    },
-    createSession: async (request, context) => {
-      const jkt = await requireDpopProof(context);
-      let subjectToken = request.subjectToken;
-      if (request.authorizationCode) {
-        // Server-side PKCE code exchange for browser clients (Module 3).
-        subjectToken = await exchangeAuthorizationCode(env, request);
-      } else if (request.subjectTokenType && request.subjectTokenType !== TOKEN_TYPE_ACCESS_TOKEN) {
-        throw new ConnectError("sessions require an upstream access token", Code.InvalidArgument);
-      }
-      const identity = await verifyOidcToken(subjectToken, oidcProvider(env));
-      if (!identity) {
-        throw new ConnectError("invalid subject token", Code.Unauthenticated);
-      }
-      if (!isAllowedUser(env, identity)) {
-        throw new ConnectError("forbidden", Code.PermissionDenied);
-      }
-      const { session, refreshToken } = await createSession(env, identity, jkt);
-      await audit(env, identity.email ?? identity.subject, "session_created", session.id);
-      logger.info("session_created", { subject: identity.subject, session: session.id });
-      return { tokens: await sessionTokensMessage(env, session, refreshToken) };
-    },
-    refreshSession: async (request, context) => {
-      const jkt = await requireDpopProof(context);
-      if (!request.refreshToken) {
-        throw new ConnectError("refresh_token is required", Code.InvalidArgument);
-      }
-      const rotated = await consumeRefreshToken(env, request.refreshToken, jkt);
-      if (!rotated) {
-        throw new ConnectError("invalid refresh token", Code.Unauthenticated);
-      }
-      await audit(
-        env,
-        rotated.session.email ?? rotated.session.subject,
-        "session_refreshed",
-        rotated.session.id,
-      );
-      logger.info("session_refreshed", { session: rotated.session.id });
-      return { tokens: await sessionTokensMessage(env, rotated.session, rotated.refreshToken) };
-    },
-    revokeSession: async (request) => {
-      if (!request.refreshToken) {
-        throw new ConnectError("refresh_token is required", Code.InvalidArgument);
-      }
-      const revoked = await revokeSession(env, request.refreshToken);
-      if (revoked) {
-        logger.info("session_revoked", {});
-      }
-      return { revoked };
-    },
-    exchangeToken: async (request, context) => {
-      let actorClientId: string | null = null;
-      let actorApplication: string | null = null;
-      if (request.actorToken) {
-        if (request.actorTokenType && request.actorTokenType !== TOKEN_TYPE_SERVICE_CREDENTIAL) {
-          throw new ConnectError("unsupported actor token type", Code.InvalidArgument);
-        }
-        const separator = request.actorToken.indexOf(":");
-        if (separator < 0) {
-          throw new ConnectError("invalid actor token", Code.Unauthenticated);
-        }
-        actorClientId = request.actorToken.slice(0, separator);
-        actorApplication = await verifyServiceClient(
-          env,
-          actorClientId,
-          request.actorToken.slice(separator + 1),
-        );
-        if (!actorApplication) {
-          throw new ConnectError("invalid actor credential", Code.Unauthenticated);
-        }
-      }
-
-      if (actorApplication) {
-        const caller = await localGatewayStsAuthenticator(env)(
-          context.requestHeader,
-          requestDescriptor(context),
-        );
-        if (caller?.cnfJkt) {
-          if (!request.impersonationToken) {
-            throw new ConnectError("impersonation authorization required", Code.PermissionDenied);
-          }
-          const actorApp = await getApplication(env, actorApplication);
-          if (!actorApp?.impersonationAccessClientId) {
-            throw new ConnectError(
-              `application ${actorApplication} has no impersonation access app configured`,
-              Code.FailedPrecondition,
-            );
-          }
-          const impersonation = await verifyOidcToken(
-            request.impersonationToken,
-            accessOidcProvider(env.ACCESS_TEAM_DOMAIN, actorApp.impersonationAccessClientId),
-          );
-          if (!impersonation) {
-            throw new ConnectError("invalid impersonation token", Code.Unauthenticated);
-          }
-          if (
-            !caller.email ||
-            !impersonation.email ||
-            impersonation.email.toLowerCase() !== caller.email.toLowerCase()
-          ) {
-            throw new ConnectError("impersonation token identity mismatch", Code.PermissionDenied);
-          }
-          await audit(
-            env,
-            caller.email ?? caller.subject,
-            "impersonation_exchange",
-            actorApplication,
-          );
-        }
-      }
-
-      const resolved = await resolveSubject(env, request, actorApplication);
-      if (!resolved) {
-        throw new ConnectError("invalid subject token", Code.Unauthenticated);
-      }
-      const subject = resolved.identity;
-      if (!isAllowedUser(env, subject)) {
-        throw new ConnectError("forbidden", Code.PermissionDenied);
-      }
-      if (!actorApplication && subject.cnfJkt) {
-        const jkt = await requireDpopProof(context);
-        if (jkt !== subject.cnfJkt) {
-          throw new ConnectError("DPoP proof does not match token binding", Code.Unauthenticated);
-        }
-      }
-
-      // An inherited actor chain is only ever trusted after re-validation
-      // against the live registry: every prior hop must still be a known
-      // service client with a delegation matching its position in the chain.
-      if (subject.actorChain.length > 0 && resolved.tokenAudience) {
-        const refusal = await actorChainRefusal(env, subject.actorChain, resolved.tokenAudience);
-        if (refusal) {
-          identityExchangeRefused({
-            audience: request.audience,
-            subject_token_type: request.subjectTokenType,
-            ...(request.actorTokenType ? { actor_token_type: request.actorTokenType } : {}),
-            ...(actorClientId ? { act: actorClientId } : {}),
-            ...(request.impersonationToken ? { impersonation: true } : {}),
-            principal: principalFromIdentity(subject),
-            reason: refusal,
-          });
-          await audit(env, subject.email ?? subject.subject, "exchange_chain_refused", refusal);
-          throw new ConnectError(refusal, Code.PermissionDenied);
-        }
-      }
-
-      const application = await getApplicationByAudience(env, request.audience);
-      if (!application) {
-        throw new ConnectError(`unknown audience ${request.audience}`, Code.NotFound);
-      }
-
-      let scopes: string[];
-      if (actorApplication) {
-        const delegation = await delegationFor(env, actorApplication, application.audience);
-        if (!delegation) {
-          throw new ConnectError(
-            `application ${actorApplication} has no delegation to audience ${application.audience}`,
-            Code.PermissionDenied,
-          );
-        }
-        const granted = delegationGrants(delegation);
-        scopes = validateScopes(application.audience, request.scopes, granted, granted);
-      } else {
-        scopes = validateScopes(application.audience, request.scopes, subject.scopes, [
-          `${application.audience}/*`,
-        ]);
-      }
-
-      const actorChain = actorClientId ? [actorClientId, ...subject.actorChain] : subject.actorChain;
-      if (actorChain.length > MAX_ACTOR_CHAIN) {
-        throw new ConnectError(
-          `actor chain exceeds maximum depth ${MAX_ACTOR_CHAIN}`,
-          Code.PermissionDenied,
-        );
-      }
-      const now = Math.floor(Date.now() / 1000);
-      const payload: Record<string, unknown> = {
-        iss: issuer(env),
-        sub: subject.subject,
-        aud: application.audience,
-        scope: scopes.join(" "),
-        kind: subject.kind,
-        jti: crypto.randomUUID(),
-        iat: now,
-        exp: now + TOKEN_LIFETIME_SECONDS,
-      };
-      if (subject.email) {
-        payload.email = subject.email;
-      }
-      const act = nestActChain(actorChain);
-      if (act) {
-        payload.act = act;
-      }
-
-      const accessToken = await signToken(env, payload);
-      identityExchanged({
-        audience: application.audience,
-        subject_token_type: request.subjectTokenType,
-        ...(request.actorTokenType ? { actor_token_type: request.actorTokenType } : {}),
-        ...(actorClientId ? { act: actorClientId } : {}),
-        ...(request.impersonationToken ? { impersonation: true } : {}),
-        principal: principalFromIdentity({
-          kind: subject.kind,
-          subject: subject.subject,
-          email: subject.email,
-          actorChain,
-        }),
-        scopes,
-      });
-      return {
-        accessToken,
-        issuedTokenType: TOKEN_TYPE_JWT,
-        tokenType: "Bearer",
-        expiresIn: BigInt(TOKEN_LIFETIME_SECONDS),
-        scopes,
       };
     },
     exchangeProviderToken: async (request, context) => {
@@ -1089,5 +1143,44 @@ export const buildDiscovery = async (env: Env) => {
       ),
     ),
     provider: providerConfigMessage(await getProviderConfig(env)),
+  };
+};
+
+export const buildAuthorizationServerMetadata = async (env: Env) => {
+  const discovered = await buildDiscovery(env);
+  const scopes = new Set<string>(["openid", "email", "profile", "*"]);
+  for (const app of discovered.applications) {
+    for (const resource of app.resources) {
+      for (const method of resource.methods) {
+        if (method.scope) {
+          scopes.add(method.scope);
+        }
+      }
+    }
+    scopes.add(`${app.audience}/*`);
+  }
+  return {
+    issuer: discovered.issuer,
+    authorization_endpoint: discovered.oidc.authorizationEndpoint,
+    token_endpoint: discovered.endpoints.tokenExchange,
+    jwks_uri: discovered.jwksUri,
+    introspection_endpoint: discovered.endpoints.introspect,
+    revocation_endpoint: discovered.endpoints.tokenRevoke,
+    response_types_supported: ["code"],
+    grant_types_supported: [
+      "authorization_code",
+      "refresh_token",
+      "urn:ietf:params:oauth:grant-type:token-exchange",
+    ],
+    token_endpoint_auth_methods_supported: ["none", "client_secret_basic", "client_secret_post"],
+    code_challenge_methods_supported: ["S256"],
+    scopes_supported: Array.from(scopes).sort(),
+    token_endpoint_auth_signing_alg_values_supported: ["ES256"],
+    id_token_signing_alg_values_supported: ["ES256"],
+    dpop_signing_alg_values_supported: ["ES256"],
+    subject_types_supported: ["public"],
+    claims_supported: ["iss", "sub", "aud", "exp", "iat", "jti", "email", "scope", "act", "cnf", "sid"],
+    service_documentation: `${discovered.issuer}/api/discovery`,
+    platy_discovery_endpoint: discovered.endpoints.discovery,
   };
 };

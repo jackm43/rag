@@ -130,6 +130,10 @@ func randomJti() (string, error) {
 }
 
 func (k *Key) Proof(method, requestURL string) (string, error) {
+	return k.ProofWithAccessToken(method, requestURL, "")
+}
+
+func (k *Key) ProofWithAccessToken(method, requestURL, accessToken string) (string, error) {
 	header := map[string]any{
 		"alg": "ES256",
 		"typ": "dpop+jwt",
@@ -144,6 +148,10 @@ func (k *Key) Proof(method, requestURL string) (string, error) {
 		"htu": normalizeHtu(requestURL),
 		"jti": jti,
 		"iat": time.Now().Unix(),
+	}
+	if accessToken != "" {
+		digest := sha256.Sum256([]byte(accessToken))
+		payload["ath"] = encodeSegment(digest[:])
 	}
 	headerJSON, err := json.Marshal(header)
 	if err != nil {

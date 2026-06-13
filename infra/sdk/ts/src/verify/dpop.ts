@@ -21,6 +21,7 @@ export type RequestDescriptor = {
 export type DpopProof = {
   jkt: string;
   jti: string;
+  ath?: string;
 };
 
 export type DpopKey = {
@@ -39,9 +40,18 @@ const normalizeHtu = (url: string): string | null => {
   }
 };
 
+const b64urlDigest = async (value: string): Promise<string> => {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+};
+
 export const verifyDpopProof = async (
   headers: Headers,
   request: RequestDescriptor,
+  accessToken?: string,
 ): Promise<DpopProof | null> => {
   const proof = headers.get(DPOP_HEADER);
   if (!proof) {
@@ -69,7 +79,16 @@ export const verifyDpopProof = async (
     if (typeof payload.jti !== "string" || payload.jti.length === 0) {
       return null;
     }
-    return { jkt: await calculateJwkThumbprint(jwk, "sha256"), jti: payload.jti };
+    if (accessToken) {
+      if (typeof payload.ath !== "string" || payload.ath !== await b64urlDigest(accessToken)) {
+        return null;
+      }
+    }
+    return {
+      jkt: await calculateJwkThumbprint(jwk, "sha256"),
+      jti: payload.jti,
+      ath: typeof payload.ath === "string" ? payload.ath : undefined,
+    };
   } catch {
     return null;
   }
@@ -83,11 +102,16 @@ export const generateDpopKey = async (): Promise<DpopKey> => {
 export const dpopThumbprint = (key: DpopKey): Promise<string> =>
   calculateJwkThumbprint(key.publicJwk, "sha256");
 
-export const createDpopProof = (key: DpopKey, request: RequestDescriptor): Promise<string> =>
+export const createDpopProof = async (
+  key: DpopKey,
+  request: RequestDescriptor,
+  accessToken?: string,
+): Promise<string> =>
   new SignJWT({
     htm: request.method.toUpperCase(),
     htu: normalizeHtu(request.url) ?? request.url,
     jti: crypto.randomUUID(),
+    ...(accessToken ? { ath: await b64urlDigest(accessToken) } : {}),
   })
     .setProtectedHeader({ alg: DPOP_ALGORITHM, typ: "dpop+jwt", jwk: key.publicJwk })
     .setIssuedAt()
