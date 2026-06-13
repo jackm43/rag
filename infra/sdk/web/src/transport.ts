@@ -2,7 +2,7 @@ import { createClient, type Client, type Interceptor, type Transport } from "@co
 import { createConnectTransport } from "@connectrpc/connect-web";
 import type { DescService } from "@bufbuild/protobuf";
 
-import type { TrustZoneWebAuth } from "./trustzone";
+import type { BrowserAuth } from "./browser-auth";
 
 export type WebClientOptions = {
   // Extra headers stamped on every request — e.g. a client-instance id
@@ -22,7 +22,7 @@ export type WebClientOptions = {
 // client: session auth + proof, per-instance headers, trace rooting (via
 // authHeaders), and boundary logging — generated clients and pages never
 // re-implement any of it.
-const authInterceptor = (auth: TrustZoneWebAuth, options: WebClientOptions): Interceptor =>
+const authInterceptor = (auth: BrowserAuth, options: WebClientOptions): Interceptor =>
   (next) => async (req) => {
     for (const [key, value] of Object.entries(options.headers ?? {})) {
       req.header.set(key, value);
@@ -59,7 +59,7 @@ const authInterceptor = (auth: TrustZoneWebAuth, options: WebClientOptions): Int
   };
 
 export const webTransport = (
-  auth: TrustZoneWebAuth,
+  auth: BrowserAuth,
   application: string,
   options: WebClientOptions = {},
 ): Transport => {
@@ -77,7 +77,7 @@ export const webTransport = (
 // ClientIdentityService, …) — same session auth, gateway origin from
 // discovery (same-origin when "gateway" is in sameOrigin).
 export const gatewayTransport = (
-  auth: TrustZoneWebAuth,
+  auth: BrowserAuth,
   options: WebClientOptions = {},
 ): Transport =>
   createConnectTransport({
@@ -86,7 +86,7 @@ export const gatewayTransport = (
   });
 
 export const gatewayClient = <S extends DescService>(
-  auth: TrustZoneWebAuth,
+  auth: BrowserAuth,
   service: S,
   options: WebClientOptions = {},
 ): Client<S> => createClient(service, gatewayTransport(auth, options));
@@ -95,7 +95,7 @@ export const gatewayClient = <S extends DescService>(
 // Generated per-application clients (infra/applications/<app>/web) wrap this
 // so a page constructs a typed client in one line.
 export const webClient = <S extends DescService>(
-  auth: TrustZoneWebAuth,
+  auth: BrowserAuth,
   application: string,
   service: S,
   options: WebClientOptions = {},

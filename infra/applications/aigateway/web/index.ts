@@ -2,12 +2,12 @@
 import type { Client } from "@connectrpc/connect";
 
 import { ChatService } from "../server/aigateway/v1/chat_service_pb";
-import { webClient, type TrustZoneWebAuth, type WebClientOptions } from "../../../sdk/web/src";
+import { webClient, type BrowserAuth, type WebClientOptions } from "../../../sdk/web/src";
 
 export const APPLICATION = "aigateway";
 
 export const chatServiceClient = (
-  auth: TrustZoneWebAuth,
+  auth: BrowserAuth,
   options?: WebClientOptions,
 ): Client<typeof ChatService> => webClient(auth, APPLICATION, ChatService, options);
 

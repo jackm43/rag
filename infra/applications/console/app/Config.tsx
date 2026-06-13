@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { TrustZoneWebAuth } from "../../../sdk/web/src";
+import type { BrowserAuth } from "../../../sdk/web/src";
 
 // Ragbot runtime configuration: list with inline editing (update / reset to
 // default) through the BFF-chained ConfigService, plus the Discord gateway
@@ -8,7 +8,7 @@ import type { TrustZoneWebAuth } from "../../../sdk/web/src";
 
 type ConfigEntry = { key: string; value?: string; defaultValue?: string; overridden?: boolean };
 
-export function Config({ auth, signedIn }: { auth: TrustZoneWebAuth; signedIn: boolean }) {
+export function Config({ auth, signedIn }: { auth: BrowserAuth; signedIn: boolean }) {
   const [entries, setEntries] = useState<ConfigEntry[]>([]);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);

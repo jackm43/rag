@@ -138,11 +138,11 @@ func renderWeb(app string, services []serviceBinding, extra string) string {
 	for _, service := range services {
 		fmt.Fprintf(&b, "import { %s } from %q;\n", service.Name, service.ImportPath)
 	}
-	b.WriteString("import { webClient, type TrustZoneWebAuth, type WebClientOptions } from \"../../../sdk/web/src\";\n\n")
+	b.WriteString("import { webClient, type BrowserAuth, type WebClientOptions } from \"../../../sdk/web/src\";\n\n")
 	fmt.Fprintf(&b, "export const APPLICATION = %q;\n\n", app)
 	for _, service := range services {
 		fmt.Fprintf(&b, "export const %s = (\n", service.FactoryName)
-		b.WriteString("  auth: TrustZoneWebAuth,\n")
+		b.WriteString("  auth: BrowserAuth,\n")
 		b.WriteString("  options?: WebClientOptions,\n")
 		fmt.Fprintf(&b, "): Client<typeof %s> => webClient(auth, APPLICATION, %s, options);\n\n", service.Name, service.Name)
 	}

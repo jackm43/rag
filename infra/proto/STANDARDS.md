@@ -223,7 +223,7 @@ Workers do not import `infra/sdk/go/`. The TS layout is policy- and connector-or
 
 ### Web SDK (`infra/sdk/web/`)
 
-Browser-only: DPoP session (`TrustZoneWebAuth`), `webTransport` / `webClient` factories bound to generated `applications/<app>/web` clients.
+Browser-only: DPoP session (`BrowserAuth`), `webTransport` / `webClient` factories bound to generated `applications/<app>/web` clients.
 
 ### Outbound clients (shared, not per-app)
 

@@ -7,7 +7,7 @@ import {
   CLIENT_INSTANCE_HEADER,
   registerChatInstance,
   type ChatInstance,
-  type TrustZoneWebAuth,
+  type BrowserAuth,
 } from "../../../sdk/web/src";
 
 import { DataPanel } from "./DataPanel";
@@ -28,7 +28,7 @@ const costLabel = (m: ModelInfo): string =>
     ? `$${(m.costIn * 1e6).toFixed(2)}/M in · $${(m.costOut * 1e6).toFixed(2)}/M out`
     : "included";
 
-export function App({ auth, signedIn: initialSignedIn }: { auth: TrustZoneWebAuth; signedIn: boolean }) {
+export function App({ auth, signedIn: initialSignedIn }: { auth: BrowserAuth; signedIn: boolean }) {
   const [signedIn, setSignedIn] = useState(initialSignedIn);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [total, setTotal] = useState(0);

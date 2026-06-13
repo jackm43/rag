@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { TrustZoneWebAuth } from "../../../sdk/web/src";
+import type { BrowserAuth } from "../../../sdk/web/src";
 
 // Deploy view: lists worker scripts via the deploy application (chained
 // through the BFF). The deploy service uploads prebuilt bundles
@@ -10,7 +10,7 @@ import type { TrustZoneWebAuth } from "../../../sdk/web/src";
 
 type WorkerInfo = { name?: string; modifiedOn?: string };
 
-export function Deploy({ auth, signedIn }: { auth: TrustZoneWebAuth; signedIn: boolean }) {
+export function Deploy({ auth, signedIn }: { auth: BrowserAuth; signedIn: boolean }) {
   const [workers, setWorkers] = useState<WorkerInfo[]>([]);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);

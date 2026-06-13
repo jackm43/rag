@@ -5,7 +5,7 @@ import {
   gatewayClient,
   registerChatInstance,
   type ChatInstance,
-  type TrustZoneWebAuth,
+  type BrowserAuth,
 } from "../../../sdk/web/src";
 
 // Live trace flow: a server-streaming RPC (idp.v1.TraceService/StreamTraces)
@@ -60,7 +60,7 @@ const spanDepth = (span: LiveSpan, byId: Map<string, LiveSpan>): number => {
   return depth;
 };
 
-export function LiveTraces({ auth, signedIn }: { auth: TrustZoneWebAuth; signedIn: boolean }) {
+export function LiveTraces({ auth, signedIn }: { auth: BrowserAuth; signedIn: boolean }) {
   const [running, setRunning] = useState(false);
   const [traces, setTraces] = useState<LiveTrace[]>([]);
   const [selected, setSelected] = useState<string | null>(null);

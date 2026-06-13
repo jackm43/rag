@@ -40,14 +40,14 @@ export type DiscoveryConfig = {
   applications?: DiscoveryApplication[];
 };
 
-export type TrustZoneWebAuthOptions = {
+export type BrowserAuthOptions = {
   // Hostnames routed onto this page's origin (zone worker routes), so calls
   // to them are same-origin and need no CORS. Keys are application names or
   // "gateway"; the rewrite keeps the path and swaps the origin.
   sameOrigin?: string[];
 };
 
-export type BootstrapOptions = TrustZoneWebAuthOptions & {
+export type BootstrapOptions = BrowserAuthOptions & {
   // Path the OIDC provider redirects back to. Defaults to "/callback".
   callbackPath?: string;
   // When false, a missing session resolves to "unauthenticated" instead of
@@ -56,7 +56,7 @@ export type BootstrapOptions = TrustZoneWebAuthOptions & {
 };
 
 export type BootstrapResult = {
-  auth: TrustZoneWebAuth;
+  auth: BrowserAuth;
   status: EnsureResult;
 };
 
@@ -218,7 +218,7 @@ const sessionTokensFromOAuth = (response: OAuthTokenResponse): SessionTokens => 
   expiresIn: response.expires_in,
 });
 
-export class TrustZoneWebAuth {
+export class BrowserAuth {
   private readonly discoveryUrl: string;
   private readonly sameOrigin: string[];
   private config: DiscoveryConfig | null = null;
@@ -228,7 +228,7 @@ export class TrustZoneWebAuth {
   // Reason string once a session existed but is gone.
   private needsLogin: string | null = null;
 
-  constructor(discoveryUrl: string, options: TrustZoneWebAuthOptions = {}) {
+  constructor(discoveryUrl: string, options: BrowserAuthOptions = {}) {
     this.discoveryUrl = discoveryUrl;
     this.sameOrigin = options.sameOrigin ?? [];
   }
@@ -240,7 +240,7 @@ export class TrustZoneWebAuth {
   // rendering); otherwise render using the returned auth instance.
   static async bootstrap(discoveryUrl: string, options: BootstrapOptions = {}): Promise<BootstrapResult> {
     const { callbackPath = "/callback", interactive = true, ...authOptions } = options;
-    const auth = new TrustZoneWebAuth(discoveryUrl, authOptions);
+    const auth = new BrowserAuth(discoveryUrl, authOptions);
     await auth.init();
     if (location.pathname === callbackPath) {
       await auth.handleRedirect();

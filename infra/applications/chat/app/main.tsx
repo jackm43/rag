@@ -1,11 +1,11 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { TrustZoneWebAuth } from "../../../sdk/web/src";
+import { BrowserAuth } from "../../../sdk/web/src";
 
 import { App } from "./App";
 
-const mount = (auth: TrustZoneWebAuth, signedIn: boolean) => {
+const mount = (auth: BrowserAuth, signedIn: boolean) => {
   const root = createRoot(document.getElementById("root")!);
   root.render(
     <StrictMode>
@@ -20,7 +20,7 @@ const mount = (auth: TrustZoneWebAuth, signedIn: boolean) => {
   // host, so no CORS is involved. One call handles discovery, the OIDC
   // callback, and silent refresh / login redirect.
   try {
-    const { auth, status } = await TrustZoneWebAuth.bootstrap(`${location.origin}/api/discovery`, {
+    const { auth, status } = await BrowserAuth.bootstrap(`${location.origin}/api/discovery`, {
       sameOrigin: ["gateway", "aigateway", "ragbot"],
     });
     if (status === "login_redirect") {

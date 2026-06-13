@@ -52,7 +52,7 @@ tracing.
    deploy, cloudflare, discovery, and aigateway workers now use it.
 
 5. Web auth is conceptually strong but not packaged as an extension model.
-   `TrustZoneWebAuth` owns PKCE, IndexedDB DPoP keys, refresh, and transport
+   `BrowserAuth` owns PKCE, IndexedDB DPoP keys, refresh, and transport
    auth, which is good. It should expose composable route/page guards and
    explicit DPoP client extension points so React apps do not hand-roll auth
    state transitions.
@@ -122,7 +122,7 @@ tracing.
 - BFF entrypoints use one SDK wrapper:
   `createWebBffWorker({ app, targets })`.
 - Browser apps use one auth object and generated clients:
-  `const auth = await TrustZoneWebAuth.bootstrap(...)`;
+  `const auth = await BrowserAuth.bootstrap(...)`;
   `const client = ragbot.client(auth, ConfigService)`.
 - Pages/components use SDK route guards instead of ad hoc checks:
   `auth.requireSession()` for loaders and `AuthBoundary` for React.

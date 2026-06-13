@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { discoveryServiceClient } from "../../discovery/web";
-import type { TrustZoneWebAuth } from "../../../sdk/web/src";
+import type { BrowserAuth } from "../../../sdk/web/src";
 
 import { Applications } from "./Applications";
 import { Config } from "./Config";
@@ -21,7 +21,7 @@ const VIEWS: { id: View; label: string }[] = [
   { id: "identity", label: "Identity" },
 ];
 
-export function App({ auth, signedIn: initialSignedIn }: { auth: TrustZoneWebAuth; signedIn: boolean }) {
+export function App({ auth, signedIn: initialSignedIn }: { auth: BrowserAuth; signedIn: boolean }) {
   const [signedIn, setSignedIn] = useState(initialSignedIn);
   const [view, setView] = useState<View>("applications");
 

@@ -47,7 +47,7 @@ old client contracts are deleted when a stronger standard surface exists.
 
 ## Phase 4: Web Auth Package
 
-- Add `TrustZoneWebAuth.bootstrap()` to fetch discovery, initialize DPoP, and
+- Add `BrowserAuth.bootstrap()` to fetch discovery, initialize DPoP, and
   recover/refresh sessions in one call.
 - Add React-neutral route guards:
   `requireSession`, `optionalSession`, and `handleCallback`.
@@ -171,7 +171,7 @@ application authors write only business logic.
   `ragbot.client(auth, ConfigService)`.
 - Generate a `ragbot` web client and replace the raw `auth.call` Connect paths
   in `infra/applications/chat/app/DataPanel.tsx`.
-- Add `TrustZoneWebAuth.bootstrap()` one-call init plus route guards and React
+- Add `BrowserAuth.bootstrap()` one-call init plus route guards and React
   bindings (completes Phase 4).
 - Introduce npm workspace package names to replace deep `../../../../sdk/ts/src`
   imports; consolidate the duplicate `proxyTarget`/`proxyTargetFor`; and
@@ -180,7 +180,7 @@ application authors write only business logic.
 Landed in this pass: the SDK `platformAuthenticator(env, audience)` helper now
 owns all worker auth wiring (issuer/JWKS/STS/session-chain), adopted by the
 ragbot, aigateway, deploy, cloudflare, and discovery workers;
-`TrustZoneWebAuth.bootstrap()` collapses the browser init/callback/refresh
+`BrowserAuth.bootstrap()` collapses the browser init/callback/refresh
 sequence (adopted by chat and console); and the dead generated `proxyTarget`
 duplication was removed in favour of the SDK `proxyTargetFor`.
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { TrustZoneWebAuth } from "../../../sdk/web/src";
+import type { BrowserAuth } from "../../../sdk/web/src";
 
 // Identity view: who the gateway thinks this session is (Introspect on the
 // session token) plus the local session state held by the web auth SDK.
@@ -17,7 +17,7 @@ type Introspection = {
   scopes?: string[];
 };
 
-export function Identity({ auth, signedIn }: { auth: TrustZoneWebAuth; signedIn: boolean }) {
+export function Identity({ auth, signedIn }: { auth: BrowserAuth; signedIn: boolean }) {
   const [intro, setIntro] = useState<Introspection | null>(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);

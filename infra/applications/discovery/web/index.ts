@@ -2,12 +2,12 @@
 import type { Client } from "@connectrpc/connect";
 
 import { DiscoveryService } from "../server/discovery/v1/discovery_service_pb";
-import { webClient, type TrustZoneWebAuth, type WebClientOptions } from "../../../sdk/web/src";
+import { webClient, type BrowserAuth, type WebClientOptions } from "../../../sdk/web/src";
 
 export const APPLICATION = "discovery";
 
 export const discoveryServiceClient = (
-  auth: TrustZoneWebAuth,
+  auth: BrowserAuth,
   options?: WebClientOptions,
 ): Client<typeof DiscoveryService> => webClient(auth, APPLICATION, DiscoveryService, options);
 

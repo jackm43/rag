@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { TrustZoneWebAuth } from "../../../sdk/web/src";
+import type { BrowserAuth } from "../../../sdk/web/src";
 
 // Read-only data + platform APIs callable from the page. Connect entries go
 // same-origin through the chat BFF (session token + DPoP proof; the worker
@@ -77,7 +77,7 @@ export function DataPanel({
   signedIn,
   wide = false,
 }: {
-  auth: TrustZoneWebAuth;
+  auth: BrowserAuth;
   signedIn: boolean;
   wide?: boolean;
 }) {

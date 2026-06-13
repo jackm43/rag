@@ -5,7 +5,7 @@ import {
   gatewayClient,
   registerChatInstance,
   type ChatInstance,
-  type TrustZoneWebAuth,
+  type BrowserAuth,
 } from "../../../sdk/web/src";
 
 // Trace views over the gateway's TraceService: a recent-trace list with
@@ -143,7 +143,7 @@ function Waterfall({ spans }: { spans: SpanRow[] }) {
   );
 }
 
-export function Traces({ auth, signedIn }: { auth: TrustZoneWebAuth; signedIn: boolean }) {
+export function Traces({ auth, signedIn }: { auth: BrowserAuth; signedIn: boolean }) {
   const [summaries, setSummaries] = useState<TraceSummary[]>([]);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [detailSpans, setDetailSpans] = useState<SpanRow[]>([]);

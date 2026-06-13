@@ -422,7 +422,7 @@ AI Gateway application (Module 14b). It implements this module directly:
   `applications.yaml`; `platy dev generate` then emits
   `infra/applications/<app>/web/index.ts`, a typed factory per Connect
   service (e.g. `createChatServiceClient(auth)`) bound through the SDK
-  factory. Pages stay dumb clients: construct `TrustZoneWebAuth`, call
+  factory. Pages stay dumb clients: construct `BrowserAuth`, call
   `ensureAuthenticated()`, build the generated client, render data.
 - `infra/applications/chat/app/App.tsx` + `main.tsx` are a React UI on exactly that
   pattern, streaming responses token by token over the Connect protocol
@@ -555,7 +555,7 @@ WebAuthn-based session binding is the planned upgrade (Module 15).
 ### Frontend auth SDK interface
 
 ```
-interface TrustZoneWebAuth {
+interface BrowserAuth {
     // One-time setup; reads discovery, opens or resumes a session.
     init(opts: { discoveryUrl: string }): Promise<SessionState>
 
