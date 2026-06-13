@@ -22,6 +22,8 @@
 ## Delegations
 
 - `aigateway` -> all registered scopes
+- `idp`
+  - `idp/DiscoveryService.Discover`
 - `ragbot`
   - `ragbot/LeaderboardService.ListTotals`
 

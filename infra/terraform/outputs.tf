@@ -22,3 +22,10 @@ output "queues" {
     ai_jobs_dlq = cloudflare_queue.ai_jobs_dlq.queue_id
   }
 }
+
+output "secrets_store" {
+  value = {
+    id   = cloudflare_secrets_store.platy.id
+    name = cloudflare_secrets_store.platy.name
+  }
+}

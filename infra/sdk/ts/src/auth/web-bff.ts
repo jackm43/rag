@@ -1,6 +1,6 @@
 import type { ConnectorConfig } from "../client/connector";
 import type { Identity } from "../identity";
-import { serviceCredentialFromEnv } from "../oauth2/credential";
+import { loadServiceCredentialFromEnv, type ServiceCredential } from "../oauth2/credential";
 import { annotateSpan, gatewayTraceExporter, traceRpc, tracerFromEnv } from "../otel";
 import { logger } from "../logger";
 import { sessionProxy, verifySessionRequest, type ProxyTarget } from "./proxy";
@@ -48,7 +48,7 @@ export type WebBffEnv = {
   AUTH_GATEWAY_URL: string;
   AUTH_GATEWAY?: Fetcher;
   SERVICE_CLIENT_ID?: string;
-  SERVICE_CLIENT_SECRET?: string;
+  SERVICE_CLIENT_SECRET?: string | { get(): Promise<string> };
   OTEL_SERVICE_NAME?: string;
   OTEL_EXPORTER_OTLP_ENDPOINT?: string;
   OTEL_EXPORTER_OTLP_HEADERS?: string;
@@ -96,7 +96,7 @@ const registerInstance = async (
   config: {
     gatewayUrl: string;
     verify?: { jwksUrl: string; gatewayFetch?: typeof fetch };
-    credential: NonNullable<ReturnType<typeof serviceCredentialFromEnv>>;
+    credential: ServiceCredential;
     gatewayFetch?: typeof fetch;
   },
   request: Request,
@@ -184,77 +184,81 @@ export const createWebBffWorker = (config: WebBffConfig) => {
   ];
 
   let cached: { env: WebBffEnv; handler: Handler } | null = null;
+  let credentialPromise: Promise<ServiceCredential | null> | null = null;
 
-  const proxyHandler = (env: WebBffEnv & Record<string, unknown>): Handler => {
+  const unavailableHandler = (): Handler => async (request) =>
+    proxyPrefixes.some((prefix) => new URL(request.url).pathname.startsWith(prefix))
+      ? new Response(
+        JSON.stringify({ code: "unavailable", message: "service credential not configured" }),
+        { status: 503, headers: { "content-type": "application/json" } },
+      )
+      : null;
+
+  const proxyHandler = async (env: WebBffEnv & Record<string, unknown>): Promise<Handler> => {
     if (cached?.env === env) {
       return cached.handler;
     }
-    const credential = serviceCredentialFromEnv(env);
-    const issuer = (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, "");
-    let handler: Handler;
+    credentialPromise ??= loadServiceCredentialFromEnv(env);
+    const credential = await credentialPromise;
     if (!credential) {
-      handler = async (request) =>
-        proxyPrefixes.some((prefix) => new URL(request.url).pathname.startsWith(prefix))
-          ? new Response(
-            JSON.stringify({ code: "unavailable", message: "service credential not configured" }),
-            { status: 503, headers: { "content-type": "application/json" } },
-          )
-          : null;
-    } else {
-      const tracer = tracerFromEnv(env, config.app, {
-        exporter: env.AUTH_GATEWAY
-          ? gatewayTraceExporter({
-            gatewayUrl: issuer,
-            credential,
-            fetch: bindingFetch(env.AUTH_GATEWAY),
-          })
-          : undefined,
-      });
-      const verify = {
-        jwksUrl: `${issuer}/.well-known/jwks.json`,
-        gatewayFetch: bindingFetch(env.AUTH_GATEWAY),
-      };
-      const targets = config.targets.flatMap((target) => {
-        const endpoint = readEnv(env, target.endpoint);
-        if (!endpoint) {
-          return [];
-        }
-        return [
-          proxyTargetFor(target.audience, {
-            endpoint,
-            scopes: target.scopes,
-            fetch: bindingFetch(readBinding(env, target.binding)),
-          }),
-        ];
-      });
-      const proxy = sessionProxy({
-        gatewayUrl: issuer,
-        credential,
-        verify,
-        gatewayFetch: bindingFetch(env.AUTH_GATEWAY),
-        targets,
-      });
-      const registerClient = config.registerClient;
-      handler = traceRpc(tracer, async (request) => {
-        const url = new URL(request.url);
-        if (registerClient && url.pathname === registerPath && request.method === "POST") {
-          return registerInstance(config.app, defaultKind, registerClient, {
-            gatewayUrl: issuer,
-            verify,
-            credential,
-            gatewayFetch: bindingFetch(env.AUTH_GATEWAY),
-          }, request);
-        }
-        return proxy(request);
-      });
+      const handler = unavailableHandler();
+      cached = { env, handler };
+      return handler;
     }
+    const issuer = (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, "");
+    const tracer = tracerFromEnv(env, config.app, {
+      exporter: env.AUTH_GATEWAY
+        ? gatewayTraceExporter({
+          gatewayUrl: issuer,
+          credential,
+          fetch: bindingFetch(env.AUTH_GATEWAY),
+        })
+        : undefined,
+    });
+    const verify = {
+      jwksUrl: `${issuer}/.well-known/jwks.json`,
+      gatewayFetch: bindingFetch(env.AUTH_GATEWAY),
+    };
+    const targets = config.targets.flatMap((target) => {
+      const endpoint = readEnv(env, target.endpoint);
+      if (!endpoint) {
+        return [];
+      }
+      return [
+        proxyTargetFor(target.audience, {
+          endpoint,
+          scopes: target.scopes,
+          fetch: bindingFetch(readBinding(env, target.binding)),
+        }),
+      ];
+    });
+    const proxy = sessionProxy({
+      gatewayUrl: issuer,
+      credential,
+      verify,
+      gatewayFetch: bindingFetch(env.AUTH_GATEWAY),
+      targets,
+    });
+    const registerClient = config.registerClient;
+    const handler = traceRpc(tracer, async (request) => {
+      const url = new URL(request.url);
+      if (registerClient && url.pathname === registerPath && request.method === "POST") {
+        return registerInstance(config.app, defaultKind, registerClient, {
+          gatewayUrl: issuer,
+          verify,
+          credential,
+          gatewayFetch: bindingFetch(env.AUTH_GATEWAY),
+        }, request);
+      }
+      return proxy(request);
+    });
     cached = { env, handler };
     return handler;
   };
 
   return {
     async fetch(request: Request, env: WebBffEnv & Record<string, unknown>, ctx: ExecutionContext): Promise<Response> {
-      const proxied = await proxyHandler(env)(request, ctx);
+      const proxied = await (await proxyHandler(env))(request, ctx);
       if (proxied) {
         return proxied;
       }

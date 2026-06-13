@@ -45,6 +45,9 @@ func (s *Service) RegisterProvider(provider Provider) {
 }
 
 func (s *Service) Store(ctx context.Context, name, body, provider string) (string, error) {
+	if provider == "" {
+		provider = OnePasswordProvider
+	}
 	selected, err := s.provider(provider)
 	if err != nil {
 		return "", err
@@ -53,6 +56,12 @@ func (s *Service) Store(ctx context.Context, name, body, provider string) (strin
 }
 
 func (s *Service) Resolve(ctx context.Context, reference, provider string) (string, error) {
+	if provider == "" {
+		provider = ProviderForReference(reference)
+	}
+	if provider == "" {
+		provider = OnePasswordProvider
+	}
 	selected, err := s.provider(provider)
 	if err != nil {
 		return "", err

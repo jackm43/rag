@@ -67,7 +67,7 @@ test("sender-constrained identities require a matching proof", async () => {
     kind: "user",
     subject: "user-1",
     email: "user@example.com",
-    scopes: ["*"],
+    scopes: ["internal"],
     actorChain: [],
     cnfJkt: await dpopThumbprint(key),
   };

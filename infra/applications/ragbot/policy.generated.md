@@ -44,6 +44,7 @@
 
 ## Delegations
 
+- `ragbot` -> all registered scopes
 - `idp` -> all registered scopes
 - `deploy`
   - `deploy/DeployService.ListWorkers`

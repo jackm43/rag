@@ -15,13 +15,17 @@ import {
   accessOidcProvider,
   anyAuthenticator,
   bearerToken,
+  directExchangeGrants,
   hasScope,
+  isCommunitySession,
   logger,
   oidcAuthenticator,
   protect,
   requireIdentity,
   requireSenderConstraint,
   scopeMatches,
+  sessionScopeForTier,
+  sessionTierFromScope,
   stsAuthenticator,
   TOKEN_TYPE_ACCESS_TOKEN,
   TOKEN_TYPE_JWT,
@@ -62,7 +66,8 @@ import {
 import { consumeRefreshToken, createSession, type Session } from "./sessions";
 import { exchangeProviderAccessToken } from "./provider-oauth";
 import { getTrace, listTraces, streamSpans } from "./traces";
-import { allowedEmails, type Env } from "./types";
+import { isInternalEmail, type Env } from "./types";
+import { DISCORD_CODE_PREFIX, discordAuthorizeUrl, redeemDiscordCode } from "./discord-oauth";
 
 const TOKEN_LIFETIME_SECONDS = 300;
 
@@ -128,9 +133,26 @@ const exchangeAuthorizationCode = async (
   return body.access_token;
 };
 
-export const isAllowedUser = (env: Env, identity: Identity): boolean =>
-  identity.kind !== "user" ||
-  (identity.email !== null && allowedEmails(env).includes(identity.email.toLowerCase()));
+export const isAllowedUser = (env: Env, identity: Identity): boolean => {
+  if (identity.kind !== "user") {
+    return true;
+  }
+  const tier = sessionTierFromScope(identity.scopes);
+  if (tier === "community") {
+    return true;
+  }
+  return isInternalEmail(env, identity.email);
+};
+
+export const allowGatewayPrincipal = (env: Env, identity: Identity): boolean => {
+  if (!isAllowedUser(env, identity)) {
+    return false;
+  }
+  if (isCommunitySession(identity) && identity.cnfJkt) {
+    return false;
+  }
+  return true;
+};
 
 const localGatewayStsAuthenticator = (env: Env): Authenticator => async (headers, request) => {
   const token = bearerToken(headers);
@@ -367,10 +389,8 @@ export type GatewaySessionTokens = {
   scope: string;
 };
 
-// User sessions are full-trust principals: the granted scope is the platform
-// wildcard. Keeping it here (rather than hardcoded at the HTTP layer) means the
-// token response always reports the scope the session token actually carries.
-export const SESSION_SCOPE = "*";
+// User sessions carry a trust-tier scope (internal or community), not a
+// platform wildcard. Tier rules govern token exchange and gateway RPC access.
 
 const resolveSubject = async (
   env: Env,
@@ -471,7 +491,7 @@ const sessionAccessToken = async (env: Env, session: Session): Promise<string> =
     iss: issuer(env),
     sub: session.subject,
     aud: "idp",
-    scope: SESSION_SCOPE,
+    scope: sessionScopeForTier(session.tier),
     kind: "user",
     sid: session.id,
     cnf: { jkt: session.jkt },
@@ -495,7 +515,7 @@ const sessionTokensMessage = async (
   refreshToken,
   refreshExpiresIn: BigInt(Math.max(session.refreshExpiresAt - Math.floor(Date.now() / 1000), 0)),
   tokenType: "DPoP",
-  scope: SESSION_SCOPE,
+  scope: sessionScopeForTier(session.tier),
 });
 
 export const createGatewaySession = async (
@@ -503,6 +523,21 @@ export const createGatewaySession = async (
   request: GatewaySessionGrantInput,
   dpopJkt: string,
 ): Promise<GatewaySessionTokens> => {
+  if (request.authorizationCode?.startsWith(DISCORD_CODE_PREFIX)) {
+    const redeemed = await redeemDiscordCode(env, {
+      authorizationCode: request.authorizationCode,
+      codeVerifier: request.codeVerifier ?? "",
+      redirectUri: request.redirectUri ?? "",
+    });
+    const identity: Identity = {
+      kind: "user",
+      subject: redeemed.subject,
+      email: null,
+      scopes: ["community"],
+      actorChain: [],
+    };
+    return createCommunityGatewaySession(env, identity, dpopJkt);
+  }
   let subjectToken = request.subjectToken ?? "";
   if (request.authorizationCode) {
     // Server-side PKCE code exchange for browser clients.
@@ -518,12 +553,23 @@ export const createGatewaySession = async (
   if (!identity) {
     throw new ConnectError("invalid subject token", Code.Unauthenticated);
   }
-  if (!isAllowedUser(env, identity)) {
+  if (!isInternalEmail(env, identity.email)) {
     throw new ConnectError("forbidden", Code.PermissionDenied);
   }
-  const { session, refreshToken } = await createSession(env, identity, dpopJkt);
+  const { session, refreshToken } = await createSession(env, identity, dpopJkt, "internal");
   await audit(env, identity.email ?? identity.subject, "session_created", session.id);
   logger.info("session_created", { subject: identity.subject, session: session.id });
+  return sessionTokensMessage(env, session, refreshToken);
+};
+
+export const createCommunityGatewaySession = async (
+  env: Env,
+  identity: Identity,
+  dpopJkt: string,
+): Promise<GatewaySessionTokens> => {
+  const { session, refreshToken } = await createSession(env, identity, dpopJkt, "community");
+  await audit(env, identity.email ?? identity.subject, "session_created", session.id);
+  logger.info("session_created", { subject: identity.subject, session: session.id, tier: "community" });
   return sessionTokensMessage(env, session, refreshToken);
 };
 
@@ -668,7 +714,14 @@ export const exchangeGatewayToken = async (
     const granted = delegationGrants(delegation);
     scopes = validateScopes(application.audience, request.scopes, granted, granted);
   } else {
-    scopes = validateScopes(application.audience, request.scopes, subject.scopes, [
+    if (isCommunitySession(subject)) {
+      throw new ConnectError("community sessions require an actor token", Code.PermissionDenied);
+    }
+    const grants = directExchangeGrants(subject, application.audience);
+    if (!grants) {
+      throw new ConnectError("community sessions require an actor token", Code.PermissionDenied);
+    }
+    scopes = validateScopes(application.audience, request.scopes, grants, [
       `${application.audience}/*`,
     ]);
   }
@@ -787,7 +840,7 @@ export const registerServices = (router: ConnectRouter, env: Env) => {
   const authenticate = gatewayAuthenticator(env);
   const policy = {
     authenticate,
-    allow: (identity: Identity) => isAllowedUser(env, identity),
+    allow: (identity: Identity) => allowGatewayPrincipal(env, identity),
   };
 
   router.service(IdentityService, {
@@ -1182,6 +1235,7 @@ export const registerServices = (router: ConnectRouter, env: Env) => {
 
 export const buildBootstrapDiscovery = (env: Env) => {
   const oidc = oidcProvider(env);
+  const base = issuer(env);
   return {
     oidc: {
       issuer: oidc.issuer,
@@ -1190,6 +1244,16 @@ export const buildBootstrapDiscovery = (env: Env) => {
       tokenEndpoint: oidc.tokenEndpoint,
       jwksEndpoint: oidc.jwksEndpoint,
     },
+    auth_providers: [
+      {
+        id: "access",
+        authorization_endpoint: oidc.authorizationEndpoint,
+      },
+      {
+        id: "discord",
+        authorization_endpoint: discordAuthorizeUrl(env),
+      },
+    ],
     endpoints: gatewayEndpoints(env),
   };
 };
@@ -1211,7 +1275,7 @@ export const buildDiscovery = async (env: Env) => {
 
 export const buildAuthorizationServerMetadata = async (env: Env) => {
   const discovered = await buildDiscovery(env);
-  const scopes = new Set<string>(["openid", "email", "profile", "*"]);
+  const scopes = new Set<string>(["openid", "email", "profile", "internal", "community"]);
   for (const app of discovered.applications) {
     for (const resource of app.resources) {
       for (const method of resource.methods) {

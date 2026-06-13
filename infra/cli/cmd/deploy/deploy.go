@@ -169,17 +169,23 @@ func deployApplication(
 	}
 
 	if needsSecrets {
-		if err := pushWorkerSecrets(root, name, app, env, out, resolved); err != nil {
-			return needsDeploy, false, err
-		}
-		if name == "idp" {
-			if err := cmdapp.PushProviderOAuthClients(root, env, out, providerOAuth); err != nil {
-				return needsDeploy, false, fmt.Errorf("push provider oauth secrets: %w", err)
-			}
-		}
-		if !app.Internal {
-			if err := pushServiceCredential(ctx, root, name, app, env, out); err != nil {
+		if app.UsesSecretsStore() {
+			if err := pushSecretsStoreBindings(ctx, root, name, app, env, out, resolved, providerOAuth, clientID); err != nil {
 				return needsDeploy, false, err
+			}
+		} else {
+			if err := pushWorkerSecrets(root, name, app, env, out, resolved); err != nil {
+				return needsDeploy, false, err
+			}
+			if name == "idp" {
+				if err := cmdapp.PushProviderOAuthClients(root, env, out, providerOAuth); err != nil {
+					return needsDeploy, false, fmt.Errorf("push provider oauth secrets: %w", err)
+				}
+			}
+			if !app.Internal {
+				if err := pushServiceCredential(ctx, root, name, app, env, out); err != nil {
+					return needsDeploy, false, err
+				}
 			}
 		}
 		if err := state.recordSecrets(name, secretsHash); err != nil {

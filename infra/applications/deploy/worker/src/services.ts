@@ -19,7 +19,7 @@ export const registerDeployServices = (router: ConnectRouter, env: Env) => {
             script: request.scriptName,
             actor: identity.email ?? identity.subject,
           });
-          const result = await targets(env, identity).cloudflare.workerService().deployWorker({
+          const result = await (await targets(env, identity).cloudflare.workerService()).deployWorker({
             scriptName: request.scriptName,
             mainModule: request.mainModule,
             modules: request.modules.map((module) => ({
@@ -39,7 +39,7 @@ export const registerDeployServices = (router: ConnectRouter, env: Env) => {
         },
         listWorkers: async (_request, context) => {
           const identity = requireIdentity(context);
-          const result = await targets(env, identity).cloudflare.workerService().listWorkers({});
+          const result = await (await targets(env, identity).cloudflare.workerService()).listWorkers({});
           return {
             workers: result.workers.map((worker) => ({
               name: worker.name,

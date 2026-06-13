@@ -1,8 +1,6 @@
-import type { Env } from "./types";
+import { resolveSecret } from "@platy/sdk";
 
-// Outbound integration with the Cloudflare AI Gateway. The authorization token
-// for the authenticated gateway is resolved from the worker secret and injected
-// on the outbound fetch; nothing else in the platform holds it.
+import type { Env } from "./types";
 
 export type ChatMessage = { role: string; content: string };
 
@@ -71,8 +69,12 @@ export const listCatalogModels = async (env: Env): Promise<CatalogModel[]> => {
   if (catalogCache && Date.now() - catalogCache.fetchedAt < CATALOG_TTL_MS) {
     return catalogCache.models;
   }
+  const token = await resolveSecret(env.CF_AIG_TOKEN);
+  if (!token) {
+    throw new GatewayError("CF_AIG_TOKEN secret is not configured", 500);
+  }
   const response = await fetch(`${compatBase(env)}/models`, {
-    headers: { "cf-aig-authorization": `Bearer ${env.CF_AIG_TOKEN}` },
+    headers: { "cf-aig-authorization": `Bearer ${token}` },
   });
   if (!response.ok) {
     throw new GatewayError(`model catalog returned ${response.status}`, response.status);
@@ -116,14 +118,15 @@ const requestBody = (request: CompletionRequest): Record<string, unknown> => {
 // account for paid providers, and `workers-ai/*` models stay on Workers AI
 // postpaid billing.
 const callGateway = async (env: Env, request: CompletionRequest): Promise<Response> => {
-  if (!env.CF_AIG_TOKEN) {
+  const token = await resolveSecret(env.CF_AIG_TOKEN);
+  if (!token) {
     throw new GatewayError("CF_AIG_TOKEN secret is not configured", 500);
   }
   const response = await fetch(compatUrl(env), {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "cf-aig-authorization": `Bearer ${env.CF_AIG_TOKEN}`,
+      "cf-aig-authorization": `Bearer ${token}`,
     },
     body: JSON.stringify(requestBody(request)),
   });
@@ -207,13 +210,13 @@ type StreamPayload = {
 export type StreamEvent =
   | { kind: "delta"; delta: string }
   | {
-      kind: "final";
-      content: string;
-      model: string;
-      finishReason: string;
-      usage: Usage;
-      toolCalls: ToolCall[];
-    };
+    kind: "final";
+    content: string;
+    model: string;
+    finishReason: string;
+    usage: Usage;
+    toolCalls: ToolCall[];
+  };
 
 // Parses the OpenAI-compatible SSE stream into deltas plus a synthesized final
 // event carrying the assembled content and any usage the provider reported.

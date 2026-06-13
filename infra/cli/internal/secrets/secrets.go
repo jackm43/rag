@@ -14,6 +14,11 @@ func Service() *sdksecrets.Service {
 	if err != nil {
 		output.Fail("secret service: %v", err)
 	}
+	root, err := sdkplatform.RepoRoot()
+	if err != nil {
+		output.Fail("repo root: %v", err)
+	}
+	registerCloudflareSecretsStore(service, root)
 	return service
 }
 
@@ -22,10 +27,11 @@ func ResolveValue(ctx context.Context, value string) string {
 	if value == "" {
 		return ""
 	}
-	if !strings.HasPrefix(value, "op://") {
+	providerName := sdksecrets.ProviderForReference(value)
+	if providerName == "" {
 		return value
 	}
-	resolved, err := Service().Resolve(ctx, value, sdksecrets.OnePasswordProvider)
+	resolved, err := Service().Resolve(ctx, value, providerName)
 	if err != nil {
 		output.Fail("resolve secret: %v", err)
 	}

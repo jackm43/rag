@@ -7,7 +7,7 @@ import type { Identity } from "../identity";
 import { errorMessage, logger } from "../logger";
 import { traceHeaders } from "../otel";
 import { ttlCache } from "./cache";
-import { chainExchange, serviceCredentialFromEnv, type ServiceCredential } from "../oauth2/exchange";
+import { chainExchange, loadServiceCredentialFromEnv, type ServiceCredential } from "../oauth2/exchange";
 import { createClient, type PlatformClient } from "./fetch";
 
 // A connector is the standard outbound integration with another trust zone
@@ -165,7 +165,7 @@ type ServiceBinding = {
 export type ServiceConnectionEnv = {
   AUTH_GATEWAY_URL?: string;
   SERVICE_CLIENT_ID?: string;
-  SERVICE_CLIENT_SECRET?: string;
+  SERVICE_CLIENT_SECRET?: string | { get(): Promise<string> };
   AUTH_GATEWAY?: ServiceBinding;
 };
 
@@ -181,11 +181,11 @@ export type ServiceConnectionTarget = {
 // own service credential and gateway binding from the environment plus the
 // target's endpoint/binding. Returns null until the credential and endpoint
 // are configured (first-deploy ordering), so callers can fail closed.
-export const serviceConnection = (
+export const serviceConnection = async (
   env: ServiceConnectionEnv,
   target: ServiceConnectionTarget,
-): Omit<ConnectorConfig, "application"> | null => {
-  const credential = serviceCredentialFromEnv(env);
+): Promise<Omit<ConnectorConfig, "application"> | null> => {
+  const credential = await loadServiceCredentialFromEnv(env);
   if (!credential || !target.endpoint) {
     return null;
   }

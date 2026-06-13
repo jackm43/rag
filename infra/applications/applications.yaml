@@ -5,13 +5,17 @@ applications:
     worker: auth-gateway
     config: infra/applications/idp/worker/wrangler.jsonc
     provider: cloudflare
-    secret_provider: 1password
+    secret_provider: cloudflare_secrets_store
+    secrets_delivery: secrets_store
     trust_zone: tier2
     internal: true
     # Generated worker-to-worker client: applications call gateway services
     # (client identity registration, tracing) through typed factories.
     service_client: true
     web_client: true
+    secrets:
+      DISCORD_APPLICATION_ID: op://mqrwrig24fxs3ssywmf3pxwqgy/ragbot/ApplicationId
+      DISCORD_CLIENT_SECRET: op://mqrwrig24fxs3ssywmf3pxwqgy/ragbot/add more/client_secret
     access:
       allowed_groups: [admins]
       allowed_idps: [github]
@@ -21,10 +25,12 @@ applications:
     worker: ragbot-worker
     config: infra/applications/ragbot/worker/wrangler.jsonc
     provider: cloudflare
-    secret_provider: 1password
+    secret_provider: cloudflare_secrets_store
+    secrets_delivery: secrets_store
     trust_zone: tier2
     service_client: true
     web_client: true
+    browser_auth_client: true
     secrets:
       DISCORD_APPLICATION_ID: op://mqrwrig24fxs3ssywmf3pxwqgy/ragbot/ApplicationId
       DISCORD_PUBLIC_KEY: op://mqrwrig24fxs3ssywmf3pxwqgy/ragbot/PublicKey
@@ -33,6 +39,10 @@ applications:
       allowed_groups: [admins]
       allowed_idps: [github]
     delegations:
+      # Direct browser calls use the SDK's session-chain pattern: ragbot
+      # validates the user's DPoP-bound gateway session at its edge, then
+      # chains it into a ragbot audience token while acting as itself.
+      - audience: ragbot
       - audience: idp
       - audience: deploy
         scopes:
@@ -52,7 +62,8 @@ applications:
     # The upstream AI Gateway only supports a static credential: the secret
     # below is delivered as a worker secret and injected on outbound calls.
     provider_auth: api_token
-    secret_provider: 1password
+    secret_provider: cloudflare_secrets_store
+    secrets_delivery: secrets_store
     trust_zone: tier2
     # aigateway is only ever a target of impersonation, never the actor, so it
     # needs no Cloudflare Access app of its own.
@@ -64,6 +75,9 @@ applications:
     # exactly the RPCs the tools use.
     delegations:
       - audience: aigateway
+      - audience: idp
+        scopes:
+          - idp/DiscoveryService.Discover
       - audience: ragbot
         scopes:
           - ragbot/LeaderboardService.ListTotals
@@ -83,8 +97,10 @@ applications:
     worker: chat
     config: infra/applications/chat/worker/wrangler.jsonc
     provider: cloudflare
-    secret_provider: 1password
+    secret_provider: cloudflare_secrets_store
+    secrets_delivery: secrets_store
     trust_zone: tier2
+    browser_auth_client: true
     # The web application is the registered principal for its pages: a
     # client-only application (no proto/RPC surface) whose worker holds the
     # service credential and runs the confidential flow on the browser's
@@ -111,14 +127,40 @@ applications:
     access:
       allowed_groups: [admins]
       allowed_idps: [github]
+  portal:
+    description: Community portal for Discord server members (data, models, chat)
+    endpoint: https://portal.jsmunro.me
+    worker: portal
+    config: infra/applications/portal/worker/wrangler.jsonc
+    provider: cloudflare
+    secret_provider: cloudflare_secrets_store
+    secrets_delivery: secrets_store
+    trust_zone: tier3
+    browser_auth_client: true
+    impersonatable: false
+    delegations:
+      - audience: aigateway
+      - audience: ragbot
+        scopes:
+          - ragbot/LeaderboardService.ListTotals
+          - ragbot/InteractionService.ListInteractions
+          - ragbot/ConfigService.ListConfig
+          - ragbot/ConfigService.GetConfig
+          - ragbot/ConfigService.UpdateConfig
+          - ragbot/GatewayControlService.GetHealth
+      - audience: idp
+        scopes:
+          - idp/ClientIdentityService.RegisterClientIdentity
   console:
     description: Platform management web console (confidential BFF) over registry, deploys, config, and traces
     endpoint: https://console.jsmunro.me
     worker: console
     config: infra/applications/console/worker/wrangler.jsonc
     provider: cloudflare
-    secret_provider: 1password
+    secret_provider: cloudflare_secrets_store
+    secrets_delivery: secrets_store
     trust_zone: tier2
+    browser_auth_client: true
     # Client-only application like chat: no proto/RPC surface of its own. The
     # worker holds the service credential and runs the confidential flow on
     # the browser's behalf - it validates the DPoP-bound session at its edge,
@@ -164,7 +206,8 @@ applications:
     worker: discovery
     config: infra/applications/discovery/worker/wrangler.jsonc
     provider: cloudflare
-    secret_provider: 1password
+    secret_provider: cloudflare_secrets_store
+    secrets_delivery: secrets_store
     trust_zone: tier2
     service_client: true
     web_client: true
@@ -183,7 +226,8 @@ applications:
     worker: deploy
     config: infra/applications/deploy/worker/wrangler.jsonc
     provider: cloudflare
-    secret_provider: 1password
+    secret_provider: cloudflare_secrets_store
+    secrets_delivery: secrets_store
     trust_zone: tier2
     service_client: true
     web_client: true
@@ -201,7 +245,8 @@ applications:
     worker: cloudflare
     config: infra/applications/cloudflare/worker/wrangler.jsonc
     provider: cloudflare
-    secret_provider: 1password
+    secret_provider: cloudflare_secrets_store
+    secrets_delivery: secrets_store
     impersonatable: false
     trust_zone: tier2
     service_client: true

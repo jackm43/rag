@@ -1100,6 +1100,157 @@ test("gateway durable object persists enabled state and schedules an alarm", asy
   }
 });
 
+test("gateway stale close handlers do not orphan the active socket", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  const storedValues = new Map<string, unknown>();
+  const sockets: FakeGatewayWebSocket[] = [];
+  class FakeGatewayWebSocket extends EventTarget {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+    readyState = FakeGatewayWebSocket.CONNECTING;
+    sent: string[] = [];
+    constructor(readonly url: string) {
+      super();
+      sockets.push(this);
+    }
+    send(payload: string) {
+      this.sent.push(payload);
+    }
+    close() {
+      this.readyState = FakeGatewayWebSocket.CLOSED;
+      this.dispatchEvent(new Event("close"));
+    }
+  }
+  globalThis.WebSocket = FakeGatewayWebSocket as never;
+
+  try {
+    const gateway = new DiscordGateway(
+      {
+        storage: {
+          get: async (key: string) => storedValues.get(key),
+          put: async (key: string, value: unknown) => {
+            storedValues.set(key, value);
+          },
+          delete: async (key: string) => {
+            storedValues.delete(key);
+          },
+          setAlarm: async () => { },
+        },
+      } as never,
+      createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" }),
+    );
+    await gateway.fetch(new Request("https://example.com/gateway/start", { method: "POST" }));
+    assert.equal(sockets.length, 1);
+
+    await gateway.fetch(new Request("https://example.com/gateway/start", { method: "POST" }));
+    assert.equal(sockets.length, 2);
+
+    sockets[0].close();
+    assert.equal(sockets[1].readyState, FakeGatewayWebSocket.CONNECTING);
+
+    const health = await gateway.fetch(new Request("https://example.com/gateway/health", { method: "GET" }));
+    const body = (await health.json()) as { connected: boolean };
+    assert.equal(body.connected, false);
+  } finally {
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
+
+test("gateway persists resume session state and resumes after restart", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  const storedValues = new Map<string, unknown>();
+  const createdSockets: Array<{ url: string; sent: string[] }> = [];
+
+  class FakeGatewayWebSocket extends EventTarget {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+    readyState = FakeGatewayWebSocket.OPEN;
+    sent: string[] = [];
+    constructor(readonly url: string) {
+      super();
+      createdSockets.push(this);
+      queueMicrotask(() => {
+        this.dispatchEvent(
+          new MessageEvent("message", {
+            data: JSON.stringify({ op: 10, d: { heartbeat_interval: 45_000 } }),
+          }),
+        );
+      });
+    }
+    send(payload: string) {
+      this.sent.push(payload);
+      const parsed = JSON.parse(payload) as { op: number };
+      if (parsed.op === 2 || parsed.op === 6) {
+        queueMicrotask(() => {
+          this.dispatchEvent(
+            new MessageEvent("message", {
+              data: JSON.stringify({
+                op: 0,
+                t: "READY",
+                s: 1,
+                d: {
+                  session_id: "session-123",
+                  resume_gateway_url: "wss://gateway-us-east1.discord.gg",
+                  user: { id: "bot-user-id" },
+                },
+              }),
+            }),
+          );
+        });
+      }
+    }
+    close() {
+      this.readyState = FakeGatewayWebSocket.CLOSED;
+    }
+  }
+  globalThis.WebSocket = FakeGatewayWebSocket as never;
+
+  const storage = {
+    get: async (key: string) => storedValues.get(key),
+    put: async (key: string, value: unknown) => {
+      storedValues.set(key, value);
+    },
+    delete: async (key: string) => {
+      storedValues.delete(key);
+    },
+    setAlarm: async () => { },
+  };
+  const state = {
+    blockConcurrencyWhile: async (callback: () => Promise<void>) => callback(),
+    storage,
+  };
+
+  const flushAsync = async () => {
+    for (let index = 0; index < 4; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  };
+
+  try {
+    const gateway = new DiscordGateway(state as never, createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" }));
+    await gateway.fetch(new Request("https://example.com/gateway/start", { method: "POST" }));
+    await flushAsync();
+
+    assert.equal(storedValues.get("gatewaySessionId"), "session-123");
+    assert.equal(storedValues.get("gatewayResumeUrl"), "wss://gateway-us-east1.discord.gg");
+    assert.equal(JSON.parse(createdSockets[0].sent[0]).op, 2);
+
+    createdSockets.length = 0;
+    const restarted = new DiscordGateway(state as never, createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" }));
+    await flushAsync();
+
+    assert.equal(createdSockets[0]?.url, "wss://gateway-us-east1.discord.gg");
+    assert.equal(JSON.parse(createdSockets[0].sent[0]).op, 6);
+    assert.equal(JSON.parse(createdSockets[0].sent[0]).d.session_id, "session-123");
+  } finally {
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
+
 test("queue handler builds a conversation from channel history and posts the reply", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];

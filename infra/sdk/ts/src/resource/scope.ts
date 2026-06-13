@@ -1,7 +1,14 @@
 import type { Identity } from "../identity";
+import { INTERNAL_SESSION_SCOPE } from "../session-tier";
 
 export const scopeMatches = (granted: string, required: string): boolean => {
-  if (granted === "*" || granted === required) {
+  if (granted === required) {
+    return true;
+  }
+  if (
+    (granted === INTERNAL_SESSION_SCOPE || granted === "*") &&
+    required.startsWith("idp/")
+  ) {
     return true;
   }
   if (granted.endsWith("/*")) {

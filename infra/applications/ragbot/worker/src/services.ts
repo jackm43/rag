@@ -17,6 +17,8 @@ import {
   type AuthPolicy,
 } from "@platy/sdk";
 import { CONFIG_DEFAULTS, deleteSetting, getSettings, isConfigKey, setSetting } from "./config";
+import { requireCommunityConfigKey } from "./community-config";
+import { ensureRagbotSchema } from "./schema";
 import { postChannelMessage } from "./discord";
 import { recordChannelChatInteraction, runChannelChat, streamChannelChat, type ChannelChatInput } from "./mention";
 import type { Env } from "./types";
@@ -74,6 +76,7 @@ export const registerRagbotServices = (router: ConnectRouter, env: Env) => {
         updateConfig: async (request, context) => {
           const identity = requireIdentity(context);
           const key = requireConfigKey(request.key);
+          requireCommunityConfigKey(identity, key);
           await setSetting(env, key, request.value);
           logger.info("config_updated", { key, actor: identity.email ?? identity.subject });
           return { entry: await configEntry(env, key) };
@@ -81,6 +84,7 @@ export const registerRagbotServices = (router: ConnectRouter, env: Env) => {
         resetConfig: async (request, context) => {
           const identity = requireIdentity(context);
           const key = requireConfigKey(request.key);
+          requireCommunityConfigKey(identity, key);
           await deleteSetting(env, key);
           logger.info("config_reset", { key, actor: identity.email ?? identity.subject });
           return { entry: await configEntry(env, key) };
@@ -126,9 +130,10 @@ export const registerRagbotServices = (router: ConnectRouter, env: Env) => {
       InteractionService,
       {
         listInteractions: async (request) => {
+          await ensureRagbotSchema(env);
           const limit = Math.min(Math.max(request.limit || 20, 1), 100);
           const result = await env.DB.prepare(
-            "SELECT id, kind, channel_id, requester_username, prompt, response_text, model, ai_duration_ms, total_duration_ms, status, error_message, created_at FROM rag_ai_interactions ORDER BY id DESC LIMIT ?",
+            "SELECT id, kind, channel_id, requester_username, prompt, response_text, model, ai_duration_ms, total_duration_ms, status, error_message, created_at, prompt_tokens, completion_tokens, total_tokens FROM rag_ai_interactions ORDER BY id DESC LIMIT ?",
           )
             .bind(limit)
             .run<Record<string, unknown>>();
@@ -146,6 +151,9 @@ export const registerRagbotServices = (router: ConnectRouter, env: Env) => {
               status: String(row.status ?? ""),
               errorMessage: String(row.error_message ?? ""),
               createdAt: String(row.created_at ?? ""),
+              promptTokens: BigInt((row.prompt_tokens as number) ?? 0),
+              completionTokens: BigInt((row.completion_tokens as number) ?? 0),
+              totalTokens: BigInt((row.total_tokens as number) ?? 0),
             })),
           };
         },

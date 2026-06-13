@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS idp_sessions (
   subject TEXT NOT NULL,
   email TEXT,
   jkt TEXT NOT NULL,
+  tier TEXT NOT NULL DEFAULT 'internal',
   refresh_hash TEXT NOT NULL,
   refresh_expires_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -105,3 +106,19 @@ CREATE TABLE IF NOT EXISTS idp_client_identities (
 
 CREATE INDEX IF NOT EXISTS idx_idp_client_identities_app ON idp_client_identities(application, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_idp_spans_created ON idp_spans(created_at);
+
+CREATE TABLE IF NOT EXISTS idp_discord_pending (
+  state TEXT PRIMARY KEY,
+  code_challenge TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS idp_oauth_codes (
+  code TEXT PRIMARY KEY,
+  subject TEXT NOT NULL,
+  username TEXT NOT NULL DEFAULT '',
+  code_challenge TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);

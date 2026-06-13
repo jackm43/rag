@@ -19,7 +19,7 @@ export {
   TOKEN_TYPE_SERVICE_CREDENTIAL,
   type StsVerifierConfig,
 } from "./sts";
-export { actorToken, serviceCredentialFromEnv, type ServiceCredential } from "./credential";
+export { actorToken, loadServiceCredentialFromEnv, serviceCredentialFromEnv, type ServiceCredential, type ServiceCredentialEnv } from "./credential";
 export {
   chainExchange,
   exchangeToken,

@@ -1,6 +1,6 @@
 import type { ConnectRouter } from "@connectrpc/connect";
 
-import { serviceCredentialFromEnv } from "./oauth2/credential";
+import { loadServiceCredentialFromEnv } from "./oauth2/credential";
 import { gatewayTraceExporter, traceRpc, tracerFromEnv, type Tracer } from "./otel";
 import { createRpcHandler, type RpcHandler } from "./resource/router";
 
@@ -12,7 +12,7 @@ export type PlatformRpcWorkerEnv = {
   AUTH_GATEWAY_URL?: string;
   AUTH_GATEWAY?: Fetcher;
   SERVICE_CLIENT_ID?: string;
-  SERVICE_CLIENT_SECRET?: string;
+  SERVICE_CLIENT_SECRET?: string | { get(): Promise<string> };
   OTEL_SERVICE_NAME?: string;
   OTEL_EXPORTER_OTLP_ENDPOINT?: string;
   OTEL_EXPORTER_OTLP_HEADERS?: string;
@@ -94,20 +94,22 @@ export const createPlatformRpcWorker = <Env extends PlatformRpcWorkerEnv>(
   config: PlatformRpcWorkerConfig<Env>,
 ) => {
   let cached: CachedHandler<Env> | null = null;
+  let credentialPromise: Promise<Awaited<ReturnType<typeof loadServiceCredentialFromEnv>> | null> | null = null;
 
-  const handler = (env: Env): CachedHandler<Env>["handler"] => {
+  const handler = async (env: Env): Promise<CachedHandler<Env>["handler"]> => {
     if (cached?.env === env) {
       return cached.handler;
     }
-    const credential = serviceCredentialFromEnv(env);
+    credentialPromise ??= loadServiceCredentialFromEnv(env);
+    const credential = await credentialPromise;
     const gatewayUrl = (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, "");
     const exporter =
       credential && env.AUTH_GATEWAY
         ? gatewayTraceExporter({
-            gatewayUrl,
-            credential,
-            fetch: bindingFetch(env.AUTH_GATEWAY),
-          })
+          gatewayUrl,
+          credential,
+          fetch: bindingFetch(env.AUTH_GATEWAY),
+        })
         : undefined;
     const tracer = tracerFromEnv(env, config.serviceName, { exporter });
     cached = {
@@ -147,7 +149,7 @@ export const createPlatformRpcWorker = <Env extends PlatformRpcWorkerEnv>(
         }
         return withHeaders(jsonResponse(metadata), cors);
       }
-      const rpc = await handler(env)(request, ctx);
+      const rpc = await (await handler(env))(request, ctx);
       if (rpc) {
         return withHeaders(rpc, cors);
       }

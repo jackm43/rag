@@ -15,6 +15,9 @@ message Interaction {
   string status = 10;
   string error_message = 11;
   string created_at = 12;
+  int64 prompt_tokens = 13;
+  int64 completion_tokens = 14;
+  int64 total_tokens = 15;
 }
 
 message ListInteractionsRequest {

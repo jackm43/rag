@@ -137,3 +137,8 @@ import {
   to = cloudflare_queue.ai_jobs_dlq
   id = "314e7e015b5f4429c4e2da1e6ec93271/ce3a5d901b404d3a91bdc939438918e8"
 }
+
+import {
+  to = cloudflare_secrets_store.platy
+  id = "314e7e015b5f4429c4e2da1e6ec93271/2bca8b5b9f7a46999c37ff8eafbf7ba3"
+}

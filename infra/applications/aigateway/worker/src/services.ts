@@ -61,13 +61,12 @@ const toConnectError = (error: unknown): ConnectError => {
 };
 
 export const registerAiGatewayServices = (router: ConnectRouter, env: Env, tracer: Tracer) => {
-  // Accepts a normal audience-scoped STS token (CLI, chained services) and,
-  // because this worker carries a service credential, a DPoP-bound gateway
-  // session token from a dumb browser client (the SDK mints the audience token
-  // via client-credentials chaining). All issuer/JWKS/credential wiring lives
-  // in the SDK helper.
   const policy: AuthPolicy = { authenticate: platformAuthenticator(env, "aigateway") };
-  const connectors = buildConnectors(env, tracer);
+  let connectorsPromise: Promise<Awaited<ReturnType<typeof buildConnectors>>> | null = null;
+  const connectors = async () => {
+    connectorsPromise ??= buildConnectors(env, tracer);
+    return connectorsPromise;
+  };
 
   router.service(
     ChatService,
@@ -86,7 +85,8 @@ export const registerAiGatewayServices = (router: ConnectRouter, env: Env, trace
           });
           try {
             let messages: UpstreamMessage[] = built.messages;
-            let tools = connectors.tools;
+            const connectorSet = await connectors();
+            let tools = connectorSet.tools;
             const totals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
             for (let round = 0; ; round += 1) {
               let result;
@@ -121,7 +121,7 @@ export const registerAiGatewayServices = (router: ConnectRouter, env: Env, trace
               messages = [
                 ...messages,
                 assistantToolCallMessage(result.content, result.toolCalls),
-                ...(await runToolCalls(connectors, identity, result.toolCalls, parent)),
+                ...(await runToolCalls(connectorSet, identity, result.toolCalls, parent)),
               ];
             }
           } catch (error) {
@@ -140,7 +140,8 @@ export const registerAiGatewayServices = (router: ConnectRouter, env: Env, trace
           });
           try {
             let messages: UpstreamMessage[] = built.messages;
-            let tools = connectors.tools;
+            const connectorSet = await connectors();
+            let tools = connectorSet.tools;
             const totals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
             for (let round = 0; ; round += 1) {
               let final: Extract<StreamEvent, { kind: "final" }> | null = null;
@@ -194,7 +195,7 @@ export const registerAiGatewayServices = (router: ConnectRouter, env: Env, trace
               messages = [
                 ...messages,
                 assistantToolCallMessage(final.content, final.toolCalls),
-                ...(await runToolCalls(connectors, identity, final.toolCalls, parent)),
+                ...(await runToolCalls(connectorSet, identity, final.toolCalls, parent)),
               ];
             }
           } catch (error) {

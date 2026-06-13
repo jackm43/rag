@@ -47,6 +47,7 @@ type ProviderConfig struct {
 	ImpersonationClients map[string]string               `json:"impersonationClients,omitempty"`
 	TrustZoneProvisioned map[string]TrustZoneProvisioned `json:"trustZoneProvisioned,omitempty"`
 	Organization         OrganizationPolicy              `json:"organization,omitempty"`
+	SecretsStoreID       string                          `json:"secretsStoreId,omitempty"`
 }
 
 // OAuthClientProvisioner is the dynamic, post-Terraform provider surface the

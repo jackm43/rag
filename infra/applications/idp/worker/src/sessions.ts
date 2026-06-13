@@ -1,4 +1,4 @@
-import { logger, type Identity } from "@platy/sdk";
+import { logger, type Identity, type SessionTier } from "@platy/sdk";
 import { audit, secretHash, secretHashMatches } from "./registry";
 import type { Env } from "./types";
 
@@ -12,6 +12,7 @@ export type Session = {
   subject: string;
   email: string | null;
   jkt: string;
+  tier: SessionTier;
   refreshExpiresAt: number;
 };
 
@@ -20,6 +21,7 @@ type SessionRow = {
   subject: string;
   email: string | null;
   jkt: string;
+  tier: string;
   refresh_hash: string;
   refresh_expires_at: number;
   revoked: number;
@@ -47,17 +49,18 @@ export const createSession = async (
   env: Env,
   identity: Identity,
   jkt: string,
+  tier: SessionTier,
 ): Promise<{ session: Session; refreshToken: string }> => {
   const id = crypto.randomUUID();
   const secret = newRefreshSecret();
   const refreshExpiresAt = Math.floor(Date.now() / 1000) + REFRESH_LIFETIME_SECONDS;
   await env.DB.prepare(
-    "INSERT INTO idp_sessions (id, subject, email, jkt, refresh_hash, refresh_expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO idp_sessions (id, subject, email, jkt, tier, refresh_hash, refresh_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
   )
-    .bind(id, identity.subject, identity.email, jkt, await secretHash(secret), refreshExpiresAt)
+    .bind(id, identity.subject, identity.email, jkt, tier, await secretHash(secret), refreshExpiresAt)
     .run();
   return {
-    session: { id, subject: identity.subject, email: identity.email, jkt, refreshExpiresAt },
+    session: { id, subject: identity.subject, email: identity.email, jkt, tier, refreshExpiresAt },
     refreshToken: refreshToken(id, secret),
   };
 };
@@ -102,6 +105,7 @@ export const consumeRefreshToken = async (
       subject: row.subject,
       email: row.email,
       jkt: row.jkt,
+      tier: row.tier === "community" ? "community" : "internal",
       refreshExpiresAt: row.refresh_expires_at,
     },
     refreshToken: refreshToken(row.id, secret),

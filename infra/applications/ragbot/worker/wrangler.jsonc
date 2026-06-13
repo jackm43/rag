@@ -12,6 +12,14 @@
       "custom_domain": true
     }
   ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/ragbot.v1.*"
+    ]
+  },
   "vars": {
     "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.me",
     "AIGATEWAY_ENDPOINT": "https://aigateway.jsmunro.me",

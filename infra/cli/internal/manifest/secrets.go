@@ -27,9 +27,13 @@ func ResolveSecretRefs(ctx context.Context, refs map[string]string, provider str
 			continue
 		}
 		value := ref
-		if strings.HasPrefix(ref, "op://") {
+		if sdksecrets.ProviderForReference(ref) != "" {
 			var err error
-			value, err = service.Resolve(ctx, ref, provider)
+			sourceProvider := sdksecrets.OnePasswordProvider
+			if provider == sdksecrets.CloudflareSecretsStoreProvider && strings.HasPrefix(ref, sdksecrets.CFSSPrefix) {
+				continue
+			}
+			value, err = service.Resolve(ctx, ref, sourceProvider)
 			if err != nil {
 				return nil, fmt.Errorf("resolve %s: %w", key, err)
 			}

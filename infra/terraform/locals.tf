@@ -28,7 +28,8 @@ locals {
   }
 
   web_client_callback_uris = sort([
-    for name, app in local.web_client_applications : "${trimsuffix(app.endpoint, "/")}/callback"
+    for name, app in local.registered_applications : "${trimsuffix(app.endpoint, "/")}/callback"
+    if try(app.browser_auth_client, false) && try(app.endpoint, "") != ""
   ])
 
   auth_gateway_redirect_uris = concat(local.cli_redirect_uris, local.web_client_callback_uris)

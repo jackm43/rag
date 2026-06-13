@@ -36,17 +36,18 @@ type ApplicationAccess struct {
 }
 
 type Application struct {
-	Description      string            `yaml:"description"`
-	Endpoint         string            `yaml:"endpoint"`
-	Worker           string            `yaml:"worker"`
-	Config           string            `yaml:"config"`
-	IdentityProvider string            `yaml:"provider"`
-	TrustZone        string            `yaml:"trust_zone"`
-	TrustBoundary    TrustBoundary     `yaml:"trust_boundary"`
-	Access           ApplicationAccess `yaml:"access"`
-	SecretProvider   string            `yaml:"secret_provider"`
-	Secrets          map[string]string `yaml:"secrets"`
-	Internal         bool              `yaml:"internal"`
+	Description         string            `yaml:"description"`
+	Endpoint            string            `yaml:"endpoint"`
+	Worker              string            `yaml:"worker"`
+	Config              string            `yaml:"config"`
+	IdentityProvider    string            `yaml:"provider"`
+	TrustZone           string            `yaml:"trust_zone"`
+	TrustBoundary       TrustBoundary     `yaml:"trust_boundary"`
+	Access              ApplicationAccess `yaml:"access"`
+	SecretProvider      string            `yaml:"secret_provider"`
+	SecretsDeliveryMode string            `yaml:"secrets_delivery"`
+	Secrets             map[string]string `yaml:"secrets"`
+	Internal            bool              `yaml:"internal"`
 	// Impersonatable controls whether registration provisions a Cloudflare
 	// Access application so this app can be impersonated as an actor
 	// (`platy fetch <target> --as <thisapp>`). Defaults to true to preserve
@@ -58,6 +59,11 @@ type Application struct {
 	// this application (infra/applications/<name>/web) that binds the
 	// generated Connect services to the trust zone web auth SDK.
 	WebClient bool `yaml:"web_client"`
+	// BrowserAuthClient marks an application origin as a browser client that
+	// completes the OIDC callback itself using the trust zone web auth SDK.
+	// These origins need <endpoint>/callback registered on the Auth Gateway
+	// Access application even when the app is not a client-only BFF.
+	BrowserAuthClient bool `yaml:"browser_auth_client"`
 	// ServiceClient makes buf generate emit a typed worker-to-worker client
 	// (infra/applications/<name>/service): each factory wraps the SDK
 	// connector (validate caller, chain identity, attach token) so callers
@@ -123,6 +129,25 @@ func (a *Application) Provider() string {
 	return sdksecrets.OnePasswordProvider
 }
 
+const (
+	SecretsDeliveryWrangler     = "wrangler"
+	SecretsDeliverySecretsStore = "secrets_store"
+)
+
+func (a *Application) SecretsDelivery() string {
+	if a.SecretsDeliveryMode != "" {
+		return a.SecretsDeliveryMode
+	}
+	if a.Provider() == sdksecrets.CloudflareSecretsStoreProvider {
+		return SecretsDeliverySecretsStore
+	}
+	return SecretsDeliveryWrangler
+}
+
+func (a *Application) UsesSecretsStore() bool {
+	return a.SecretsDelivery() == SecretsDeliverySecretsStore
+}
+
 func (a *Application) ResolvedTrustZone() string {
 	return provider.NormalizeTrustZone(a.TrustZone)
 }
@@ -172,11 +197,8 @@ func HasProtoPackage(root, name string) bool {
 func (m *Manifest) WebClientCallbackURIs(root string) []string {
 	uris := []string{}
 	seen := map[string]bool{}
-	for name, app := range m.Applications {
-		if app.Internal || app.AllowsImpersonation() || strings.TrimSpace(app.Endpoint) == "" {
-			continue
-		}
-		if HasProtoPackage(root, name) {
+	for _, app := range m.Applications {
+		if app.Internal || !app.BrowserAuthClient || strings.TrimSpace(app.Endpoint) == "" {
 			continue
 		}
 		uri := strings.TrimRight(strings.TrimSpace(app.Endpoint), "/") + "/callback"

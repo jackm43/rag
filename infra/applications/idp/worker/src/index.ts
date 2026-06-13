@@ -19,6 +19,7 @@ import {
   refreshGatewaySession,
   registerServices,
 } from "./services";
+import { handleDiscordAuthorize, handleDiscordCallback } from "./discord-oauth";
 import { revokeSession } from "./sessions";
 import { handleTraceIngest, localSpanSink } from "./traces";
 import { SigningKeys } from "./keys";
@@ -174,6 +175,7 @@ const handleBootstrapDiscovery = (env: Env): Response => {
       token_endpoint: discovered.oidc.tokenEndpoint,
       jwks_endpoint: discovered.oidc.jwksEndpoint,
     },
+    auth_providers: discovered.auth_providers,
   });
 };
 
@@ -368,6 +370,14 @@ export default {
         ),
         cors,
       );
+    }
+
+    if (url.pathname === "/oauth/discord/authorize" && request.method === "GET") {
+      return withCors(await handleDiscordAuthorize(env, request), cors);
+    }
+
+    if (url.pathname === "/oauth/discord/callback" && request.method === "GET") {
+      return withCors(await handleDiscordCallback(env, request), cors);
     }
 
     if (url.pathname === "/oauth/token" && request.method === "POST") {

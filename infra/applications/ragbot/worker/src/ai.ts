@@ -48,11 +48,26 @@ export type ChatModelResult = {
   content: string;
   model: string;
   durationMs: number;
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
 };
 
 export type ChatStreamChunk =
   | { done: false; delta: string }
-  | { done: true; content: string; model: string; durationMs: number };
+  | {
+    done: true;
+    content: string;
+    model: string;
+    durationMs: number;
+    usage?: {
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+    };
+  };
 
 const toGatewayModel = (model: string): string =>
   model.startsWith("@cf/") ? `workers-ai/${model}` : model;
@@ -75,13 +90,20 @@ export const runChatModel = async (
   messages: ChatMessage[],
   options: ChatOptions = {},
 ): Promise<ChatModelResult> => {
-  const response = await targets(env, identity).aigateway.chatService().complete(
+  const response = await (await targets(env, identity).aigateway.chatService()).complete(
     completionRequest(config, messages, options),
   );
   return {
     content: response.content,
     model: response.model,
     durationMs: Number(response.durationMs),
+    usage: response.usage
+      ? {
+        promptTokens: Number(response.usage.promptTokens),
+        completionTokens: Number(response.usage.completionTokens),
+        totalTokens: Number(response.usage.totalTokens),
+      }
+      : undefined,
   };
 };
 
@@ -92,7 +114,7 @@ export async function* streamChatModel(
   messages: ChatMessage[],
   options: ChatOptions = {},
 ): AsyncGenerator<ChatStreamChunk> {
-  const stream = targets(env, identity).aigateway.chatService().streamComplete(
+  const stream = (await targets(env, identity).aigateway.chatService()).streamComplete(
     completionRequest(config, messages, options),
   );
   for await (const chunk of stream) {
@@ -102,6 +124,13 @@ export async function* streamChatModel(
         content: chunk.content,
         model: chunk.model,
         durationMs: Number(chunk.durationMs),
+        usage: chunk.usage
+          ? {
+            promptTokens: Number(chunk.usage.promptTokens),
+            completionTokens: Number(chunk.usage.completionTokens),
+            totalTokens: Number(chunk.usage.totalTokens),
+          }
+          : undefined,
       };
       return;
     }

@@ -64,6 +64,7 @@ export {
   exchangeProviderAccessToken,
   exchangeToken,
   generateDpopKey,
+  loadServiceCredentialFromEnv,
   remoteJwks,
   serviceCredentialFromEnv,
   stsJwksUrl,
@@ -81,8 +82,10 @@ export {
   type ProviderAccessToken,
   type RequestDescriptor,
   type ServiceCredential,
+  type ServiceCredentialEnv,
   type StsVerifierConfig,
 } from "./oauth2";
+export { requireSecret, resolveSecret, type SecretsStoreSecret, type WorkerSecret } from "./secrets/store";
 export {
   identityExchanged,
   identityExchangeRefused,
@@ -93,6 +96,18 @@ export {
   type IdentityKind,
   type Principal,
 } from "./identity";
+export {
+  COMMUNITY_SESSION_SCOPE,
+  communitySessionRequiresActor,
+  directExchangeGrants,
+  INTERNAL_SESSION_SCOPE,
+  isCommunitySession,
+  isInternalSession,
+  sessionScopeForTier,
+  sessionTierFromIdentity,
+  sessionTierFromScope,
+  type SessionTier,
+} from "./session-tier";
 export { errorMessage, logger } from "./logger";
 export {
   annotateSpan,

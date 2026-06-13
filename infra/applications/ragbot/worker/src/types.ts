@@ -67,19 +67,20 @@ export type DiscordMessage = {
   referenced_message?: DiscordMessage | null;
 };
 
+import type { WorkerSecret } from "@platy/sdk";
+
 export interface Env {
-  DISCORD_PUBLIC_KEY: string;
-  DISCORD_APPLICATION_ID: string;
-  DISCORD_BOT_TOKEN: string;
+  ASSETS: Fetcher;
+  DISCORD_PUBLIC_KEY: WorkerSecret;
+  DISCORD_APPLICATION_ID: WorkerSecret;
+  DISCORD_BOT_TOKEN: WorkerSecret;
   AUTH_GATEWAY_URL?: string;
   AUTH_GATEWAY?: Fetcher;
   AIGATEWAY_ENDPOINT?: string;
   AIGATEWAY?: Fetcher;
   ALLOWED_GUILD_IDS?: string;
-  // Service credential pushed by `platy deploy`; used to authenticate trace
-  // export to the gateway.
   SERVICE_CLIENT_ID?: string;
-  SERVICE_CLIENT_SECRET?: string;
+  SERVICE_CLIENT_SECRET?: WorkerSecret;
   // OTEL: service name override and optional OTLP/HTTP export target.
   OTEL_SERVICE_NAME?: string;
   OTEL_EXPORTER_OTLP_ENDPOINT?: string;

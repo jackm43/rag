@@ -113,7 +113,7 @@ export const syncRegistry = async (
   store: DiscoveryStore,
   identity: Identity,
 ): Promise<SyncStateView> => {
-  const response = await targets(env, identity).idp.discoveryService().discover({});
+  const response = await (await targets(env, identity).idp.discoveryService()).discover({});
   const state = await store.replace(snapshotFromDiscovery(response));
   logger.info("discovery_synced", {
     applications: state.applications,

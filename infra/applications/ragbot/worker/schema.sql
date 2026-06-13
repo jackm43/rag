@@ -49,7 +49,10 @@ CREATE TABLE IF NOT EXISTS rag_ai_interactions (
   total_duration_ms INTEGER,
   status TEXT NOT NULL,
   error_message TEXT,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  prompt_tokens INTEGER,
+  completion_tokens INTEGER,
+  total_tokens INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_rag_ai_interactions_message_status ON rag_ai_interactions(message_id, status);

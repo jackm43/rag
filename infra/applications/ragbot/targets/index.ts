@@ -26,13 +26,10 @@ const deployConnection = (env: TargetsEnv) =>
     scopes: ["deploy/DeployService.ListWorkers"],
   });
 
-// targets returns typed worker-to-worker clients for this app's manifest
-// delegations. Each accessor throws when the target's endpoint or this
-// worker's service credential is not configured.
 export const targets = (env: TargetsEnv, identity: Identity) => ({
   aigateway: {
-    chatService: () => {
-      const connection = aigatewayConnection(env);
+    chatService: async () => {
+      const connection = await aigatewayConnection(env);
       if (!connection) {
         throw new Error("aigateway service connection unavailable (missing endpoint or credential)");
       }
@@ -40,8 +37,8 @@ export const targets = (env: TargetsEnv, identity: Identity) => ({
     },
   },
   deploy: {
-    deployService: () => {
-      const connection = deployConnection(env);
+    deployService: async () => {
+      const connection = await deployConnection(env);
       if (!connection) {
         throw new Error("deploy service connection unavailable (missing endpoint or credential)");
       }
@@ -49,4 +46,3 @@ export const targets = (env: TargetsEnv, identity: Identity) => ({
     },
   },
 });
-

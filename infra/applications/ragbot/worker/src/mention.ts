@@ -1,9 +1,10 @@
 import { runChatModel, sanitizeAiText, streamChatModel, type ChatMessage } from "./ai";
 import { selfIdentity } from "./self";
+import { ensureRagbotSchema } from "./schema";
 import { loadConfig, type BotConfig } from "./config";
 import { fetchBotRoleIds, fetchChannelMessages, fetchMessage, postChannelMessage } from "./discord";
 import { rejectDisallowedGuild } from "./guild";
-import { errorMessage, logger, type Identity } from "@platy/sdk";
+import { errorMessage, logger, resolveSecret, type Identity } from "@platy/sdk";
 import type { AiChannelJob, AiJob, ChannelPromptSource, DiscordMessage, Env } from "./types";
 
 const MAX_DISCORD_MESSAGE_LENGTH = 1900;
@@ -150,7 +151,7 @@ export const handleGatewayMessageCreate = async (
     message,
     botUserId,
     referencedMessage?.author?.id,
-    env.DISCORD_APPLICATION_ID,
+    await resolveSecret(env.DISCORD_APPLICATION_ID),
     botRoleIds,
   );
   if (!prompt) {
@@ -283,6 +284,9 @@ export type ChannelChatResult = {
   model: string;
   aiDurationMs: number;
   totalDurationMs: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
 };
 
 export type ChannelChatStreamChunk = {
@@ -292,6 +296,9 @@ export type ChannelChatStreamChunk = {
   model?: string;
   aiDurationMs?: number;
   totalDurationMs?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
 };
 
 export async function* streamChannelChat(
@@ -324,10 +331,18 @@ export async function* streamChannelChat(
   const aiStartedAt = Date.now();
   let rawText = "";
   let resolvedModel = chatModel;
+  let usage:
+    | {
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+    }
+    | undefined;
   for await (const chunk of streamChatModel(env, identity, config, conversation, { model: chatModel })) {
     if (chunk.done) {
       rawText = chunk.content;
       resolvedModel = chunk.model;
+      usage = chunk.usage;
       break;
     }
     rawText += chunk.delta;
@@ -348,6 +363,9 @@ export async function* streamChannelChat(
     model: resolvedModel,
     aiDurationMs,
     totalDurationMs: Date.now() - startedAt,
+    promptTokens: usage?.promptTokens,
+    completionTokens: usage?.completionTokens,
+    totalTokens: usage?.totalTokens,
   };
 }
 
@@ -390,13 +408,19 @@ export const runChannelChat = async (
     model: result.model,
     aiDurationMs,
     totalDurationMs: Date.now() - startedAt,
+    promptTokens: result.usage?.promptTokens,
+    completionTokens: result.usage?.completionTokens,
+    totalTokens: result.usage?.totalTokens,
   };
 };
 
 export const recordChannelChatInteraction = async (
   env: Env,
   input: ChannelChatInput,
-  result: Pick<ChannelChatResult, "model" | "responseText" | "aiDurationMs" | "totalDurationMs">,
+  result: Pick<
+    ChannelChatResult,
+    "model" | "responseText" | "aiDurationMs" | "totalDurationMs" | "promptTokens" | "completionTokens" | "totalTokens"
+  >,
   status: string,
   errorText: string | null,
 ) => {
@@ -420,6 +444,9 @@ export const recordChannelChatInteraction = async (
     result.responseText,
     result.aiDurationMs,
     errorText,
+    result.promptTokens ?? null,
+    result.completionTokens ?? null,
+    result.totalTokens ?? null,
   );
 };
 
@@ -432,10 +459,14 @@ const recordAiInteraction = async (
   responseText: string | null,
   aiDurationMs: number | null,
   errorText: string | null,
+  promptTokens: number | null,
+  completionTokens: number | null,
+  totalTokens: number | null,
 ) => {
   try {
+    await ensureRagbotSchema(env);
     await env.DB.prepare(
-      "INSERT INTO rag_ai_interactions (kind, channel_id, message_id, requester_user_id, requester_username, prompt, response_text, model, ai_duration_ms, total_duration_ms, status, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO rag_ai_interactions (kind, channel_id, message_id, requester_user_id, requester_username, prompt, response_text, model, ai_duration_ms, total_duration_ms, status, error_message, prompt_tokens, completion_tokens, total_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
       .bind(
         job.kind,
@@ -450,6 +481,9 @@ const recordAiInteraction = async (
         totalDurationMs,
         status,
         errorText,
+        promptTokens,
+        completionTokens,
+        totalTokens,
       )
       .run();
   } catch (error) {
@@ -472,8 +506,23 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
   let model = "unknown";
   let aiDurationMs: number | null = null;
   let content: string | null = null;
+  let promptTokens: number | null = null;
+  let completionTokens: number | null = null;
+  let totalTokens: number | null = null;
   const record = (status: string, errorText: string | null) =>
-    recordAiInteraction(env, job, model, Date.now() - startedAt, status, content, aiDurationMs, errorText);
+    recordAiInteraction(
+      env,
+      job,
+      model,
+      Date.now() - startedAt,
+      status,
+      content,
+      aiDurationMs,
+      errorText,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+    );
 
   try {
     const identity = await selfIdentity(env);
@@ -481,6 +530,9 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
     model = result.model;
     aiDurationMs = result.aiDurationMs;
     content = result.responseText;
+    promptTokens = result.promptTokens ?? null;
+    completionTokens = result.completionTokens ?? null;
+    totalTokens = result.totalTokens ?? null;
 
     const response = await postChannelMessage(env, job.channelId, content);
     if (response.ok) {

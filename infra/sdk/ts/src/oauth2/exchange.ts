@@ -3,8 +3,8 @@ import { identityExchanged, identityExchangeRefused } from "../identity";
 import { traceHeaders } from "../otel";
 import { TOKEN_TYPE_ACCESS_TOKEN, TOKEN_TYPE_JWT, TOKEN_TYPE_SERVICE_CREDENTIAL } from "./sts";
 
-export type { ServiceCredential } from "./credential";
-export { serviceCredentialFromEnv } from "./credential";
+export type { ServiceCredential, ServiceCredentialEnv } from "./credential";
+export { actorToken, loadServiceCredentialFromEnv, serviceCredentialFromEnv } from "./credential";
 
 export type ExchangeRequest = {
   subjectToken: string;

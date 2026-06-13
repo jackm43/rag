@@ -2,8 +2,9 @@ import {
   createRpcHandler,
   errorMessage,
   gatewayTraceExporter,
+  loadServiceCredentialFromEnv,
   logger,
-  serviceCredentialFromEnv,
+  resolveSecret,
   traceRpc,
   tracerFromEnv,
 } from "@platy/sdk";
@@ -27,28 +28,31 @@ export { DiscordGateway, extractBotMentionPrompt, extractReplyToBotPrompt, handl
 type TracedRpc = (request: Request, ctx?: ExecutionContext) => Promise<Response | null>;
 
 let cachedRpc: { env: Env; gatewayUrl: string; rpc: TracedRpc } | null = null;
+let credentialPromise: ReturnType<typeof loadServiceCredentialFromEnv> | null = null;
 
-const rpcHandler = (env: Env): TracedRpc => {
+const rpcHandler = async (env: Env): Promise<TracedRpc> => {
   const gatewayUrl = (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, "");
-  if (cachedRpc?.env !== env || cachedRpc.gatewayUrl !== gatewayUrl) {
-    const credential = serviceCredentialFromEnv(env);
-    const exporter =
-      credential && env.AUTH_GATEWAY
-        ? gatewayTraceExporter({
-          gatewayUrl,
-          credential,
-          fetch: (input: RequestInfo | URL, init?: RequestInit) => env.AUTH_GATEWAY!.fetch(input, init),
-        })
-        : undefined;
-    cachedRpc = {
-      env,
-      gatewayUrl,
-      rpc: traceRpc(
-        tracerFromEnv(env, "ragbot", { exporter }),
-        createRpcHandler((router) => registerRagbotServices(router, env)),
-      ),
-    };
+  if (cachedRpc?.env === env && cachedRpc.gatewayUrl === gatewayUrl) {
+    return cachedRpc.rpc;
   }
+  credentialPromise ??= loadServiceCredentialFromEnv(env);
+  const credential = await credentialPromise;
+  const exporter =
+    credential && env.AUTH_GATEWAY
+      ? gatewayTraceExporter({
+        gatewayUrl,
+        credential,
+        fetch: (input: RequestInfo | URL, init?: RequestInit) => env.AUTH_GATEWAY!.fetch(input, init),
+      })
+      : undefined;
+  cachedRpc = {
+    env,
+    gatewayUrl,
+    rpc: traceRpc(
+      tracerFromEnv(env, "ragbot", { exporter }),
+      createRpcHandler((router) => registerRagbotServices(router, env)),
+    ),
+  };
   return cachedRpc.rpc;
 };
 
@@ -57,7 +61,7 @@ const handleInteractionRequest = async (
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> => {
-  const interaction = await verifyDiscordRequest(request, env.DISCORD_PUBLIC_KEY);
+  const interaction = await verifyDiscordRequest(request, await resolveSecret(env.DISCORD_PUBLIC_KEY));
   if (!interaction) {
     return new Response("Bad request signature", { status: 401 });
   }
@@ -108,7 +112,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/ragbot.v1.")) {
-      const rpcResponse = await rpcHandler(env)(request, ctx);
+      const rpcResponse = await (await rpcHandler(env))(request, ctx);
       if (rpcResponse) {
         return rpcResponse;
       }
@@ -119,8 +123,8 @@ export default {
       return new Response("Not found", { status: 404 });
     }
 
-    if (request.method === "GET") {
-      return new Response("ok");
+    if (request.method === "GET" || request.method === "HEAD") {
+      return env.ASSETS.fetch(request);
     }
 
     if (request.method !== "POST") {

@@ -14,13 +14,10 @@ const idpConnection = (env: TargetsEnv) =>
     scopes: ["idp/DiscoveryService.Discover"],
   });
 
-// targets returns typed worker-to-worker clients for this app's manifest
-// delegations. Each accessor throws when the target's endpoint or this
-// worker's service credential is not configured.
 export const targets = (env: TargetsEnv, identity: Identity) => ({
   idp: {
-    discoveryService: () => {
-      const connection = idpConnection(env);
+    discoveryService: async () => {
+      const connection = await idpConnection(env);
       if (!connection) {
         throw new Error("idp service connection unavailable (missing endpoint or credential)");
       }
@@ -28,4 +25,3 @@ export const targets = (env: TargetsEnv, identity: Identity) => ({
     },
   },
 });
-

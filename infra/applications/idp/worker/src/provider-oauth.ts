@@ -1,7 +1,7 @@
 import { Code, ConnectError } from "@connectrpc/connect";
 import { createLocalJWKSet, jwtVerify } from "jose";
 
-import { logger } from "@platy/sdk";
+import { logger, resolveSecret } from "@platy/sdk";
 import { getJwks, signToken } from "./keys";
 import { getApplication } from "./registry";
 import { verifyGatewayStsToken } from "./sts-verify";
@@ -27,8 +27,8 @@ type ProviderGrantRow = {
 
 const issuer = (env: Env) => env.GATEWAY_ISSUER.replace(/\/$/, "");
 
-const parseProviderClients = (env: Env): ProviderOAuthClients => {
-  const raw = env.PROVIDER_OAUTH_CLIENTS ?? "{}";
+const parseProviderClients = async (env: Env): Promise<ProviderOAuthClients> => {
+  const raw = (await resolveSecret(env.PROVIDER_OAUTH_CLIENTS)) || "{}";
   try {
     const parsed = JSON.parse(raw) as Record<
       string,
@@ -54,8 +54,8 @@ const parseProviderClients = (env: Env): ProviderOAuthClients => {
   }
 };
 
-const resolveProviderClient = (env: Env, application: string) => {
-  const clients = parseProviderClients(env);
+const resolveProviderClient = async (env: Env, application: string) => {
+  const clients = await parseProviderClients(env);
   const client = clients[application];
   if (!client) {
     throw new ConnectError(`provider oauth client is not configured for ${application}`, Code.FailedPrecondition);
@@ -221,7 +221,7 @@ export const exchangeProviderAccessToken = async (
   }
   const grant = await getGrant(env, identity.subject, application);
   if (!grant) {
-    const client = resolveProviderClient(env, application);
+    const client = await resolveProviderClient(env, application);
     if (client.client_id !== registered.providerOauthClientId) {
       throw new ConnectError(
         `provider oauth client_id mismatch for ${application}`,
@@ -240,7 +240,7 @@ export const exchangeProviderAccessToken = async (
       ),
     };
   }
-  const client = resolveProviderClient(env, application);
+  const client = await resolveProviderClient(env, application);
   const refreshed = await refreshProviderAccessToken(client, grant.refresh_token);
   if (refreshed.refresh_token && refreshed.refresh_token !== grant.refresh_token) {
     await putGrant(
@@ -267,7 +267,7 @@ export const completeProviderOAuthCallback = async (
   if (!registered?.providerOauthClientId) {
     return new Response("application is not configured for provider oauth", { status: 400 });
   }
-  const client = resolveProviderClient(env, payload.application);
+  const client = await resolveProviderClient(env, payload.application);
   if (client.client_id !== registered.providerOauthClientId) {
     return new Response("provider oauth client_id mismatch", { status: 400 });
   }

@@ -39,10 +39,14 @@ export type DiscoveryConfig = {
     token_endpoint: string;
     issuer: string;
   };
+  auth_providers?: Array<{ id: string; authorization_endpoint: string }>;
   applications?: DiscoveryApplication[];
 };
 
+export type AuthProvider = "access" | "discord";
+
 export type BrowserAuthOptions = {
+  provider?: AuthProvider;
   // Hostnames routed onto this page's origin (zone worker routes), so calls
   // to them are same-origin and need no CORS. Keys are application names or
   // "gateway"; the rewrite keeps the path and swaps the origin.
@@ -193,6 +197,7 @@ const sessionTokensFromOAuth = (response: OAuthTokenResponse): SessionTokens => 
 export class BrowserAuth {
   private readonly discoveryUrl: string;
   private readonly sameOrigin: string[];
+  private readonly provider: AuthProvider;
   private config: DiscoveryConfig | null = null;
   private key: StoredKey | null = null;
   private sessionToken: { accessToken: string; expiresAt: number } | null = null;
@@ -203,6 +208,7 @@ export class BrowserAuth {
   constructor(discoveryUrl: string, options: BrowserAuthOptions = {}) {
     this.discoveryUrl = discoveryUrl;
     this.sameOrigin = options.sameOrigin ?? [];
+    this.provider = options.provider ?? "access";
   }
 
   // bootstrap is the one-call page entry: fetch discovery and load the device
@@ -327,10 +333,28 @@ export class BrowserAuth {
     const challenge = b64url(await sha256(verifier));
     sessionStorage.setItem("tz_pkce_verifier", verifier);
     sessionStorage.setItem("tz_pkce_state", state);
+    const redirectUri = `${location.origin}/callback`;
+    if (this.provider === "discord") {
+      const endpoint =
+        config.auth_providers?.find((provider) => provider.id === "discord")?.authorization_endpoint ??
+        config.endpoints.discord_authorize ??
+        "";
+      if (!endpoint) {
+        throw new Error("discord auth provider is not configured");
+      }
+      const params = new URLSearchParams({
+        redirect_uri: redirectUri,
+        code_challenge: challenge,
+        code_challenge_method: "S256",
+        state,
+      });
+      location.assign(`${endpoint}?${params.toString()}`);
+      return;
+    }
     const params = new URLSearchParams({
       response_type: "code",
       client_id: config.oidc.client_id,
-      redirect_uri: `${location.origin}/callback`,
+      redirect_uri: redirectUri,
       scope: "openid email profile",
       code_challenge: challenge,
       code_challenge_method: "S256",

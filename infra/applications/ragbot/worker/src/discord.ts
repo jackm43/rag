@@ -1,7 +1,9 @@
+import { resolveSecret } from "@platy/sdk";
+
 import { DISCORD_API_BASE_URL, type DiscordMessage, type Env } from "./types";
 
-const botHeaders = (env: Env) => ({
-  authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
+const botHeaders = async (env: Env) => ({
+  authorization: `Bot ${await resolveSecret(env.DISCORD_BOT_TOKEN)}`,
 });
 
 export type InteractionMessageData = {
@@ -16,7 +18,7 @@ export const postChannelMessage = async (env: Env, channelId: string, content: s
   fetch(`${DISCORD_API_BASE_URL}/channels/${channelId}/messages`, {
     method: "POST",
     headers: {
-      ...botHeaders(env),
+      ...(await botHeaders(env)),
       "content-type": "application/json",
     },
     body: JSON.stringify({ content }),
@@ -35,7 +37,7 @@ export const fetchChannelMessages = async (
 
   const response = await fetch(
     `${DISCORD_API_BASE_URL}/channels/${channelId}/messages?${params}`,
-    { headers: botHeaders(env) },
+    { headers: await botHeaders(env) },
   );
   if (!response.ok) {
     return [];
@@ -50,7 +52,7 @@ export const fetchMessage = async (
 ): Promise<DiscordMessage | null> => {
   const response = await fetch(
     `${DISCORD_API_BASE_URL}/channels/${channelId}/messages/${messageId}`,
-    { headers: botHeaders(env) },
+    { headers: await botHeaders(env) },
   );
   if (!response.ok) {
     return null;
@@ -60,7 +62,7 @@ export const fetchMessage = async (
 
 export const fetchUsername = async (env: Env, userId: string): Promise<string | null> => {
   const response = await fetch(`${DISCORD_API_BASE_URL}/users/${userId}`, {
-    headers: botHeaders(env),
+    headers: await botHeaders(env),
   }).catch(() => null);
   if (!response?.ok) {
     return null;
@@ -71,7 +73,7 @@ export const fetchUsername = async (env: Env, userId: string): Promise<string | 
 
 export const fetchBotUserId = async (env: Env): Promise<string | null> => {
   const response = await fetch(`${DISCORD_API_BASE_URL}/users/@me`, {
-    headers: botHeaders(env),
+    headers: await botHeaders(env),
   }).catch(() => null);
   if (!response?.ok) {
     return null;
@@ -94,7 +96,7 @@ export const fetchBotRoleIds = async (
     return cached.roleIds;
   }
   const response = await fetch(`${DISCORD_API_BASE_URL}/guilds/${guildId}/members/${botUserId}`, {
-    headers: botHeaders(env),
+    headers: await botHeaders(env),
   }).catch(() => null);
   if (!response?.ok) {
     return cached?.roleIds ?? [];

@@ -1,7 +1,7 @@
 import {
   errorMessage,
+  loadServiceCredentialFromEnv,
   logger,
-  serviceCredentialFromEnv,
   type Identity,
   type SpanContext,
   type Tracer,
@@ -31,11 +31,12 @@ const boundedInt = (value: unknown, fallback: number, max: number): number => {
   return Math.min(parsed, max);
 };
 
-export const buildConnectors = (env: Env, tracer: Tracer): Connectors => {
+export const buildConnectors = async (env: Env, tracer: Tracer): Promise<Connectors> => {
   const tools: ToolDefinition[] = [];
   const handlers = new Map<string, ToolHandler>();
 
-  const ragbotAvailable = Boolean(env.RAGBOT_ENDPOINT && serviceCredentialFromEnv(env));
+  const credential = await loadServiceCredentialFromEnv(env);
+  const ragbotAvailable = Boolean(env.RAGBOT_ENDPOINT && credential);
   if (ragbotAvailable) {
     tools.push({
       type: "function",
@@ -52,8 +53,8 @@ export const buildConnectors = (env: Env, tracer: Tracer): Connectors => {
         },
       },
     });
-    handlers.set("ragbot_leaderboard", (identity, args) =>
-      targets(env, identity).ragbot.leaderboardService().listTotals({
+    handlers.set("ragbot_leaderboard", async (identity, args) =>
+      (await (await targets(env, identity).ragbot.leaderboardService())).listTotals({
         limit: boundedInt(args.limit, 10, 50),
       }),
     );

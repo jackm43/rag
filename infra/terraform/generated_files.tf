@@ -31,6 +31,7 @@ locals {
     impersonationClients = {
       for name, app in cloudflare_zero_trust_access_application.impersonation : name => app.saas_app.client_id
     }
+    secretsStoreId = cloudflare_secrets_store.platy.id
     trustZoneProvisioned = {
       tier0 = { policyId = cloudflare_zero_trust_access_policy.tier0_root.id }
       tier1 = { policyId = cloudflare_zero_trust_access_policy.tier1_critical.id }

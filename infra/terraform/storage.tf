@@ -45,3 +45,12 @@ resource "cloudflare_queue" "ai_jobs_dlq" {
     prevent_destroy = true
   }
 }
+
+resource "cloudflare_secrets_store" "platy" {
+  account_id = var.account_id
+  name       = "default_secrets_store"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
