@@ -3,7 +3,7 @@ import { errorMessage, logger } from "../logger";
 import { traceHeaders } from "../otel";
 import { ttlCache } from "../client/cache";
 import { createClient, type PlatformClient } from "../client/fetch";
-import { exchangeProviderAccessToken } from "./oauth";
+import { exchangeProviderAccessToken } from "../oauth2/provider";
 
 // The provider API client is the standard outbound integration with an
 // external provider API: every call requires the authenticated caller

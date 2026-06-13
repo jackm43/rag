@@ -1,8 +1,8 @@
 import type { ConnectRouter } from "@connectrpc/connect";
 
-import { serviceCredentialFromEnv } from "./credential";
+import { serviceCredentialFromEnv } from "./oauth2/credential";
 import { gatewayTraceExporter, traceRpc, tracerFromEnv, type Tracer } from "./otel";
-import { createRpcHandler, type RpcHandler } from "./router";
+import { createRpcHandler, type RpcHandler } from "./resource/router";
 
 type Fetcher = {
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;

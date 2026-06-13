@@ -1,7 +1,7 @@
 import type { Identity } from "../identity";
 import { logger } from "../logger";
-import { verifyDpopProof, type RequestDescriptor } from "../verify/dpop";
-import type { StsVerifierConfig } from "../verify/sts";
+import { verifyDpopProof, type RequestDescriptor } from "../oauth2/dpop";
+import type { StsVerifierConfig } from "../oauth2/sts";
 import { principalFromIdentity } from "../identity";
 import { actorChainRefusal, delegationGraph } from "./delegations";
 

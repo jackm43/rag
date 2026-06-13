@@ -1,6 +1,6 @@
 import type { Identity } from "../identity";
 import { logger } from "../logger";
-import { verifyStsToken, type StsVerifierConfig } from "../verify/sts";
+import { verifyStsToken, type StsVerifierConfig } from "../oauth2/sts";
 import { requireExpectedActorChain } from "./constraints";
 
 // verifyMintedToken is the receiver-side check applied to every token this

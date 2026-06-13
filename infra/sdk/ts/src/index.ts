@@ -36,21 +36,17 @@ export {
   verifyMintedToken,
   type AuthPolicy,
   type DelegationGraph,
-} from "./authz";
+} from "./resource";
 export {
-  chainExchange,
   ClientError,
   ConnectorAuthError,
   connectorServiceClient,
   connectorToken,
   createClient,
-  exchangeToken,
   serviceConnection,
   ttlCache,
   type ClientConfig,
   type ConnectorConfig,
-  type ExchangedToken,
-  type ExchangeRequest,
   type PlatformClient,
   type ServiceConnectionEnv,
   type ServiceConnectionTarget,
@@ -58,10 +54,35 @@ export {
   type TtlCache,
 } from "./client";
 export {
+  accessOidcProvider,
+  actorChainFromClaim,
   actorToken,
+  chainExchange,
+  createDpopProof,
+  DPOP_HEADER,
+  dpopThumbprint,
+  exchangeProviderAccessToken,
+  exchangeToken,
+  generateDpopKey,
+  remoteJwks,
   serviceCredentialFromEnv,
+  stsJwksUrl,
+  TOKEN_TYPE_ACCESS_TOKEN,
+  TOKEN_TYPE_JWT,
+  TOKEN_TYPE_SERVICE_CREDENTIAL,
+  verifyDpopProof,
+  verifyOidcToken,
+  verifyStsToken,
+  type DpopKey,
+  type DpopProof,
+  type ExchangedToken,
+  type ExchangeRequest,
+  type OidcProviderConfig,
+  type ProviderAccessToken,
+  type RequestDescriptor,
   type ServiceCredential,
-} from "./credential";
+  type StsVerifierConfig,
+} from "./oauth2";
 export {
   identityExchanged,
   identityExchangeRefused,
@@ -99,34 +120,14 @@ export {
   type ProviderApiAuth,
   type ProviderApiConfig,
 } from "./provider/api";
-export { exchangeProviderAccessToken, type ProviderAccessToken } from "./provider/oauth";
-export { createRpcHandler, type RpcHandler } from "./router";
+export { createRpcHandler, type RpcHandler } from "./resource/router";
 export {
   createPlatformRpcWorker,
   type PlatformRpcWorkerConfig,
   type PlatformRpcWorkerEnv,
 } from "./worker";
 export {
-  accessOidcProvider,
-  actorChainFromClaim,
-  createDpopProof,
-  DPOP_HEADER,
-  dpopThumbprint,
-  generateDpopKey,
-  remoteJwks,
   secretsMatch,
-  stsJwksUrl,
-  TOKEN_TYPE_ACCESS_TOKEN,
-  TOKEN_TYPE_JWT,
-  TOKEN_TYPE_SERVICE_CREDENTIAL,
-  verifyDpopProof,
-  verifyOidcToken,
   verifySignedWebhook,
-  verifyStsToken,
-  type DpopKey,
-  type DpopProof,
-  type OidcProviderConfig,
-  type RequestDescriptor,
-  type StsVerifierConfig,
   type WebhookVerifierConfig,
 } from "./verify";

@@ -1,4 +1,4 @@
-import { serviceCredentialFromEnv } from "../credential";
+import { serviceCredentialFromEnv } from "../oauth2/credential";
 import { anyAuthenticator, stsAuthenticator, type Authenticator } from "./authenticators";
 import { sessionChainAuthenticator } from "./sessionchain";
 

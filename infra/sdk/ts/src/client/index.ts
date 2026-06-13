@@ -1,13 +1,5 @@
 export { ttlCache, type TtlCache } from "./cache";
 export {
-  chainExchange,
-  exchangeToken,
-  serviceCredentialFromEnv,
-  type ExchangeRequest,
-  type ExchangedToken,
-  type ServiceCredential,
-} from "./exchange";
-export {
   ClientError,
   createClient,
   type ClientConfig,

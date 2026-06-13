@@ -1,10 +1,10 @@
-import { actorToken, type ServiceCredential } from "../credential";
+import { actorToken, type ServiceCredential } from "./credential";
 import { identityExchanged, identityExchangeRefused } from "../identity";
 import { traceHeaders } from "../otel";
-import { TOKEN_TYPE_ACCESS_TOKEN, TOKEN_TYPE_JWT, TOKEN_TYPE_SERVICE_CREDENTIAL } from "../verify/sts";
+import { TOKEN_TYPE_ACCESS_TOKEN, TOKEN_TYPE_JWT, TOKEN_TYPE_SERVICE_CREDENTIAL } from "./sts";
 
-export type { ServiceCredential } from "../credential";
-export { serviceCredentialFromEnv } from "../credential";
+export type { ServiceCredential } from "./credential";
+export { serviceCredentialFromEnv } from "./credential";
 
 export type ExchangeRequest = {
   subjectToken: string;

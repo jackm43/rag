@@ -10,7 +10,8 @@
     "baseUrl": ".",
     "paths": {
       "@platy/web": ["src/index.ts"],
-      "@platy/sdk": ["../ts/src/index.ts"]
+      "@platy/sdk": ["../ts/src/index.ts"],
+      "@platy/sdk/oauth2/dpop": ["../ts/src/oauth2/dpop.ts"]
     }
   },
   "include": ["src/**/*.ts", "../../applications/*/web/**/*.ts"]

@@ -5,6 +5,8 @@
 // even an XSS attacker who can read all storage cannot exfiltrate a usable
 // session — they can only sign while their code runs in the live page.
 
+import { createDpopProof } from "@platy/sdk/oauth2/dpop";
+
 const DB_NAME = "trustzone-auth";
 const STORE = "auth";
 const KEY_ID = "dpop-key";
@@ -87,8 +89,6 @@ const b64url = (bytes: ArrayBuffer | Uint8Array): string => {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 };
 
-const b64urlJson = (obj: unknown): string => b64url(new TextEncoder().encode(JSON.stringify(obj)));
-
 const randomString = (bytes: number): string =>
   b64url(crypto.getRandomValues(new Uint8Array(bytes)));
 
@@ -151,34 +151,6 @@ const ensureDeviceKey = async (): Promise<StoredKey> => {
   const stored: StoredKey = { privateKey: pair.privateKey, publicJwk };
   await idbPut(KEY_ID, stored);
   return stored;
-};
-
-const createDpopProof = async (
-  key: StoredKey,
-  method: string,
-  url: string,
-  accessToken?: string,
-): Promise<string> => {
-  const header = { typ: "dpop+jwt", alg: "ES256", jwk: key.publicJwk };
-  const cleanUrl = new URL(url);
-  cleanUrl.search = "";
-  cleanUrl.hash = "";
-  const payload: Record<string, unknown> = {
-    htm: method.toUpperCase(),
-    htu: cleanUrl.toString(),
-    iat: Math.floor(Date.now() / 1000),
-    jti: randomString(16),
-  };
-  if (accessToken) {
-    payload.ath = b64url(await sha256(accessToken));
-  }
-  const signingInput = `${b64urlJson(header)}.${b64urlJson(payload)}`;
-  const signature = await crypto.subtle.sign(
-    { name: "ECDSA", hash: "SHA-256" },
-    key.privateKey,
-    new TextEncoder().encode(signingInput),
-  );
-  return `${signingInput}.${b64url(signature)}`;
 };
 
 // ---- gateway helpers -----------------------------------------------------
@@ -381,7 +353,7 @@ export class BrowserAuth {
     // The gateway completes the upstream PKCE token exchange server-side and
     // returns a DPoP-bound gateway session from the OAuth token endpoint.
     const url = this.requireConfig().endpoints.token_exchange;
-    const proof = await createDpopProof(this.requireKey(), "POST", url);
+    const proof = await createDpopProof(this.requireKey(), { method: "POST", url });
     const result = await oauthPost<OAuthTokenResponse>(
       url,
       new URLSearchParams({
@@ -399,7 +371,7 @@ export class BrowserAuth {
 
   private async refresh(refreshToken: string): Promise<void> {
     const url = this.requireConfig().endpoints.token_exchange;
-    const proof = await createDpopProof(this.requireKey(), "POST", url);
+    const proof = await createDpopProof(this.requireKey(), { method: "POST", url });
     const result = await oauthPost<OAuthTokenResponse>(
       url,
       new URLSearchParams({
@@ -476,7 +448,7 @@ export class BrowserAuth {
   // shares one trace id, so the full flow renders as a single trace.
   async authHeaders(method: string, url: string): Promise<Record<string, string>> {
     const token = await this.sessionAccessToken();
-    const proof = await createDpopProof(this.requireKey(), method, url, token);
+    const proof = await createDpopProof(this.requireKey(), { method, url }, token);
     return {
       authorization: `Bearer ${token}`,
       dpop: proof,

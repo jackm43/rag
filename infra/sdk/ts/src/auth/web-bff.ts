@@ -1,5 +1,5 @@
 import { clientIdentityServiceClient } from "../../../../applications/idp/service";
-import { serviceCredentialFromEnv } from "../credential";
+import { serviceCredentialFromEnv } from "../oauth2/credential";
 import { annotateSpan, gatewayTraceExporter, traceRpc, tracerFromEnv } from "../otel";
 import { logger } from "../logger";
 import { sessionProxy, verifySessionRequest, type ProxyTarget } from "./proxy";

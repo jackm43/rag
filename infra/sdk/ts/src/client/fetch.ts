@@ -1,4 +1,4 @@
-import { createDpopProof, DPOP_HEADER, type DpopKey } from "../verify/dpop";
+import { createDpopProof, DPOP_HEADER, type DpopKey } from "../oauth2/dpop";
 
 // TokenSource yields a bearer token for the configured target audience.
 export type TokenSource = () => Promise<string | null>;
