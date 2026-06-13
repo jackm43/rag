@@ -604,11 +604,27 @@ func (i *gatewayInterceptor) WrapStreamingClient(next connect.StreamingClientFun
 	return func(ctx context.Context, spec connect.Spec) connect.StreamingClientConn {
 		conn := next(ctx, spec)
 		if err := i.decorate(ctx, conn.RequestHeader(), spec.Procedure); err != nil {
-			i.session.logger().Debug("failed to decorate streaming request", "error", err)
+			// Fail closed: a stream that could not be authenticated must not
+			// proceed unauthenticated. Surface the error on first use.
+			i.session.logger().Warn("streaming request authorization failed; failing closed",
+				"procedure", spec.Procedure, "error", err)
+			return &failedStreamingConn{StreamingClientConn: conn, err: err}
 		}
 		return conn
 	}
 }
+
+// failedStreamingConn surfaces an authorization error on the first stream
+// operation so a request that could not be authenticated never reaches the
+// server unauthenticated.
+type failedStreamingConn struct {
+	connect.StreamingClientConn
+	err error
+}
+
+func (c *failedStreamingConn) Send(any) error      { return c.err }
+func (c *failedStreamingConn) Receive(any) error   { return c.err }
+func (c *failedStreamingConn) CloseRequest() error { return c.err }
 
 func (i *gatewayInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
 	return next
@@ -632,9 +648,12 @@ func (i *tokenInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 func (i *tokenInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
 	return func(ctx context.Context, spec connect.Spec) connect.StreamingClientConn {
 		conn := next(ctx, spec)
-		if token, err := i.token(ctx); err == nil {
-			conn.RequestHeader().Set("Authorization", "Bearer "+token)
+		token, err := i.token(ctx)
+		if err != nil {
+			// Fail closed rather than streaming without a bearer token.
+			return &failedStreamingConn{StreamingClientConn: conn, err: err}
 		}
+		conn.RequestHeader().Set("Authorization", "Bearer "+token)
 		return conn
 	}
 }
