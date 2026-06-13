@@ -1,4 +1,5 @@
 node_modules
+infra/roo/docs/roo_*
 .wrangler
 dist
 *.log
