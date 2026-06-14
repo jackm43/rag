@@ -39,6 +39,6 @@ test("community sessions require a bff actor for direct exchange", () => {
 test("scope matching no longer treats a bare wildcard as universal", () => {
   assert.equal(scopeMatches("*", "ragbot/ConfigService.ListConfig"), false);
   assert.equal(scopeMatches("ragbot/*", "ragbot/ConfigService.ListConfig"), true);
-  assert.equal(hasScope({ kind: "user", subject: "u", email: null, scopes: ["internal"], actorChain: [] }, "idp/RegistryService.ListApplications"), false);
+  assert.equal(hasScope({ kind: "user", subject: "u", email: null, scopes: ["internal"], actorChain: [] }, "idp/RegistryService.ListApplications"), true);
   assert.equal(hasScope({ kind: "user", subject: "u", email: null, scopes: ["ragbot/*"], actorChain: [] }, "ragbot/ConfigService.ListConfig"), true);
 });

@@ -1,0 +1,1102 @@
+sessions:
+  description: >
+    Gateway principal tiers, surface kinds, and dynamic access rules. Separate
+    from Cloudflare Access trust_zones in organization.yaml (hostname gate).
+
+aliases:
+  internal: staff
+
+principal_tiers:
+  staff:
+    status: implemented
+    scope_alias: internal
+    description: >
+      Platform operators via Cloudflare Access (GitHub OIDC) on ALLOWED_EMAILS.
+      Full self-service: direct STS exchange and gateway RPCs with DPoP session.
+    scope: internal
+    authentication:
+      method: oidc
+      upstream: cloudflare_access
+      requirement: Subject email on gateway ALLOWED_EMAILS.
+    attributes:
+      dpop_bound: true
+      access_token_lifetime: 5m
+      refresh_token_lifetime: 12mo
+      refresh_rotation: true
+      refresh_reuse_revokes_session: true
+      direct_exchange: true
+      direct_exchange_grants: "{audience}/*"
+      gateway_rpc_with_session: true
+      requires_bff_actor: false
+      email_allowlist_enforced: true
+    typical_clients: [platy CLI, console, chat]
+
+  enrolled:
+    status: planned
+    description: >
+      tier3 enrollment (WARP posture, enrolled group) without email allowlist.
+      Direct exchange capped by impersonation delegations; mutating calls need JIT.
+    scope: enrolled
+    authentication:
+      method: oidc
+      upstream: cloudflare_access
+      requirement: tier3 enroll on_success grant_group enrolled.
+    attributes:
+      dpop_bound: true
+      access_token_lifetime: 5m
+      refresh_token_lifetime: 30d
+      direct_exchange: true
+      direct_exchange_grants: impersonation_delegations_only
+      gateway_rpc_with_session: read_only
+      requires_bff_actor: false
+    typical_clients: [console, chat]
+
+  contractor:
+    status: planned
+    description: >
+      External identity via tier3 contractor enroll (WARP or RBI). No standing
+      privilege; BFF or JIT for application access; no direct gateway RPCs.
+    scope: contractor
+    authentication:
+      method: oidc
+      upstream: cloudflare_access
+      requirement: tier3.enroll.contractor require_warp_or_rbi.
+    attributes:
+      dpop_bound: true
+      access_token_lifetime: 5m
+      refresh_token_lifetime: 8h
+      direct_exchange: false
+      gateway_rpc_with_session: false
+      requires_bff_actor: true
+      standing_privilege: none
+    enroll_path: organization.yaml trust_zones.tier3.enroll.contractor
+
+  community:
+    status: implemented
+    description: >
+      Discord OAuth without Cloudflare Access seat. BFF-mediated only (portal).
+    scope: community
+    authentication:
+      method: discord_oauth
+      requirement: Allowed guild when ALLOWED_GUILD_IDS set.
+    attributes:
+      dpop_bound: true
+      access_token_lifetime: 5m
+      refresh_token_lifetime: 12mo
+      direct_exchange: false
+      gateway_rpc_with_session: false
+      requires_bff_actor: true
+    bff_applications: [portal]
+    community_editable_config:
+      application: ragbot
+      actor: portal
+      keys:
+        - ai_response_model
+        - ai_mention_model
+        - ai_roast_model
+        - ai_system_prompt
+        - ai_roast_system_prompt
+
+functional_personas:
+  description: >
+    Job-function capability bundles. Orthogonal to principal_tier (trust class).
+    Effective access = principal_tier caps INTERSECT persona caps INTERSECT rules.
+    Personas are derived from Cloudflare Access groups on gateway session creation
+    and Okta group sync for SaaS; not a second login.
+  status: planned
+  resolution:
+    source: gateway_session_claims
+    claims: [access_groups, okta_groups]
+    default_when_unmapped: application_engineering
+
+  platform_engineering:
+    description: Infra, deploy, CI control plane break-glass, registry admin
+    access_groups: [admins]
+    grants:
+      platy_rpc: [deploy/*, idp/RegistryService.*]
+      ci_control_plane:
+        buildkite: [JobService.read, JobService.mutate, PipelineService.dangerous]
+      saas_oauth: [cloudflare, datadog.mutate]
+
+  application_engineering:
+    description: Product engineering; observe CI, retry builds, no pipeline admin
+    access_groups: [users, enrolled]
+    grants:
+      ci_control_plane:
+        buildkite: [JobService.read, JobService.mutate]
+      platy_rpc: [ragbot/ConfigService.*, aigateway/*]
+
+  security_operations:
+    description: Audit, traces, read-only telemetry and CI visibility
+    access_groups: [security]
+    grants:
+      platy_rpc: [idp/TraceService.*, idp/AuditService.*]
+      ci_control_plane:
+        buildkite: [JobService.read]
+      saas_oauth: [datadog.read]
+
+  detection_response:
+    description: Incident investigation; broader read, no standing mutate
+    access_groups: [detection_response]
+    grants:
+      platy_rpc: [idp/TraceService.*]
+      ci_control_plane:
+        buildkite: [JobService.read]
+      saas_oauth: [datadog.read, github.read]
+    jit_elevation:
+      allowed_method_classes: [mutate]
+      max_duration: 4h
+      requires: [ticket_id, mfa_max_age: 5m]
+
+  contractor_delivery:
+    description: External delivery; paired with principal_tier contractor
+    access_groups: [contractors]
+    grants:
+      platy_rpc: impersonation_delegations_only
+      ci_control_plane:
+        buildkite: [JobService.read]
+    standing_mutate: false
+
+device_trust_classes:
+  description: >
+    Device posture orthogonal to principal_tier. Resolved at gateway session
+    creation from Access signals (WARP posture, RBI isolation, future MDM).
+  status: planned
+
+  managed:
+    signals: [mdm_enrolled, warp_posture]
+    allowed_resource_tiers: [public, platform, critical, privileged]
+    platy_cli: true
+    dpop_refresh_ttl_cap: 12mo
+
+  byod_enrolled:
+    signals: [warp_posture]
+    allowed_resource_tiers: [public, platform, critical]
+    platy_cli: true
+    dpop_refresh_ttl_cap: 30d
+    tier1_requires: [isolation_required, mfa_max_age: 5m]
+
+  byod_rbi:
+    signals: [access_isolation_required]
+    allowed_resource_tiers: [public, platform, critical]
+    platy_cli: false
+    allowed_surfaces: [okta_sso_app, platy_rpc via BFF web clients only]
+    enroll_path: tier3.enroll.contractor require_warp_or_rbi
+    okta_critical_browser: true
+    no_laptop_required: true
+    launch_app: okta_rbi_launcher
+
+  unmanaged:
+    signals: []
+    allowed_resource_tiers: [public]
+    allowed_surfaces: [community portal]
+
+okta_rbi_launcher:
+  description: >
+    Access application that starts RBI. Option A: destination Okta + GitHub IdP
+    in Okta. Option C: Access SAML IdP to Okta inbound federation (single GitHub login).
+  status: planned
+  integration_models:
+    github_oidc_in_okta:
+      id: option_a
+      description: Inner RBI completes separate GitHub login via Okta IdP routing
+      access_application:
+        type: self_hosted
+        destination: https://jsmunro.okta.com
+        identity_providers: [github]
+    access_saml_to_okta:
+      id: option_c
+      description: Access acts as SAML IdP; Okta inbound federation; one GitHub login
+      access_applications:
+        launcher:
+          type: self_hosted
+          hostname: okta-rbi.jsmunro.me
+          destination: https://jsmunro.okta.com/login/login.htm
+          identity_providers: [github]
+          isolation_required: true
+          session_duration: 8h
+          allowed_groups: [enrolled, admins]
+        okta_saml_idp:
+          type: saas_saml
+          name: okta-inbound-saml
+          entity_id: from_okta_audience_uri
+          acs_url: from_okta_trust_specific_acs
+          login_identity_providers: [github]
+          saml_attributes:
+            - name: email
+              idp_claim: email
+              required: true
+            - name: groups
+              idp_claim: groups
+          metadata_url_suffix: /saml-metadata
+      okta_inbound_idp:
+        name: Cloudflare Access
+        idp_usage: sso_only
+        username_format: idpuser.subjectNameId
+        acs_url_type: trust_specific
+        sign_authn_requests: true
+        account_linking: match_email
+      okta_routing:
+        - match: user.email ends with @jsmunro.me
+          use_idp: Cloudflare Access
+      setup_order:
+        - okta_create_idp_placeholders_copy_acs_and_audience
+        - cloudflare_create_saas_saml_app_with_okta_acs_and_audience
+        - cloudflare_copy_sso_endpoint_issuer_cert_to_okta_idp
+        - okta_routing_and_authentication_policy
+        - cloudflare_create_rbi_launcher_self_hosted
+        - test_idp_then_test_rbi_end_to_end
+  endpoint: https://okta-rbi.jsmunro.me
+  trust_zone: tier3
+  device_trust_granted: byod_rbi
+  auth_hops:
+    option_a:
+      - gate: cloudflare_access
+        idp: github
+      - gate: okta
+        idp: github_federation_inside_rbi
+    option_c:
+      - gate: cloudflare_access
+        idp: github
+        proves: access_session_for_saml_idp
+      - gate: okta_inbound_saml
+        idp: cloudflare_access_saml
+        proves: okta_sid_cookie_in_rbi
+      - gate: okta_app_assignment
+        proves: may_launch_saml_app
+  notes:
+    - Option C requires two Access apps (launcher + SaaS SAML) and one Okta inbound IdP
+    - RBI browser must present Access session when hitting Cloudflare SAML SSO endpoint
+    - Okta SAML POST to downstream SaaS supported in RBI (2025-05+)
+
+resource_tiers:
+  privileged:
+    description: Break-glass, registry mutation, deploy upload, secrets rotation
+    default_trust_zone: tier0
+  critical:
+    description: Raw data planes, provider connectors with write, k8s exec
+    default_trust_zone: tier1
+  platform:
+    description: Normal registered applications and sandboxed devboxes
+    default_trust_zone: tier2
+  public:
+    description: Enrollment, community portal, browser clients
+    default_trust_zone: tier3
+
+method_classes:
+  read:
+    description: Non-mutating observation
+    default_name_prefixes: [List, Get, Discover]
+  mutate:
+    description: State-changing but bounded
+    default_names: [Update, Create, Register, Upsert, Complete, StreamComplete]
+  dangerous:
+    description: Unbounded or large blast radius
+    default_names: [Delete, Rotate, Revoke, Upload, Query, Start, StartGateway]
+  privileged:
+    description: Break-glass and control plane
+    default_surfaces: [idp registry admin, deploy upload]
+
+surface_kinds:
+  platy_rpc:
+    description: Registered Connect workers (ragbot, deploy, idp, ...)
+    access_path: STS token and protect middleware
+  saas_oauth:
+    description: >
+      Third-party SaaS API via provider connector, or Okta SSO-only with no API
+    access_path: ExchangeProviderToken, okta_sso_only, or dual
+    reference_implementation: cloudflare
+    integration_models:
+      platy_oauth: platy-owned OAuth client and ExchangeProviderToken
+      okta_sso_only: browser SSO via Okta; platy API denied unless dual added
+      okta_brokered_api: Okta Authorization Server issues downstream API token
+      dual: Okta SSO for humans plus separate platy OAuth client for automation
+      policy_context: read Okta for group and app assignment only
+  ci_control_plane:
+    description: CI SaaS APIs (Buildkite, GitHub Actions)
+    access_path: provider connector or OIDC workload token
+  ci_runner:
+    description: Self-hosted agents; machine principal only
+    access_path: service credential or pipeline OIDC
+  devbox:
+    description: Remote dev environments; profile drives resource tier
+    access_path: IdP federation inbound; platy CLI outbound with origin_devbox_id
+  k8s_api:
+    description: Kubernetes API; verb-class map
+    access_path: kubernetes connector or Access-wrapped apiserver
+  okta_sso_app:
+    description: Okta catalog SaaS assignment; browser SSO tiered via okta_apps
+    access_path: Okta dashboard launch; platy PDP uses assignment as policy context
+    sign_on_modes: [saml_2_0, oidc, oauth2]
+
+devbox_profiles:
+  sandbox:
+    resource_tier: platform
+    description: No prod network; egress allowlist; no persistent secrets
+    federation_allow:
+      platy_rpc:
+        - aigateway/ChatService.Complete
+        - aigateway/ChatService.StreamComplete
+        - aigateway/ChatService.ListModels
+      saas_oauth:
+        - github
+    federation_deny:
+      - deploy/*
+      - idp/RegistryService.*
+      - ragbot/DatabaseService.*
+      - k8s_api/*
+    access_token_ttl_cap: 15m
+
+  trusted:
+    resource_tier: critical
+    description: WARP enrolled; no prod kube context by default
+    requires: [posture: warp]
+    federation_allow:
+      platy_rpc:
+        - aigateway/*
+        - ragbot/ConfigService.ListConfig
+        - ragbot/ConfigService.GetConfig
+        - ragbot/LeaderboardService.*
+      saas_oauth: [github, google_workspace]
+      ci_control_plane: [buildkite]
+    dangerous_requires_jit: true
+    access_token_ttl_cap: 30m
+
+  privileged:
+    resource_tier: privileged
+    description: Prod-adjacent; rare; JIT and fresh MFA
+    requires: [jit_elevation_active, mfa_max_age: 5m, posture: warp]
+    federation_allow:
+      platy_rpc: delegated_intersection
+      saas_oauth: delegated_intersection
+      k8s_api: [read]
+    access_token_ttl_cap: 5m
+
+okta_apps:
+  description: >
+    Okta catalog applications tiered like platy apps. Browser SSO is Okta-managed;
+    API path links to saas_connectors when api.available is true. Critical apps
+    deny local BYOD browser; use okta_rbi_launcher (phone/tablet ok) or managed device.
+  sync:
+    status: planned
+    source: okta Management API
+    reconciles: [okta_app_id, label, sign_on_mode, status]
+
+  browser_device_policy:
+    description: >
+      How device_trust_class gates Okta dashboard launch per resource_tier.
+      byod_rbi satisfies critical apps without a laptop.
+    critical:
+      allowed_device_trust: [managed, byod_rbi]
+      denied_device_trust: [unmanaged]
+      byod_enrolled_requires_rbi: true
+      rbi_launcher: okta_rbi_launcher
+    platform:
+      allowed_device_trust: [managed, byod_enrolled, byod_rbi]
+      denied_device_trust: [unmanaged]
+    public:
+      allowed_device_trust: [managed, byod_enrolled, byod_rbi, unmanaged]
+
+  salesforce:
+    status: planned
+    vendor: salesforce
+    sign_on_mode: saml_2_0
+    resource_tier: critical
+    browser:
+      allowed_principal_tiers: [staff, enrolled]
+      requires_okta_assignment: true
+      device_trust:
+        allowed: [managed, byod_rbi]
+        denied: [unmanaged]
+        byod_enrolled_requires_rbi: true
+        no_laptop_path: okta_rbi_launcher
+    api:
+      available: false
+      note: SAML UI via RBI or managed browser; REST uses salesforce_api connector
+
+  google_workspace:
+    status: planned
+    vendor: google
+    sign_on_mode: saml_2_0
+    resource_tier: critical
+    browser:
+      allowed_principal_tiers: [staff, enrolled]
+      requires_okta_assignment: true
+      device_trust:
+        allowed: [managed, byod_rbi]
+        denied: [unmanaged]
+        byod_enrolled_requires_rbi: true
+        no_laptop_path: okta_rbi_launcher
+    api:
+      available: true
+      integration_model: dual
+      platy_connector: google_workspace
+
+  github:
+    status: planned
+    vendor: github
+    sign_on_mode: oidc
+    resource_tier: platform
+    browser:
+      allowed_principal_tiers: [staff, enrolled, contractor]
+      requires_okta_assignment: true
+      device_trust:
+        allowed: [managed, byod_enrolled, byod_rbi]
+    api:
+      available: true
+      integration_model: platy_oauth
+      platy_connector: github
+
+  buildkite:
+    status: planned
+    vendor: buildkite
+    sign_on_mode: oidc
+    resource_tier: platform
+    browser:
+      allowed_principal_tiers: [staff, enrolled]
+      device_trust:
+        allowed: [managed, byod_enrolled, byod_rbi]
+    api:
+      available: true
+      integration_model: api_token_app
+      platy_connector: buildkite
+      note: >
+        Org integration user API token in CFSS; humans never hold personal
+        Buildkite API keys. Agent registration token is separate (ci_runner).
+
+github_auth_policy:
+  status: planned
+  default: oauth_preferred
+  modes:
+    oauth_preferred:
+      primary_connector: github
+      fallback_connector: github_pat
+    oauth_only:
+      primary_connector: github
+    pat_only:
+      primary_connector: github_pat
+
+vendor_auth_modes:
+  description: >
+    How vendor credentials are obtained. Maps to applications.yaml provider_auth
+    and SDK providerApiClient auth mode.
+  oauth_user:
+    provider_auth: oauth
+    vendor_sees: end_user
+    credential_store: idp_provider_grants
+    exchange: ExchangeProviderToken
+  api_token_app:
+    provider_auth: api_token
+    vendor_sees: shared_integration_account
+    credential_store: cloudflare_secrets_store
+    exchange: none
+    pdp_note: Deny contractors; platy audit attributes human actor
+  api_token_user_pat:
+    provider_auth: user_api_token
+    status: planned
+    vendor_sees: end_user
+    credential_store: idp_integration_credentials
+    exchange: ResolveIntegrationCredential
+    cli: platy integration store
+  oauth_client_credentials:
+    provider_auth: client_credentials
+    status: planned
+    vendor_sees: application
+    principal_tier: service_only
+  jwt_bearer_service:
+    provider_auth: jwt_bearer
+    status: planned
+    vendor_sees: service_principal
+    principal_tier: service_only
+    credential_store: cloudflare_secrets_store
+    note: >
+      Store service account private key JSON or PEM as worker secret (same as
+      CF_AIG_TOKEN). Connector signs JWT per request; not a GCP/Okta product
+      integration with CFSS.
+
+saas_connectors:
+  cloudflare:
+    status: implemented
+    vendor_auth_mode: oauth_user
+    integration_model: platy_oauth
+    application: cloudflare
+    surface_kind: saas_oauth
+    tier_scope_caps:
+      staff: applications.yaml provider_api_scopes
+      enrolled: [teams.read, teams-connector-warp.read, workers-scripts.read]
+      contractor: []
+    exchange: IdentityService.ExchangeProviderToken
+    pep: providerApiClient plus per-RPC vendor path allowlist
+
+  okta:
+    status: planned
+    vendor_auth_mode: oauth_user
+    integration_model: policy_context
+    description: >
+      Read-only Okta Management API for group membership and app assignments.
+      Feeds PDP when SaaS is okta_sso_only; does not replace vendor API tokens.
+    application: okta
+    surface_kind: saas_oauth
+    provider_api_scopes:
+      - okta.users.read
+      - okta.groups.read
+      - okta.apps.read
+    tier_scope_caps:
+      staff: [okta.users.read, okta.groups.read, okta.apps.read]
+      enrolled: [okta.users.read.self, okta.apps.read]
+      contractor: []
+
+  github:
+    status: planned
+    vendor_auth_mode: oauth_user
+    preferred: true
+    integration_model: platy_oauth
+    okta_app: github
+    requires_okta_assignment: true
+    application: github
+    surface_kind: saas_oauth
+    registration_scopes:
+      - read:user
+      - repo
+      - read:org
+    tier_scope_caps:
+      staff: [read:user, repo, read:org]
+      enrolled: [read:user, repo]
+      contractor: [read:user, repo]
+      community: []
+    method_classes:
+      GET /repos: read
+      POST /repos/{owner}/{repo}/pulls: mutate
+      DELETE /repos/{owner}/{repo}: dangerous
+
+  google_workspace:
+    status: planned
+    vendor_auth_mode: oauth_user
+    integration_model: dual
+    okta_app: google_workspace
+    requires_okta_assignment: true
+    application: google_workspace
+    surface_kind: saas_oauth
+    tier_scope_caps:
+      staff: [openid, email, profile, drive.readonly]
+      enrolled: [openid, email, profile]
+      contractor: []
+    method_classes:
+      drive.files.get: read
+      drive.files.create: mutate
+      admin.directory.user: dangerous
+
+  salesforce_api:
+    status: planned
+    vendor_auth_mode: oauth_user
+    integration_model: dual
+    description: >
+      Salesforce Connected App for REST API. Separate from Okta SAML SSO app.
+      User must be assigned okta_apps.salesforce to call API as that user.
+    okta_app: salesforce
+    requires_okta_assignment: true
+    application: salesforce_api
+    surface_kind: saas_oauth
+    registration_scopes:
+      - api
+      - refresh_token
+    tier_scope_caps:
+      staff: [api, refresh_token]
+      enrolled: [api]
+      contractor: [api]
+    method_classes:
+      GET /sobjects: read
+      GET /query: read
+      PATCH /sobjects: mutate
+      POST /sobjects: mutate
+      tooling/sobjects: dangerous
+      metadata/deploy: dangerous
+
+  buildkite:
+    status: planned
+    vendor_auth_mode: api_token_app
+    description: >
+      Buildkite REST API via org integration user token (not per-engineer keys).
+      Operations (read logs, retry) go through platy with human actor audit.
+      Pipeline definition changes are git-based by default; API pipeline admin is
+      break-glass only (see pipeline_management). Agent registration tokens live
+      on runners only (see buildkite_runner).
+    application: buildkite
+    surface_kind: ci_control_plane
+    integration_user: platy-integration
+    integration_user_rationale: >
+      Buildkite issues API tokens per user account, not per org service principal.
+      A dedicated integration user avoids every engineer holding write_builds PATs,
+      enables single rotation in CFSS, and keeps vendor audit on one account while
+      platy audit attributes the human (provider_api_client actor). Per-user PAT
+      (api_token_user_pat) is reserved for vendors with no shared integration path.
+    buildkite_org_slug: jsmunro
+    api_base_url: https://api.buildkite.com/v2
+    token_scopes:
+      - read_builds
+      - read_build_logs
+      - read_artifacts
+      - write_builds
+    token_scopes_denied:
+      - write_pipelines
+      - write_agents
+      - write_organizations
+    pipeline_management:
+      default_path: git
+      description: >
+        Engineers change .buildkite/pipeline.yml via normal git/PR review. No
+        standing write_pipelines on the integration token. Buildkite Teams are for
+        UI visibility and notification routing only — not platy authorization.
+      api_path: break_glass
+      allowed_personas: [platform_engineering]
+      requires: [jit_elevation, mfa_max_age: 5m, principal_tier: staff]
+      rpc_service: PipelineService
+      method_class: dangerous
+    secrets:
+      BUILDKITE_API_TOKEN: op://Services/Buildkite Integration API Token/password
+    wrangler_vars:
+      BUILDKITE_ORG_SLUG: jsmunro
+    allowed_principal_tiers: [staff, enrolled]
+    contractor_allowed: false
+    persona_caps:
+      application_engineering: [JobService.read, JobService.mutate]
+      platform_engineering: [JobService.read, JobService.mutate, PipelineService.dangerous]
+      security_operations: [JobService.read]
+      detection_response: [JobService.read]
+    rpc_methods:
+      JobService.GetBuild:
+        method: GET
+        path: /organizations/{org}/pipelines/{pipeline}/builds/{number}
+        method_class: read
+        buildkite_scope: read_builds
+      JobService.ListBuilds:
+        method: GET
+        path: /organizations/{org}/pipelines/{pipeline}/builds
+        method_class: read
+        buildkite_scope: read_builds
+      JobService.StreamLog:
+        method: GET
+        path: /organizations/{org}/pipelines/{pipeline}/builds/{number}/jobs/{job_id}/log
+        method_class: read
+        buildkite_scope: read_build_logs
+        server_streaming: true
+        note: Handler lists jobs from GetBuild when job_id omitted
+      JobService.RetryBuild:
+        method: PUT
+        path: /organizations/{org}/pipelines/{pipeline}/builds/{number}/rebuild
+        method_class: mutate
+        buildkite_scope: write_builds
+        requires: [mfa_max_age: 5m, principal_tier: staff]
+      JobService.RetryFailedJobs:
+        method: POST
+        path: /organizations/{org}/pipelines/{pipeline}/builds/{number}/retry_failed_jobs
+        method_class: mutate
+        buildkite_scope: write_builds
+        requires: [mfa_max_age: 5m, principal_tier: staff]
+      JobService.RetryJob:
+        method: PUT
+        path: /organizations/{org}/pipelines/{pipeline}/builds/{number}/jobs/{job_id}/retry
+        method_class: mutate
+        buildkite_scope: write_builds
+        requires: [mfa_max_age: 5m, principal_tier: staff]
+      JobService.CancelBuild:
+        method: PUT
+        path: /organizations/{org}/pipelines/{pipeline}/builds/{number}/cancel
+        method_class: mutate
+        buildkite_scope: write_builds
+        requires: [mfa_max_age: 5m, principal_tier: staff]
+      PipelineService.UpdatePipeline:
+        method: PUT
+        path: /organizations/{org}/pipelines/{slug}
+        method_class: dangerous
+        buildkite_scope: write_pipelines
+        requires: [persona: platform_engineering, jit_elevation, mfa_max_age: 5m]
+        note: Denied at connector unless break-glass; token lacks write_pipelines anyway
+      PipelineService.CreatePipeline:
+        method: POST
+        path: /organizations/{org}/pipelines
+        method_class: dangerous
+        buildkite_scope: write_pipelines
+        requires: [persona: platform_engineering, jit_elevation, mfa_max_age: 5m]
+
+  buildkite_runner:
+    status: planned
+    vendor_auth_mode: api_token_app
+    description: >
+      Self-hosted runner identity is two-layer: Buildkite agent registration
+      (cluster membership) and platy cicd service credential (hook outbound only).
+      Humans never use either credential for log viewing.
+    surface_kind: ci_runner
+    principal_tier: service
+    identity_layers:
+      host:
+        description: VM or bare metal running buildkite-agent
+        attestation: [warp_posture, optional_machine_cert]
+        registration: planned idp machine principal RegisterClientIdentity
+      buildkite_agent:
+        description: Cluster agent registration token
+        header: Token
+        scope: start agent, receive jobs for cluster queues
+        secret: BUILDKITE_AGENT_TOKEN
+        rotation: CFSS + runner bootstrap; per-cluster tokens preferred
+      platy_hook:
+        description: Pipeline step calling platy fetch deploy.*
+        application: cicd
+        principal_tier: service
+        credential: SERVICE_CLIENT_ID + SERVICE_CLIENT_SECRET
+        delegation: deploy/DeployService.Upload
+        pdp_requires: [pipeline_slug_in_allowlist, branch_allowlist]
+      future_pipeline_oidc:
+        description: Buildkite emits OIDC JWT per job; gateway exchanges for scoped hook token
+        status: planned
+        replaces: static cicd secret on hook when available
+    secrets:
+      BUILDKITE_AGENT_TOKEN: op://Services/Buildkite Agent Token/password
+    pipeline_allowlist:
+      - ragbot-deploy
+    branch_allowlist: [main]
+    hook_identity: cicd
+    hook_delegation: deploy/DeployService.Upload
+    human_allowed: false
+
+  aigateway_upstream:
+    status: implemented
+    vendor_auth_mode: api_token_app
+    description: >
+      Cloudflare AI Gateway static token (no per-user OAuth). Reference for
+      api_token_app pattern; lives on aigateway app not a separate connector.
+    application: aigateway
+    surface_kind: saas_oauth
+    secret: CF_AIG_TOKEN
+    api_token_header: cf-aig-authorization
+    allowed_principal_tiers: [staff, enrolled]
+    contractor_allowed: false
+
+  datadog:
+    status: planned
+    vendor_auth_mode: api_token_app
+    description: >
+      Org API key (+ App key for writes). No per-user OAuth; platy attributes
+      human actor in audit; vendor sees org integration keys only.
+    application: datadog
+    surface_kind: saas_oauth
+    secrets:
+      DATADOG_API_KEY: op://Services/Datadog API Key/password
+      DATADOG_APP_KEY: op://Services/Datadog Application Key/password
+    api_token_headers:
+      read: DD-API-KEY
+      write: [DD-API-KEY, DD-APPLICATION-KEY]
+    allowed_principal_tiers: [staff, enrolled]
+    contractor_allowed: false
+    rpc_methods:
+      LogService.Query:
+        datadog: POST /api/v2/logs/events/search
+        method_class: read
+        keys: [DATADOG_API_KEY]
+      MetricService.Query:
+        method_class: read
+        keys: [DATADOG_API_KEY]
+      DashboardService.Get:
+        datadog: GET /api/v1/dashboard/{id}
+        method_class: read
+        keys: [DATADOG_API_KEY]
+      MonitorService.Create:
+        datadog: POST /api/v1/monitor
+        method_class: mutate
+        keys: [DATADOG_API_KEY, DATADOG_APP_KEY]
+      MonitorService.Delete:
+        method_class: dangerous
+        keys: [DATADOG_API_KEY, DATADOG_APP_KEY]
+
+  github_pat:
+    status: planned
+    vendor_auth_mode: api_token_user_pat
+    description: >
+      Fallback when github_auth_policy is pat_only or OAuth blocked. Each user
+      stores their own PAT; never use org-wide GitHub PAT in CFSS for humans.
+    application: github_pat
+    surface_kind: saas_oauth
+    okta_app: github
+    requires_okta_assignment: true
+    allowed_principal_tiers: [staff, enrolled]
+    requires: [integration_credential_registered]
+    method_classes:
+      GET /user: read
+      GET /repos/{owner}/{repo}: read
+      POST /repos/{owner}/{repo}/pulls: mutate
+
+upstream_idp:
+  status: planned
+  cloudflare_access:
+    status: implemented
+    principal_tier_mapping:
+      allowed_emails: staff
+  okta:
+    status: planned
+    description: >
+      Okta catalog + optional federation. For RBI: federate Okta to same GitHub
+      as Access; network zone for RBI egress; auth policy without device assurance.
+    principal_tier_mapping:
+      PlatAdmins: staff
+      PlatEnrolled: enrolled
+      Contractors: contractor
+    rbi_federation:
+      option_a_github_oidc:
+        access_destination: https://jsmunro.okta.com
+        okta_idp: github_oidc
+        inner_auth: second_github_login_inside_rbi
+      option_c_access_saml:
+        status: documented
+        launcher: okta-rbi.jsmunro.me
+        saas_saml_app: okta-inbound-saml
+        okta_inbound_idp: Cloudflare Access
+        inner_auth: cloudflare_saml_assertion_to_okta_acs
+        single_github_login: true
+        see: ZERO_TRUST_SESSIONS_DESIGN.md Option C setup
+      network_zone: Cloudflare RBI egress
+      authentication_policy:
+        option_a_require_mfa: true
+        option_c_skip_okta_mfa_if_access_mfa: true
+        skip_device_assurance: true
+    scim_to_access:
+      status: optional
+      note: If Okta becomes Access IdP, SCIM syncs groups to Cloudflare Access
+
+rules:
+  - id: saas-oauth-tier-cap
+    status: planned
+    description: Provider token scopes intersect registration ceiling and tier cap
+    when:
+      surface_kind: saas_oauth
+    grant:
+      provider_scopes: tier_scope_cap_intersection
+      access_token_ttl: 15m
+
+  - id: saas-dangerous-step-up
+    status: planned
+    when:
+      surface_kind: saas_oauth
+      method_class: [dangerous]
+      requires: [mfa_max_age: 5m, principal_tier: staff]
+    grant:
+      access_token_ttl: 5m
+
+  - id: salesforce-api-requires-okta-app
+    status: planned
+    description: Salesforce API only if user has Okta SAML app assignment
+    when:
+      platy_connector: salesforce_api
+      principal_tier: [staff, enrolled]
+    requires:
+      - okta_app_assigned: salesforce
+    grant:
+      provider_scopes: tier_scope_cap_intersection
+      access_token_ttl: 15m
+
+  - id: salesforce-api-contractor-read
+    status: planned
+    when:
+      platy_connector: salesforce_api
+      principal_tier: contractor
+      method_class: [read]
+    requires:
+      - jit_elevation_active
+      - okta_app_assigned: salesforce
+    grant:
+      access_token_ttl: 15m
+
+  - id: okta-sso-rbi-critical-allow
+    status: planned
+    description: >
+      Critical Okta SSO apps via RBI; works on phone/tablet without laptop or WARP.
+      Session runs in Cloudflare isolated browser; Okta SAML stays inside container.
+    when:
+      surface_kind: okta_sso_app
+      resource_tier: [critical, privileged]
+      device_trust_class: byod_rbi
+      access_isolation_required: true
+    requires:
+      - okta_app_assigned: true
+    grant:
+      browser_launch: allow
+      platy_api: deny
+
+  - id: okta-sso-managed-critical-allow
+    status: planned
+    description: Managed or WARP BYOD with RBI for critical Okta browser SSO
+    when:
+      surface_kind: okta_sso_app
+      resource_tier: [critical, privileged]
+      device_trust_class: [managed, byod_enrolled]
+      access_isolation_required: true
+    requires:
+      - okta_app_assigned: true
+    grant:
+      browser_launch: allow
+
+  - id: deny-okta-sso-unmanaged
+    status: planned
+    when:
+      surface_kind: okta_sso_app
+      resource_tier: [critical, privileged]
+      device_trust_class: unmanaged
+    effect: deny
+
+  - id: deny-okta-sso-local-byod-critical
+    status: planned
+    description: Critical Okta apps deny local BYOD browser without RBI wrapper
+    when:
+      surface_kind: okta_sso_app
+      resource_tier: critical
+      device_trust_class: byod_enrolled
+      access_isolation_required: false
+    effect: deny
+
+  - id: okta-app-tier-deny
+    status: planned
+    description: Deny platy API to Okta app tier user cannot launch in browser
+    when:
+      okta_app_resource_tier: [critical, privileged]
+      principal_tier: contractor
+      surface_kind: saas_oauth
+    effect: deny
+
+  - id: deny-contractor-app-token-connectors
+    status: planned
+    description: Shared API tokens never usable by contractor or community tiers
+    when:
+      vendor_auth_mode: api_token_app
+      principal_tier: [contractor, community]
+    effect: deny
+
+  - id: app-token-dangerous-step-up
+    status: planned
+    when:
+      vendor_auth_mode: api_token_app
+      method_class: [dangerous, mutate]
+      principal_tier: staff
+    requires: [mfa_max_age: 5m]
+
+  - id: user-pat-requires-registration
+    status: planned
+    description: User PAT connectors fail closed if subject has no stored credential
+    when:
+      vendor_auth_mode: api_token_user_pat
+    requires: [integration_credential_registered: true]
+
+  - id: buildkite-human-read
+    status: planned
+    description: Staff read builds and stream logs via org integration API token
+    when:
+      platy_connector: buildkite
+      vendor_auth_mode: api_token_app
+      principal_tier: [staff, enrolled]
+      method_class: [read]
+    grant:
+      integration_account: platy-integration
+      audit_actor: required
+
+  - id: buildkite-retry-step-up
+    status: planned
+    description: Retry or cancel requires staff and fresh MFA
+    when:
+      platy_connector: buildkite
+      method_class: [mutate]
+      rpc: [JobService.RetryBuild, JobService.CancelBuild]
+    requires: [principal_tier: staff, mfa_max_age: 5m]
+
+  - id: deny-buildkite-contractor-mutate
+    status: planned
+    when:
+      platy_connector: buildkite
+      principal_tier: contractor
+      method_class: [mutate, dangerous]
+    effect: deny
+
+  - id: deny-buildkite-human-agent-api
+    status: planned
+    description: Agent admin APIs are not callable by human principals
+    when:
+      platy_connector: buildkite
+      rpc_prefix: AgentService
+      principal_tier: [staff, enrolled, contractor]
+    effect: deny
+
+  - id: deny-buildkite-pipeline-api-without-persona
+    status: planned
+    description: Pipeline CRUD is break-glass; default path is git
+    when:
+      platy_connector: buildkite
+      rpc_prefix: PipelineService
+      persona: [application_engineering, security_operations, detection_response]
+    effect: deny
+
+  - id: buildkite-runner-deploy
+    status: planned
+    when:
+      principal_tier: service
+      actor_application: cicd
+      resource: deploy/DeployService.Upload
+    requires: [pipeline_slug_in_allowlist]
+
+  - id: datadog-read-staff
+    status: planned
+    when:
+      platy_connector: datadog
+      method_class: [read]
+      principal_tier: [staff, enrolled]
+    grant:
+      audit_actor: required
+
+  - id: datadog-mutate-step-up
+    status: planned
+    when:
+      platy_connector: datadog
+      method_class: [mutate, dangerous]
+    requires: [principal_tier: staff, mfa_max_age: 5m]
+
+  - id: deny-datadog-contractor
+    status: planned
+    when:
+      platy_connector: datadog
+      principal_tier: [contractor, community]
+    effect: deny
+
+  - id: devbox-outbound-cap
+    status: planned
+    when:
+      origin_devbox_id: present
+    grant:
+      scopes: devbox_profile.federation_allow_intersection
+      access_token_ttl: min(user_ttl, profile.access_token_ttl_cap)
+
+  - id: deny-contractor-dangerous
+    status: planned
+    when:
+      principal_tier: contractor
+      method_class: [dangerous, privileged]
+    effect: deny
+
+  - id: community-portal-mutate
+    status: implemented
+    when:
+      principal_tier: community
+      actor_application: portal
+      resource: ragbot/ConfigService.UpdateConfig
+      requires: [config_key_in_allowlist]
+    grant:
+      scopes: [ragbot/ConfigService.UpdateConfig]
+
+jit_elevation:
+  status: planned
+  enabled: true
+  default_mutate_ttl: 15m
+  require_purpose: true
+  sponsor_must_be: [staff, enrolled]
+
+storage:
+  sessions_table: idp_sessions
+  sessions_column: tier
+  sessions_default: internal
+  provider_grants_table: idp_provider_grants
+  elevations_table: idp_elevations
