@@ -53,11 +53,14 @@ export const buildConnectors = async (env: Env, tracer: Tracer): Promise<Connect
         },
       },
     });
-    handlers.set("ragbot_leaderboard", async (identity, args) =>
-      (await (await targets(env, identity).ragbot.leaderboardService())).listTotals({
+    handlers.set("ragbot_leaderboard", async (identity, args) => {
+      const leaderboard = await targets(env, identity).ragbot.leaderboardService() as {
+        listTotals: (request: { limit?: number }) => Promise<unknown>;
+      };
+      return leaderboard.listTotals({
         limit: boundedInt(args.limit, 10, 50),
-      }),
-    );
+      });
+    });
   }
 
   const invoke = async (

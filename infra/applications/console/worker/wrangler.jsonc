@@ -11,13 +11,16 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": [
       "/client/*",
-      "/deploy.v1.DeployService/*",
-      "/discovery.v1.DiscoveryService/*",
-      "/ragbot.v1.ConfigService/*",
-      "/ragbot.v1.GatewayControlService/*"
+      "/platform/applications/v1/*",
+      "/platform/deploy/v1/*",
+      "/platform/discovery/v1/*",
+      "/platform/gateway/v1/*",
+      "/platform/ragbot/v1/*",
+      "/platform/traces/v1/*"
     ]
   },
   "vars": {
+    "PLATY_APPLICATION": "console",
       "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.me",
       "DEPLOY_ENDPOINT": "https://deploy.jsmunro.me",
       "DISCOVERY_ENDPOINT": "https://discovery.jsmunro.me",
@@ -45,12 +48,4 @@
   "observability": {
     "logs": {"enabled": true, "invocation_logs": true}
   }
-,
-  "secrets_store_secrets": [
-  {
-    "binding": "SERVICE_CLIENT_SECRET",
-    "store_id": "2bca8b5b9f7a46999c37ff8eafbf7ba3",
-    "secret_name": "platy-console-service-client-secret"
-  }
-]
 }

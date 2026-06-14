@@ -6,6 +6,7 @@
 // session — they can only sign while their code runs in the live page.
 
 import { createDpopProof } from "@platy/sdk/oauth2/dpop";
+import { createPlatformWebClient, type PlatformWebClientOptions, type PlatformWebClients } from "./platform-client";
 
 const DB_NAME = "trustzone-auth";
 const STORE = "auth";
@@ -51,6 +52,10 @@ export type BrowserAuthOptions = {
   // to them are same-origin and need no CORS. Keys are application names or
   // "gateway"; the rewrite keeps the path and swaps the origin.
   sameOrigin?: string[];
+  // Route OAuth token and revoke through the BFF (/client/session/*). The
+  // browser still creates DPoP proofs with its device key; the BFF verifies
+  // possession and forwards the grant to the gateway with the device jkt.
+  sessionViaBff?: boolean;
 };
 
 export type BootstrapOptions = BrowserAuthOptions & {
@@ -197,6 +202,7 @@ const sessionTokensFromOAuth = (response: OAuthTokenResponse): SessionTokens => 
 export class BrowserAuth {
   private readonly discoveryUrl: string;
   private readonly sameOrigin: string[];
+  private readonly sessionViaBff: boolean;
   private readonly provider: AuthProvider;
   private config: DiscoveryConfig | null = null;
   private key: StoredKey | null = null;
@@ -208,6 +214,7 @@ export class BrowserAuth {
   constructor(discoveryUrl: string, options: BrowserAuthOptions = {}) {
     this.discoveryUrl = discoveryUrl;
     this.sameOrigin = options.sameOrigin ?? [];
+    this.sessionViaBff = options.sessionViaBff ?? true;
     this.provider = options.provider ?? "access";
   }
 
@@ -263,10 +270,8 @@ export class BrowserAuth {
     const response = await fetch(url, { headers: { accept: "application/json" } });
     if (!response.ok) throw new Error(`discovery failed (${response.status})`);
     this.config = (await response.json()) as DiscoveryConfig;
-    if (this.sameOrigin.includes("gateway")) {
-      for (const key of Object.keys(this.config.endpoints ?? {})) {
-        this.config.endpoints[key] = this.rewrite(this.config.endpoints[key]);
-      }
+    if (this.sameOrigin.includes("gateway") && this.config.endpoints.discovery) {
+      this.config.endpoints.discovery = this.rewrite(this.config.endpoints.discovery);
     }
     this.key = await ensureDeviceKey();
     const refresh = await idbGet<{ value: string }>(REFRESH_ID);
@@ -374,9 +379,9 @@ export class BrowserAuth {
     if (!code || !returnedState || returnedState !== expectedState || !verifier) {
       throw new Error("invalid authorization callback");
     }
-    // The gateway completes the upstream PKCE token exchange server-side and
-    // returns a DPoP-bound gateway session from the OAuth token endpoint.
-    const url = this.requireConfig().endpoints.token_exchange;
+    // Device-bound session: the browser signs this token request with its own
+    // DPoP key; the BFF verifies possession and forwards the grant to the gateway.
+    const url = this.sessionTokenUrl();
     const proof = await createDpopProof(this.requireKey(), { method: "POST", url });
     const result = await oauthPost<OAuthTokenResponse>(
       url,
@@ -394,7 +399,7 @@ export class BrowserAuth {
   }
 
   private async refresh(refreshToken: string): Promise<void> {
-    const url = this.requireConfig().endpoints.token_exchange;
+    const url = this.sessionTokenUrl();
     const proof = await createDpopProof(this.requireKey(), { method: "POST", url });
     const result = await oauthPost<OAuthTokenResponse>(
       url,
@@ -480,27 +485,48 @@ export class BrowserAuth {
     };
   }
 
-  // Calls a registered application's Connect endpoint as a dumb client.
-  async call(application: string, path: string, body?: unknown, init: RequestInit = {}): Promise<Response> {
+  async request(application: string, path: string, init: RequestInit = {}): Promise<Response> {
     const app = this.application(application);
     if (!app?.endpoint) throw new Error(`unknown application ${application}`);
+    const method = init.method ?? "GET";
     const url = `${app.endpoint.replace(/\/$/, "")}${path}`;
     return fetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "connect-protocol-version": "1",
-        ...(await this.authHeaders("POST", url)),
-      },
-      body: JSON.stringify(body ?? {}),
       ...init,
+      method,
+      headers: {
+        ...(await this.authHeaders(method, url)),
+        ...(init.headers instanceof Headers
+          ? Object.fromEntries(init.headers.entries())
+          : Array.isArray(init.headers)
+            ? Object.fromEntries(init.headers)
+            : init.headers ?? {}),
+      },
     });
   }
 
-  // The gateway's own HTTP API base (same-origin when "gateway" is listed in
-  // sameOrigin), for endpoints like /api/traces.
+  platformClient(application: string, options: PlatformWebClientOptions = {}): PlatformWebClients {
+    return createPlatformWebClient(this, application, options);
+  }
+
+  private sessionTokenUrl(): string {
+    if (this.sessionViaBff) {
+      return `${location.origin}/client/session/token`;
+    }
+    return this.requireConfig().endpoints.token_exchange;
+  }
+
+  private sessionRevokeUrl(): string {
+    if (this.sessionViaBff) {
+      return `${location.origin}/client/session/revoke`;
+    }
+    return this.requireConfig().endpoints.token_revoke;
+  }
+
   gatewayOrigin(): string {
-    return new URL(this.requireConfig().endpoints.token_exchange).origin;
+    if (this.sessionViaBff) {
+      return new URL(this.requireConfig().endpoints.token_exchange).origin;
+    }
+    return new URL(this.sessionTokenUrl()).origin;
   }
 
   // Authenticated GET against the gateway's HTTP API (session token + proof).
@@ -509,22 +535,6 @@ export class BrowserAuth {
     return fetch(url, { headers: await this.authHeaders("GET", url) });
   }
 
-  // Authenticated Connect RPC against the gateway itself (e.g. TraceService).
-  async gatewayCall(path: string, body?: unknown): Promise<Response> {
-    const url = `${this.gatewayOrigin()}${path}`;
-    return fetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "connect-protocol-version": "1",
-        ...(await this.authHeaders("POST", url)),
-      },
-      body: JSON.stringify(body ?? {}),
-    });
-  }
-
-  // Authenticated POST to this page's own application worker (the BFF), e.g.
-  // registering a chat instance during client auth.
   async appPost(path: string, body?: unknown): Promise<Response> {
     const url = `${location.origin}${path}`;
     return fetch(url, {
@@ -542,7 +552,7 @@ export class BrowserAuth {
     if (refresh?.value) {
       try {
         await oauthPost(
-          this.requireConfig().endpoints.token_revoke,
+          this.sessionRevokeUrl(),
           new URLSearchParams({
             token: refresh.value,
             token_type_hint: "refresh_token",

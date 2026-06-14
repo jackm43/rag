@@ -1,16 +1,14 @@
-import { createPlatformRpcWorker, errorMessage, logger } from "@platy/sdk";
+import { errorMessage, logger } from "@platy/sdk";
 import { d1Store } from "./data";
-import { registerDiscoveryServices } from "./services";
+import { handleDiscoveryHttpApi } from "./http-api";
 import { selfIdentity, syncRegistry } from "./sync";
 import type { Env } from "./types";
 
-const worker = createPlatformRpcWorker<Env>({
-  serviceName: "discovery",
-  register: (router, env) => registerDiscoveryServices(router, env),
-});
-
 export default {
-  fetch: worker.fetch,
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    return await handleDiscoveryHttpApi(request, env, ctx)
+      ?? Response.json({ errors: [{ status: 404, code: "not_found", title: "Not found" }] }, { status: 404 });
+  },
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(

@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 
-	"connectrpc.com/connect"
-
-	idpv1 "jsmunro.me/platy/applications/idp/client/idp/v1"
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/platform"
 )
@@ -60,11 +57,7 @@ func SyncToGateway(ctx context.Context, config ProviderConfig) error {
 	if err != nil {
 		return err
 	}
-	s := platform.Session(ctx)
-	_, err = s.RegistryClient().UpsertProviderConfig(ctx, connect.NewRequest(&idpv1.UpsertProviderConfigRequest{
-		ConfigJson: string(data),
-	}))
-	if err != nil {
+	if err := platform.Session(ctx).UpsertProviderConfigHTTP(ctx, string(data)); err != nil {
 		return err
 	}
 	output.Logger.Info("synced provider config to gateway")

@@ -8,6 +8,7 @@ export {
 export {
   CLIENT_INSTANCE_HEADER,
   clientInstance,
+  proxyTargetFor,
   sessionProxy,
   verifySessionRequest,
   type ProxyTarget,
@@ -16,7 +17,6 @@ export {
 } from "./proxy";
 export {
   createWebBffWorker,
-  proxyTargetFor,
   type WebBffConfig,
   type WebBffEnv,
   type WebBffTarget,

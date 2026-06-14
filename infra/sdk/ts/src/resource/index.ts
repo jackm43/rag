@@ -7,5 +7,4 @@ export {
   type DelegationGraph,
 } from "./delegations";
 export { verifyMintedToken } from "./minted";
-export { defaultScope, protect, requireIdentity, type AuthPolicy } from "./protect";
-export { hasScope, scopeMatches } from "./scope";
+export { defaultScope, hasScope, scopeMatches } from "./scope";

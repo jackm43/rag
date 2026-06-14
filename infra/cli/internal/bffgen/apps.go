@@ -4,13 +4,14 @@ import (
 	"sort"
 
 	"jsmunro.me/platy/cli/internal/manifest"
+	"jsmunro.me/platy/sdk/catalog"
 )
 
 func ClientOnlyApps(root string) []string {
 	loaded := manifest.Load(root)
 	var apps []string
 	for name, entry := range loaded.Applications {
-		if manifest.HasProtoPackage(root, name) {
+		if catalog.HasApplicationResources(root, name) {
 			continue
 		}
 		if entry.Config == "" {

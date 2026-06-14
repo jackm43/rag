@@ -1,20 +1,16 @@
 import {
-  createRpcHandler,
   errorMessage,
-  gatewayTraceExporter,
-  loadServiceCredentialFromEnv,
   logger,
   resolveSecret,
-  traceRpc,
-  tracerFromEnv,
 } from "@platy/sdk";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
 import { DiscordGateway } from "./gateway";
 import { rejectDisallowedGuild } from "./guild";
 import { jsonResponse, verifyDiscordRequest } from "./http";
+import { handleRagbotHttpApi } from "./http-api";
+import webBff from "./worker";
 import { extractBotMentionPrompt, extractReplyToBotPrompt, handleGatewayMessageCreate, processAiQueueMessage, resolveChannelPrompt } from "./mention";
-import { registerRagbotServices } from "./services";
 import {
   APPLICATION_COMMAND,
   CHANNEL_MESSAGE_WITH_SOURCE,
@@ -25,35 +21,33 @@ import {
 
 export { DiscordGateway, extractBotMentionPrompt, extractReplyToBotPrompt, handleGatewayMessageCreate, resolveChannelPrompt };
 
-type TracedRpc = (request: Request, ctx?: ExecutionContext) => Promise<Response | null>;
-
-let cachedRpc: { env: Env; gatewayUrl: string; rpc: TracedRpc } | null = null;
-let credentialPromise: ReturnType<typeof loadServiceCredentialFromEnv> | null = null;
-
-const rpcHandler = async (env: Env): Promise<TracedRpc> => {
-  const gatewayUrl = (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, "");
-  if (cachedRpc?.env === env && cachedRpc.gatewayUrl === gatewayUrl) {
-    return cachedRpc.rpc;
+const bearerAudience = (request: Request): string | null => {
+  const header = request.headers.get("authorization") ?? "";
+  const match = /^bearer\s+(.+)$/i.exec(header);
+  if (!match) {
+    return null;
   }
-  credentialPromise ??= loadServiceCredentialFromEnv(env);
-  const credential = await credentialPromise;
-  const exporter =
-    credential && env.AUTH_GATEWAY
-      ? gatewayTraceExporter({
-        gatewayUrl,
-        credential,
-        fetch: (input: RequestInfo | URL, init?: RequestInit) => env.AUTH_GATEWAY!.fetch(input, init),
-      })
-      : undefined;
-  cachedRpc = {
-    env,
-    gatewayUrl,
-    rpc: traceRpc(
-      tracerFromEnv(env, "ragbot", { exporter }),
-      createRpcHandler((router) => registerRagbotServices(router, env)),
-    ),
-  };
-  return cachedRpc.rpc;
+  const segments = match[1].split(".");
+  if (segments.length < 2) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(atob(segments[1].replace(/-/g, "+").replace(/_/g, "/"))) as { aud?: unknown };
+    return typeof payload.aud === "string" ? payload.aud : null;
+  } catch {
+    return null;
+  }
+};
+
+const shouldUseWebBff = (pathname: string, request: Request): boolean => {
+  if (pathname.startsWith("/client/")) {
+    return true;
+  }
+  if (!pathname.startsWith("/platform/")) {
+    return false;
+  }
+  const audience = bearerAudience(request);
+  return audience === null || audience === "idp";
 };
 
 const handleInteractionRequest = async (
@@ -111,12 +105,24 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname.startsWith("/ragbot.v1.")) {
-      const rpcResponse = await (await rpcHandler(env))(request, ctx);
-      if (rpcResponse) {
-        return rpcResponse;
+    if (shouldUseWebBff(url.pathname, request)) {
+      const bffResponse = await webBff.fetch(
+        request,
+        env as unknown as Parameters<typeof webBff.fetch>[1],
+        ctx,
+      );
+      if (bffResponse) {
+        return bffResponse;
       }
-      return jsonResponse({ error: "not found" }, 404);
+    }
+
+    const httpApiResponse = await handleRagbotHttpApi(request, env, ctx);
+    if (httpApiResponse) {
+      return httpApiResponse;
+    }
+
+    if (url.pathname.startsWith("/client/") || url.pathname.startsWith("/platform/")) {
+      return webBff.fetch(request, env as unknown as Parameters<typeof webBff.fetch>[1], ctx);
     }
 
     if (url.pathname.startsWith("/gateway/")) {

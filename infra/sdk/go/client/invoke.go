@@ -88,10 +88,18 @@ func (e *ProviderAuthorizationError) Error() string {
 }
 
 // providerAuthorizationURL extracts the authorize URL from a connector refusal
-// body. The wire contract is the Connect error message prefix; the parsing is
-// confined here so consumers only ever see the typed error.
+// body. HTTP errors use the platform envelope; legacy Connect bodies used a
+// message prefix.
 func providerAuthorizationURL(body any) (string, bool) {
 	record, _ := body.(map[string]any)
+	if errors, ok := record["errors"].([]any); ok {
+		for _, entry := range errors {
+			item, _ := entry.(map[string]any)
+			if detail, _ := item["detail"].(string); strings.HasPrefix(detail, "provider authorization required: ") {
+				return strings.TrimSpace(strings.TrimPrefix(detail, "provider authorization required: ")), true
+			}
+		}
+	}
 	message, _ := record["message"].(string)
 	const prefix = "provider authorization required: "
 	if !strings.HasPrefix(message, prefix) {

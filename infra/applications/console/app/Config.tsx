@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { ragbot } from "../../ragbot/web";
+import { createPlatformWebClient, type ConfigEntry } from "@platy/web";
 import { useAuth } from "@platy/web/react";
-
-type ConfigEntry = { key: string; value?: string; defaultValue?: string; overridden?: boolean };
 
 export function Config() {
   const { auth, signedIn } = useAuth();
@@ -14,8 +12,8 @@ export function Config() {
   const [draft, setDraft] = useState("");
   const [health, setHealth] = useState("");
 
-  const configClient = useMemo(() => ragbot.configServiceClient(auth), [auth]);
-  const gatewayClient = useMemo(() => ragbot.gatewayControlServiceClient(auth), [auth]);
+  const configClient = useMemo(() => createPlatformWebClient(auth, "ragbot").configServiceClient(), [auth]);
+  const gatewayClient = useMemo(() => createPlatformWebClient(auth, "ragbot").gatewayControlServiceClient(), [auth]);
 
   const load = async () => {
     setBusy(true);

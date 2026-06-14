@@ -1,14 +1,5 @@
-import { create } from "@bufbuild/protobuf";
-
 import type { PlatformClient } from "@platy/sdk";
 
-import {
-  DeviceRegistrationSummarySchema,
-  DeviceSchema,
-  DevicePolicySummarySchema,
-  DeviceUserSummarySchema,
-  type Device,
-} from "../../server/cloudflare/v1/device_service_pb";
 import { appendQuery, apiRequest } from "./api";
 
 type ApiDevicePolicy = {
@@ -50,17 +41,56 @@ type ApiDevice = {
   serial_number?: string;
 };
 
+export type DevicePolicySummary = {
+  id: string;
+  default: boolean;
+  deleted: boolean;
+  name: string;
+  updatedAt: string;
+};
+
+export type DeviceRegistrationSummary = {
+  policy: DevicePolicySummary;
+};
+
+export type DeviceUserSummary = {
+  id: string;
+  email: string;
+  name: string;
+};
+
+export type Device = {
+  id: string;
+  activeRegistrations: number;
+  createdAt: string;
+  lastSeenAt: string;
+  name: string;
+  updatedAt: string;
+  clientVersion: string;
+  deletedAt: string;
+  deviceType: string;
+  hardwareId: string;
+  lastSeenRegistration?: DeviceRegistrationSummary;
+  lastSeenUser?: DeviceUserSummary;
+  macAddress: string;
+  manufacturer: string;
+  model: string;
+  osVersion: string;
+  osVersionExtra: string;
+  serialNumber: string;
+};
+
 const policySummary = (policy?: ApiDevicePolicy) => {
   if (!policy) {
     return undefined;
   }
-  return create(DevicePolicySummarySchema, {
+  return {
     id: policy.id ?? "",
     default: policy.default ?? false,
     deleted: policy.deleted ?? false,
     name: policy.name ?? "",
     updatedAt: policy.updated_at ?? "",
-  });
+  };
 };
 
 const registrationSummary = (registration?: ApiDeviceRegistration) => {
@@ -68,24 +98,24 @@ const registrationSummary = (registration?: ApiDeviceRegistration) => {
     return undefined;
   }
   const policy = policySummary(registration.policy);
-  return policy ? create(DeviceRegistrationSummarySchema, { policy }) : undefined;
+  return policy ? { policy } : undefined;
 };
 
 const userSummary = (user?: ApiDeviceUser) => {
   if (!user) {
     return undefined;
   }
-  return create(DeviceUserSummarySchema, {
+  return {
     id: user.id ?? "",
     email: user.email ?? "",
     name: user.name ?? "",
-  });
+  };
 };
 
 export const mapDevice = (device: ApiDevice): Device =>
-  create(DeviceSchema, {
+  ({
     id: device.id ?? "",
-    activeRegistrations: BigInt(device.active_registrations ?? 0),
+    activeRegistrations: device.active_registrations ?? 0,
     createdAt: device.created_at ?? "",
     lastSeenAt: device.last_seen_at ?? "",
     name: device.name ?? "",

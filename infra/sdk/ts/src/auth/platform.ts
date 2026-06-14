@@ -1,8 +1,9 @@
 import { loadServiceCredentialFromEnv, type ServiceCredentialEnv } from "../oauth2/credential";
 import { anyAuthenticator, stsAuthenticator, type Authenticator } from "./authenticators";
 import { sessionChainAuthenticator } from "./sessionchain";
+import type { TransportEnv } from "../transport";
 
-export type PlatformAuthEnv = ServiceCredentialEnv & {
+export type PlatformAuthEnv = ServiceCredentialEnv & TransportEnv & {
   AUTH_GATEWAY_URL?: string;
   AUTH_GATEWAY?: { fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> };
 };

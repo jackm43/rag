@@ -31,6 +31,8 @@ const identityFromStsPayload = (payload: Record<string, unknown>): Identity | nu
   const kind = payload.kind === "service" ? "service" : "user";
   const scopes = typeof payload.scope === "string" ? payload.scope.split(" ").filter(Boolean) : [];
   const cnf = payload.cnf as { jkt?: unknown } | undefined;
+  const instance = typeof payload.instance === "string" ? payload.instance : null;
+  const tokenKind = typeof payload.kind === "string" ? payload.kind : null;
   return {
     kind,
     subject: payload.sub,
@@ -39,6 +41,8 @@ const identityFromStsPayload = (payload: Record<string, unknown>): Identity | nu
     actorChain: actorChainFromClaim(payload.act),
     cnfJkt: typeof cnf?.jkt === "string" ? cnf.jkt : null,
     sessionId: typeof payload.sid === "string" ? payload.sid : null,
+    clientInstance: instance,
+    clientKind: tokenKind && tokenKind !== "user" && tokenKind !== "service" ? tokenKind : null,
   };
 };
 

@@ -10,9 +10,15 @@
     {
       "pattern": "discovery.jsmunro.me",
       "custom_domain": true
+    },
+    {
+      "pattern": "ragbot.jsmunro.me/platform/discovery/v1/*",
+      "zone_name": "jsmunro.me"
     }
   ],
   "vars": {
+    "PLATY_APPLICATION": "discovery",
+    "OTEL_SERVICE_NAME": "discovery",
     "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.me"
   },
   "services": [

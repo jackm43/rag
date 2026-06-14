@@ -3,15 +3,19 @@ import type { Identity } from "../identity";
 import { loadServiceCredentialFromEnv, type ServiceCredential } from "../oauth2/credential";
 import { annotateSpan, gatewayTraceExporter, traceRpc, tracerFromEnv } from "../otel";
 import { logger } from "../logger";
-import { sessionProxy, verifySessionRequest, type ProxyTarget } from "./proxy";
+import { createPlatformAuthClient } from "../client/platform-auth";
+import { DEVICE_JKT_HEADER } from "../http/tokens";
+import { verifyDpopProof } from "../oauth2/dpop";
+import { verifySessionRequest } from "./proxy";
+import { createPlatformHonoApp } from "../http/app";
+import { serviceBindingFetch } from "../transport";
 
-// Injected client-identity registrar. The generated idp service client
-// (idp.clientIdentityServiceClient) is structurally assignable; injecting it
-// keeps the SDK from depending on generated application code.
 export type ClientIdentityRegistrar = (
   connection: Omit<ConnectorConfig, "application">,
   identity: Identity,
-) => {
+) => unknown;
+
+type ClientIdentityRegistrarClient = {
   registerClientIdentity(request: {
     application: string;
     instanceId: string;
@@ -40,6 +44,7 @@ export type WebBffTarget = {
   audience: string;
   binding?: string;
   endpoint: string;
+  prefixes?: string[];
   scopes?: string[];
 };
 
@@ -59,22 +64,65 @@ export type WebBffConfig = {
   targets: WebBffTarget[];
   defaultInstanceKind?: string;
   registerPath?: string;
-  // When set, /client/chats registers a per-instance client identity through
-  // this factory (the generated idp client). Omit to disable registration.
   registerClient?: ClientIdentityRegistrar;
 };
 
-export const proxyTargetFor = (
-  audience: string,
-  target: { endpoint: string; scopes?: string[]; fetch?: typeof fetch },
-): ProxyTarget => ({
-  prefix: `/${audience}.v1.`,
-  application: audience,
-  ...target,
-});
+const SESSION_TOKEN_PATH = "/client/session/token";
+const SESSION_REVOKE_PATH = "/client/session/revoke";
 
-const bindingFetch = (binding: Fetcher | undefined): typeof fetch | undefined =>
-  binding ? (input: RequestInfo | URL, init?: RequestInit) => binding.fetch(input, init) : undefined;
+const basicServiceAuth = (credential: ServiceCredential): string =>
+  `Basic ${btoa(`${credential.clientId}:${credential.clientSecret}`)}`;
+
+const forwardSessionToken = async (
+  request: Request,
+  issuer: string,
+  credential: ServiceCredential,
+  gatewayFetch: typeof fetch,
+): Promise<Response> => {
+  const proof = await verifyDpopProof(request.headers, {
+    method: request.method,
+    url: request.url,
+  });
+  if (!proof) {
+    return Response.json(
+      { error: "invalid_dpop_proof", error_description: "a valid DPoP proof is required" },
+      { status: 401, headers: { "content-type": "application/json" } },
+    );
+  }
+  const response = await gatewayFetch(`${issuer}/oauth/token`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      authorization: basicServiceAuth(credential),
+      [DEVICE_JKT_HEADER]: proof.jkt,
+    },
+    body: await request.text(),
+  });
+  return new Response(response.body, {
+    status: response.status,
+    headers: {
+      "content-type": response.headers.get("content-type") ?? "application/json",
+      "cache-control": "no-store",
+      pragma: "no-cache",
+    },
+  });
+};
+
+const forwardSessionRevoke = async (
+  request: Request,
+  issuer: string,
+  gatewayFetch: typeof fetch,
+): Promise<Response> => {
+  const response = await gatewayFetch(`${issuer}/oauth/revoke`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: await request.text(),
+  });
+  return new Response(response.body, {
+    status: response.status,
+    headers: { "cache-control": "no-store", pragma: "no-cache" },
+  });
+};
 
 const readEnv = (env: WebBffEnv & Record<string, unknown>, key: string): string | undefined => {
   const value = env[key];
@@ -85,8 +133,7 @@ const readBinding = (env: WebBffEnv & Record<string, unknown>, key: string | und
   if (!key) {
     return undefined;
   }
-  const value = env[key];
-  return value as Fetcher | undefined;
+  return env[key] as Fetcher | undefined;
 };
 
 const registerInstance = async (
@@ -133,7 +180,7 @@ const registerInstance = async (
         fetch: config.gatewayFetch,
       },
       identity,
-    );
+    ) as ClientIdentityRegistrarClient;
     const result = await idp.registerClientIdentity({
       application: app,
       instanceId: INSTANCE_ID_PATTERN.test(requested) ? requested : "",
@@ -173,94 +220,129 @@ const registerInstance = async (
   }
 };
 
-type Handler = (request: Request, ctx?: ExecutionContext) => Promise<Response | null>;
+const proxyPrefixes = (targets: WebBffTarget[]): string[] =>
+  targets.flatMap((target) => target.prefixes ?? [`/platform/${target.audience}/v1/`]);
+
+const isBffPath = (pathname: string, registerPath: string, prefixes: string[]): boolean =>
+  pathname === registerPath
+  || pathname === SESSION_TOKEN_PATH
+  || pathname === SESSION_REVOKE_PATH
+  || prefixes.some((prefix) => pathname.startsWith(prefix));
 
 export const createWebBffWorker = (config: WebBffConfig) => {
   const registerPath = config.registerPath ?? "/client/chats";
   const defaultKind = config.defaultInstanceKind ?? config.app;
-  const proxyPrefixes = [
-    ...config.targets.map((target) => `/${target.audience}.v1.`),
-    "/client/",
-  ];
+  const prefixes = proxyPrefixes(config.targets);
 
-  let cached: { env: WebBffEnv; handler: Handler } | null = null;
+  let cached: {
+    env: WebBffEnv;
+    app: ReturnType<typeof createPlatformHonoApp<WebBffEnv>>;
+    traced: (request: Request, ctx?: ExecutionContext) => Promise<Response | null>;
+  } | null = null;
   let credentialPromise: Promise<ServiceCredential | null> | null = null;
 
-  const unavailableHandler = (): Handler => async (request) =>
-    proxyPrefixes.some((prefix) => new URL(request.url).pathname.startsWith(prefix))
-      ? new Response(
-        JSON.stringify({ code: "unavailable", message: "service credential not configured" }),
-        { status: 503, headers: { "content-type": "application/json" } },
-      )
-      : null;
+  const unavailable = (): Response =>
+    new Response(
+      JSON.stringify({ code: "unavailable", message: "service credential not configured" }),
+      { status: 503, headers: { "content-type": "application/json" } },
+    );
 
-  const proxyHandler = async (env: WebBffEnv & Record<string, unknown>): Promise<Handler> => {
+  const buildApp = async (env: WebBffEnv & Record<string, unknown>) => {
     if (cached?.env === env) {
-      return cached.handler;
+      return cached;
     }
     credentialPromise ??= loadServiceCredentialFromEnv(env);
     const credential = await credentialPromise;
+    const app = createPlatformHonoApp<WebBffEnv>({ application: config.app });
     if (!credential) {
-      const handler = unavailableHandler();
-      cached = { env, handler };
-      return handler;
+      app.all("*", () => unavailable());
+      const traced = traceRpc(tracerFromEnv(env, config.app), async (request) => {
+        const response = await app.fetch(request, env);
+        return response.status === 404 ? null : response;
+      });
+      cached = { env, app, traced };
+      return cached;
     }
     const issuer = (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, "");
+    const gatewayFetch = serviceBindingFetch(env.AUTH_GATEWAY, "AUTH_GATEWAY");
     const tracer = tracerFromEnv(env, config.app, {
-      exporter: env.AUTH_GATEWAY
-        ? gatewayTraceExporter({
-          gatewayUrl: issuer,
-          credential,
-          fetch: bindingFetch(env.AUTH_GATEWAY),
-        })
-        : undefined,
+      exporter: gatewayTraceExporter({
+        gatewayUrl: issuer,
+        credential,
+        fetch: gatewayFetch,
+      }),
     });
     const verify = {
       jwksUrl: `${issuer}/.well-known/jwks.json`,
-      gatewayFetch: bindingFetch(env.AUTH_GATEWAY),
+      gatewayFetch,
     };
     const targets = config.targets.flatMap((target) => {
       const endpoint = readEnv(env, target.endpoint);
       if (!endpoint) {
         return [];
       }
-      return [
-        proxyTargetFor(target.audience, {
-          endpoint,
-          scopes: target.scopes,
-          fetch: bindingFetch(readBinding(env, target.binding)),
-        }),
-      ];
+      return [{
+        audience: target.audience,
+        endpoint,
+        scopes: target.scopes,
+        prefixes: target.prefixes,
+        bindingName: target.binding,
+        fetch: serviceBindingFetch(readBinding(env, target.binding), target.binding),
+      }];
     });
-    const proxy = sessionProxy({
+    const authClient = createPlatformAuthClient({
+      application: config.app,
       gatewayUrl: issuer,
       credential,
       verify,
-      gatewayFetch: bindingFetch(env.AUTH_GATEWAY),
+      gatewayFetch,
       targets,
     });
+    const proxy = authClient.proxy;
+    if (!proxy) {
+      throw new Error(`bff ${config.app} has no proxy targets configured`);
+    }
     const registerClient = config.registerClient;
-    const handler = traceRpc(tracer, async (request) => {
-      const url = new URL(request.url);
-      if (registerClient && url.pathname === registerPath && request.method === "POST") {
-        return registerInstance(config.app, defaultKind, registerClient, {
+    app.post(SESSION_TOKEN_PATH, async (c) =>
+      forwardSessionToken(c.req.raw, issuer, credential, gatewayFetch),
+    );
+    app.post(SESSION_REVOKE_PATH, async (c) =>
+      forwardSessionRevoke(c.req.raw, issuer, gatewayFetch),
+    );
+    if (registerClient) {
+      app.post(registerPath, async (c) =>
+        registerInstance(config.app, defaultKind, registerClient, {
           gatewayUrl: issuer,
           verify,
           credential,
-          gatewayFetch: bindingFetch(env.AUTH_GATEWAY),
-        }, request);
+          gatewayFetch,
+        }, c.req.raw),
+      );
+    }
+    app.all("*", async (c) => {
+      const proxied = await proxy(c.req.raw);
+      if (proxied) {
+        return proxied;
       }
-      return proxy(request);
+      return c.body(null, 404);
     });
-    cached = { env, handler };
-    return handler;
+    const traced = traceRpc(tracer, async (request) => {
+      const response = await app.fetch(request, env);
+      return response.status === 404 ? null : response;
+    });
+    cached = { env, app, traced };
+    return cached;
   };
 
   return {
     async fetch(request: Request, env: WebBffEnv & Record<string, unknown>, ctx: ExecutionContext): Promise<Response> {
-      const proxied = await (await proxyHandler(env))(request, ctx);
-      if (proxied) {
-        return proxied;
+      const url = new URL(request.url);
+      if (isBffPath(url.pathname, registerPath, prefixes)) {
+        const { traced } = await buildApp(env);
+        const proxied = await traced(request, ctx);
+        if (proxied) {
+          return proxied;
+        }
       }
       return env.ASSETS.fetch(request);
     },

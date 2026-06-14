@@ -120,10 +120,15 @@ applications:
           - ragbot/GatewayControlService.GetHealth
       # Chat instances federate with the platform IdP: the BFF registers
       # each instance (acting for the user) and receives a gateway-signed,
-      # key-bound identity document.
+      # key-bound identity document. Same-origin idp/gateway paths in the
+      # data panel and live traces panel are proxied through this worker.
       - audience: idp
         scopes:
           - idp/ClientIdentityService.RegisterClientIdentity
+          - idp/TraceService.ListTraces
+          - idp/TraceService.GetTrace
+          - idp/TraceService.StreamTraces
+          - idp/DiscoveryService.Discover
     access:
       allowed_groups: [admins]
       allowed_idps: [github]

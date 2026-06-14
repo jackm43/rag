@@ -6,6 +6,10 @@
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
     "strict": true,
+    "types": [
+      "@cloudflare/workers-types",
+      "node"
+    ],
     "noEmit": true,
     "skipLibCheck": true,
     "baseUrl": ".",

@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
-import { idp } from "../../idp/web";
 import {
+  createPlatformWebClient,
   registerChatInstance,
   type ChatInstance,
 } from "@platy/web";
 import { useAuth } from "@platy/web/react";
 
-// Live trace flow: a server-streaming RPC (idp.v1.TraceService/StreamTraces)
-// pushes spans as the gateway ingests them. Every browser request roots a
+// Live trace flow: POST /platform/traces/v1/traces/stream pushes spans as the
 // trace (traceparent minted client-side), so the full flow — proxy hop,
 // token exchanges, identity registrations, service calls — renders as one
 // waterfall per trace, live.
@@ -90,15 +89,27 @@ export function LiveTraces() {
     while (!abort.signal.aborted) {
       try {
         setNote("streaming");
-        const client = idp.traceServiceClient(
+        const client = createPlatformWebClient(
           auth,
+          "idp",
           tracingIdentity.current ? { headers: tracingIdentity.current.headers } : {},
-        );
+        ).traceServiceClient();
         for await (const message of client.streamTraces({}, { signal: abort.signal })) {
-          const span = message.span;
+          const span = (message as { span?: {
+            spanId: string;
+            parentSpanId: string;
+            service: string;
+            name: string;
+            kind: string;
+            start: string;
+            durationMs: number | string;
+            status: string;
+            error: string;
+            attributesJson: string;
+          } }).span;
           if (!span) continue;
           // Don't render the tail's own polling as traffic.
-          if (span.name.includes("TraceService/StreamTraces")) continue;
+          if (span.name.includes("streamTraces")) continue;
           let attributes: Record<string, unknown> = {};
           try {
             attributes = JSON.parse(span.attributesJson || "{}") as Record<string, unknown>;

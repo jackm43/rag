@@ -1,15 +1,4 @@
-import { Code, ConnectError, type ConnectRouter, type HandlerContext } from "@connectrpc/connect";
-
-import { ClientIdentityService } from "../../server/idp/v1/client_identity_service_pb";
-import { DiscoveryService } from "../../server/idp/v1/gateway_discovery_service_pb";
-import { IdentityService } from "../../server/idp/v1/identity_service_pb";
-import { RegistryService } from "../../server/idp/v1/registry_service_pb";
-import { TraceService } from "../../server/idp/v1/trace_service_pb";
-import {
-  type Application,
-  type ProviderConfig as ProviderConfigMessage,
-} from "../../server/idp/v1/types_pb";
-import { calculateJwkThumbprint, type JWK } from "jose";
+import { OAuthError, OAuthErrorCode } from "./oauth-error";
 
 import {
   accessOidcProvider,
@@ -20,8 +9,6 @@ import {
   isCommunitySession,
   logger,
   oidcAuthenticator,
-  protect,
-  requireIdentity,
   requireSenderConstraint,
   scopeMatches,
   sessionScopeForTier,
@@ -43,19 +30,13 @@ import { signToken } from "./keys";
 import { verifyGatewayStsToken, verifyGatewayTokenClaims } from "./sts-verify";
 import {
   audit,
-  createServiceClient,
   delegationFor,
-  deleteApplication,
   getApplication,
   getApplicationByAudience,
   getProviderConfig,
-  hasServiceClient,
   listApplications,
   listDelegations,
   serviceClientApplication,
-  setDelegations,
-  upsertApplication,
-  upsertProviderConfig,
   verifyServiceClient,
   type ApplicationAccess,
   type DelegationGrant,
@@ -64,8 +45,6 @@ import {
   type TrustBoundary,
 } from "./registry";
 import { consumeRefreshToken, createSession, type Session } from "./sessions";
-import { exchangeProviderAccessToken } from "./provider-oauth";
-import { getTrace, listTraces, streamSpans } from "./traces";
 import { isInternalEmail, type Env } from "./types";
 import { DISCORD_CODE_PREFIX, discordAuthorizeUrl, redeemDiscordCode } from "./discord-oauth";
 
@@ -90,9 +69,9 @@ const exchangeAuthorizationCode = async (
   request: { authorizationCode: string; codeVerifier: string; redirectUri: string },
 ): Promise<string> => {
   if (!request.codeVerifier || !request.redirectUri) {
-    throw new ConnectError(
+    throw new OAuthError(
       "authorization_code requires code_verifier and redirect_uri",
-      Code.InvalidArgument,
+      OAuthErrorCode.InvalidArgument,
     );
   }
   const provider = oidcProvider(env);
@@ -110,25 +89,25 @@ const exchangeAuthorizationCode = async (
   });
   if (response.status >= 300 && response.status < 400) {
     const location = response.headers.get("location") ?? "";
-    throw new ConnectError(
+    throw new OAuthError(
       `upstream token exchange redirect (${response.status}): ${location}`,
-      Code.Unauthenticated,
+      OAuthErrorCode.Unauthenticated,
     );
   }
   if (!response.ok) {
-    throw new ConnectError(
+    throw new OAuthError(
       `upstream token exchange failed (${response.status})`,
-      Code.Unauthenticated,
+      OAuthErrorCode.Unauthenticated,
     );
   }
   let body: { access_token?: string };
   try {
     body = (await response.json()) as { access_token?: string };
   } catch {
-    throw new ConnectError("upstream token response was not JSON", Code.Unauthenticated);
+    throw new OAuthError("upstream token response was not JSON", OAuthErrorCode.Unauthenticated);
   }
   if (!body.access_token) {
-    throw new ConnectError("upstream token response had no access_token", Code.Unauthenticated);
+    throw new OAuthError("upstream token response had no access_token", OAuthErrorCode.Unauthenticated);
   }
   return body.access_token;
 };
@@ -174,11 +153,6 @@ export const gatewayAuthenticator = (env: Env): Authenticator =>
     stsAuthenticator({ issuer: issuer(env), audience: "idp", jwksUrl: jwksUrl(env) }),
   );
 
-const requestDescriptor = (context: HandlerContext): RequestDescriptor => ({
-  method: context.requestMethod,
-  url: context.url,
-});
-
 const requireDpopProof = async (
   headers: Headers,
   request: RequestDescriptor,
@@ -186,7 +160,7 @@ const requireDpopProof = async (
 ): Promise<string> => {
   const proof = await verifyDpopProof(headers, request, accessToken);
   if (!proof) {
-    throw new ConnectError("valid DPoP proof required", Code.Unauthenticated);
+    throw new OAuthError("valid DPoP proof required", OAuthErrorCode.Unauthenticated);
   }
   return proof.jkt;
 };
@@ -273,24 +247,23 @@ const accessMessage = (access: ApplicationAccess) => ({
   postureRequired: access.postureRequired,
 });
 
-const applicationMessage = (app: RegisteredApplication, delegations: DelegationGrant[] = []): Application =>
-  ({
-    name: app.name,
-    audience: app.audience,
-    endpoint: app.endpoint,
-    description: app.description,
-    resources: app.resources,
-    delegations,
-    provider: app.provider,
-    trustBoundary: trustBoundaryMessage(app.trustBoundary),
-    access: accessMessage(app.access),
-    trustZone: app.access.trustZone,
-    impersonationAccessClientId: app.impersonationAccessClientId,
-    providerOauthClientId: app.providerOauthClientId,
-    providerOauthScopes: app.providerOauthScopes,
-    createdAt: BigInt(app.createdAt),
-    updatedAt: BigInt(app.updatedAt),
-  }) as Application;
+export const applicationView = (app: RegisteredApplication, delegations: DelegationGrant[] = []) => ({
+  name: app.name,
+  audience: app.audience,
+  endpoint: app.endpoint,
+  description: app.description,
+  resources: app.resources,
+  delegations,
+  provider: app.provider,
+  trustBoundary: trustBoundaryMessage(app.trustBoundary),
+  access: accessMessage(app.access),
+  trustZone: app.access.trustZone,
+  impersonationAccessClientId: app.impersonationAccessClientId,
+  providerOauthClientId: app.providerOauthClientId,
+  providerOauthScopes: app.providerOauthScopes,
+  createdAt: app.createdAt,
+  updatedAt: app.updatedAt,
+});
 
 const organizationMessage = (policy: ProviderConfig["organization"]) => {
   if (!policy) {
@@ -320,26 +293,25 @@ const organizationMessage = (policy: ProviderConfig["organization"]) => {
   };
 };
 
-const providerConfigMessage = (config: ProviderConfig): ProviderConfigMessage =>
-  ({
-    boundary: trustBoundaryMessage(config.boundary),
-    identityProviders: config.identityProviders.map((idp) => ({
-      id: idp.id,
-      name: idp.name,
-      type: idp.type,
-    })),
-    groups: config.groups.map((group) => ({
-      id: group.id,
-      name: group.name,
-    })),
-    emailAllowlist: config.emailAllowlist,
-    posture: {
-      enabled: config.posture.enabled,
-      ruleId: config.posture.ruleId,
-      checks: config.posture.checks.map((check) => ({ type: check.type })),
-    },
-    organization: organizationMessage(config.organization),
-  }) as ProviderConfigMessage;
+export const providerConfigView = (config: ProviderConfig) => ({
+  boundary: trustBoundaryMessage(config.boundary),
+  identityProviders: config.identityProviders.map((idp) => ({
+    id: idp.id,
+    name: idp.name,
+    type: idp.type,
+  })),
+  groups: config.groups.map((group) => ({
+    id: group.id,
+    name: group.name,
+  })),
+  emailAllowlist: config.emailAllowlist,
+  posture: {
+    enabled: config.posture.enabled,
+    ruleId: config.posture.ruleId,
+    checks: config.posture.checks.map((check) => ({ type: check.type })),
+  },
+  organization: organizationMessage(config.organization),
+});
 
 type ResolvedSubject = {
   identity: Identity;
@@ -407,9 +379,9 @@ const resolveSubject = async (
   // token), so a service can never replay an unbound upstream credential
   // through its delegations.
   if (actorApplication && tokenType !== TOKEN_TYPE_JWT) {
-    throw new ConnectError(
+    throw new OAuthError(
       "chained exchange requires a gateway-issued subject token",
-      Code.InvalidArgument,
+      OAuthErrorCode.InvalidArgument,
     );
   }
 
@@ -476,10 +448,10 @@ const validateScopes = (
   const scopes = requested.length > 0 ? requested : fallback;
   for (const scope of scopes) {
     if (scope !== `${audience}/*` && !scope.startsWith(`${audience}/`)) {
-      throw new ConnectError(`scope ${scope} is outside audience ${audience}`, Code.InvalidArgument);
+      throw new OAuthError(`scope ${scope} is outside audience ${audience}`, OAuthErrorCode.InvalidArgument);
     }
     if (!granted.some((grant) => scopeMatches(grant, scope))) {
-      throw new ConnectError(`grant does not allow ${scope}`, Code.PermissionDenied);
+      throw new OAuthError(`grant does not allow ${scope}`, OAuthErrorCode.PermissionDenied);
     }
   }
   return scopes;
@@ -547,14 +519,14 @@ export const createGatewaySession = async (
       redirectUri: request.redirectUri ?? "",
     });
   } else if (request.subjectTokenType && request.subjectTokenType !== TOKEN_TYPE_ACCESS_TOKEN) {
-    throw new ConnectError("sessions require an upstream access token", Code.InvalidArgument);
+    throw new OAuthError("sessions require an upstream access token", OAuthErrorCode.InvalidArgument);
   }
   const identity = await verifyOidcToken(subjectToken, oidcProvider(env));
   if (!identity) {
-    throw new ConnectError("invalid subject token", Code.Unauthenticated);
+    throw new OAuthError("invalid subject token", OAuthErrorCode.Unauthenticated);
   }
   if (!isInternalEmail(env, identity.email)) {
-    throw new ConnectError("forbidden", Code.PermissionDenied);
+    throw new OAuthError("forbidden", OAuthErrorCode.PermissionDenied);
   }
   const { session, refreshToken } = await createSession(env, identity, dpopJkt, "internal");
   await audit(env, identity.email ?? identity.subject, "session_created", session.id);
@@ -579,11 +551,11 @@ export const refreshGatewaySession = async (
   dpopJkt: string,
 ): Promise<GatewaySessionTokens> => {
   if (!request.refreshToken) {
-    throw new ConnectError("refresh_token is required", Code.InvalidArgument);
+    throw new OAuthError("refresh_token is required", OAuthErrorCode.InvalidArgument);
   }
   const rotated = await consumeRefreshToken(env, request.refreshToken, dpopJkt);
   if (!rotated) {
-    throw new ConnectError("invalid refresh token", Code.Unauthenticated);
+    throw new OAuthError("invalid refresh token", OAuthErrorCode.Unauthenticated);
   }
   await audit(
     env,
@@ -609,11 +581,11 @@ export const exchangeGatewayToken = async (
   let actorApplication: string | null = null;
   if (request.actorToken) {
     if (request.actorTokenType && request.actorTokenType !== TOKEN_TYPE_SERVICE_CREDENTIAL) {
-      throw new ConnectError("unsupported actor token type", Code.InvalidArgument);
+      throw new OAuthError("unsupported actor token type", OAuthErrorCode.InvalidArgument);
     }
     const separator = request.actorToken.indexOf(":");
     if (separator < 0) {
-      throw new ConnectError("invalid actor token", Code.Unauthenticated);
+      throw new OAuthError("invalid actor token", OAuthErrorCode.Unauthenticated);
     }
     actorClientId = request.actorToken.slice(0, separator);
     actorApplication = await verifyServiceClient(
@@ -622,7 +594,7 @@ export const exchangeGatewayToken = async (
       request.actorToken.slice(separator + 1),
     );
     if (!actorApplication) {
-      throw new ConnectError("invalid actor credential", Code.Unauthenticated);
+      throw new OAuthError("invalid actor credential", OAuthErrorCode.Unauthenticated);
     }
   }
 
@@ -630,13 +602,13 @@ export const exchangeGatewayToken = async (
     const caller = await localGatewayStsAuthenticator(env)(context.headers, context.request);
     if (caller?.cnfJkt) {
       if (!request.impersonationToken) {
-        throw new ConnectError("impersonation authorization required", Code.PermissionDenied);
+        throw new OAuthError("impersonation authorization required", OAuthErrorCode.PermissionDenied);
       }
       const actorApp = await getApplication(env, actorApplication);
       if (!actorApp?.impersonationAccessClientId) {
-        throw new ConnectError(
+        throw new OAuthError(
           `application ${actorApplication} has no impersonation access app configured`,
-          Code.FailedPrecondition,
+          OAuthErrorCode.FailedPrecondition,
         );
       }
       const impersonation = await verifyOidcToken(
@@ -644,14 +616,14 @@ export const exchangeGatewayToken = async (
         accessOidcProvider(env.ACCESS_TEAM_DOMAIN, actorApp.impersonationAccessClientId),
       );
       if (!impersonation) {
-        throw new ConnectError("invalid impersonation token", Code.Unauthenticated);
+        throw new OAuthError("invalid impersonation token", OAuthErrorCode.Unauthenticated);
       }
       if (
         !caller.email ||
         !impersonation.email ||
         impersonation.email.toLowerCase() !== caller.email.toLowerCase()
       ) {
-        throw new ConnectError("impersonation token identity mismatch", Code.PermissionDenied);
+        throw new OAuthError("impersonation token identity mismatch", OAuthErrorCode.PermissionDenied);
       }
       await audit(
         env,
@@ -664,16 +636,16 @@ export const exchangeGatewayToken = async (
 
   const resolved = await resolveSubject(env, request, actorApplication);
   if (!resolved) {
-    throw new ConnectError("invalid subject token", Code.Unauthenticated);
+    throw new OAuthError("invalid subject token", OAuthErrorCode.Unauthenticated);
   }
   const subject = resolved.identity;
   if (!isAllowedUser(env, subject)) {
-    throw new ConnectError("forbidden", Code.PermissionDenied);
+    throw new OAuthError("forbidden", OAuthErrorCode.PermissionDenied);
   }
   if (!actorApplication && subject.cnfJkt) {
     const jkt = await requireDpopProof(context.headers, context.request, request.subjectToken);
     if (jkt !== subject.cnfJkt) {
-      throw new ConnectError("DPoP proof does not match token binding", Code.Unauthenticated);
+      throw new OAuthError("DPoP proof does not match token binding", OAuthErrorCode.Unauthenticated);
     }
   }
 
@@ -693,33 +665,33 @@ export const exchangeGatewayToken = async (
         reason: refusal,
       });
       await audit(env, subject.email ?? subject.subject, "exchange_chain_refused", refusal);
-      throw new ConnectError(refusal, Code.PermissionDenied);
+      throw new OAuthError(refusal, OAuthErrorCode.PermissionDenied);
     }
   }
 
   const application = await getApplicationByAudience(env, request.audience);
   if (!application) {
-    throw new ConnectError(`unknown audience ${request.audience}`, Code.NotFound);
+    throw new OAuthError(`unknown audience ${request.audience}`, OAuthErrorCode.NotFound);
   }
 
   let scopes: string[];
   if (actorApplication) {
     const delegation = await delegationFor(env, actorApplication, application.audience);
     if (!delegation) {
-      throw new ConnectError(
+      throw new OAuthError(
         `application ${actorApplication} has no delegation to audience ${application.audience}`,
-        Code.PermissionDenied,
+        OAuthErrorCode.PermissionDenied,
       );
     }
     const granted = delegationGrants(delegation);
     scopes = validateScopes(application.audience, request.scopes, granted, granted);
   } else {
     if (isCommunitySession(subject)) {
-      throw new ConnectError("community sessions require an actor token", Code.PermissionDenied);
+      throw new OAuthError("community sessions require an actor token", OAuthErrorCode.PermissionDenied);
     }
     const grants = directExchangeGrants(subject, application.audience);
     if (!grants) {
-      throw new ConnectError("community sessions require an actor token", Code.PermissionDenied);
+      throw new OAuthError("community sessions require an actor token", OAuthErrorCode.PermissionDenied);
     }
     scopes = validateScopes(application.audience, request.scopes, grants, [
       `${application.audience}/*`,
@@ -728,9 +700,9 @@ export const exchangeGatewayToken = async (
 
   const actorChain = actorClientId ? [actorClientId, ...subject.actorChain] : subject.actorChain;
   if (actorChain.length > MAX_ACTOR_CHAIN) {
-    throw new ConnectError(
+    throw new OAuthError(
       `actor chain exceeds maximum depth ${MAX_ACTOR_CHAIN}`,
-      Code.PermissionDenied,
+      OAuthErrorCode.PermissionDenied,
     );
   }
   const now = Math.floor(Date.now() / 1000);
@@ -746,6 +718,12 @@ export const exchangeGatewayToken = async (
   };
   if (subject.email) {
     payload.email = subject.email;
+  }
+  if (subject.clientInstance) {
+    payload.instance = subject.clientInstance;
+  }
+  if (subject.clientKind) {
+    payload.client_kind = subject.clientKind;
   }
   const act = nestActChain(actorChain);
   if (act) {
@@ -836,403 +814,6 @@ export const authorizeIntrospectionCaller = async (
   }
 };
 
-export const registerServices = (router: ConnectRouter, env: Env) => {
-  const authenticate = gatewayAuthenticator(env);
-  const policy = {
-    authenticate,
-    allow: (identity: Identity) => allowGatewayPrincipal(env, identity),
-  };
-
-  router.service(IdentityService, {
-    introspect: async (_request, context) => {
-      const identity = await authenticate(context.requestHeader, requestDescriptor(context));
-      if (!identity) {
-        logger.warn("request_unauthenticated", { method: "idp.v1.IdentityService/Introspect" });
-        throw new ConnectError("unauthenticated", Code.Unauthenticated);
-      }
-      if (!isAllowedUser(env, identity)) {
-        throw new ConnectError("forbidden", Code.PermissionDenied);
-      }
-      const scope = "idp/IdentityService.Introspect";
-      if (!hasScope(identity, scope)) {
-        logger.warn("request_denied", {
-          method: "idp.v1.IdentityService/Introspect",
-          actor: identity.email ?? identity.subject,
-          reason: "scope",
-          scope,
-        });
-        throw new ConnectError(`missing required scope ${scope}`, Code.PermissionDenied);
-      }
-      const principal = principalFromIdentity(identity);
-      return {
-        principal: {
-          kind: principal.kind,
-          sub: principal.sub,
-          email: principal.email ?? "",
-          act: principal.act ?? [],
-        },
-        scopes: identity.scopes,
-      };
-    },
-    exchangeProviderToken: async (request, context) => {
-      const auth = context.requestHeader.get("authorization") ?? "";
-      const subjectToken = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : request.subjectToken;
-      if (!subjectToken) {
-        throw new ConnectError("subject token is required", Code.Unauthenticated);
-      }
-      if (!request.application) {
-        throw new ConnectError("application is required", Code.InvalidArgument);
-      }
-      const exchanged = await exchangeProviderAccessToken(env, subjectToken, request.application);
-      if (!exchanged.accessToken) {
-        return {
-          accessToken: "",
-          expiresIn: 0n,
-          authorizeUrl: exchanged.authorizeUrl ?? "",
-        };
-      }
-      return {
-        accessToken: exchanged.accessToken,
-        expiresIn: BigInt(exchanged.expiresIn),
-        authorizeUrl: "",
-      };
-    },
-  });
-
-  router.service(
-    RegistryService,
-    protect(
-      RegistryService,
-      {
-        registerApplication: async (request, context) => {
-          try {
-            const identity = requireIdentity(context);
-            if (!request.name || !/^[a-z][a-z0-9-]*$/.test(request.name)) {
-              throw new ConnectError("application name must be lowercase alphanumeric", Code.InvalidArgument);
-            }
-            for (const delegation of request.delegations) {
-              if (!delegation.audience) {
-                throw new ConnectError("delegation audience is required", Code.InvalidArgument);
-              }
-              for (const scope of delegation.scopes) {
-                if (scope !== `${delegation.audience}/*` && !scope.startsWith(`${delegation.audience}/`)) {
-                  throw new ConnectError(
-                    `delegation scope ${scope} is outside audience ${delegation.audience}`,
-                    Code.InvalidArgument,
-                  );
-                }
-              }
-            }
-            const providerConfig = await getProviderConfig(env);
-            const postureRequired =
-              request.access?.postureRequired ?? (providerConfig.posture.enabled && providerConfig.posture.ruleId !== "");
-            const application = await upsertApplication(env, {
-              name: request.name,
-              endpoint: request.endpoint,
-              description: request.description,
-              resources: request.resources.map((resource) => ({
-                name: resource.name,
-                methods: resource.methods.map((method) => ({
-                  name: method.name,
-                  scope: method.scope || `${request.name}/${resource.name}.${method.name}`,
-                })),
-              })),
-              provider: request.provider ?? providerConfig.boundary.provider,
-              trustBoundary: {
-                provider: request.trustBoundary?.provider ?? providerConfig.boundary.provider,
-                accountId: request.trustBoundary?.accountId ?? providerConfig.boundary.accountId,
-                teamId: request.trustBoundary?.teamId ?? providerConfig.boundary.teamId,
-                teamName: request.trustBoundary?.teamName ?? providerConfig.boundary.teamName,
-                teamDomain: request.trustBoundary?.teamDomain ?? providerConfig.boundary.teamDomain,
-              },
-              access: {
-                allowedGroups: request.access?.allowedGroups ?? [],
-                allowedIdps: request.access?.allowedIdps ?? [],
-                postureRequired,
-                trustZone: request.trustZone || "tier2",
-              },
-              impersonationAccessClientId: request.impersonationAccessClientId ?? "",
-              providerOauthClientId: request.providerOauthClientId ?? "",
-              providerOauthScopes: request.providerOauthScopes ?? [],
-            });
-            const delegations = request.delegations.map((delegation) => ({
-              audience: delegation.audience,
-              scopes: delegation.scopes,
-            }));
-            await setDelegations(env, application.name, delegations);
-            const credential = (await hasServiceClient(env, application.name))
-              ? { clientId: "", clientSecret: "" }
-              : await createServiceClient(env, application.name);
-            await audit(
-              env,
-              identity.email ?? identity.subject,
-              "register_application",
-              application.name,
-            );
-            return {
-              application: applicationMessage(application, delegations),
-              credential,
-            };
-          } catch (error) {
-            if (error instanceof ConnectError) {
-              throw error;
-            }
-            logger.info("register_application_failed", { error: error instanceof Error ? error.message : String(error) });
-            throw new ConnectError(
-              error instanceof Error ? error.message : "register application failed",
-              Code.Internal,
-            );
-          }
-        },
-        getApplication: async (request) => {
-          const application = await getApplication(env, request.name);
-          if (!application) {
-            throw new ConnectError(`unknown application ${request.name}`, Code.NotFound);
-          }
-          return {
-            application: applicationMessage(application, await listDelegations(env, application.name)),
-          };
-        },
-        listApplications: async () => ({
-          applications: await Promise.all(
-            (await listApplications(env)).map(async (app) =>
-              applicationMessage(app, await listDelegations(env, app.name)),
-            ),
-          ),
-        }),
-        deleteApplication: async (request, context) => {
-          const identity = requireIdentity(context);
-          const deleted = await deleteApplication(env, request.name);
-          if (deleted) {
-            await audit(env, identity.email ?? identity.subject, "delete_application", request.name);
-          }
-          return { deleted };
-        },
-        registerClient: async (request, context) => {
-          const identity = requireIdentity(context);
-          const application = await getApplication(env, request.application);
-          if (!application) {
-            throw new ConnectError(`unknown application ${request.application}`, Code.NotFound);
-          }
-          const credential = await createServiceClient(env, application.name);
-          await audit(env, identity.email ?? identity.subject, "register_client", application.name);
-          return { credential };
-        },
-        upsertProviderConfig: async (request, context) => {
-          const identity = requireIdentity(context);
-          let parsed: ProviderConfig;
-          try {
-            parsed = JSON.parse(request.configJson) as ProviderConfig;
-          } catch {
-            throw new ConnectError("config_json must be valid provider config JSON", Code.InvalidArgument);
-          }
-          const stored = await upsertProviderConfig(env, parsed);
-          await audit(env, identity.email ?? identity.subject, "upsert_provider_config", stored.boundary.teamName);
-          return { config: providerConfigMessage(stored) };
-        },
-        getProviderConfig: async () => ({
-          config: providerConfigMessage(await getProviderConfig(env)),
-        }),
-      },
-      policy,
-    ),
-  );
-
-  // Tracing is an ordinary platform service: same Connect surface, protect()
-  // policy, and generated clients as every other application RPC.
-  router.service(
-    TraceService,
-    protect(
-      TraceService,
-      {
-        listTraces: async (request) => ({
-          traces: await listTraces(env, request.limit > 0 ? request.limit : 25),
-        }),
-        getTrace: async (request) => {
-          const spans = await getTrace(env, request.traceId);
-          if (!spans) {
-            throw new ConnectError(`trace ${request.traceId} not found`, Code.NotFound);
-          }
-          return { traceId: request.traceId, spans };
-        },
-        // Live tail: poll the span store and stream new spans as they are
-        // ingested. Streams are kept short (~45s) so idle connections are
-        // recycled before intermediaries time them out; clients reconnect
-        // continuously while the live view stays open.
-        streamTraces: async function* (_request, context) {
-          const POLL_MS = 1500;
-          const MAX_TICKS = 30;
-          let cursor = Math.floor(Date.now() / 1000) - 5;
-          const seen = new Set<string>();
-          for (let tick = 0; tick < MAX_TICKS && !context.signal.aborted; tick += 1) {
-            const rows = await streamSpans(env, cursor);
-            for (const row of rows) {
-              if (seen.has(row.span.spanId)) {
-                continue;
-              }
-              seen.add(row.span.spanId);
-              cursor = Math.max(cursor, row.createdAt);
-              yield { traceId: row.traceId, span: row.span };
-            }
-            if (seen.size > 4000) {
-              seen.clear();
-              cursor = Math.floor(Date.now() / 1000);
-            }
-            await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-          }
-        },
-      },
-      policy,
-    ),
-  );
-
-  // Client identity registration: applications (acting for a user via a
-  // chained token) register sub-identities — e.g. one chat conversation —
-  // and receive a gateway-signed, key-bound identity document. This is the
-  // IdP-registration surface; generated clients exist like any other service.
-  router.service(
-    ClientIdentityService,
-    protect(
-      ClientIdentityService,
-      {
-        registerClientIdentity: async (request, context) => {
-          const identity = requireIdentity(context);
-          const application = request.application.trim();
-          if (!/^[a-z][a-z0-9-]*$/.test(application)) {
-            throw new ConnectError("application must be a registered name", Code.InvalidArgument);
-          }
-          if (!(await getApplicationByAudience(env, application))) {
-            throw new ConnectError(`unknown application ${application}`, Code.NotFound);
-          }
-          // The registering actor must be the application itself (chained
-          // call) or the user directly (no actor chain). The immediate actor
-          // is the head of the chain: the service that performed this hop.
-          const immediateActor = identity.actorChain[0];
-          if (immediateActor && !immediateActor.startsWith(`svc_${application}_`)) {
-            throw new ConnectError(
-              `actor ${immediateActor} cannot register identities for ${application}`,
-              Code.PermissionDenied,
-            );
-          }
-          const instanceId = /^[A-Za-z0-9_-]{1,64}$/.test(request.instanceId)
-            ? request.instanceId
-            : crypto.randomUUID().replace(/-/g, "").slice(0, 16);
-          let jkt = "";
-          if (request.publicJwk) {
-            try {
-              jkt = await calculateJwkThumbprint(JSON.parse(request.publicJwk) as JWK, "sha256");
-            } catch {
-              throw new ConnectError("public_jwk is not a valid JWK", Code.InvalidArgument);
-            }
-          }
-          const kind = request.kind.trim() || "client";
-          const now = Math.floor(Date.now() / 1000);
-          const expiresAt = now + TOKEN_LIFETIME_SECONDS * 144; // 12 hours
-          await env.DB.prepare(
-            `INSERT OR REPLACE INTO idp_client_identities
-               (instance_id, application, subject, email, kind, jkt, public_jwk, created_at, expires_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-            .bind(
-              instanceId,
-              application,
-              identity.subject,
-              identity.email ?? "",
-              kind,
-              jkt,
-              request.publicJwk ?? "",
-              now,
-              expiresAt,
-            )
-            .run();
-          const token = await signToken(env, {
-            iss: issuer(env),
-            sub: identity.subject,
-            aud: application,
-            email: identity.email ?? undefined,
-            kind,
-            instance: instanceId,
-            iat: now,
-            exp: expiresAt,
-            jti: crypto.randomUUID(),
-            ...(identity.actorChain.length > 0 ? { act: nestActChain(identity.actorChain) } : {}),
-            ...(jkt ? { cnf: { jkt } } : {}),
-          });
-          await audit(
-            env,
-            identity.email ?? identity.subject,
-            "register_client_identity",
-            `${application}:${instanceId}`,
-          );
-          return {
-            identityToken: token,
-            expiresIn: BigInt(expiresAt - now),
-            identity: {
-              instanceId,
-              application,
-              subject: identity.subject,
-              email: identity.email ?? "",
-              kind,
-              jkt,
-              createdAt: BigInt(now),
-              expiresAt: BigInt(expiresAt),
-            },
-          };
-        },
-        listClientIdentities: async (request, context) => {
-          const identity = requireIdentity(context);
-          const application = request.application.trim();
-          // A chained caller may only list identities for the application
-          // that performed the hop; the unscoped listing is reserved for
-          // direct (allowlisted) users.
-          const immediateActor = identity.actorChain[0];
-          if (immediateActor) {
-            if (!application || !immediateActor.startsWith(`svc_${application}_`)) {
-              throw new ConnectError(
-                `actor ${immediateActor} may only list identities for its own application`,
-                Code.PermissionDenied,
-              );
-            }
-          }
-          const rows = application
-            ? await env.DB.prepare(
-              "SELECT * FROM idp_client_identities WHERE application = ? ORDER BY created_at DESC LIMIT 100",
-            )
-              .bind(application)
-              .run<Record<string, string | number>>()
-            : await env.DB.prepare(
-              "SELECT * FROM idp_client_identities ORDER BY created_at DESC LIMIT 100",
-            ).run<Record<string, string | number>>();
-          return {
-            identities: rows.results.map((row) => ({
-              instanceId: String(row.instance_id),
-              application: String(row.application),
-              subject: String(row.subject),
-              email: String(row.email),
-              kind: String(row.kind),
-              jkt: String(row.jkt),
-              createdAt: BigInt(row.created_at),
-              expiresAt: BigInt(row.expires_at),
-            })),
-          };
-        },
-      },
-      policy,
-    ),
-  );
-
-  router.service(
-    DiscoveryService,
-    protect(
-      DiscoveryService,
-      {
-        discover: async () => buildDiscovery(env),
-      },
-      policy,
-    ),
-  );
-};
-
 export const buildBootstrapDiscovery = (env: Env) => {
   const oidc = oidcProvider(env);
   const base = issuer(env);
@@ -1266,10 +847,10 @@ export const buildDiscovery = async (env: Env) => {
     ...bootstrap,
     applications: await Promise.all(
       (await listApplications(env)).map(async (app) =>
-        applicationMessage(app, await listDelegations(env, app.name)),
+        applicationView(app, await listDelegations(env, app.name)),
       ),
     ),
-    provider: providerConfigMessage(await getProviderConfig(env)),
+    provider: providerConfigView(await getProviderConfig(env)),
   };
 };
 

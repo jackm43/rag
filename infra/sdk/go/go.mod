@@ -3,10 +3,9 @@ module jsmunro.me/platy/sdk
 go 1.25.0
 
 require (
-	connectrpc.com/connect v1.20.0
 	github.com/1password/onepassword-sdk-go v0.4.0
 	golang.org/x/oauth2 v0.30.0
-	jsmunro.me/platy/applications v0.0.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -19,7 +18,4 @@ require (
 	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-	gopkg.in/yaml.v3 v3.0.1
 )
-
-replace jsmunro.me/platy/applications => ../../applications

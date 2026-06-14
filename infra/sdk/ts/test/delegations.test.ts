@@ -117,11 +117,11 @@ test("delegationGraph caches per issuer and serves stale on fetch failure", asyn
         { status: 200, headers: { "content-type": "application/json" } },
       );
     }
-    if (url.endsWith("/idp.v1.DiscoveryService/Discover")) {
+    if (url.endsWith("/platform/gateway/v1/discovery")) {
       if (calls > 1) {
         throw new Error("network down");
       }
-      return new Response(JSON.stringify(discovery), {
+      return new Response(JSON.stringify({ data: discovery }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });

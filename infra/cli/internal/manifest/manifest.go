@@ -12,6 +12,7 @@ import (
 
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/provider"
+	"jsmunro.me/platy/sdk/catalog"
 	sdksecrets "jsmunro.me/platy/sdk/secrets"
 )
 
@@ -189,9 +190,8 @@ func (m *Manifest) Application(name string) *Application {
 	return &app
 }
 
-func HasProtoPackage(root, name string) bool {
-	_, err := os.Stat(filepath.Join(root, "infra", "proto", name))
-	return err == nil
+func HasApplicationResources(root, name string) bool {
+	return catalog.HasApplicationResources(root, name)
 }
 
 func (m *Manifest) WebClientCallbackURIs(root string) []string {
@@ -239,11 +239,19 @@ func SetWranglerVars(path string, vars map[string]string) error {
 		if value == "" {
 			continue
 		}
-		pattern := regexp.MustCompile(`("` + regexp.QuoteMeta(key) + `"\s*:\s*)"[^"]*"`)
-		if !pattern.MatchString(body) {
-			return fmt.Errorf("%s has no var %s to update", path, key)
+		quotedKey := regexp.QuoteMeta(key)
+		pattern := regexp.MustCompile(`("` + quotedKey + `"\s*:\s*)"[^"]*"`)
+		if pattern.MatchString(body) {
+			body = pattern.ReplaceAllString(body, `${1}"`+value+`"`)
+			continue
 		}
-		body = pattern.ReplaceAllString(body, `${1}"`+value+`"`)
+		varsBlock := regexp.MustCompile(`(?ms)("vars"\s*:\s*\{)(.*?)(\n\s*\})`)
+		match := varsBlock.FindStringSubmatch(body)
+		if match == nil {
+			return fmt.Errorf("%s has no vars block", path)
+		}
+		entry := fmt.Sprintf("\n    %q: %q,", key, value)
+		body = varsBlock.ReplaceAllString(body, match[1]+match[2]+entry+match[3])
 	}
 	return os.WriteFile(path, []byte(body), 0o644)
 }

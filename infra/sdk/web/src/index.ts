@@ -10,12 +10,21 @@ export {
   type BrowserAuthOptions,
 } from "./browser-auth";
 export {
-  gatewayClient,
-  gatewayTransport,
-  webClient,
-  webTransport,
-  type WebClientOptions,
-} from "./transport";
+  createPlatformWebClient,
+  type PlatformWebClientOptions,
+  type PlatformWebClients,
+} from "./platform-client";
+export type { PlatformWebClientOptions as BrowserPlatformClientOptions, PlatformWebClients as BrowserPlatformClients } from "./platform-client";
+export type {
+  ChatStreamChunk,
+  ConfigEntry,
+  ModelInfo,
+  RagbotChatStreamChunk,
+  RagInteraction,
+  TraceSpan,
+  TraceStreamMessage,
+  TraceSummary,
+} from "./platform-types";
 export {
   CLIENT_INSTANCE_HEADER,
   CLIENT_TOKEN_HEADER,

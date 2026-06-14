@@ -2,95 +2,92 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"reflect"
 	"sort"
 
-	"connectrpc.com/connect"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
-
-	idpv1 "jsmunro.me/platy/applications/idp/client/idp/v1"
 	"jsmunro.me/platy/cli/internal/manifest"
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/platform"
 	"jsmunro.me/platy/cli/internal/provider"
+	"jsmunro.me/platy/sdk/apps/discovery"
+	"jsmunro.me/platy/sdk/catalog"
 )
 
-// applicationResources returns the registry resources for an application:
-// services/methods from its proto package, or none for client-only
-// applications (confidential web clients, connectors) without one.
-func applicationResources(root, name string) ([]*idpv1.Resource, map[string]string, bool) {
-	if _, err := os.Stat(filepath.Join(root, "infra", "proto", name)); err != nil {
-		return []*idpv1.Resource{}, map[string]string{}, false
+func applicationResources(root, name string) ([]catalog.Resource, bool) {
+	if !catalog.HasApplicationResources(root, name) {
+		return nil, false
 	}
-	resources, fullNames := protoResources(root, name)
-	return resources, fullNames, true
+	resources, err := catalog.ApplicationResources(root, name)
+	if err != nil {
+		output.Fail("load resources for %s: %v", name, err)
+	}
+	return resources, true
 }
 
-// desiredApplication builds the registry state the manifest declares for one
-// application — the same inputs registerApplication sends, minus the
-// provisioned impersonation client id (cloud-side, excluded from diffs).
 func desiredApplication(
 	root string,
 	loaded *manifest.Manifest,
 	name string,
 	providerConfig provider.ProviderConfig,
-) *idpv1.Application {
+) *discovery.Application {
 	app := loaded.Application(name)
-	resources, _, _ := applicationResources(root, name)
-	return &idpv1.Application{
+	resources, _ := applicationResources(root, name)
+	converted := make([]discovery.Resource, 0, len(resources))
+	for _, resource := range resources {
+		entry := discovery.Resource{Name: resource.Name}
+		for _, method := range resource.Methods {
+			entry.Methods = append(entry.Methods, discovery.ResourceMethod{Name: method.Name, Scope: method.Scope})
+		}
+		converted = append(converted, entry)
+	}
+	return &discovery.Application{
 		Name:                name,
 		Endpoint:            app.Endpoint,
 		Description:         app.Description,
-		Resources:           resources,
-		Delegations:         manifestDelegations(app),
+		Resources:           converted,
+		Delegations:         manifestDelegationsDiscovery(app),
 		Provider:            app.ProxyProvider(),
-		TrustBoundary:       manifestTrustBoundary(app, providerConfig),
-		Access:              manifestAccess(app, providerConfig),
+		TrustBoundary:       manifestTrustBoundaryDiscovery(app, providerConfig),
+		Access:              manifestAccessDiscovery(app, providerConfig),
 		TrustZone:           app.ResolvedTrustZone(),
 		ProviderOauthScopes: app.ProviderAPIScopes,
 	}
 }
 
-var diffJSON = protojson.MarshalOptions{UseProtoNames: true}
-
-func messageChange(field string, desired, actual proto.Message) string {
-	return fmt.Sprintf("%s: %s -> %s", field, diffJSON.Format(actual), diffJSON.Format(desired))
-}
-
-// diffApplication lists the fields where the manifest's desired state differs
-// from the registry, as "field: actual -> desired" strings.
-func diffApplication(desired, actual *idpv1.Application) []string {
+func diffApplication(desired, actual *discovery.Application) []string {
 	changes := []string{}
 	scalar := func(field, want, got string) {
 		if want != got {
 			changes = append(changes, fmt.Sprintf("%s: %q -> %q", field, got, want))
 		}
 	}
-	scalar("endpoint", desired.GetEndpoint(), actual.GetEndpoint())
-	scalar("description", desired.GetDescription(), actual.GetDescription())
-	scalar("provider", desired.GetProvider(), actual.GetProvider())
-	scalar("trust_zone", desired.GetTrustZone(), actual.GetTrustZone())
+	scalar("endpoint", desired.Endpoint, actual.Endpoint)
+	scalar("description", desired.Description, actual.Description)
+	scalar("provider", desired.Provider, actual.Provider)
+	scalar("trust_zone", desired.TrustZone, actual.TrustZone)
 
-	if !messageListsEqual(desired.GetResources(), actual.GetResources()) {
-		changes = append(changes, fmt.Sprintf("resources: %d service(s) changed", len(desired.GetResources())))
+	if !reflect.DeepEqual(desired.Resources, actual.Resources) {
+		changes = append(changes, fmt.Sprintf("resources: %d service(s) changed", len(desired.Resources)))
 	}
-	// The registry returns delegations sorted by audience; compare order-free.
-	if !messageListsEqual(sortedDelegations(desired.GetDelegations()), sortedDelegations(actual.GetDelegations())) {
-		changes = append(changes, messageChange("delegations",
-			&idpv1.Application{Delegations: desired.GetDelegations()},
-			&idpv1.Application{Delegations: actual.GetDelegations()}))
+	if !reflect.DeepEqual(sortedDelegationsDiscovery(desired.Delegations), sortedDelegationsDiscovery(actual.Delegations)) {
+		desiredJSON, _ := json.Marshal(sortedDelegationsDiscovery(desired.Delegations))
+		actualJSON, _ := json.Marshal(sortedDelegationsDiscovery(actual.Delegations))
+		changes = append(changes, fmt.Sprintf("delegations: %s -> %s", actualJSON, desiredJSON))
 	}
-	if !proto.Equal(desired.GetAccess(), actual.GetAccess()) {
-		changes = append(changes, messageChange("access", desired.GetAccess(), actual.GetAccess()))
+	if !reflect.DeepEqual(desired.Access, actual.Access) {
+		desiredJSON, _ := json.Marshal(desired.Access)
+		actualJSON, _ := json.Marshal(actual.Access)
+		changes = append(changes, fmt.Sprintf("access: %s -> %s", actualJSON, desiredJSON))
 	}
-	if !proto.Equal(desired.GetTrustBoundary(), actual.GetTrustBoundary()) {
-		changes = append(changes, messageChange("trust_boundary", desired.GetTrustBoundary(), actual.GetTrustBoundary()))
+	if !reflect.DeepEqual(desired.TrustBoundary, actual.TrustBoundary) {
+		desiredJSON, _ := json.Marshal(desired.TrustBoundary)
+		actualJSON, _ := json.Marshal(actual.TrustBoundary)
+		changes = append(changes, fmt.Sprintf("trust_boundary: %s -> %s", actualJSON, desiredJSON))
 	}
-	if !slicesEqual(desired.GetProviderOauthScopes(), actual.GetProviderOauthScopes()) {
-		changes = append(changes, fmt.Sprintf("provider_oauth_scopes: %v -> %v", actual.GetProviderOauthScopes(), desired.GetProviderOauthScopes()))
+	if !slicesEqual(desired.ProviderOauthScopes, actual.ProviderOauthScopes) {
+		changes = append(changes, fmt.Sprintf("provider_oauth_scopes: %v -> %v", actual.ProviderOauthScopes, desired.ProviderOauthScopes))
 	}
 	return changes
 }
@@ -107,40 +104,25 @@ func slicesEqual(a, b []string) bool {
 	return true
 }
 
-func sortedDelegations(delegations []*idpv1.Delegation) []*idpv1.Delegation {
-	sorted := append([]*idpv1.Delegation{}, delegations...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].GetAudience() < sorted[j].GetAudience() })
+func sortedDelegationsDiscovery(delegations []discovery.Delegation) []discovery.Delegation {
+	sorted := append([]discovery.Delegation{}, delegations...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Audience < sorted[j].Audience })
 	return sorted
 }
 
-func messageListsEqual[M proto.Message](desired, actual []M) bool {
-	if len(desired) != len(actual) {
-		return false
-	}
-	for index := range desired {
-		if !proto.Equal(desired[index], actual[index]) {
-			return false
-		}
-	}
-	return true
-}
-
-func registeredApplications(ctx context.Context) map[string]*idpv1.Application {
-	response, err := platform.Session(ctx).RegistryClient().ListApplications(ctx, connect.NewRequest(&idpv1.ListApplicationsRequest{}))
+func registeredApplications(ctx context.Context) map[string]*discovery.Application {
+	apps, err := platform.Session(ctx).ListApplicationsHTTP(ctx)
 	if err != nil {
 		output.Fail("list applications: %v", err)
 	}
-	registered := map[string]*idpv1.Application{}
-	for _, application := range response.Msg.Applications {
-		registered[application.Name] = application
+	registered := map[string]*discovery.Application{}
+	for index := range apps {
+		app := apps[index]
+		registered[app.Name] = &app
 	}
 	return registered
 }
 
-// Plan retrieves the registry's current state and diffs it against the
-// manifest, so a sync's effect is visible before anything is applied.
-// It returns the number of applications that would change (non-zero exit
-// status when invoked as `platy app plan`).
 func Plan(ctx context.Context) int {
 	root := platform.RepoRoot()
 	loaded := manifest.Load(root)
@@ -159,7 +141,7 @@ func Plan(ctx context.Context) int {
 		if !exists {
 			changedCount++
 			lines = append(lines, fmt.Sprintf("+ %-12s new application (audience %s, %d resource(s), %d delegation(s))",
-				name, name, len(desired.GetResources()), len(desired.GetDelegations())))
+				name, name, len(desired.Resources), len(desired.Delegations)))
 			continue
 		}
 		changes := diffApplication(desired, actual)
@@ -195,4 +177,52 @@ func Plan(ctx context.Context) int {
 	}
 	output.PrintLines("", fmt.Sprintf("%d application(s) would change; apply with platy app sync", changedCount+len(orphans)))
 	return changedCount + len(orphans)
+}
+
+func manifestDelegationsDiscovery(app *manifest.Application) []discovery.Delegation {
+	delegations := []discovery.Delegation{}
+	for _, delegation := range app.Delegations {
+		delegations = append(delegations, discovery.Delegation{
+			Audience: delegation.Audience,
+			Scopes:   delegation.Scopes,
+		})
+	}
+	return delegations
+}
+
+func manifestTrustBoundaryDiscovery(app *manifest.Application, config provider.ProviderConfig) discovery.TrustBoundary {
+	boundary := config.Boundary
+	if app.TrustBoundary.AccountID != "" {
+		boundary.AccountID = app.TrustBoundary.AccountID
+	}
+	if app.TrustBoundary.TeamID != "" {
+		boundary.TeamID = app.TrustBoundary.TeamID
+	}
+	if app.TrustBoundary.TeamName != "" {
+		boundary.TeamName = app.TrustBoundary.TeamName
+	}
+	if app.TrustBoundary.TeamDomain != "" {
+		boundary.TeamDomain = app.TrustBoundary.TeamDomain
+	}
+	return discovery.TrustBoundary{
+		Provider:   string(boundary.Provider),
+		AccountID:  boundary.AccountID,
+		TeamID:     boundary.TeamID,
+		TeamName:   boundary.TeamName,
+		TeamDomain: boundary.TeamDomain,
+	}
+}
+
+func manifestAccessDiscovery(app *manifest.Application, config provider.ProviderConfig) discovery.ApplicationAccess {
+	postureRequired := config.Posture.Enabled
+	if app.Access.PostureRequired != nil {
+		postureRequired = *app.Access.PostureRequired
+	} else if config.Organization.PostureRequiredForZone(app.ResolvedTrustZone()) {
+		postureRequired = true
+	}
+	return discovery.ApplicationAccess{
+		AllowedGroups:   app.Access.AllowedGroups,
+		AllowedIdPs:     app.Access.AllowedIdPs,
+		PostureRequired: postureRequired,
+	}
 }

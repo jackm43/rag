@@ -20,8 +20,8 @@ type OidcProvider struct {
 }
 
 type Endpoints struct {
-	TokenExchange string `json:"token_exchange"`
-	TokenRevoke   string `json:"token_revoke"`
+	TokenExchange string `json:"tokenExchange"`
+	TokenRevoke   string `json:"tokenRevoke"`
 	Introspect    string `json:"introspect"`
 	Discovery     string `json:"discovery"`
 	Jwks          string `json:"jwks"`
@@ -183,11 +183,12 @@ type Application struct {
 	TrustZone                   string                    `json:"trustZone,omitempty"`
 	TrustBoundary               TrustBoundary             `json:"trustBoundary,omitempty"`
 	Access                      ApplicationAccess         `json:"access,omitempty"`
-	CreatedAt                   int64                     `json:"created_at"`
-	UpdatedAt                   int64                     `json:"updated_at"`
-	GatewayURL                  string                    `json:"gateway_url,omitempty"`
-	ImpersonationAccessClientID string                    `json:"impersonation_access_client_id,omitempty"`
-	ProviderOAuthClientID       string                    `json:"provider_oauth_client_id,omitempty"`
+	CreatedAt                   int64                     `json:"createdAt"`
+	UpdatedAt                   int64                     `json:"updatedAt"`
+	GatewayURL                  string                    `json:"gatewayUrl,omitempty"`
+	ImpersonationAccessClientID string                    `json:"impersonationAccessClientId,omitempty"`
+	ProviderOAuthClientID       string                    `json:"providerOauthClientId,omitempty"`
+	ProviderOauthScopes         []string                  `json:"providerOauthScopes,omitempty"`
 	Credential                  *secrets.ClientCredential `json:"credential,omitempty"`
 	ProviderOAuth               *secrets.ClientCredential `json:"provider_oauth,omitempty"`
 }
@@ -199,8 +200,8 @@ type BootstrapDocument struct {
 
 type Document struct {
 	Issuer                string         `json:"issuer"`
-	JwksURI               string         `json:"jwks_uri"`
-	TokenExchangeEndpoint string         `json:"token_exchange_endpoint"`
+	JwksURI               string         `json:"jwksUri"`
+	TokenExchangeEndpoint string         `json:"tokenExchangeEndpoint,omitempty"`
 	Endpoints             Endpoints      `json:"endpoints"`
 	Oidc                  OidcProvider   `json:"oidc"`
 	Applications          []Application  `json:"applications"`

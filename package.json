@@ -8,7 +8,7 @@
     "infra/sdk/web"
   ],
   "scripts": {
-    "dev": "go run jsmunro.me/platy/cli dev vars ragbot && wrangler dev -c infra/applications/ragbot/worker/wrangler.jsonc",
+    "dev": "wrangler dev -c infra/applications/ragbot/worker/wrangler.jsonc",
     "deploy": "wrangler deploy -c infra/applications/ragbot/worker/wrangler.jsonc",
     "gw:dev": "wrangler dev -c infra/applications/idp/worker/wrangler.jsonc",
     "gw:deploy": "wrangler deploy -c infra/applications/idp/worker/wrangler.jsonc",
@@ -22,30 +22,28 @@
     "discovery:deploy": "wrangler deploy -c infra/applications/discovery/worker/wrangler.jsonc",
     "discovery:d1:migrate:local": "wrangler d1 execute discovery --local -c infra/applications/discovery/worker/wrangler.jsonc --file=./infra/applications/discovery/worker/schema.sql",
     "discovery:d1:migrate:remote": "wrangler d1 execute discovery --remote -c infra/applications/discovery/worker/wrangler.jsonc --file=./infra/applications/discovery/worker/schema.sql",
-    "generate": "go run jsmunro.me/platy/cli dev generate",
+    "generate": "npx tsx infra/scripts/generate-platform.ts",
     "ragbot:build": "esbuild infra/applications/ragbot/app/main.tsx --bundle --format=esm --jsx=automatic --minify --define:process.env.NODE_ENV='\"production\"' --outfile=infra/applications/ragbot/worker/public/app.js",
     "chat:build": "esbuild infra/applications/chat/app/main.tsx --bundle --format=esm --jsx=automatic --minify --define:process.env.NODE_ENV='\"production\"' --outfile=infra/applications/chat/worker/public/app.js",
     "portal:build": "esbuild infra/applications/portal/app/main.tsx --bundle --format=esm --jsx=automatic --minify --define:process.env.NODE_ENV='\"production\"' --outfile=infra/applications/portal/worker/public/app.js",
     "check": "tsc --noEmit && tsc -p infra/sdk/web",
     "test": "node --test --import tsx infra/applications/ragbot/worker/test/*.test.ts infra/applications/discovery/worker/test/*.test.ts infra/applications/idp/worker/test/*.test.ts infra/sdk/ts/test/*.test.ts",
-    "register:commands": "go run jsmunro.me/platy/cli dev register-commands",
+    "register:commands": "npx tsx infra/applications/ragbot/worker/scripts/register-commands.ts",
     "d1:migrate:local": "wrangler d1 execute ragbot --local -c infra/applications/ragbot/worker/wrangler.jsonc --file=./infra/applications/ragbot/worker/schema.sql"
   },
   "devDependencies": {
-    "@bufbuild/protoc-gen-es": "^2.12.0",
     "@cloudflare/workers-types": "^4.20260417.0",
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
-    "wrangler": "^4.13.2"
+    "wrangler": "^4.13.2",
+    "yaml": "^2.9.0"
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.12.0",
-    "@connectrpc/connect": "^2.1.1",
-    "@connectrpc/connect-web": "^2.1.1",
     "graphql": "^16.14.2",
+    "hono": "^4.12.25",
     "jose": "^6.0.13",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

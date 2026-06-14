@@ -193,13 +193,12 @@ func (p *CloudflareSecretsStore) createSecret(ctx context.Context, storeID, secr
 	return err
 }
 
-func (p *CloudflareSecretsStore) updateSecret(ctx context.Context, storeID, secretID, secretName, value string) error {
+func (p *CloudflareSecretsStore) updateSecret(ctx context.Context, storeID, secretID, _, value string) error {
 	path := fmt.Sprintf("/accounts/%s/secrets_store/stores/%s/secrets/%s", p.AccountID, storeID, secretID)
 	_, err := p.request(ctx, http.MethodPatch, path, map[string]any{
 		"value":   value,
 		"scopes":  []string{"workers"},
 		"comment": "managed by platy",
-		"name":    secretName,
 	})
 	return err
 }

@@ -1,7 +1,16 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { errorMessage, logger } from "../logger";
-import type { RpcHandler } from "../resource/router";
+import {
+  currentSpanContext,
+  formatTraceparent,
+  runWithActiveSpan,
+  setActiveSpanStore,
+} from "./context";
+
+export { annotateSpan, currentSpanContext, formatTraceparent, traceHeaders } from "./context";
+
+type RequestHandler = (request: Request, ctx?: ExecutionContext) => Promise<Response | null>;
 
 // Minimal OpenTelemetry tracing for workers: W3C traceparent propagation,
 // spans with attributes/status, and OTLP/HTTP JSON export. Every span is also
@@ -37,6 +46,8 @@ export type Span = {
   end(): void;
 };
 
+setActiveSpanStore(new AsyncLocalStorage<Span>());
+
 export type SpanOptions = {
   kind?: SpanKind;
   parent?: SpanContext | null;
@@ -64,8 +75,6 @@ export type TracerConfig = {
   exporter?: (service: string, spans: SpanData[]) => Promise<void>;
 };
 
-const activeSpan = new AsyncLocalStorage<Span>();
-
 const hex = (bytes: number): string => {
   const buffer = crypto.getRandomValues(new Uint8Array(bytes));
   return Array.from(buffer, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -76,32 +85,6 @@ const TRACEPARENT = /^[0-9a-f]{2}-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/;
 export const parseTraceparent = (header: string | null): SpanContext | null => {
   const match = header ? TRACEPARENT.exec(header.trim()) : null;
   return match ? { traceId: match[1], spanId: match[2] } : null;
-};
-
-export const formatTraceparent = (context: SpanContext): string =>
-  `00-${context.traceId}-${context.spanId}-01`;
-
-// Headers carrying the active trace context, for injection on any outbound
-// request (pass to createClient's decorate, or spread into fetch headers).
-export const traceHeaders = (): Record<string, string> => {
-  const span = activeSpan.getStore();
-  return span ? { traceparent: formatTraceparent(span.context) } : {};
-};
-
-export const currentSpanContext = (): SpanContext | null =>
-  activeSpan.getStore()?.context ?? null;
-
-// Adds attributes to the active span, if any — used by auth middleware to
-// stamp the request span with the verified identity (actor, chain) so traces
-// answer "who did this" without joining logs.
-export const annotateSpan = (attributes: Record<string, AttributeValue>): void => {
-  const span = activeSpan.getStore();
-  if (!span) {
-    return;
-  }
-  for (const [key, value] of Object.entries(attributes)) {
-    span.setAttribute(key, value);
-  }
 };
 
 const KIND_CODES: Record<SpanKind, number> = { internal: 1, server: 2, client: 3 };
@@ -197,7 +180,7 @@ export const createTracer = (config: TracerConfig): Tracer => {
     span: async (name, options, fn) => {
       const span = startSpan(name, options);
       try {
-        return await activeSpan.run(span, () => fn(span));
+        return await runWithActiveSpan(span, () => fn(span));
       } catch (error) {
         span.recordError(error);
         throw error;
@@ -285,7 +268,7 @@ export const gatewayTraceExporter = (options: {
 // method/path/status, and the export flush rides ctx.waitUntil. Requests the
 // handler does not own (null response) leave no span behind.
 export const traceRpc =
-  (tracer: Tracer, rpc: RpcHandler) =>
+  (tracer: Tracer, rpc: RequestHandler) =>
   async (request: Request, ctx?: ExecutionContext): Promise<Response | null> => {
     const url = new URL(request.url);
     const parent = parseTraceparent(request.headers.get("traceparent"));
@@ -295,7 +278,7 @@ export const traceRpc =
       attributes: { "http.method": request.method, "url.path": url.pathname },
     });
     try {
-      const response = await activeSpan.run(span, () => rpc(request));
+      const response = await runWithActiveSpan(span, () => rpc(request));
       if (response === null) {
         span.discard();
         return null;

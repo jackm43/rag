@@ -6,15 +6,17 @@
     "nodejs_compat"
   ],
   // The chat application's worker (confidential BFF) proxies
-  // chat.jsmunro.me/aigateway.v1.* here over a service binding with a chained
+  // /platform/aigateway/v1/* here over a service binding with a chained
   // audience token. The custom domain is the canonical endpoint for the CLI
   // and service callers; workers.dev is disabled.
   "workers_dev": false,
   "routes": [
     { "pattern": "aigateway.jsmunro.me", "custom_domain": true },
-    { "pattern": "ragbot.jsmunro.me/aigateway.v1.*", "zone_name": "jsmunro.me" }
+    { "pattern": "ragbot.jsmunro.me/platform/aigateway/v1/*", "zone_name": "jsmunro.me" }
   ],
   "vars": {
+    "AIGATEWAY_ENDPOINT": "https://aigateway.jsmunro.me",
+    "PLATY_APPLICATION": "aigateway",
     "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.me",
     "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
     "AIG_GATEWAY_ID": "platy",
@@ -24,6 +26,10 @@
     "OTEL_SERVICE_NAME": "aigateway"
   },
   "services": [
+    {
+      "binding": "AIGATEWAY",
+      "service": "aigateway"
+    },
     {
       "binding": "AUTH_GATEWAY",
       "service": "auth-gateway"
@@ -38,5 +44,12 @@
       "enabled": true,
       "invocation_logs": true
     }
-  }
+  },
+  "secrets_store_secrets": [
+    {
+      "binding": "SERVICE_CLIENT_SECRET",
+      "store_id": "2bca8b5b9f7a46999c37ff8eafbf7ba3",
+      "secret_name": "platy-aigateway-service-client-secret"
+    }
+  ]
 }

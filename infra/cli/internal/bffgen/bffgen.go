@@ -10,6 +10,7 @@ import (
 
 	"jsmunro.me/platy/cli/internal/manifest"
 	"jsmunro.me/platy/cli/internal/output"
+	"jsmunro.me/platy/sdk/catalog"
 )
 
 const idpAudience = "idp"
@@ -22,7 +23,7 @@ type proxyTarget struct {
 }
 
 func Generate(root, app string) error {
-	if manifest.HasProtoPackage(root, app) {
+	if catalog.HasApplicationResources(root, app) {
 		return nil
 	}
 	loaded := manifest.Load(root)

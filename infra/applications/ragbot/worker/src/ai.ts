@@ -72,6 +72,36 @@ export type ChatStreamChunk =
 const toGatewayModel = (model: string): string =>
   model.startsWith("@cf/") ? `workers-ai/${model}` : model;
 
+type ChatCompletion = {
+  content: string;
+  model: string;
+  durationMs: number | string;
+  usage?: {
+    promptTokens: number | string;
+    completionTokens: number | string;
+    totalTokens: number | string;
+  };
+};
+
+type ChatStreamChunkResponse =
+  | { done: false; delta?: string }
+  | {
+    done: true;
+    content: string;
+    model: string;
+    durationMs: number | string;
+    usage?: {
+      promptTokens: number | string;
+      completionTokens: number | string;
+      totalTokens: number | string;
+    };
+  };
+
+type ChatServiceClient = {
+  complete: (request: Record<string, unknown>) => Promise<ChatCompletion>;
+  streamComplete: (request: Record<string, unknown>) => AsyncGenerator<ChatStreamChunkResponse>;
+};
+
 const completionRequest = (
   config: BotConfig,
   messages: ChatMessage[],
@@ -90,7 +120,8 @@ export const runChatModel = async (
   messages: ChatMessage[],
   options: ChatOptions = {},
 ): Promise<ChatModelResult> => {
-  const response = await (await targets(env, identity).aigateway.chatService()).complete(
+  const chat = await targets(env, identity).aigateway.chatService() as ChatServiceClient;
+  const response = await chat.complete(
     completionRequest(config, messages, options),
   );
   return {
@@ -114,7 +145,8 @@ export async function* streamChatModel(
   messages: ChatMessage[],
   options: ChatOptions = {},
 ): AsyncGenerator<ChatStreamChunk> {
-  const stream = (await targets(env, identity).aigateway.chatService()).streamComplete(
+  const chat = await targets(env, identity).aigateway.chatService() as ChatServiceClient;
+  const stream = chat.streamComplete(
     completionRequest(config, messages, options),
   );
   for await (const chunk of stream) {

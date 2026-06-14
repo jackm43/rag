@@ -17,4 +17,5 @@ export type {
   ResourceInfo,
   SyncState,
 } from "./types";
+export type { DiscoveryClient } from "./graphql";
 export { queryDiscovery } from "./graphql";

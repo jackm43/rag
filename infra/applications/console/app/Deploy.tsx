@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { deploy } from "../../deploy/web";
+import { createPlatformWebClient } from "@platy/web";
 import { useAuth } from "@platy/web/react";
 
 type WorkerInfo = { name?: string; modifiedOn?: string };
@@ -13,7 +13,7 @@ export function Deploy() {
   const [selected, setSelected] = useState<string | null>(null);
   const [raw, setRaw] = useState("");
 
-  const deployClient = useMemo(() => deploy.deployServiceClient(auth), [auth]);
+  const deployClient = useMemo(() => createPlatformWebClient(auth, "deploy").deployServiceClient(), [auth]);
 
   const load = async () => {
     setBusy(true);
@@ -48,8 +48,8 @@ export function Deploy() {
         </div>
       </div>
       <p className="hint">
-        Bundle building happens via the CLI: platy deploy [app] builds, uploads through
-        deploy.DeployService.DeployWorker, and reconciles routes. This view lists the live scripts.
+        Bundle building and upload happen outside this console (wrangler deploy or your CI pipeline).
+        This view lists live Cloudflare worker scripts via deploy.DeployService.ListWorkers.
       </p>
       {note ? <div className="note">{note}</div> : null}
 
@@ -90,7 +90,7 @@ export function Deploy() {
               <dd>{detail.modifiedOn ?? "-"}</dd>
             </dl>
             <p className="hint">
-              Redeploy from the CLI: platy deploy {detail.name}. The deploy service holds no
+              Redeploy with wrangler deploy for {detail.name}. The deploy service holds no
               provider credential; it chains the caller's identity to the cloudflare application.
             </p>
           </div>

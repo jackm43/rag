@@ -47,7 +47,7 @@ func pushSecretsStoreBindings(
 				if err := manifest.SetWranglerVars(filepath.Join(root, filepath.FromSlash(app.Config)), map[string]string{
 					"SERVICE_CLIENT_ID": clientID,
 				}); err != nil {
-					output.Logger.Debug("service client id var not injected", "app", name, "error", err.Error())
+					return fmt.Errorf("inject service client id for %s: %w", name, err)
 				}
 			}
 		}

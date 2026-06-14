@@ -1,38 +1,29 @@
-import { createClient as createConnectClient, type Client, type Interceptor, type Transport } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import type { DescService } from "@bufbuild/protobuf";
-
-import { verifyMintedToken } from "../resource/minted";
 import type { Identity } from "../identity";
 import { errorMessage, logger } from "../logger";
-import { traceHeaders } from "../otel";
+import { traceHeaders } from "../otel/context";
 import { ttlCache } from "./cache";
 import { chainExchange, loadServiceCredentialFromEnv, type ServiceCredential } from "../oauth2/exchange";
+import { generateDpopKey, type DpopKey } from "../oauth2/dpop";
 import { createClient, type PlatformClient } from "./fetch";
-
-// A connector is the standard outbound integration with another trust zone
-// application on behalf of the calling user: the outbound interceptor (the
-// client's token source) authenticates the caller, exchanges the caller's
-// subject token for an audience token naming the next hop (this service's
-// credential as actor, so the chain is recorded), validates the minted token
-// against the caller's identity, and attaches it to the service-to-service
-// request. Any failure stops the request before it leaves.
+import { verifyMintedToken } from "../resource/minted";
+import {
+  applicationFromEnv,
+  createWorkerTransportFetch,
+  serviceBindingFetch,
+  transportModeFromEnv,
+  type TransportMode,
+} from "../transport";
 
 export type ConnectorConfig = {
-  // Target application name — the audience of the chained token and the next
-  // hop in the delegation chain (requires a registered delegation).
   application: string;
-  // Target base URL; workers also pass the service-binding fetch below.
   endpoint: string;
   gatewayUrl: string;
   credential: ServiceCredential;
   scopes?: string[];
-  // Isolates token caching per logical client instance (e.g. one chat
-  // conversation): same user, same audience, separate minted tokens.
   partition?: string;
-  // Transport for the exchange call (gateway service binding in workers).
+  caller?: string;
+  transportMode?: TransportMode;
   gatewayFetch?: typeof fetch;
-  // Transport for the target application (its service binding in workers).
   fetch?: typeof fetch;
 };
 
@@ -43,13 +34,14 @@ export class ConnectorAuthError extends Error {
   }
 }
 
-// Chained tokens are cached per (audience, subject token) until near expiry,
-// shared across connector instances since clients are built per request.
 const tokenCache = ttlCache<string>();
+let connectorDpopKey: Promise<DpopKey> | null = null;
 
-// connectorToken authenticates the caller and mints the chained audience
-// token for one outbound hop; exported for proxies that inject the token on
-// forwarded requests rather than making their own RPCs.
+const dpopKey = (): Promise<DpopKey> => {
+  connectorDpopKey ??= generateDpopKey();
+  return connectorDpopKey;
+};
+
 export const connectorToken = async (config: ConnectorConfig, identity: Identity): Promise<string> => {
   if (!identity.subjectToken) {
     throw new ConnectorAuthError(
@@ -74,9 +66,6 @@ export const connectorToken = async (config: ConnectorConfig, identity: Identity
       `connector ${config.application}: token exchange refused for ${identity.email ?? identity.subject}`,
     );
   }
-  // Fail closed unless the gateway minted exactly what this request needs: a
-  // fully verified token for the target audience whose actor chain is a
-  // currently-delegated path and that still names the caller as subject.
   const verified = await verifyMintedToken(
     minted.accessToken,
     {
@@ -96,67 +85,59 @@ export const connectorToken = async (config: ConnectorConfig, identity: Identity
   return minted.accessToken;
 };
 
-// connectorClient builds the per-caller outbound client for a connector.
-const connectorClient = (config: ConnectorConfig, identity: Identity): PlatformClient =>
-  createClient({
+const connectorClient = async (config: ConnectorConfig, identity: Identity): Promise<PlatformClient> => {
+  const transportFetch = createWorkerTransportFetch(config.fetch, {
+    mode: config.transportMode ?? "service-auth",
+    caller: config.caller ?? "",
+    target: config.application,
+    credential: config.credential,
+    gatewayUrl: config.gatewayUrl,
+    gatewayFetch: config.gatewayFetch,
+  }, { requireBinding: Boolean(config.fetch) });
+  return createClient({
     endpoint: config.endpoint,
-    fetch: config.fetch,
+    fetch: transportFetch,
     token: () => connectorToken(config, identity),
+    dpop: await dpopKey(),
     decorate: (headers) => {
       for (const [key, value] of Object.entries(traceHeaders())) {
         headers.set(key, value);
       }
     },
   });
-
-// connectorTransport is the Connect transport every generated service client
-// is built on. The instrumentation is part of the transport, not the
-// generated or hand-written layer: outbound boundary crossings are logged
-// (request, status, duration, actor) and the trace context propagates, so
-// codegen output and applications never re-implement it.
-const connectorTransport = (config: ConnectorConfig, identity: Identity): Transport => {
-  const platform = connectorClient(config, identity);
-  const boundary: Interceptor = (next) => async (req) => {
-    const method = `${req.service.typeName}/${req.method.name}`;
-    const actor = identity.email ?? identity.subject;
-    const start = Date.now();
-    try {
-      const response = await next(req);
-      logger.info("rpc_client", {
-        application: config.application,
-        method,
-        actor,
-        duration_ms: Date.now() - start,
-      });
-      return response;
-    } catch (error) {
-      logger.warn("rpc_client_failed", {
-        application: config.application,
-        method,
-        actor,
-        duration_ms: Date.now() - start,
-        error: errorMessage(error),
-      });
-      throw error;
-    }
-  };
-  return createConnectTransport({
-    baseUrl: config.endpoint.replace(/\/$/, ""),
-    // Workers fetch rejects connect-web's redirect: "error" option.
-    fetch: ((input, init) =>
-      platform.fetch(String(input), { ...init, redirect: undefined })) as typeof fetch,
-    interceptors: [boundary],
-  });
 };
 
-// connectorServiceClient binds a generated Connect service to a connector
-// transport; generated per-application service clients are thin wrappers
-// over this.
-export const connectorServiceClient = <S extends DescService>(
+export const connectorFetch = async (
   config: ConnectorConfig,
   identity: Identity,
-  service: S,
-): Client<S> => createConnectClient(service, connectorTransport(config, identity));
+  input: string,
+  init?: RequestInit,
+): Promise<Response> => {
+  const method = `${config.application} ${init?.method ?? "GET"} ${input}`;
+  const actor = identity.email ?? identity.subject;
+  const start = Date.now();
+  try {
+    const client = await connectorClient(config, identity);
+    const response = await client.fetch(input, init);
+    logger.info("http_client", {
+      application: config.application,
+      method,
+      actor,
+      status: response.status,
+      duration_ms: Date.now() - start,
+    });
+    return response;
+  } catch (error) {
+    logger.warn("http_client_failed", {
+      application: config.application,
+      method,
+      actor,
+      duration_ms: Date.now() - start,
+      error: errorMessage(error),
+    });
+    throw error;
+  }
+};
 
 type ServiceBinding = {
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
@@ -167,20 +148,18 @@ export type ServiceConnectionEnv = {
   SERVICE_CLIENT_ID?: string;
   SERVICE_CLIENT_SECRET?: string | { get(): Promise<string> };
   AUTH_GATEWAY?: ServiceBinding;
+  OTEL_SERVICE_NAME?: string;
+  PLATY_APPLICATION?: string;
+  TRANSPORT_MODE?: string;
 };
 
 export type ServiceConnectionTarget = {
   endpoint?: string;
-  // Target's service binding; same-account worker-to-worker fetches over
-  // public URLs are blocked.
   binding?: ServiceBinding;
+  bindingName?: string;
   scopes?: string[];
 };
 
-// serviceConnection is the one way a worker wires an outbound connector: its
-// own service credential and gateway binding from the environment plus the
-// target's endpoint/binding. Returns null until the credential and endpoint
-// are configured (first-deploy ordering), so callers can fail closed.
 export const serviceConnection = async (
   env: ServiceConnectionEnv,
   target: ServiceConnectionTarget,
@@ -194,9 +173,9 @@ export const serviceConnection = async (
     gatewayUrl: (env.AUTH_GATEWAY_URL ?? "").replace(/\/$/, ""),
     credential,
     scopes: target.scopes,
-    gatewayFetch: env.AUTH_GATEWAY
-      ? (input, init) => env.AUTH_GATEWAY!.fetch(input, init)
-      : undefined,
-    fetch: target.binding ? (input, init) => target.binding!.fetch(input, init) : undefined,
+    caller: applicationFromEnv(env),
+    transportMode: transportModeFromEnv(env),
+    gatewayFetch: serviceBindingFetch(env.AUTH_GATEWAY, "AUTH_GATEWAY"),
+    fetch: serviceBindingFetch(target.binding, target.bindingName),
   };
 };

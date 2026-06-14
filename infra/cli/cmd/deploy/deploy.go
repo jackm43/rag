@@ -152,44 +152,49 @@ func deployApplication(
 	out := newPrefixWriter(name)
 	defer out.Flush()
 
-	if needsDeploy {
-		output.Logger.Info("deploying worker", "app", name, "worker", app.Worker, "config", app.Config)
-		if err := wrangler.Run(root, env, "", out, "deploy", "-c", app.Config); err != nil {
-			return false, false, fmt.Errorf("deploy %s: %w", name, err)
-		}
-		reconcileRoutes(apiToken, root, name, app)
-		if err := state.recordDeploy(name, deployHash); err != nil {
-			return false, false, fmt.Errorf("record deploy state for %s: %w", name, err)
-		}
-		for _, hook := range app.PostDeploy {
-			if err := runPostDeploy(ctx, name, app, hook); err != nil {
-				return false, false, err
-			}
-		}
-	}
-
 	if needsSecrets {
 		if app.UsesSecretsStore() {
 			if err := pushSecretsStoreBindings(ctx, root, name, app, env, out, resolved, providerOAuth, clientID); err != nil {
-				return needsDeploy, false, err
+				return false, false, err
 			}
 		} else {
 			if err := pushWorkerSecrets(root, name, app, env, out, resolved); err != nil {
-				return needsDeploy, false, err
+				return false, false, err
 			}
 			if name == "idp" {
 				if err := cmdapp.PushProviderOAuthClients(root, env, out, providerOAuth); err != nil {
-					return needsDeploy, false, fmt.Errorf("push provider oauth secrets: %w", err)
+					return false, false, fmt.Errorf("push provider oauth secrets: %w", err)
 				}
 			}
 			if !app.Internal {
 				if err := pushServiceCredential(ctx, root, name, app, env, out); err != nil {
-					return needsDeploy, false, err
+					return false, false, err
 				}
 			}
 		}
 		if err := state.recordSecrets(name, secretsHash); err != nil {
-			return needsDeploy, false, fmt.Errorf("record secrets state for %s: %w", name, err)
+			return false, false, fmt.Errorf("record secrets state for %s: %w", name, err)
+		}
+		needsDeploy = true
+	}
+
+	if needsDeploy {
+		deployHash, err = computeDeployHash(root, name, app)
+		if err != nil {
+			return false, needsSecrets, fmt.Errorf("hash deploy inputs for %s: %w", name, err)
+		}
+		output.Logger.Info("deploying worker", "app", name, "worker", app.Worker, "config", app.Config)
+		if err := wrangler.Run(root, env, "", out, "deploy", "-c", app.Config); err != nil {
+			return false, needsSecrets, fmt.Errorf("deploy %s: %w", name, err)
+		}
+		reconcileRoutes(apiToken, root, name, app)
+		if err := state.recordDeploy(name, deployHash); err != nil {
+			return false, needsSecrets, fmt.Errorf("record deploy state for %s: %w", name, err)
+		}
+		for _, hook := range app.PostDeploy {
+			if err := runPostDeploy(ctx, name, app, hook); err != nil {
+				return false, needsSecrets, err
+			}
 		}
 	}
 

@@ -26,7 +26,7 @@ test("oauth discovery bootstrap is public but full discovery requires authentica
   assert.deepEqual(await full.json(), {
     error: "unauthenticated",
     error_description:
-      "full discovery requires authentication; use idp.v1.DiscoveryService.Discover or ?view=bootstrap",
+      "full discovery requires authentication; use GET /platform/gateway/v1/discovery or ?view=bootstrap",
   });
 });
 

@@ -1,6 +1,6 @@
 import type { Identity } from "../identity";
 import { errorMessage, logger } from "../logger";
-import { traceHeaders } from "../otel";
+import { traceHeaders } from "../otel/context";
 import { ttlCache } from "../client/cache";
 import { createClient, type PlatformClient } from "../client/fetch";
 import { exchangeProviderAccessToken } from "../oauth2/provider";
@@ -17,7 +17,7 @@ import { exchangeProviderAccessToken } from "../oauth2/provider";
 //   identity still gates the call, but the provider sees the application.
 export type ProviderApiAuth =
   | { mode: "oauth"; gatewayUrl: string; gatewayFetch?: typeof fetch }
-  | { mode: "api_token"; token: string; header?: string };
+  | { mode: "api_token"; token: string | (() => Promise<string | null>); header?: string; bearer?: boolean };
 
 export type ProviderApiConfig = {
   application: string;
@@ -40,12 +40,15 @@ export const providerApiToken = async (
   identity: Identity,
 ): Promise<string> => {
   if (config.auth.mode === "api_token") {
-    if (!config.auth.token) {
+    const token = typeof config.auth.token === "function"
+      ? await config.auth.token()
+      : config.auth.token;
+    if (!token) {
       throw new ProviderApiAuthError(
         `provider api ${config.application}: api token is not configured`,
       );
     }
-    return config.auth.token;
+    return token;
   }
   if (!identity.subjectToken) {
     throw new ProviderApiAuthError(
@@ -78,7 +81,8 @@ export const providerApiClient = (
     fetch: config.fetch,
     decorate: async (headers) => {
       const token = await providerApiToken(config, identity);
-      headers.set(header, header === "authorization" ? `Bearer ${token}` : token);
+      const useBearer = config.auth.mode !== "api_token" || (config.auth.bearer ?? header === "authorization");
+      headers.set(header, useBearer ? `Bearer ${token}` : token);
       for (const [key, value] of Object.entries(traceHeaders())) {
         headers.set(key, value);
       }
@@ -108,5 +112,5 @@ export const providerApiClient = (
       throw error;
     }
   };
-  return { fetch, call: platform.call };
+  return { fetch };
 };

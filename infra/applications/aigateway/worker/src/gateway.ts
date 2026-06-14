@@ -1,4 +1,4 @@
-import { resolveSecret } from "@platy/sdk";
+import { createApiTokenProviderClient, resolveSecret, type Identity, type PlatformClient } from "@platy/sdk";
 
 import type { Env } from "./types";
 
@@ -50,7 +50,19 @@ export class GatewayError extends Error {
 const compatBase = (env: Env): string =>
   `https://gateway.ai.cloudflare.com/v1/${env.CF_ACCOUNT_ID}/${env.AIG_GATEWAY_ID}/compat`;
 
-const compatUrl = (env: Env): string => `${compatBase(env)}/chat/completions`;
+const upstreamClient = (env: Env, identity: Identity): PlatformClient =>
+  createApiTokenProviderClient(
+    {
+      application: "aigateway",
+      apiBaseUrl: compatBase(env),
+      token: () => resolveSecret(env.CF_AIG_TOKEN),
+      tokenHeader: "cf-aig-authorization",
+      bearer: true,
+    },
+    identity,
+  );
+
+const compatUrl = (_env: Env): string => "/chat/completions";
 
 export type CatalogModel = {
   id: string;
@@ -65,17 +77,11 @@ const CATALOG_TTL_MS = 5 * 60_000;
 // The gateway's model catalog (~2k provider-qualified models with pricing),
 // fetched with the same injected authorization token and cached briefly in
 // isolate memory.
-export const listCatalogModels = async (env: Env): Promise<CatalogModel[]> => {
+export const listCatalogModels = async (env: Env, identity: Identity): Promise<CatalogModel[]> => {
   if (catalogCache && Date.now() - catalogCache.fetchedAt < CATALOG_TTL_MS) {
     return catalogCache.models;
   }
-  const token = await resolveSecret(env.CF_AIG_TOKEN);
-  if (!token) {
-    throw new GatewayError("CF_AIG_TOKEN secret is not configured", 500);
-  }
-  const response = await fetch(`${compatBase(env)}/models`, {
-    headers: { "cf-aig-authorization": `Bearer ${token}` },
-  });
+  const response = await upstreamClient(env, identity).fetch("/models");
   if (!response.ok) {
     throw new GatewayError(`model catalog returned ${response.status}`, response.status);
   }
@@ -117,17 +123,14 @@ const requestBody = (request: CompletionRequest): Record<string, unknown> => {
 // token; unified billing means no provider key is sent — Cloudflare bills the
 // account for paid providers, and `workers-ai/*` models stay on Workers AI
 // postpaid billing.
-const callGateway = async (env: Env, request: CompletionRequest): Promise<Response> => {
-  const token = await resolveSecret(env.CF_AIG_TOKEN);
-  if (!token) {
-    throw new GatewayError("CF_AIG_TOKEN secret is not configured", 500);
-  }
-  const response = await fetch(compatUrl(env), {
+const callGateway = async (
+  env: Env,
+  identity: Identity,
+  request: CompletionRequest,
+): Promise<Response> => {
+  const response = await upstreamClient(env, identity).fetch(compatUrl(env), {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "cf-aig-authorization": `Bearer ${token}`,
-    },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify(requestBody(request)),
   });
   if (!response.ok && !response.body) {
@@ -174,8 +177,8 @@ export type Completion = {
   toolCalls: ToolCall[];
 };
 
-export const complete = async (env: Env, request: CompletionRequest): Promise<Completion> => {
-  const response = await callGateway(env, { ...request, stream: false });
+export const complete = async (env: Env, identity: Identity, request: CompletionRequest): Promise<Completion> => {
+  const response = await callGateway(env, identity, { ...request, stream: false });
   const payload = (await response.json()) as CompletionPayload;
   if (!response.ok) {
     const detail =
@@ -222,9 +225,10 @@ export type StreamEvent =
 // event carrying the assembled content and any usage the provider reported.
 export async function* streamComplete(
   env: Env,
+  identity: Identity,
   request: CompletionRequest,
 ): AsyncGenerator<StreamEvent> {
-  const response = await callGateway(env, { ...request, stream: true });
+  const response = await callGateway(env, identity, { ...request, stream: true });
   if (!response.ok || !response.body) {
     const text = await response.text().catch(() => "");
     throw new GatewayError(text || `ai gateway returned ${response.status}`, response.status);

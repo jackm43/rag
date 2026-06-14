@@ -994,17 +994,12 @@ fast and offline-tolerant without ever caching secrets in plaintext.
 
 ### Generated code and metadata
 
-- Contracts are protobuf-first in `infra/proto/<app>/v1/`. Regenerate with
-  `infra/scripts/generate.sh [app...]` (buf + protoc-gen-go, connect-go,
-  protobuf-es). Generated output lands in `infra/applications/<app>/client`
-  (Go) and `infra/applications/<app>/server` (TypeScript); these directories
-  are not committed.
-- Generated servers plug into the server SDK (`createRpcHandler` +
-  `protect`, Module 6) so auth enforcement is impossible to forget.
-- Generated clients embed nothing environment-specific: endpoint and
-  audience are resolved through discovery at runtime.
-- Regeneration is idempotent and CI-checkable: a dirty diff after
-  `generate.sh` fails the build.
+- HTTP route catalog in `infra/applications/resources.yaml`; hand-written
+  clients in `infra/applications/<app>/service` and `web`.
+- Servers use `createHttpApp` from `infra/sdk/ts/src/http` with
+  `platformAuthenticator` so auth enforcement is consistent.
+- Clients embed nothing environment-specific: endpoint and audience are
+  resolved through discovery at runtime.
 
 ### Deployment
 

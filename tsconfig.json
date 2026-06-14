@@ -23,7 +23,6 @@
     "infra/sdk/ts/src/**/*.ts",
     "infra/applications/*/worker/src/**/*.ts",
     "infra/applications/ragbot/worker/scripts/**/*.ts",
-    "infra/applications/**/server/**/*.ts",
     "infra/applications/**/service/**/*.ts",
     "infra/applications/**/targets/**/*.ts",
     "infra/applications/discovery/graphql/**/*.ts"

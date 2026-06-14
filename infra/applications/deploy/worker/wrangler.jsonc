@@ -10,9 +10,15 @@
     {
       "pattern": "deploy.jsmunro.me",
       "custom_domain": true
+    },
+    {
+      "pattern": "ragbot.jsmunro.me/platform/deploy/v1/*",
+      "zone_name": "jsmunro.me"
     }
   ],
   "vars": {
+    "PLATY_APPLICATION": "deploy",
+    "OTEL_SERVICE_NAME": "deploy",
     "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.me",
     "CLOUDFLARE_ENDPOINT": "https://cloudflare.jsmunro.me"
   },

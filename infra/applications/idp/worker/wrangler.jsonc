@@ -17,7 +17,15 @@
       "custom_domain": true
     },
     {
-      "pattern": "chat.jsmunro.me/idp.v1.*",
+      "pattern": "chat.jsmunro.me/platform/gateway/v1/*",
+      "zone_name": "jsmunro.me"
+    },
+    {
+      "pattern": "chat.jsmunro.me/platform/traces/v1/*",
+      "zone_name": "jsmunro.me"
+    },
+    {
+      "pattern": "chat.jsmunro.me/platform/applications/v1/*",
       "zone_name": "jsmunro.me"
     },
     {
@@ -33,7 +41,15 @@
       "zone_name": "jsmunro.me"
     },
     {
-      "pattern": "console.jsmunro.me/idp.v1.*",
+      "pattern": "console.jsmunro.me/platform/gateway/v1/*",
+      "zone_name": "jsmunro.me"
+    },
+    {
+      "pattern": "console.jsmunro.me/platform/traces/v1/*",
+      "zone_name": "jsmunro.me"
+    },
+    {
+      "pattern": "console.jsmunro.me/platform/applications/v1/*",
       "zone_name": "jsmunro.me"
     },
     {
@@ -49,7 +65,15 @@
       "zone_name": "jsmunro.me"
     },
     {
-      "pattern": "ragbot.jsmunro.me/idp.v1.*",
+      "pattern": "ragbot.jsmunro.me/platform/gateway/v1/*",
+      "zone_name": "jsmunro.me"
+    },
+    {
+      "pattern": "ragbot.jsmunro.me/platform/traces/v1/*",
+      "zone_name": "jsmunro.me"
+    },
+    {
+      "pattern": "ragbot.jsmunro.me/platform/applications/v1/*",
       "zone_name": "jsmunro.me"
     },
     {
@@ -65,7 +89,15 @@
       "zone_name": "jsmunro.me"
     },
     {
-      "pattern": "portal.jsmunro.me/idp.v1.*",
+      "pattern": "portal.jsmunro.me/platform/gateway/v1/*",
+      "zone_name": "jsmunro.me"
+    },
+    {
+      "pattern": "portal.jsmunro.me/platform/traces/v1/*",
+      "zone_name": "jsmunro.me"
+    },
+    {
+      "pattern": "portal.jsmunro.me/platform/applications/v1/*",
       "zone_name": "jsmunro.me"
     },
     {
@@ -82,6 +114,8 @@
     }
   ],
   "vars": {
+    "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.me",
+    "PLATY_APPLICATION": "idp",
     "ACCESS_TEAM_DOMAIN": "https://jsmunro.cloudflareaccess.com",
     "ACCESS_OIDC_CLIENT_ID": "ac54e29071a4290c456817550ba97163740dcca388330f33e6a77660c0bbc4ee",
     "GATEWAY_ISSUER": "https://auth-gateway.jsmunro.me",

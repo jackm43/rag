@@ -1,5 +1,3 @@
-import { createContextKey } from "@connectrpc/connect";
-
 import { logger } from "./logger";
 
 export type IdentityKind = "user" | "service" | "platform";
@@ -13,9 +11,11 @@ export type Identity = {
   cnfJkt?: string | null;
   sessionId?: string | null;
   subjectToken?: string | null;
+  clientInstance?: string | null;
+  clientKind?: string | null;
 };
 
-export const identityKey = createContextKey<Identity | null>(null);
+export const identityKey = Symbol("platy.identity");
 
 export type Principal = {
   kind: IdentityKind;

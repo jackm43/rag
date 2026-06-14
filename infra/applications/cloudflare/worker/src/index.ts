@@ -1,8 +1,9 @@
-import { createPlatformRpcWorker } from "@platy/sdk";
-import { registerCloudflareServices } from "./services";
+import { handleCloudflareHttpApi } from "./http-api";
 import type { Env } from "./types";
 
-export default createPlatformRpcWorker<Env>({
-  serviceName: "cloudflare",
-  register: (router, env) => registerCloudflareServices(router, env),
-});
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    return await handleCloudflareHttpApi(request, env, ctx)
+      ?? Response.json({ errors: [{ status: 404, code: "not_found", title: "Not found" }] }, { status: 404 });
+  },
+};

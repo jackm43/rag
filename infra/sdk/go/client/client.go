@@ -11,20 +11,19 @@ import (
 	"strings"
 	"time"
 
+	"jsmunro.me/platy/sdk/catalog"
 	"jsmunro.me/platy/sdk/gateway"
+	"jsmunro.me/platy/sdk/httpapi"
 	"jsmunro.me/platy/sdk/httpclient"
 	"jsmunro.me/platy/sdk/trace"
 )
 
 const maxResponseBytes = 10 << 20
 
-// Client is the standard outbound request client for platform applications.
-// It resolves endpoints and method paths from discovery metadata, acquires
-// audience-scoped tokens through the gateway session (refreshing and proving
-// possession as needed), and executes the request.
 type Client struct {
 	Session    *gateway.Session
 	HTTPClient *http.Client
+	Catalog    *catalog.Catalog
 }
 
 func New(session *gateway.Session) *Client {
@@ -39,8 +38,6 @@ type Response struct {
 	Body       []byte
 }
 
-// Decoded returns the response body as JSON when possible, otherwise as a
-// trimmed string.
 func (r *Response) Decoded() any {
 	decoded := any(nil)
 	if len(r.Body) > 0 && json.Unmarshal(r.Body, &decoded) != nil {
@@ -50,11 +47,9 @@ func (r *Response) Decoded() any {
 }
 
 func (r *Response) OK() bool {
-	return r.StatusCode == http.StatusOK
+	return r.StatusCode >= 200 && r.StatusCode < 300
 }
 
-// Fetch performs an authenticated HTTP request against an application
-// endpoint path. The caller owns the returned response body.
 func (c *Client) Fetch(ctx context.Context, application, method, path string, body io.Reader, header http.Header) (*http.Response, error) {
 	app, err := c.Session.Application(ctx, application)
 	if err != nil {
@@ -83,8 +78,6 @@ func (c *Client) Fetch(ctx context.Context, application, method, path string, bo
 		}
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
-	// Identity-boundary standard: this client roots (or continues) the trace
-	// and logs every outbound crossing — same contract as the worker SDK.
 	traceparent := trace.FromContext(ctx)
 	if traceparent == "" {
 		traceparent = trace.NewTraceparent()
@@ -105,34 +98,62 @@ func (c *Client) Fetch(ctx context.Context, application, method, path string, bo
 	return response, nil
 }
 
-// Call invokes <application>.<service>.<method> as a Connect JSON unary
-// request, resolving the method path from discovery metadata.
 func (c *Client) Call(ctx context.Context, application, service, method, body string) (*Response, error) {
+	if c.Catalog == nil {
+		return nil, fmt.Errorf("platform catalog is unavailable")
+	}
+	route, err := c.Catalog.Route(application, service, method)
+	if err != nil {
+		return nil, err
+	}
 	app, err := c.Session.Application(ctx, application)
 	if err != nil {
 		return nil, err
 	}
-	path, err := app.MethodPath(service, method)
+	if app.Endpoint == "" {
+		return nil, fmt.Errorf("application %s has no endpoint registered", application)
+	}
+	audience := app.Audience
+	if audience == "" {
+		audience = app.Name
+	}
+	requestBody := any(nil)
+	if route.HTTPMethod != http.MethodGet && route.HTTPMethod != http.MethodDelete {
+		if body == "" {
+			body = "{}"
+		}
+		if err := json.Unmarshal([]byte(body), &requestBody); err != nil {
+			return nil, fmt.Errorf("request body must be JSON: %w", err)
+		}
+	}
+	path := catalog.SubstitutePath(route.Path, pathParamsFromBody(body, route.PathParams))
+	payload, status, err := c.Session.AppRequestHTTP(
+		ctx,
+		app.Endpoint,
+		route.HTTPMethod,
+		path,
+		requestBody,
+		route.IdentityDPoP,
+		func(ctx context.Context) (string, error) {
+			return c.Session.AppToken(ctx, audience)
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
-	if body == "" {
-		body = "{}"
+	if status < 200 || status >= 300 {
+		decoded, _ := httpapi.UnwrapData(payload)
+		return nil, &ClientError{
+			Target: fmt.Sprintf("%s.%s.%s", application, service, method),
+			Status: status,
+			Body:   decodeJSON(decoded),
+		}
 	}
-
-	header := http.Header{}
-	header.Set("Content-Type", "application/json")
-	header.Set("Connect-Protocol-Version", "1")
-	response, err := c.Fetch(ctx, application, http.MethodPost, path, strings.NewReader(body), header)
+	data, err := httpapi.UnwrapData(payload)
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-	return &Response{StatusCode: response.StatusCode, Body: payload}, nil
+	return &Response{StatusCode: status, Body: data}, nil
 }
 
 func (c *Client) StreamCall(
@@ -140,41 +161,79 @@ func (c *Client) StreamCall(
 	application, service, method, body string,
 	onMessage func([]byte) error,
 ) error {
+	if c.Catalog == nil {
+		return fmt.Errorf("platform catalog is unavailable")
+	}
+	route, err := c.Catalog.Route(application, service, method)
+	if err != nil {
+		return err
+	}
 	app, err := c.Session.Application(ctx, application)
 	if err != nil {
 		return err
 	}
-	path, err := app.MethodPath(service, method)
-	if err != nil {
-		return err
+	if app.Endpoint == "" {
+		return fmt.Errorf("application %s has no endpoint registered", application)
+	}
+	audience := app.Audience
+	if audience == "" {
+		audience = app.Name
 	}
 	if body == "" {
 		body = "{}"
 	}
-	requestBody := envelopConnectJSON([]byte(body))
-
-	header := http.Header{}
-	header.Set("Content-Type", "application/connect+json")
-	header.Set("Connect-Protocol-Version", "1")
-	header.Set("Connect-Content-Encoding", "identity")
-	header.Set("Connect-Accept-Encoding", "identity")
-	response, err := c.Fetch(ctx, application, http.MethodPost, path, bytes.NewReader(requestBody), header)
+	var requestBody any
+	if err := json.Unmarshal([]byte(body), &requestBody); err != nil {
+		return fmt.Errorf("request body must be JSON: %w", err)
+	}
+	path := catalog.SubstitutePath(route.Path, pathParamsFromBody(body, route.PathParams))
+	payload, status, err := c.Session.AppRequestHTTP(
+		ctx,
+		app.Endpoint,
+		route.HTTPMethod,
+		path,
+		requestBody,
+		route.IdentityDPoP,
+		func(ctx context.Context) (string, error) {
+			return c.Session.AppToken(ctx, audience)
+		},
+	)
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		payload, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
-		if readErr != nil {
-			return fmt.Errorf("stream request failed with status %d", response.StatusCode)
-		}
+	if status < 200 || status >= 300 {
 		return &ClientError{
 			Target: fmt.Sprintf("%s.%s.%s", application, service, method),
-			Status: response.StatusCode,
-			Body:   (&Response{StatusCode: response.StatusCode, Body: payload}).Decoded(),
+			Status: status,
+			Body:   decodeJSON(payload),
 		}
 	}
-	return readConnectStream(response.Body, onMessage)
+	return httpapi.ReadNDJSON(bytes.NewReader(payload), onMessage)
+}
+
+func pathParamsFromBody(body string, names []string) map[string]string {
+	params := map[string]string{}
+	if len(names) == 0 || strings.TrimSpace(body) == "" {
+		return params
+	}
+	var parsed map[string]any
+	if json.Unmarshal([]byte(body), &parsed) != nil {
+		return params
+	}
+	for _, name := range names {
+		if value, ok := parsed[name]; ok {
+			params[name] = fmt.Sprint(value)
+		}
+	}
+	return params
+}
+
+func decodeJSON(raw json.RawMessage) any {
+	decoded := any(nil)
+	if len(raw) > 0 && json.Unmarshal(raw, &decoded) != nil {
+		decoded = strings.TrimSpace(string(raw))
+	}
+	return decoded
 }
 
 func (c *Client) httpClient() *http.Client {

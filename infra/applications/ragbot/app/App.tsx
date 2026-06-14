@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { aigateway } from "../../aigateway/web";
-import type { ModelInfo } from "../../aigateway/server/aigateway/v1/chat_service_pb";
-import { idp } from "../../idp/web";
-import type { TraceSpan, TraceSummary } from "../../idp/server/idp/v1/trace_service_pb";
-import { ragbot } from "../web";
-import type { ConfigEntry } from "../server/ragbot/v1/config_service_pb";
-import type { Interaction } from "../server/ragbot/v1/interaction_service_pb";
-import type { RagTotal } from "../server/ragbot/v1/leaderboard_service_pb";
+import {
+  createPlatformWebClient,
+  type ConfigEntry,
+  type ModelInfo,
+  type RagInteraction,
+  type TraceSpan,
+  type TraceSummary,
+} from "@platy/web";
 import { useAuth } from "@platy/web/react";
 
 type View =
@@ -21,6 +21,8 @@ type View =
   | "chat";
 
 type JsonRecord = Record<string, unknown>;
+type Interaction = RagInteraction;
+type RagTotal = { userId: string; username: string; ragCount: number; updatedAt: string };
 
 type TraceRow = {
   spanId: string;
@@ -173,7 +175,7 @@ const ResultBlock = ({ title, value }: { title: string; value: unknown }) => (
 
 const LeaderboardView = () => {
   const { auth, signedIn } = useAuth();
-  const client = useMemo(() => ragbot.leaderboardServiceClient(auth), [auth]);
+  const client = useMemo(() => createPlatformWebClient(auth, "ragbot").leaderboardServiceClient(), [auth]);
   const [limit, setLimit] = useState(25);
   const [totals, setTotals] = useState<RagTotal[]>([]);
   const [busy, setBusy] = useState(false);
@@ -202,7 +204,7 @@ const LeaderboardView = () => {
       <div className="view-head">
         <div>
           <h1>Leaderboard</h1>
-          <p className="hint">`ragbot.v1.LeaderboardService/ListTotals`</p>
+          <p className="hint">/platform/ragbot/v1/leaderboard/totals</p>
         </div>
         <div className="view-actions">
           <label className="inline-field">
@@ -257,8 +259,8 @@ const LeaderboardView = () => {
 
 const InteractionsView = () => {
   const { auth, signedIn } = useAuth();
-  const interactionClient = useMemo(() => ragbot.interactionServiceClient(auth), [auth]);
-  const modelClient = useMemo(() => aigateway.chatServiceClient(auth), [auth]);
+  const interactionClient = useMemo(() => createPlatformWebClient(auth, "ragbot").interactionServiceClient(), [auth]);
+  const modelClient = useMemo(() => createPlatformWebClient(auth, "aigateway").chatServiceClient(), [auth]);
   const [limit, setLimit] = useState(25);
   const [items, setItems] = useState<Interaction[]>([]);
   const [modelById, setModelById] = useState<Map<string, ModelInfo>>(new Map());
@@ -275,7 +277,7 @@ const InteractionsView = () => {
         modelClient.listModels({ filter: "", limit: 500 }),
       ]);
       setItems(interactionResult.interactions ?? []);
-      setModelById(new Map((modelResult.models ?? []).map((model) => [model.id, model])));
+      setModelById(new Map((modelResult.models ?? []).map((model: ModelInfo) => [model.id, model])));
       if (!selectedId && interactionResult.interactions?.[0]) {
         setSelectedId(interactionResult.interactions[0].id.toString());
       }
@@ -443,8 +445,8 @@ const InteractionsView = () => {
 
 const ModelsView = () => {
   const { auth, signedIn } = useAuth();
-  const configClient = useMemo(() => ragbot.configServiceClient(auth), [auth]);
-  const modelClient = useMemo(() => aigateway.chatServiceClient(auth), [auth]);
+  const configClient = useMemo(() => createPlatformWebClient(auth, "ragbot").configServiceClient(), [auth]);
+  const modelClient = useMemo(() => createPlatformWebClient(auth, "aigateway").chatServiceClient(), [auth]);
   const [entries, setEntries] = useState<ConfigEntry[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [busy, setBusy] = useState(false);
@@ -464,7 +466,7 @@ const ModelsView = () => {
         modelClient.listModels({ filter: "", limit: 500 }),
       ]);
       setEntries(configResult.entries ?? []);
-      setModels((modelResult.models ?? []).sort((a, b) => a.id.localeCompare(b.id)));
+      setModels((modelResult.models ?? []).sort((a: ModelInfo, b: ModelInfo) => a.id.localeCompare(b.id)));
     } catch (err) {
       setNote((err as Error).message);
     } finally {
@@ -565,7 +567,7 @@ const PromptModal = ({
   onClose: () => void;
   onSave: (next: string) => Promise<void>;
 }) => {
-  const [value, setValue] = useState(entry.value);
+  const [value, setValue] = useState(entry.value ?? "");
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-panel" onClick={(event) => event.stopPropagation()}>
@@ -603,7 +605,7 @@ const PromptModal = ({
 
 const ConfigView = () => {
   const { auth, signedIn } = useAuth();
-  const client = useMemo(() => ragbot.configServiceClient(auth), [auth]);
+  const client = useMemo(() => createPlatformWebClient(auth, "ragbot").configServiceClient(), [auth]);
   const [entries, setEntries] = useState<ConfigEntry[]>([]);
   const [editing, setEditing] = useState<string>("");
   const [draft, setDraft] = useState("");
@@ -617,7 +619,7 @@ const ConfigView = () => {
     try {
       const result = await client.listConfig({});
       setEntries(
-        (result.entries ?? []).filter((entry) => !(entry.key in MODEL_KEYS)).sort((a, b) => a.key.localeCompare(b.key)),
+        (result.entries ?? []).filter((entry: ConfigEntry) => !(entry.key in MODEL_KEYS)).sort((a: ConfigEntry, b: ConfigEntry) => a.key.localeCompare(b.key)),
       );
     } catch (err) {
       setNote((err as Error).message);
@@ -771,7 +773,7 @@ const ConfigView = () => {
                             disabled={!signedIn || busy}
                             onClick={() => {
                               setEditing(entry.key);
-                              setDraft(entry.value);
+                              setDraft(entry.value ?? "");
                             }}
                           >
                             Edit
@@ -808,7 +810,7 @@ const ConfigView = () => {
 
 const DatabaseView = () => {
   const { auth, signedIn } = useAuth();
-  const client = useMemo(() => ragbot.databaseServiceClient(auth), [auth]);
+  const client = useMemo(() => createPlatformWebClient(auth, "ragbot").databaseServiceClient(), [auth]);
   const [sql, setSql] = useState(DEFAULT_SQL);
   const [rows, setRows] = useState<JsonRecord[]>([]);
   const [meta, setMeta] = useState<JsonRecord | null>(null);
@@ -987,7 +989,7 @@ const DatabaseView = () => {
 
 const GatewayView = () => {
   const { auth, signedIn } = useAuth();
-  const client = useMemo(() => ragbot.gatewayControlServiceClient(auth), [auth]);
+  const client = useMemo(() => createPlatformWebClient(auth, "ragbot").gatewayControlServiceClient(), [auth]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [state, setState] = useState<JsonRecord | null>(null);
@@ -1047,7 +1049,7 @@ const GatewayView = () => {
 
 const ObservabilityView = () => {
   const { auth, signedIn } = useAuth();
-  const client = useMemo(() => idp.traceServiceClient(auth), [auth]);
+  const client = useMemo(() => createPlatformWebClient(auth, "idp").traceServiceClient(), [auth]);
   const [summaries, setSummaries] = useState<TraceSummary[]>([]);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [detailSpans, setDetailSpans] = useState<TraceRow[]>([]);
@@ -1088,7 +1090,7 @@ const ObservabilityView = () => {
     setDetailSpans([]);
     try {
       const result = await client.getTrace({ traceId });
-      setDetailSpans(result.spans.map(parseTrace).sort((a, b) => a.startMs - b.startMs));
+      setDetailSpans((result.spans ?? []).map(parseTrace).sort((a: TraceRow, b: TraceRow) => a.startMs - b.startMs));
     } catch (err) {
       setNote((err as Error).message);
     }
@@ -1293,7 +1295,7 @@ const ObservabilityView = () => {
 
 const ChatView = () => {
   const { auth, signedIn } = useAuth();
-  const client = useMemo(() => ragbot.chatServiceClient(auth), [auth]);
+  const client = useMemo(() => createPlatformWebClient(auth, "ragbot").chatServiceClient(), [auth]);
   const [prompt, setPrompt] = useState("");
   const [requesterUsername, setRequesterUsername] = useState("");
   const [channelId, setChannelId] = useState("");

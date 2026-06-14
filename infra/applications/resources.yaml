@@ -1,0 +1,253 @@
+applications:
+  idp:
+    resources:
+      - name: DiscoveryService
+        methods:
+          - name: Discover
+            scope: idp/DiscoveryService.Discover
+            http:
+              method: GET
+              path: /platform/gateway/v1/discovery
+      - name: IdentityService
+        methods:
+          - name: Introspect
+            scope: idp/IdentityService.Introspect
+            http:
+              method: GET
+              path: /platform/gateway/v1/identity/introspections
+          - name: ExchangeProviderToken
+            scope: idp/IdentityService.ExchangeProviderToken
+            http:
+              method: POST
+              path: /platform/gateway/v1/provider/token/exchanges
+      - name: RegistryService
+        methods:
+          - name: GetProviderConfig
+            scope: idp/RegistryService.GetProviderConfig
+            http:
+              method: GET
+              path: /platform/gateway/v1/provider/config
+          - name: UpsertProviderConfig
+            scope: idp/RegistryService.UpsertProviderConfig
+            http:
+              method: PUT
+              path: /platform/gateway/v1/provider/config
+          - name: ListApplications
+            scope: idp/RegistryService.ListApplications
+            http:
+              method: GET
+              path: /platform/applications/v1/applications
+          - name: RegisterApplication
+            scope: idp/RegistryService.RegisterApplication
+            http:
+              method: POST
+              path: /platform/applications/v1/applications
+          - name: GetApplication
+            scope: idp/RegistryService.GetApplication
+            http:
+              method: GET
+              path: /platform/applications/v1/applications/{applicationId}
+              pathParams: [applicationId]
+          - name: DeleteApplication
+            scope: idp/RegistryService.DeleteApplication
+            http:
+              method: DELETE
+              path: /platform/applications/v1/applications/{applicationId}
+              pathParams: [applicationId]
+          - name: RegisterClient
+            scope: idp/RegistryService.RegisterClient
+            http:
+              method: POST
+              path: /platform/applications/v1/applications/{applicationId}/service/clients
+              pathParams: [applicationId]
+      - name: ClientIdentityService
+        methods:
+          - name: RegisterClientIdentity
+            scope: idp/ClientIdentityService.RegisterClientIdentity
+            http:
+              method: POST
+              path: /platform/gateway/v1/client/identities
+          - name: ListClientIdentities
+            scope: idp/ClientIdentityService.ListClientIdentities
+            http:
+              method: GET
+              path: /platform/gateway/v1/client/identities
+      - name: TraceService
+        methods:
+          - name: ListTraces
+            scope: idp/TraceService.ListTraces
+            http:
+              method: GET
+              path: /platform/traces/v1/traces
+          - name: GetTrace
+            scope: idp/TraceService.GetTrace
+            http:
+              method: GET
+              path: /platform/traces/v1/traces/{traceId}
+              pathParams: [traceId]
+          - name: StreamTraces
+            scope: idp/TraceService.StreamTraces
+            http:
+              method: POST
+              path: /platform/traces/v1/traces/stream
+              stream: ndjson
+  ragbot:
+    resources:
+      - name: ConfigService
+        methods:
+          - name: ListConfig
+            scope: ragbot/ConfigService.ListConfig
+            http:
+              method: GET
+              path: /platform/ragbot/v1/configurations
+          - name: GetConfig
+            scope: ragbot/ConfigService.GetConfig
+            http:
+              method: GET
+              path: /platform/ragbot/v1/configurations/{key}
+              pathParams: [key]
+          - name: UpdateConfig
+            scope: ragbot/ConfigService.UpdateConfig
+            http:
+              method: PATCH
+              path: /platform/ragbot/v1/configurations/{key}
+              pathParams: [key]
+          - name: ResetConfig
+            scope: ragbot/ConfigService.ResetConfig
+            http:
+              method: DELETE
+              path: /platform/ragbot/v1/configurations/{key}
+              pathParams: [key]
+      - name: InteractionService
+        methods:
+          - name: ListInteractions
+            scope: ragbot/InteractionService.ListInteractions
+            http:
+              method: GET
+              path: /platform/ragbot/v1/interactions
+      - name: ChatService
+        methods:
+          - name: Chat
+            scope: ragbot/ChatService.Chat
+            http:
+              method: POST
+              path: /platform/ragbot/v1/chat/completions
+          - name: StreamChat
+            scope: ragbot/ChatService.StreamChat
+            http:
+              method: POST
+              path: /platform/ragbot/v1/chat/completions/stream
+              stream: ndjson
+      - name: LeaderboardService
+        methods:
+          - name: ListTotals
+            scope: ragbot/LeaderboardService.ListTotals
+            http:
+              method: GET
+              path: /platform/ragbot/v1/leaderboard/totals
+      - name: DatabaseService
+        methods:
+          - name: Query
+            scope: ragbot/DatabaseService.Query
+            http:
+              method: POST
+              path: /platform/ragbot/v1/database/queries
+      - name: GatewayControlService
+        methods:
+          - name: GetHealth
+            scope: ragbot/GatewayControlService.GetHealth
+            http:
+              method: GET
+              path: /platform/ragbot/v1/gateway/health
+          - name: StartGateway
+            scope: ragbot/GatewayControlService.StartGateway
+            http:
+              method: POST
+              path: /platform/ragbot/v1/gateway/starts
+  aigateway:
+    resources:
+      - name: ChatService
+        methods:
+          - name: Complete
+            scope: aigateway/ChatService.Complete
+            http:
+              method: POST
+              path: /platform/aigateway/v1/chat/completions
+          - name: StreamComplete
+            scope: aigateway/ChatService.StreamComplete
+            http:
+              method: POST
+              path: /platform/aigateway/v1/chat/completions/stream
+              stream: ndjson
+          - name: ListModels
+            scope: aigateway/ChatService.ListModels
+            http:
+              method: GET
+              path: /platform/aigateway/v1/models
+  deploy:
+    resources:
+      - name: DeployService
+        methods:
+          - name: ListWorkers
+            scope: deploy/DeployService.ListWorkers
+            http:
+              method: GET
+              path: /platform/deploy/v1/workers
+          - name: DeployWorker
+            scope: deploy/DeployService.DeployWorker
+            http:
+              method: POST
+              path: /platform/deploy/v1/worker/deployments
+  cloudflare:
+    resources:
+      - name: DeviceService
+        methods:
+          - name: ListDevices
+            scope: cloudflare/DeviceService.ListDevices
+            http:
+              method: GET
+              path: /platform/cloudflare/v1/devices
+          - name: GetDevice
+            scope: cloudflare/DeviceService.GetDevice
+            http:
+              method: GET
+              path: /platform/cloudflare/v1/devices/{deviceId}
+              pathParams: [deviceId]
+          - name: DeleteDevice
+            scope: cloudflare/DeviceService.DeleteDevice
+            http:
+              method: DELETE
+              path: /platform/cloudflare/v1/devices/{deviceId}
+              pathParams: [deviceId]
+          - name: RevokeDevice
+            scope: cloudflare/DeviceService.RevokeDevice
+            http:
+              method: POST
+              path: /platform/cloudflare/v1/devices/{deviceId}/revocations
+              pathParams: [deviceId]
+      - name: WorkerService
+        methods:
+          - name: DeployWorker
+            scope: cloudflare/WorkerService.DeployWorker
+            http:
+              method: POST
+              path: /platform/cloudflare/v1/worker/deployments
+          - name: ListWorkers
+            scope: cloudflare/WorkerService.ListWorkers
+            http:
+              method: GET
+              path: /platform/cloudflare/v1/workers
+  discovery:
+    resources:
+      - name: DiscoveryService
+        methods:
+          - name: Query
+            scope: discovery/DiscoveryService.Query
+            http:
+              method: POST
+              path: /platform/discovery/v1/graphql/queries
+          - name: Sync
+            scope: discovery/DiscoveryService.Sync
+            http:
+              method: POST
+              path: /platform/discovery/v1/synchronisations

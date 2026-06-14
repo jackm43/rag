@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	idpv1 "jsmunro.me/platy/applications/idp/client/idp/v1"
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/sdk/apps/discovery"
 	sdksecrets "jsmunro.me/platy/sdk/secrets"
@@ -24,62 +23,21 @@ func WriteRepoMetadata(root string, document *discovery.Application) {
 }
 
 func Document(
-	app *idpv1.Application,
+	app *discovery.Application,
 	gatewayURL string,
 	credential *sdksecrets.ClientCredential,
 	providerOAuth *sdksecrets.ClientCredential,
-	fullNames map[string]string,
 ) *discovery.Application {
-	document := &discovery.Application{
-		Name:                        app.GetName(),
-		Audience:                    app.GetAudience(),
-		Endpoint:                    app.GetEndpoint(),
-		Description:                 app.GetDescription(),
-		CreatedAt:                   app.GetCreatedAt(),
-		UpdatedAt:                   app.GetUpdatedAt(),
-		GatewayURL:                  gatewayURL,
-		ImpersonationAccessClientID: app.GetImpersonationAccessClientId(),
-		ProviderOAuthClientID:       app.GetProviderOauthClientId(),
-		Credential:                  credential,
-		ProviderOAuth:               providerOAuth,
+	if app == nil {
+		return nil
 	}
-	for _, resource := range app.GetResources() {
-		converted := discovery.Resource{Name: resource.GetName(), FullName: fullNames[resource.GetName()]}
-		for _, method := range resource.GetMethods() {
-			converted.Methods = append(converted.Methods, discovery.ResourceMethod{Name: method.GetName(), Scope: method.GetScope()})
-		}
-		document.Resources = append(document.Resources, converted)
-	}
-	for _, delegation := range app.GetDelegations() {
-		document.Delegations = append(document.Delegations, discovery.Delegation{
-			Audience: delegation.GetAudience(),
-			Scopes:   delegation.GetScopes(),
-		})
-	}
-	document.Provider = app.GetProvider()
-	document.TrustZone = app.GetTrustZone()
-	if boundary := app.GetTrustBoundary(); boundary != nil {
-		document.TrustBoundary = discovery.TrustBoundary{
-			Provider:   boundary.GetProvider(),
-			AccountID:  boundary.GetAccountId(),
-			TeamID:     boundary.GetTeamId(),
-			TeamName:   boundary.GetTeamName(),
-			TeamDomain: boundary.GetTeamDomain(),
-		}
-	}
-	if access := app.GetAccess(); access != nil {
-		document.Access = discovery.ApplicationAccess{
-			AllowedGroups:   access.GetAllowedGroups(),
-			AllowedIdPs:     access.GetAllowedIdps(),
-			PostureRequired: access.GetPostureRequired(),
-		}
-	}
-	return document
+	document := *app
+	document.GatewayURL = gatewayURL
+	document.Credential = credential
+	document.ProviderOAuth = providerOAuth
+	return &document
 }
 
-// MergeRepoMetadata carries forward the fields only the repository metadata
-// document knows: the stored credentials and the protos' qualified resource
-// names.
 func MergeRepoMetadata(root string, document *discovery.Application) {
 	data, err := os.ReadFile(RepoMetadataPath(root, document.Name))
 	if err != nil {
@@ -101,18 +59,9 @@ func MergeRepoMetadata(root string, document *discovery.Application) {
 	if document.ImpersonationAccessClientID == "" {
 		document.ImpersonationAccessClientID = existing.ImpersonationAccessClientID
 	}
-	existingResources := map[string]discovery.Resource{}
-	for _, resource := range existing.Resources {
-		existingResources[resource.Name] = resource
-	}
-	for index := range document.Resources {
-		if resource, ok := existingResources[document.Resources[index].Name]; ok && document.Resources[index].FullName == "" {
-			document.Resources[index].FullName = resource.FullName
-		}
-	}
 }
 
-func JSON(app *idpv1.Application) map[string]any {
+func JSON(app *discovery.Application) map[string]any {
 	if app == nil {
 		return nil
 	}

@@ -1,6 +1,6 @@
-import { Code, ConnectError } from "@connectrpc/connect";
+import { createOAuthProviderClient, serviceBindingFetch, type Identity, type PlatformClient } from "@platy/sdk";
 
-import { providerApiClient, type Identity, type PlatformClient } from "@platy/sdk";
+import { failedPrecondition } from "./errors";
 import type { Env } from "./types";
 
 export const API_BASE_URL = "https://api.cloudflare.com/client/v4";
@@ -17,17 +17,12 @@ type ApiEnvelope<T> = {
 };
 
 export const cloudflareApiClient = (env: Env, identity: Identity): PlatformClient =>
-  providerApiClient(
+  createOAuthProviderClient(
     {
       application: "cloudflare",
       apiBaseUrl: API_BASE_URL,
-      auth: {
-        mode: "oauth",
-        gatewayUrl: env.AUTH_GATEWAY_URL,
-        gatewayFetch: env.AUTH_GATEWAY
-          ? (input: RequestInfo | URL, init?: RequestInit) => env.AUTH_GATEWAY!.fetch(input, init)
-          : undefined,
-      },
+      gatewayUrl: env.AUTH_GATEWAY_URL,
+      gatewayFetch: serviceBindingFetch(env.AUTH_GATEWAY, "AUTH_GATEWAY"),
     },
     identity,
   );
@@ -47,10 +42,7 @@ export const apiRequest = async <T>(
   const body = (await response.json()) as ApiEnvelope<T>;
   if (!response.ok || !body.success) {
     const detail = (body.errors ?? []).map((error) => `${error.code} ${error.message}`).join("; ");
-    throw new ConnectError(
-      `cloudflare api error (${response.status}): ${detail || "unknown"}`,
-      Code.FailedPrecondition,
-    );
+    failedPrecondition(`cloudflare api error (${response.status}): ${detail || "unknown"}`);
   }
   if (body.result === undefined) {
     return { result: {} as T, resultInfo: body.result_info };

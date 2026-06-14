@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { idp } from "../../idp/web";
+import { createPlatformWebClient } from "@platy/web";
 import { useAuth } from "@platy/web/react";
 
 type Principal = {
@@ -21,7 +21,7 @@ export function Identity() {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const identityClient = useMemo(() => idp.identityServiceClient(auth), [auth]);
+  const identityClient = useMemo(() => createPlatformWebClient(auth, "idp").identityServiceClient(), [auth]);
 
   const load = async () => {
     setBusy(true);

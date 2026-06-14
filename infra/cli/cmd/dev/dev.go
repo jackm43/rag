@@ -16,26 +16,24 @@ import (
 	"jsmunro.me/platy/cli/internal/platform"
 )
 
-// protoApps lists every application with a proto package, matching
-// generate.sh's own default.
-func protoApps() ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(root(), "infra", "proto"))
-	if err != nil {
-		return nil, fmt.Errorf("list proto packages: %w", err)
+// generate runs the TypeScript platform codegen from resources.yaml.
+func generate() error {
+	script := filepath.Join(root(), "infra", "scripts", "generate-platform.ts")
+	cmd := exec.Command("npx", "tsx", script)
+	cmd.Dir = root()
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("generate: %w", err)
 	}
-	var apps []string
-	for _, entry := range entries {
-		if entry.IsDir() && entry.Name() != "platy" {
-			apps = append(apps, entry.Name())
-		}
-	}
-	return apps, nil
+	output.Logger.Info("generated platform catalog and bindings")
+	return nil
 }
 
 var goPackages = []string{
 	"jsmunro.me/platy/cli/...",
 	"jsmunro.me/platy/sdk/...",
-	"jsmunro.me/platy/applications/...",
 }
 
 func Command() *cobra.Command {
@@ -45,10 +43,11 @@ func Command() *cobra.Command {
 	}
 	cmd.AddCommand(
 		&cobra.Command{
-			Use:   "generate [app...]",
-			Short: "Regenerate protobuf code and typed client bindings (default: all proto packages)",
+			Use:   "generate",
+			Short: "Regenerate platform catalog and typed client bindings from resources.yaml",
+			Args:  cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, args []string) error {
-				return generate(args)
+				return generate()
 			},
 		},
 		&cobra.Command{
@@ -168,27 +167,6 @@ func runCommand(name string, commandArgs ...string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
-	return nil
-}
-
-func generate(apps []string) error {
-	if len(apps) == 0 {
-		all, err := protoApps()
-		if err != nil {
-			return err
-		}
-		apps = all
-	}
-	script := filepath.Join(root(), "infra", "scripts", "generate.sh")
-	cmd := exec.Command(script, apps...)
-	cmd.Dir = root()
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("generate: %w", err)
-	}
-	output.Logger.Info("generated protobuf code", "apps", apps)
 	return nil
 }
 

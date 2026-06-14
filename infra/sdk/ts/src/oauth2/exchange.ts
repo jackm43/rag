@@ -1,6 +1,6 @@
 import { actorToken, type ServiceCredential } from "./credential";
 import { identityExchanged, identityExchangeRefused } from "../identity";
-import { traceHeaders } from "../otel";
+import { traceHeaders } from "../otel/context";
 import { TOKEN_TYPE_ACCESS_TOKEN, TOKEN_TYPE_JWT, TOKEN_TYPE_SERVICE_CREDENTIAL } from "./sts";
 
 export type { ServiceCredential, ServiceCredentialEnv } from "./credential";

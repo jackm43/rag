@@ -1,18 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Client } from "@connectrpc/connect";
 
-import { ChatService } from "../../aigateway/server/aigateway/v1/chat_service_pb";
-import { aigateway } from "../../aigateway/web";
-import type { ModelInfo } from "../../aigateway/server/aigateway/v1/chat_service_pb";
-import { ragbot } from "../../ragbot/web";
-import type { ConfigEntry } from "../../ragbot/server/ragbot/v1/config_service_pb";
-import type { Interaction } from "../../ragbot/server/ragbot/v1/interaction_service_pb";
-import type { RagTotal } from "../../ragbot/server/ragbot/v1/leaderboard_service_pb";
-import { registerChatInstance, type ChatInstance } from "@platy/web";
+import {
+  createPlatformWebClient,
+  registerChatInstance,
+  type ChatInstance,
+  type ConfigEntry,
+  type ModelInfo,
+  type RagInteraction,
+} from "@platy/web";
 import { useAuth } from "@platy/web/react";
 
 type View = "leaderboard" | "interactions" | "models" | "chat";
 type Message = { role: "user" | "assistant"; content: string; pending?: boolean; error?: boolean };
+type Interaction = RagInteraction;
+type RagTotal = { userId: string; username: string; ragCount: number; updatedAt: string };
+type AiGatewayClient = ReturnType<ReturnType<typeof createPlatformWebClient>["chatServiceClient"]>;
 
 const MODEL_KEYS = ["ai_response_model", "ai_mention_model", "ai_roast_model"] as const;
 const PROMPT_KEYS = ["ai_system_prompt", "ai_roast_system_prompt"] as const;
@@ -26,10 +28,10 @@ export function App() {
   const [view, setView] = useState<View>("leaderboard");
   const [note, setNote] = useState("");
 
-  const leaderboardClient = useMemo(() => ragbot.leaderboardServiceClient(auth), [auth]);
-  const interactionClient = useMemo(() => ragbot.interactionServiceClient(auth), [auth]);
-  const configClient = useMemo(() => ragbot.configServiceClient(auth), [auth]);
-  const modelClient = useMemo(() => aigateway.chatServiceClient(auth), [auth]);
+  const leaderboardClient = useMemo(() => createPlatformWebClient(auth, "ragbot").leaderboardServiceClient(), [auth]);
+  const interactionClient = useMemo(() => createPlatformWebClient(auth, "ragbot").interactionServiceClient(), [auth]);
+  const configClient = useMemo(() => createPlatformWebClient(auth, "ragbot").configServiceClient(), [auth]);
+  const modelClient = useMemo(() => createPlatformWebClient(auth, "aigateway").chatServiceClient(), [auth]);
 
   const [totals, setTotals] = useState<RagTotal[]>([]);
   const [interactions, setInteractions] = useState<Interaction[]>([]);
@@ -43,7 +45,7 @@ export function App() {
   const [chatInput, setChatInput] = useState("");
   const [chatModel, setChatModel] = useState(DEFAULT_MODEL);
   const [chatBusy, setChatBusy] = useState(false);
-  const chatClient = useRef<Client<typeof ChatService> | null>(null);
+  const chatClient = useRef<AiGatewayClient | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
 
   const entryMap = useMemo(() => new Map(entries.map((entry) => [entry.key, entry])), [entries]);
@@ -104,7 +106,7 @@ export function App() {
     const instance = await registerChatInstance(auth);
     setChatInstance(instance);
     setChatId(instance.id);
-    const client = aigateway.chatServiceClient(auth, { headers: instance.headers });
+    const client = createPlatformWebClient(auth, "aigateway", { headers: instance.headers }).chatServiceClient();
     chatClient.current = client;
     return client;
   };
@@ -123,7 +125,7 @@ export function App() {
       });
       let content = "";
       for await (const chunk of stream) {
-        if (chunk.delta) {
+        if (!chunk.done && chunk.delta) {
           content += chunk.delta;
           setMessages((current) => {
             const next = [...current];

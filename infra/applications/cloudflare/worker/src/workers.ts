@@ -1,12 +1,23 @@
-import type { JsonObject } from "@bufbuild/protobuf";
-import { Code, ConnectError } from "@connectrpc/connect";
-
 import type { PlatformClient } from "@platy/sdk";
-import type {
-  DeployWorkerRequest,
-  ListWorkersRequest,
-} from "../../server/cloudflare/v1/worker_service_pb";
 import { apiRequest } from "./api";
+import { badRequest, failedPrecondition } from "./errors";
+
+export type WorkerModuleInput = {
+  name: string;
+  contentType?: string;
+  content: string | ArrayBuffer | Blob;
+};
+
+export type DeployWorkerRequest = {
+  scriptName: string;
+  mainModule: string;
+  modules: WorkerModuleInput[];
+  compatibilityDate?: string;
+  compatibilityFlags?: string[];
+  metadata?: Record<string, unknown>;
+};
+
+export type ListWorkersRequest = Record<string, never>;
 
 export const deployWorker = async (
   client: PlatformClient,
@@ -14,13 +25,13 @@ export const deployWorker = async (
   request: DeployWorkerRequest,
 ) => {
   if (!request.scriptName || !/^[a-z0-9-]+$/.test(request.scriptName)) {
-    throw new ConnectError("script_name must be lowercase alphanumeric", Code.InvalidArgument);
+    badRequest("script_name must be lowercase alphanumeric");
   }
   if (!request.mainModule || request.modules.length === 0) {
-    throw new ConnectError("main_module and at least one module are required", Code.InvalidArgument);
+    badRequest("main_module and at least one module are required");
   }
 
-  const metadata: JsonObject = {
+  const metadata: Record<string, unknown> = {
     main_module: request.mainModule,
     compatibility_date: request.compatibilityDate || "2026-04-23",
     compatibility_flags: request.compatibilityFlags,
@@ -51,15 +62,13 @@ export const deployWorker = async (
   };
   if (!response.ok || !body.success || !body.result) {
     const detail = (body.errors ?? []).map((error) => `${error.code} ${error.message}`).join("; ");
-    throw new ConnectError(
-      `cloudflare api error (${response.status}): ${detail || "unknown"}`,
-      Code.FailedPrecondition,
-    );
+    failedPrecondition(`cloudflare api error (${response.status}): ${detail || "unknown"}`);
   }
+  const result = body.result as { id?: string; etag?: string; modified_on?: string };
   return {
     scriptName: request.scriptName,
-    etag: body.result.etag ?? "",
-    modifiedOn: body.result.modified_on ?? "",
+    etag: result.etag ?? "",
+    modifiedOn: result.modified_on ?? "",
   };
 };
 

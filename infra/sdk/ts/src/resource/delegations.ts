@@ -1,5 +1,6 @@
 import type { Identity } from "../identity";
 import type { ServiceCredential } from "../oauth2/credential";
+import { createDpopProof, DPOP_HEADER, generateDpopKey, type DpopKey } from "../oauth2/dpop";
 import { exchangeToken } from "../oauth2/exchange";
 import { TOKEN_TYPE_SERVICE_CREDENTIAL } from "../oauth2/sts";
 import { logger } from "../logger";
@@ -56,6 +57,13 @@ export const delegationGraphFromDiscovery = (document: DiscoveryDocument): Deleg
 const CACHE_TTL_MS = 300_000;
 const DISCOVER_SCOPE = "idp/DiscoveryService.Discover";
 
+let discoverDpopKey: Promise<DpopKey> | null = null;
+
+const discoverDpopKeyFor = (): Promise<DpopKey> => {
+  discoverDpopKey ??= generateDpopKey();
+  return discoverDpopKey;
+};
+
 type CacheEntry = {
   graph: DelegationGraph;
   fetchedAt: number;
@@ -94,19 +102,20 @@ const discoverDocument = async (
   } else {
     throw new Error("delegation graph requires a service credential");
   }
-  const response = await gatewayFetch(`${base}/idp.v1.DiscoveryService/Discover`, {
-    method: "POST",
+  const url = `${base}/platform/gateway/v1/discovery`;
+  const dpop = await discoverDpopKeyFor();
+  const response = await gatewayFetch(url, {
+    method: "GET",
     headers: {
       authorization: `Bearer ${accessToken}`,
-      "content-type": "application/json",
-      "connect-protocol-version": "1",
+      [DPOP_HEADER]: await createDpopProof(dpop, { method: "GET", url }, accessToken),
     },
-    body: "{}",
   });
   if (!response.ok) {
     throw new Error(`discover returned ${response.status}`);
   }
-  return (await response.json()) as DiscoveryDocument;
+  const envelope = (await response.json()) as { data?: DiscoveryDocument };
+  return envelope.data ?? {};
 };
 
 // Fetch the delegation graph from the protected gateway Discover RPC, cached

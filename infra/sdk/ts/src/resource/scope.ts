@@ -22,3 +22,6 @@ export const scopeMatches = (granted: string, required: string): boolean => {
 
 export const hasScope = (identity: Identity, required: string): boolean =>
   identity.scopes.some((granted) => scopeMatches(granted, required));
+
+export const defaultScope = (application: string, service: string, method: string): string =>
+  `${application}/${service}.${method}`;

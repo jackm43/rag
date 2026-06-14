@@ -1,14 +1,10 @@
 import { createDpopProof, DPOP_HEADER, type DpopKey } from "../oauth2/dpop";
 
-// TokenSource yields a bearer token for the configured target audience.
 export type TokenSource = () => Promise<string | null>;
 
 export type ClientConfig = {
-  // Application base URL; relative paths passed to fetch/call resolve
-  // against it.
   endpoint: string;
   token?: TokenSource;
-  // When set, every request carries a fresh DPoP proof bound to this key.
   dpop?: DpopKey;
   decorate?: (headers: Headers) => void | Promise<void>;
   fetch?: typeof fetch;
@@ -16,7 +12,6 @@ export type ClientConfig = {
 
 export type PlatformClient = {
   fetch: (input: string, init?: RequestInit) => Promise<Response>;
-  call: <T = unknown>(path: string, body?: unknown) => Promise<T>;
 };
 
 export class ClientError extends Error {
@@ -30,21 +25,6 @@ export class ClientError extends Error {
   }
 }
 
-const decodeBody = (payload: string): unknown => {
-  if (!payload) {
-    return null;
-  }
-  try {
-    return JSON.parse(payload);
-  } catch {
-    return payload;
-  }
-};
-
-// createClient is the standard outbound request client. Any runtime with
-// fetch (worker, browser, node) configures an endpoint plus a token source
-// and gets back a fetch that handles auth, proof-of-possession, and
-// per-application decoration.
 export const createClient = (config: ClientConfig): PlatformClient => {
   const transport = config.fetch ?? globalThis.fetch.bind(globalThis);
   const base = config.endpoint.replace(/\/$/, "");
@@ -73,18 +53,5 @@ export const createClient = (config: ClientConfig): PlatformClient => {
     return transport(url, { ...init, method, headers });
   };
 
-  const call = async <T = unknown>(path: string, body?: unknown): Promise<T> => {
-    const response = await doFetch(path, {
-      method: "POST",
-      headers: { "content-type": "application/json", "connect-protocol-version": "1" },
-      body: JSON.stringify(body ?? {}),
-    });
-    const decoded = decodeBody(await response.text());
-    if (!response.ok) {
-      throw new ClientError(`${path} failed with status ${response.status}`, response.status, decoded);
-    }
-    return decoded as T;
-  };
-
-  return { fetch: doFetch, call };
+  return { fetch: doFetch };
 };

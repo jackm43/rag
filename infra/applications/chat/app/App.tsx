@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Client } from "@connectrpc/connect";
 
-import { ChatService } from "../../aigateway/server/aigateway/v1/chat_service_pb";
-import { aigateway } from "../../aigateway/web";
 import {
   CLIENT_INSTANCE_HEADER,
+  createPlatformWebClient,
   registerChatInstance,
   type ChatInstance,
 } from "@platy/web";
@@ -18,6 +16,7 @@ type Message = { role: Role; content: string; model?: string; pending?: boolean;
 type ModelInfo = { id: string; provider: string; costIn: number; costOut: number };
 type Chat = { id: string; title: string; messages: Message[] };
 type ModelSort = "name" | "costIn" | "costOut";
+type AiGatewayClient = ReturnType<ReturnType<typeof createPlatformWebClient>["chatServiceClient"]>;
 
 const DEFAULT_MODEL = "workers-ai/@cf/meta/llama-3.1-8b-instruct";
 
@@ -44,17 +43,17 @@ export function App() {
   const scroller = useRef<HTMLDivElement>(null);
   // One typed client per chat: each is its own factory instance carrying the
   // chat's registered identity headers on every request.
-  const clients = useRef(new Map<string, Client<typeof ChatService>>());
+  const clients = useRef(new Map<string, AiGatewayClient>());
   const instances = useRef(new Map<string, ChatInstance>());
   const searchTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const active = chats.find((chat) => chat.id === activeId) ?? null;
 
-  const clientFor = (chatId: string): Client<typeof ChatService> => {
+  const clientFor = (chatId: string): AiGatewayClient => {
     let client = clients.current.get(chatId);
     if (!client) {
       const headers = instances.current.get(chatId)?.headers ?? { [CLIENT_INSTANCE_HEADER]: chatId };
-      client = aigateway.chatServiceClient(auth, { headers });
+      client = createPlatformWebClient(auth, "aigateway", { headers }).chatServiceClient();
       clients.current.set(chatId, client);
     }
     return client;
@@ -108,9 +107,12 @@ export function App() {
   const loadModels = async (filter: string) => {
     if (!activeId) return;
     try {
-      const res = await clientFor(activeId).listModels({ filter, limit: 100 });
+      const res = await clientFor(activeId).listModels({ filter, limit: 100 }) as {
+        models?: ModelInfo[];
+        total?: number;
+      };
       setModels(res.models as ModelInfo[]);
-      setTotal(res.total);
+      setTotal(res.total ?? 0);
     } catch (err) {
       setNote(`could not load models: ${(err as Error).message}`);
     }

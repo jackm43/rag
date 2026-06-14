@@ -12,11 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"connectrpc.com/connect"
 	"golang.org/x/oauth2"
 
-	idpv1 "jsmunro.me/platy/applications/idp/client/idp/v1"
-	"jsmunro.me/platy/applications/idp/client/idp/v1/idpv1connect"
 	"jsmunro.me/platy/sdk/apps/discovery"
 	"jsmunro.me/platy/sdk/httpclient"
 	"jsmunro.me/platy/sdk/identity"
@@ -133,16 +130,7 @@ func (s *Session) Discovery(ctx context.Context) (*discovery.Document, error) {
 }
 
 func (s *Session) fetchDiscover(ctx context.Context) (*discovery.Document, error) {
-	client := idpv1connect.NewDiscoveryServiceClient(
-		s.httpClient,
-		s.gatewayURL,
-		connect.WithInterceptors(s.UserAuthInterceptor()),
-	)
-	response, err := client.Discover(ctx, connect.NewRequest(&idpv1.DiscoverRequest{}))
-	if err != nil {
-		return nil, fmt.Errorf("gateway discover: %w", err)
-	}
-	return discovery.DocumentFromDiscover(response.Msg), nil
+	return s.fetchDiscoverHTTP(ctx)
 }
 
 func (s *Session) InvalidateDiscovery() {
@@ -181,7 +169,7 @@ func (s *Session) userTokenKey() string {
 	return "session|" + s.gatewayURL
 }
 
-func (s *Session) dpopProof(target, accessToken string) (string, error) {
+func (s *Session) dpopProof(method, target, accessToken string) (string, error) {
 	if s.deviceKey == nil {
 		return "", fmt.Errorf("session has no device key for DPoP proofs")
 	}
@@ -189,11 +177,11 @@ func (s *Session) dpopProof(target, accessToken string) (string, error) {
 	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
 		proofURL = s.gatewayURL + target
 	}
-	return s.deviceKey.ProofWithAccessToken(http.MethodPost, proofURL, accessToken)
+	return s.deviceKey.ProofWithAccessToken(method, proofURL, accessToken)
 }
 
-func (s *Session) attachDpopForToken(header http.Header, target, accessToken string) error {
-	proof, err := s.dpopProof(target, accessToken)
+func (s *Session) attachDpopForToken(header http.Header, method, target, accessToken string) error {
+	proof, err := s.dpopProof(method, target, accessToken)
 	if err != nil {
 		return err
 	}
@@ -254,7 +242,7 @@ func (s *Session) oauthPost(
 		request.Header.Set("Authorization", "Bearer "+authToken)
 	}
 	if s.deviceKey != nil {
-		if err := s.attachDpopForToken(request.Header, endpoint, dpopAccessToken); err != nil {
+		if err := s.attachDpopForToken(request.Header, http.MethodPost, endpoint, dpopAccessToken); err != nil {
 			return oauthTokenResponse{}, err
 		}
 	}
@@ -392,35 +380,6 @@ func (s *Session) UserToken(ctx context.Context, forceLogin bool) (string, error
 func (s *Session) Logout(ctx context.Context) error {
 	s.revokeCachedSession(ctx)
 	return nil
-}
-
-func (s *Session) IdentityClient() idpv1connect.IdentityServiceClient {
-	return idpv1connect.NewIdentityServiceClient(s.httpClient, s.gatewayURL)
-}
-
-func (s *Session) Introspect(ctx context.Context) (*idpv1.IntrospectResponse, error) {
-	var interceptor connect.Interceptor
-	if actor := impersonate(ctx); actor != "" {
-		interceptor = &tokenInterceptor{token: func(ctx context.Context) (string, error) {
-			return s.ChainedAppToken(ctx, actor, "idp", nil)
-		}}
-	} else {
-		interceptor = s.UserAuthInterceptor()
-	}
-	client := idpv1connect.NewIdentityServiceClient(
-		s.httpClient,
-		s.gatewayURL,
-		connect.WithInterceptors(interceptor),
-	)
-	response, err := client.Introspect(ctx, connect.NewRequest(&idpv1.IntrospectRequest{}))
-	if err != nil {
-		return nil, err
-	}
-	return response.Msg, nil
-}
-
-func (s *Session) RegistryClient() idpv1connect.RegistryServiceClient {
-	return idpv1connect.NewRegistryServiceClient(s.httpClient, s.gatewayURL, connect.WithInterceptors(s.UserAuthInterceptor()))
 }
 
 func (s *Session) AppToken(ctx context.Context, audience string) (string, error) {
@@ -611,100 +570,6 @@ func (s *Session) exchangeToken(
 	}, nil
 }
 
-type gatewayInterceptor struct {
-	session *Session
-}
-
-func (i *gatewayInterceptor) decorate(ctx context.Context, header http.Header, procedure string) error {
-	token, err := i.session.UserToken(ctx, false)
-	if err != nil {
-		return err
-	}
-	header.Set("Authorization", "Bearer "+token)
-	return i.session.attachDpopForToken(header, procedure, token)
-}
-
-func (i *gatewayInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
-	return func(ctx context.Context, request connect.AnyRequest) (connect.AnyResponse, error) {
-		if err := i.decorate(ctx, request.Header(), request.Spec().Procedure); err != nil {
-			return nil, err
-		}
-		return next(ctx, request)
-	}
-}
-
-func (i *gatewayInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
-	return func(ctx context.Context, spec connect.Spec) connect.StreamingClientConn {
-		conn := next(ctx, spec)
-		if err := i.decorate(ctx, conn.RequestHeader(), spec.Procedure); err != nil {
-			// Fail closed: a stream that could not be authenticated must not
-			// proceed unauthenticated. Surface the error on first use.
-			i.session.logger().Warn("streaming request authorization failed; failing closed",
-				"procedure", spec.Procedure, "error", err)
-			return &failedStreamingConn{StreamingClientConn: conn, err: err}
-		}
-		return conn
-	}
-}
-
-// failedStreamingConn surfaces an authorization error on the first stream
-// operation so a request that could not be authenticated never reaches the
-// server unauthenticated.
-type failedStreamingConn struct {
-	connect.StreamingClientConn
-	err error
-}
-
-func (c *failedStreamingConn) Send(any) error      { return c.err }
-func (c *failedStreamingConn) Receive(any) error   { return c.err }
-func (c *failedStreamingConn) CloseRequest() error { return c.err }
-
-func (i *gatewayInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
-	return next
-}
-
-type tokenInterceptor struct {
-	token func(ctx context.Context) (string, error)
-}
-
-func (i *tokenInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
-	return func(ctx context.Context, request connect.AnyRequest) (connect.AnyResponse, error) {
-		token, err := i.token(ctx)
-		if err != nil {
-			return nil, err
-		}
-		request.Header().Set("Authorization", "Bearer "+token)
-		return next(ctx, request)
-	}
-}
-
-func (i *tokenInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
-	return func(ctx context.Context, spec connect.Spec) connect.StreamingClientConn {
-		conn := next(ctx, spec)
-		token, err := i.token(ctx)
-		if err != nil {
-			// Fail closed rather than streaming without a bearer token.
-			return &failedStreamingConn{StreamingClientConn: conn, err: err}
-		}
-		conn.RequestHeader().Set("Authorization", "Bearer "+token)
-		return conn
-	}
-}
-
-func (i *tokenInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
-	return next
-}
-
-func (s *Session) AppAuthInterceptor(audience string) connect.Interceptor {
-	return &tokenInterceptor{token: func(ctx context.Context) (string, error) {
-		return s.AppToken(ctx, audience)
-	}}
-}
-
-func (s *Session) UserAuthInterceptor() connect.Interceptor {
-	return &gatewayInterceptor{session: s}
-}
-
 // DiscoveryClient returns the GraphQL discovery client for the registered
 // discovery application, resolving its endpoint from the authenticated
 // gateway registry and authenticating with an STS token for the discovery
@@ -735,6 +600,9 @@ func (s *Session) DiscoveryClient(ctx context.Context) (*discovery.Client, error
 	})
 	client.HTTPClient = s.httpClient
 	client.Logger = s.logger()
+	client.AttachDPoP = func(ctx context.Context, header http.Header, method, url, accessToken string) error {
+		return s.attachDpopForToken(header, method, url, accessToken)
+	}
 	s.discoveryClient = client
 	return client, nil
 }

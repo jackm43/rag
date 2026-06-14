@@ -1,12 +1,15 @@
 import { requireSenderConstraint } from "../resource/constraints";
 import { connectorToken } from "../client/connector";
 import type { ServiceCredential } from "../oauth2/exchange";
+import { createDpopProof, generateDpopKey, type DpopKey } from "../oauth2/dpop";
 import type { Identity } from "../identity";
 import { errorMessage, logger } from "../logger";
 import { principalFromIdentity } from "../identity";
-import { annotateSpan, traceHeaders } from "../otel";
+import { annotateSpan, traceHeaders } from "../otel/context";
 import { verifyStsToken, type StsVerifierConfig } from "../oauth2/sts";
 import { bearerToken } from "./authenticators";
+import { CLIENT_INSTANCE_HEADER, CLIENT_TOKEN_HEADER } from "../http/tokens";
+import { createWorkerTransportFetch, serviceBindingFetch, type TransportMode } from "../transport";
 
 // sessionProxy is the confidential web client (BFF) pattern: the web
 // application is the registered principal for its pages. The browser stays a
@@ -19,26 +22,36 @@ import { bearerToken } from "./authenticators";
 // still validates the audience token itself.
 
 export type ProxyTarget = {
-  // Path prefix owned by this target, e.g. "/aigateway.v1." (Connect routes
-  // are /<package>.<Service>/<Method>).
-  prefix: string;
-  // Target application name — the audience of the chained token.
+  prefixes: string[];
   application: string;
   endpoint: string;
   scopes?: string[];
-  // Service-binding fetch for the target (same-account worker-to-worker
-  // fetches over public URLs are blocked).
+  bindingName?: string;
   fetch?: typeof fetch;
 };
 
 export type SessionProxyConfig = {
+  application: string;
   gatewayUrl: string;
   credential: ServiceCredential;
   verify?: Partial<StsVerifierConfig>;
+  transportMode?: TransportMode;
   // Transport for the exchange call (gateway service binding in workers).
   gatewayFetch?: typeof fetch;
   targets: ProxyTarget[];
 };
+
+export const proxyTargetFor = (
+  audience: string,
+  target: { endpoint: string; prefixes?: string[]; scopes?: string[]; bindingName?: string; fetch?: typeof fetch },
+): ProxyTarget => ({
+  prefixes: target.prefixes ?? [`/platform/${audience}/v1/`],
+  application: audience,
+  endpoint: target.endpoint,
+  scopes: target.scopes,
+  bindingName: target.bindingName,
+  fetch: target.fetch,
+});
 
 const connectError = (status: number, code: string, message: string): Response =>
   new Response(JSON.stringify({ code, message }), {
@@ -49,13 +62,67 @@ const connectError = (status: number, code: string, message: string): Response =
 // Per-client-instance header: a web page tags each logical client (e.g. one
 // chat conversation) so the proxy keys its token cache per instance and the
 // id shows up on every span along the request path.
-export const CLIENT_INSTANCE_HEADER = "x-client-instance";
+export { CLIENT_INSTANCE_HEADER } from "../http/tokens";
 
 const INSTANCE_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+let proxyDpopKey: Promise<DpopKey> | null = null;
+
+const dpopKey = (): Promise<DpopKey> => {
+  proxyDpopKey ??= generateDpopKey();
+  return proxyDpopKey;
+};
 
 export const clientInstance = (headers: Headers): string | null => {
   const value = headers.get(CLIENT_INSTANCE_HEADER);
   return value && INSTANCE_PATTERN.test(value) ? value : null;
+};
+
+export const verifyClientIdentityToken = async (
+  config: { gatewayUrl: string; application: string; verify?: Partial<StsVerifierConfig> },
+  token: string,
+  session: Identity,
+  instanceId?: string | null,
+): Promise<Identity | null> => {
+  const issuer = config.gatewayUrl.replace(/\/$/, "");
+  const identity = await verifyStsToken(token, {
+    issuer,
+    audience: config.application,
+    ...config.verify,
+  });
+  if (!identity || identity.subject !== session.subject) {
+    return null;
+  }
+  if (instanceId && identity.clientInstance && identity.clientInstance !== instanceId) {
+    return null;
+  }
+  return identity;
+};
+
+const chainIdentity = async (
+  config: SessionProxyConfig,
+  issuer: string,
+  request: Request,
+  session: Identity,
+): Promise<Identity> => {
+  const instance = clientInstance(request.headers);
+  const clientToken = request.headers.get(CLIENT_TOKEN_HEADER);
+  if (!clientToken) {
+    return session;
+  }
+  const clientIdentity = await verifyClientIdentityToken(
+    { gatewayUrl: issuer, application: config.application, verify: config.verify },
+    clientToken,
+    session,
+    instance,
+  );
+  if (!clientIdentity) {
+    return session;
+  }
+  return {
+    ...session,
+    ...clientIdentity,
+    subjectToken: clientToken,
+  };
 };
 
 // verifySessionRequest authenticates a browser request at the application's
@@ -88,7 +155,9 @@ export const sessionProxy = (config: SessionProxyConfig): SessionProxy => {
   const issuer = config.gatewayUrl.replace(/\/$/, "");
   return async (request) => {
     const url = new URL(request.url);
-    const target = config.targets.find((candidate) => url.pathname.startsWith(candidate.prefix));
+    const target = config.targets.find((candidate) =>
+      candidate.prefixes.some((prefix) => url.pathname.startsWith(prefix)),
+    );
     if (!target) {
       return null;
     }
@@ -100,8 +169,9 @@ export const sessionProxy = (config: SessionProxyConfig): SessionProxy => {
       logger.warn("request_unauthenticated", { method: url.pathname, target: target.application });
       return connectError(401, "unauthenticated", "a DPoP-bound session token with a valid proof is required");
     }
-    const instance = clientInstance(request.headers);
-    const principal = principalFromIdentity(identity);
+    const chainSubject = await chainIdentity(config, issuer, request, identity);
+    const instance = chainSubject.clientInstance ?? clientInstance(request.headers);
+    const principal = principalFromIdentity(chainSubject);
     annotateSpan({
       principal_kind: principal.kind,
       principal_sub: principal.sub,
@@ -109,6 +179,7 @@ export const sessionProxy = (config: SessionProxyConfig): SessionProxy => {
       ...(principal.act ? { principal_act: principal.act.join(" > ") } : {}),
       target: target.application,
       ...(instance ? { client_instance: instance } : {}),
+      ...(chainSubject.clientKind ? { client_kind: chainSubject.clientKind } : {}),
     });
 
     let access: string;
@@ -123,13 +194,13 @@ export const sessionProxy = (config: SessionProxyConfig): SessionProxy => {
           partition: instance ?? undefined,
           gatewayFetch: config.gatewayFetch,
         },
-        identity,
+        chainSubject,
       );
     } catch (error) {
       logger.warn("request_denied", {
         method: url.pathname,
         target: target.application,
-        actor: identity.email ?? identity.subject,
+        actor: chainSubject.email ?? chainSubject.subject,
         reason: errorMessage(error),
       });
       return connectError(403, "permission_denied", errorMessage(error));
@@ -140,10 +211,28 @@ export const sessionProxy = (config: SessionProxyConfig): SessionProxy => {
       request,
     );
     upstream.headers.set("authorization", `Bearer ${access}`);
-    upstream.headers.delete("dpop");
+    upstream.headers.set(
+      "dpop",
+      await createDpopProof(await dpopKey(), { method: upstream.method, url: upstream.url }, access),
+    );
+    if (instance) {
+      upstream.headers.set(CLIENT_INSTANCE_HEADER, instance);
+    }
     for (const [key, value] of Object.entries(traceHeaders())) {
       upstream.headers.set(key, value);
     }
-    return (target.fetch ?? globalThis.fetch.bind(globalThis))(upstream);
+    const transportFetch = createWorkerTransportFetch(target.fetch, {
+      mode: config.transportMode ?? "service-auth",
+      caller: config.application,
+      target: target.application,
+      credential: config.credential,
+      gatewayUrl: issuer,
+      gatewayFetch: config.gatewayFetch,
+    }, { requireBinding: Boolean(target.bindingName || target.fetch) });
+    if (!transportFetch) {
+      const label = target.bindingName ?? target.application;
+      return connectError(503, "unavailable", `service binding ${label} is not configured`);
+    }
+    return transportFetch(upstream);
   };
 };

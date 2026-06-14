@@ -78,6 +78,10 @@ export interface Env {
   AUTH_GATEWAY?: Fetcher;
   AIGATEWAY_ENDPOINT?: string;
   AIGATEWAY?: Fetcher;
+  DEPLOY_ENDPOINT?: string;
+  DEPLOY?: Fetcher;
+  RAGBOT_ENDPOINT?: string;
+  RAGBOT?: Fetcher;
   ALLOWED_GUILD_IDS?: string;
   SERVICE_CLIENT_ID?: string;
   SERVICE_CLIENT_SECRET?: WorkerSecret;

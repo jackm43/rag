@@ -1,7 +1,7 @@
-import type { DiscoverResponse } from "../../../idp/server/idp/v1/gateway_discovery_service_pb";
 import {
   exchangeToken,
   logger,
+  serviceBindingFetch,
   serviceCredentialFromEnv,
   TOKEN_TYPE_SERVICE_CREDENTIAL,
   type Identity,
@@ -29,9 +29,7 @@ export const selfIdentity = async (env: Env): Promise<Identity> => {
       audience: "idp",
       scopes: [DISCOVER_SCOPE],
     },
-    env.AUTH_GATEWAY
-      ? (input, init) => env.AUTH_GATEWAY!.fetch(input, init)
-      : undefined,
+    serviceBindingFetch(env.AUTH_GATEWAY, "AUTH_GATEWAY"),
   );
   if (!minted) {
     throw new Error("self token exchange refused");
@@ -46,28 +44,36 @@ export const selfIdentity = async (env: Env): Promise<Identity> => {
   };
 };
 
-type DiscoverLike = Pick<DiscoverResponse, "issuer" | "jwksUri"> & {
-  endpoints?: Partial<NonNullable<DiscoverResponse["endpoints"]>>;
+type DiscoverApplicationLike = {
+  name: string;
+  audience: string;
+  endpoint: string;
+  description: string;
+  provider: string;
+  trustZone: string;
+  impersonationAccessClientId?: string;
+  providerOauthClientId?: string;
+  providerOauthScopes?: string[];
+  createdAt: number | bigint | string;
+  updatedAt: number | bigint | string;
+  trustBoundary?: unknown;
+  access?: unknown;
+  resources: Array<{ name: string; methods: Array<{ name: string; scope: string }> }>;
+  delegations: Array<{ audience: string; scopes: string[] }>;
+};
+
+type DiscoverLike = {
+  issuer: string;
+  jwksUri: string;
+  endpoints?: Partial<{
+    tokenExchange: string;
+    tokenRevoke: string;
+    introspect: string;
+    discovery: string;
+    jwks: string;
+  }>;
   applications: Array<
-    Pick<
-      DiscoverResponse["applications"][number],
-      | "name"
-      | "audience"
-      | "endpoint"
-      | "description"
-      | "provider"
-      | "trustZone"
-      | "impersonationAccessClientId"
-      | "providerOauthClientId"
-      | "providerOauthScopes"
-      | "createdAt"
-      | "updatedAt"
-    > & {
-      trustBoundary?: unknown;
-      access?: unknown;
-      resources: Array<{ name: string; methods: Array<{ name: string; scope: string }> }>;
-      delegations: Array<{ audience: string; scopes: string[] }>;
-    }
+    DiscoverApplicationLike
   >;
 };
 
@@ -90,11 +96,11 @@ export const snapshotFromDiscovery = (response: DiscoverLike): RegistrySnapshot 
     description: application.description,
     provider: application.provider,
     trustZone: application.trustZone,
-    impersonationAccessClientId: application.impersonationAccessClientId,
-    providerOauthClientId: application.providerOauthClientId,
-    providerOauthScopes: application.providerOauthScopes,
-    trustBoundary: application.trustBoundary,
-    access: application.access,
+    impersonationAccessClientId: application.impersonationAccessClientId ?? "",
+    providerOauthClientId: application.providerOauthClientId ?? "",
+    providerOauthScopes: application.providerOauthScopes ?? [],
+    trustBoundary: application.trustBoundary ?? null,
+    access: application.access ?? null,
     createdAt: Number(application.createdAt),
     updatedAt: Number(application.updatedAt),
     resources: application.resources.map((resource) => ({
@@ -113,7 +119,7 @@ export const syncRegistry = async (
   store: DiscoveryStore,
   identity: Identity,
 ): Promise<SyncStateView> => {
-  const response = await (await targets(env, identity).idp.discoveryService()).discover({});
+  const response = await (await targets(env, identity).idp.discoveryService()).discover() as DiscoverLike;
   const state = await store.replace(snapshotFromDiscovery(response));
   logger.info("discovery_synced", {
     applications: state.applications,

@@ -65,7 +65,7 @@ const gateway: GatewayView = {
   endpoints: {
     tokenExchange: "https://auth-gateway.example.com/oauth/token",
     tokenRevoke: "https://auth-gateway.example.com/oauth/revoke",
-    introspect: "https://auth-gateway.example.com/idp.v1.IdentityService/Introspect",
+    introspect: "https://auth-gateway.example.com/platform/gateway/v1/identity/introspections",
     discovery: "https://auth-gateway.example.com/api/discovery",
     jwks: "https://auth-gateway.example.com/.well-known/jwks.json",
   },

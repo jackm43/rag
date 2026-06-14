@@ -99,6 +99,11 @@ import {
 }
 
 import {
+  to = cloudflare_zero_trust_access_application.web_client_bypass["portal"]
+  id = "accounts/314e7e015b5f4429c4e2da1e6ec93271/7009cec6-61f4-439e-bc59-c29b4b7bb710"
+}
+
+import {
   to = cloudflare_zero_trust_access_application.enroll
   id = "accounts/314e7e015b5f4429c4e2da1e6ec93271/8db07225-d31e-40cb-8e39-14877c17d15d"
 }

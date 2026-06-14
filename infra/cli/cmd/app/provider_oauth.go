@@ -6,8 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"connectrpc.com/connect"
-	idpv1 "jsmunro.me/platy/applications/idp/client/idp/v1"
 	"jsmunro.me/platy/cli/internal/applications"
 	"jsmunro.me/platy/cli/internal/manifest"
 	"jsmunro.me/platy/cli/internal/output"
@@ -146,11 +144,11 @@ func resolveProviderOAuthCredential(ctx context.Context, root, name string, app 
 		return nil
 	}
 	if document.ProviderOAuthClientID == "" {
-		registered, err := platform.Session(ctx).RegistryClient().GetApplication(ctx, connect.NewRequest(&idpv1.GetApplicationRequest{Name: name}))
-		if err != nil || registered.Msg.Application.GetProviderOauthClientId() == "" {
+		registered, err := platform.Session(ctx).GetApplicationHTTP(ctx, name)
+		if err != nil || registered.ProviderOAuthClientID == "" {
 			return nil
 		}
-		document.ProviderOAuthClientID = registered.Msg.Application.GetProviderOauthClientId()
+		document.ProviderOAuthClientID = registered.ProviderOAuthClientID
 	}
 	secretProvider := app.Provider()
 	if secretProvider == "" {

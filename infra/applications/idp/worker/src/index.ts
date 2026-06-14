@@ -1,9 +1,6 @@
-import { Code, ConnectError } from "@connectrpc/connect";
+import { OAuthError, OAuthErrorCode } from "./oauth-error";
 
 import {
-  createRpcHandler,
-  traceRpc,
-  tracerFromEnv,
   verifyDpopProof,
   type RequestDescriptor,
 } from "@platy/sdk";
@@ -17,31 +14,17 @@ import {
   exchangeGatewayToken,
   introspectToken,
   refreshGatewaySession,
-  registerServices,
 } from "./services";
 import { handleDiscordAuthorize, handleDiscordCallback } from "./discord-oauth";
+import { handleGatewayHttpApi } from "./http-api";
 import { revokeSession } from "./sessions";
-import { handleTraceIngest, localSpanSink } from "./traces";
+import { verifyServiceClient } from "./registry";
+import { handleTraceIngest } from "./traces";
+import { mintServiceBindingToken } from "./service-binding";
 import { SigningKeys } from "./keys";
 import type { Env } from "./types";
 
 export { SigningKeys };
-
-type TracedRpc = (request: Request, ctx?: ExecutionContext) => Promise<Response | null>;
-
-let cached: { env: Env; rpc: TracedRpc } | null = null;
-
-const rpcHandler = (env: Env): TracedRpc => {
-  if (cached?.env !== env) {
-    // The gateway exports its own spans straight to the trace store in D1.
-    const tracer = tracerFromEnv(env, "auth-gateway", { exporter: localSpanSink(env) });
-    cached = {
-      env,
-      rpc: traceRpc(tracer, createRpcHandler((router) => registerServices(router, env))),
-    };
-  }
-  return cached.rpc;
-};
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -65,20 +48,20 @@ const oauthResponse = (body: unknown, status = 200, extraHeaders?: Record<string
 class DpopRequiredError extends Error { }
 
 const oauthErrorCode = (error: unknown): { error: string; status: number; description: string } => {
-  if (!(error instanceof ConnectError)) {
+  if (!(error instanceof OAuthError)) {
     return { error: "server_error", status: 500, description: String(error) };
   }
-  const description = (error as ConnectError & { rawMessage?: string }).rawMessage ?? error.message;
+  const description = (error as OAuthError & { rawMessage?: string }).rawMessage ?? error.message;
   switch (error.code) {
-    case Code.InvalidArgument:
+    case OAuthErrorCode.InvalidArgument:
       return { error: "invalid_request", status: 400, description };
-    case Code.Unauthenticated:
+    case OAuthErrorCode.Unauthenticated:
       return { error: "invalid_grant", status: 400, description };
-    case Code.PermissionDenied:
+    case OAuthErrorCode.PermissionDenied:
       return { error: "access_denied", status: 403, description };
-    case Code.NotFound:
+    case OAuthErrorCode.NotFound:
       return { error: "invalid_target", status: 400, description };
-    case Code.FailedPrecondition:
+    case OAuthErrorCode.FailedPrecondition:
       return { error: "unauthorized_client", status: 400, description };
     default:
       return { error: "server_error", status: 500, description };
@@ -108,12 +91,39 @@ const tokenEndpointRequest = (request: Request): RequestDescriptor => ({
   url: request.url,
 });
 
+const DEVICE_JKT_HEADER = "x-platy-device-jkt";
+const DEVICE_JKT_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
+
 const requireOAuthDpop = async (request: Request): Promise<string> => {
   const proof = await verifyDpopProof(request.headers, tokenEndpointRequest(request));
   if (!proof) {
     throw new DpopRequiredError();
   }
   return proof.jkt;
+};
+
+const resolveOAuthDpopJkt = async (env: Env, request: Request): Promise<string> => {
+  const deviceJkt = request.headers.get(DEVICE_JKT_HEADER)?.trim() ?? "";
+  if (!deviceJkt) {
+    return requireOAuthDpop(request);
+  }
+  const basic = basicClientCredential(request.headers);
+  if (!basic) {
+    throw new DpopRequiredError();
+  }
+  const separator = basic.indexOf(":");
+  if (separator < 0) {
+    throw new DpopRequiredError();
+  }
+  const application = await verifyServiceClient(
+    env,
+    decodeURIComponent(basic.slice(0, separator)),
+    decodeURIComponent(basic.slice(separator + 1)),
+  );
+  if (!application || !DEVICE_JKT_PATTERN.test(deviceJkt)) {
+    throw new DpopRequiredError();
+  }
+  return deviceJkt;
 };
 
 const dpopChallengeResponse = (description: string): Response =>
@@ -141,7 +151,7 @@ const corsHeaders = (env: Env, request: Request): Record<string, string> => {
   return {
     "access-control-allow-origin": origin,
     "access-control-allow-methods": "POST, GET, OPTIONS",
-    "access-control-allow-headers": "authorization, dpop, content-type, connect-protocol-version, connect-timeout-ms, traceparent, x-client-instance, x-client-token",
+    "access-control-allow-headers": "authorization, dpop, content-type, traceparent, x-client-instance, x-client-token",
     "access-control-max-age": "86400",
     vary: "origin",
   };
@@ -206,7 +216,7 @@ const handleOAuthToken = async (env: Env, request: Request): Promise<Response> =
   const grantType = params.get("grant_type") ?? "";
   try {
     if (grantType === "authorization_code") {
-      const jkt = await requireOAuthDpop(request);
+      const jkt = await resolveOAuthDpopJkt(env, request);
       const tokens = await createGatewaySession(
         env,
         {
@@ -228,7 +238,7 @@ const handleOAuthToken = async (env: Env, request: Request): Promise<Response> =
     }
 
     if (grantType === "refresh_token") {
-      const jkt = await requireOAuthDpop(request);
+      const jkt = await resolveOAuthDpopJkt(env, request);
       const tokens = await refreshGatewaySession(
         env,
         { refreshToken: params.get("refresh_token") ?? "" },
@@ -335,12 +345,61 @@ const handleOAuthIntrospect = async (env: Env, request: Request): Promise<Respon
   return oauthResponse(await introspectToken(env, token));
 };
 
+const handleServiceBindingToken = async (env: Env, request: Request): Promise<Response> => {
+  const basic = basicClientCredential(request.headers);
+  if (!basic) {
+    return jsonResponse({ error: "unauthenticated" }, 401);
+  }
+  const separator = basic.indexOf(":");
+  if (separator < 0) {
+    return jsonResponse({ error: "unauthenticated" }, 401);
+  }
+  const clientId = decodeURIComponent(basic.slice(0, separator));
+  const clientSecret = decodeURIComponent(basic.slice(separator + 1));
+  let body: {
+    caller?: string;
+    target?: string;
+    method?: string;
+    path?: string;
+    body_digest?: string;
+  };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return jsonResponse({ error: "invalid_request" }, 400);
+  }
+  if (!body.caller || !body.target || !body.method || !body.path) {
+    return jsonResponse({ error: "invalid_request" }, 400);
+  }
+  try {
+    const result = await mintServiceBindingToken(env, clientId, clientSecret, {
+      caller: body.caller,
+      target: body.target,
+      method: body.method,
+      path: body.path,
+      bodyDigest: body.body_digest ?? "",
+    });
+    return jsonResponse({ token: result.token, expires_in: result.expiresIn });
+  } catch (error) {
+    if (error instanceof OAuthError) {
+      const mapped = oauthErrorCode(error);
+      return jsonResponse({ error: mapped.error, error_description: mapped.description }, mapped.status);
+    }
+    return jsonResponse({ error: "server_error" }, 500);
+  }
+};
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const cors = corsHeaders(env, request);
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: cors });
+    }
+
+    const httpApiResponse = await handleGatewayHttpApi(request, env, ctx);
+    if (httpApiResponse) {
+      return withCors(httpApiResponse, cors);
     }
 
     if (url.pathname === "/.well-known/jwks.json" && request.method === "GET") {
@@ -364,7 +423,7 @@ export default {
           {
             error: "unauthenticated",
             error_description:
-              "full discovery requires authentication; use idp.v1.DiscoveryService.Discover or ?view=bootstrap",
+              "full discovery requires authentication; use GET /platform/gateway/v1/discovery or ?view=bootstrap",
           },
           401,
         ),
@@ -396,6 +455,10 @@ export default {
       return handleTraceIngest(env, request);
     }
 
+    if (url.pathname === "/internal/v1/service-binding/token" && request.method === "POST") {
+      return handleServiceBindingToken(env, request);
+    }
+
     if (url.pathname === "/provider/oauth/callback" && request.method === "GET") {
       const query = url.searchParams;
       const code = query.get("code") ?? "";
@@ -404,11 +467,6 @@ export default {
         return new Response("missing code or state", { status: 400 });
       }
       return withCors(await completeProviderOAuthCallback(env, code, state), cors);
-    }
-
-    const rpcResponse = await rpcHandler(env)(request, ctx);
-    if (rpcResponse) {
-      return withCors(rpcResponse, cors);
     }
 
     if (url.pathname === "/" && request.method === "GET") {

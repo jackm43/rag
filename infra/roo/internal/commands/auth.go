@@ -5,25 +5,24 @@ import (
 
 	"github.com/spf13/cobra"
 
-	idpv1 "jsmunro.me/platy/applications/idp/client/idp/v1"
 	"jsmunro.me/platy/roo/internal/output"
+	"jsmunro.me/platy/sdk/gateway"
 )
 
-func printIntrospection(response *idpv1.IntrospectResponse) {
-	principal := response.GetPrincipal()
+func printIntrospection(response *gateway.IntrospectResponse) {
 	body := map[string]any{
 		"scopes": response.Scopes,
 	}
-	if principal != nil {
+	if response.Principal.Sub != "" || response.Principal.Kind != "" {
 		entry := map[string]any{
-			"kind": principal.Kind,
-			"sub":  principal.Sub,
+			"kind": response.Principal.Kind,
+			"sub":  response.Principal.Sub,
 		}
-		if principal.Email != "" {
-			entry["email"] = principal.Email
+		if response.Principal.Email != "" {
+			entry["email"] = response.Principal.Email
 		}
-		if len(principal.Act) > 0 {
-			entry["act"] = principal.Act
+		if len(response.Principal.Act) > 0 {
+			entry["act"] = response.Principal.Act
 		}
 		body["principal"] = entry
 	}

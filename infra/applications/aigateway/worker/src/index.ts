@@ -1,11 +1,12 @@
-import { createPlatformRpcWorker } from "@platy/sdk";
-import { registerAiGatewayServices } from "./services";
+import { handleAiGatewayHttpApi } from "./http-api";
 import type { Env } from "./types";
 
-export default createPlatformRpcWorker<Env>({
-  serviceName: "aigateway",
-  register: (router, env, tracer) => registerAiGatewayServices(router, env, tracer),
-  cors: {
-    originsEnv: "AIG_ALLOWED_ORIGINS",
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const response = await handleAiGatewayHttpApi(request, env, ctx);
+    if (response) {
+      return response;
+    }
+    return Response.json({ error: "not found" }, { status: 404 });
   },
-});
+};

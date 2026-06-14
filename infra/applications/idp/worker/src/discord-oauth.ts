@@ -1,4 +1,4 @@
-import { ConnectError, Code } from "@connectrpc/connect";
+import { OAuthError, OAuthErrorCode } from "./oauth-error";
 
 import { logger, resolveSecret } from "@platy/sdk";
 import type { Env } from "./types";
@@ -49,7 +49,7 @@ const requireDiscordConfig = async (env: Env): Promise<{ clientId: string; clien
   const clientId = (await resolveSecret(env.DISCORD_APPLICATION_ID)).trim();
   const clientSecret = (await resolveSecret(env.DISCORD_CLIENT_SECRET)).trim();
   if (!clientId || !clientSecret) {
-    throw new ConnectError("discord oauth is not configured", Code.FailedPrecondition);
+    throw new OAuthError("discord oauth is not configured", OAuthErrorCode.FailedPrecondition);
   }
   return { clientId, clientSecret };
 };
@@ -111,11 +111,11 @@ const fetchDiscordToken = async (
     }).toString(),
   });
   if (!response.ok) {
-    throw new ConnectError(`discord token exchange failed (${response.status})`, Code.Unauthenticated);
+    throw new OAuthError(`discord token exchange failed (${response.status})`, OAuthErrorCode.Unauthenticated);
   }
   const body = (await response.json()) as { access_token?: string };
   if (!body.access_token) {
-    throw new ConnectError("discord token response missing access_token", Code.Unauthenticated);
+    throw new OAuthError("discord token response missing access_token", OAuthErrorCode.Unauthenticated);
   }
   return { access_token: body.access_token };
 };
@@ -129,12 +129,12 @@ const fetchDiscordIdentity = async (
     fetch(`${DISCORD_API}/users/@me/guilds`, { headers }),
   ]);
   if (!userResponse.ok || !guildsResponse.ok) {
-    throw new ConnectError("discord identity fetch failed", Code.Unauthenticated);
+    throw new OAuthError("discord identity fetch failed", OAuthErrorCode.Unauthenticated);
   }
   const user = (await userResponse.json()) as DiscordUser;
   const guilds = (await guildsResponse.json()) as DiscordGuild[];
   if (!user.id) {
-    throw new ConnectError("discord user id missing", Code.Unauthenticated);
+    throw new OAuthError("discord user id missing", OAuthErrorCode.Unauthenticated);
   }
   return { user, guilds };
 };
@@ -186,16 +186,16 @@ export const redeemDiscordCode = async (
   request: { authorizationCode: string; codeVerifier: string; redirectUri: string },
 ): Promise<{ subject: string; username: string }> => {
   if (!request.codeVerifier || !request.redirectUri) {
-    throw new ConnectError(
+    throw new OAuthError(
       "authorization_code requires code_verifier and redirect_uri",
-      Code.InvalidArgument,
+      OAuthErrorCode.InvalidArgument,
     );
   }
   if (!request.authorizationCode.startsWith(DISCORD_CODE_PREFIX)) {
-    throw new ConnectError("invalid discord authorization code", Code.InvalidArgument);
+    throw new OAuthError("invalid discord authorization code", OAuthErrorCode.InvalidArgument);
   }
   if (!allowedRedirectUri(env, request.redirectUri)) {
-    throw new ConnectError("redirect_uri not allowed", Code.PermissionDenied);
+    throw new OAuthError("redirect_uri not allowed", OAuthErrorCode.PermissionDenied);
   }
   const challenge = await sha256(request.codeVerifier);
   const row = await env.DB.prepare("SELECT * FROM idp_oauth_codes WHERE code = ?")
@@ -209,15 +209,15 @@ export const redeemDiscordCode = async (
       expires_at: number;
     }>();
   if (!row) {
-    throw new ConnectError("invalid authorization code", Code.Unauthenticated);
+    throw new OAuthError("invalid authorization code", OAuthErrorCode.Unauthenticated);
   }
   await env.DB.prepare("DELETE FROM idp_oauth_codes WHERE code = ?").bind(row.code).run();
   const now = Math.floor(Date.now() / 1000);
   if (now >= row.expires_at) {
-    throw new ConnectError("authorization code expired", Code.Unauthenticated);
+    throw new OAuthError("authorization code expired", OAuthErrorCode.Unauthenticated);
   }
   if (row.code_challenge !== challenge || row.redirect_uri !== request.redirectUri) {
-    throw new ConnectError("pkce verification failed", Code.Unauthenticated);
+    throw new OAuthError("pkce verification failed", OAuthErrorCode.Unauthenticated);
   }
   logger.info("discord_code_redeemed", { subject: row.subject, username: row.username });
   return { subject: row.subject, username: row.username };

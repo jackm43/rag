@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Client } from "@connectrpc/connect";
 
-import type { DiscoveryService } from "../../discovery/server/discovery/v1/discovery_service_pb";
 import {
   applicationDetailQuery,
   applicationsListQuery,
   queryDiscovery,
   type ApplicationInfo,
+  type DiscoveryClient,
   type SyncState,
 } from "../../discovery/web";
-import { idp } from "../../idp/web";
+import { createPlatformWebClient } from "@platy/web";
 import { useAuth } from "@platy/web/react";
 
 // Application registry view: browse from the discovery GraphQL read model,
@@ -37,10 +36,10 @@ const formatTime = (seconds: number): string =>
 export function Applications({
   discovery,
 }: {
-  discovery: Client<typeof DiscoveryService> | null;
+  discovery: DiscoveryClient | null;
 }) {
   const { auth, signedIn } = useAuth();
-  const registryClient = useMemo(() => idp.registryServiceClient(auth), [auth]);
+  const registryClient = useMemo(() => createPlatformWebClient(auth, "idp").registryServiceClient(), [auth]);
   const [apps, setApps] = useState<ApplicationInfo[]>([]);
   const [detail, setDetail] = useState<ApplicationInfo | null>(null);
   const [sync, setSync] = useState<SyncState | null>(null);
@@ -191,8 +190,8 @@ export function Applications({
         <div className="panel">
           <h2>Register application</h2>
           <p className="hint">
-            JSON body for idp.v1.RegistryService/RegisterApplication. A first registration issues a
-            service credential; store it via the CLI flow (platy app register) for managed apps.
+            JSON body for the gateway application registration endpoint. A first registration issues a
+            service credential; store it through your secret manager for managed apps.
           </p>
           <textarea
             className="json-editor"

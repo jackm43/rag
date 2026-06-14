@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import nacl from "tweetnacl";
 
+import { createDpopProof, generateDpopKey, type DpopKey } from "@platy/sdk";
 import worker, {
   DiscordGateway,
   extractBotMentionPrompt,
@@ -44,6 +45,9 @@ const createEnv = (publicKeyHex: string, overrides: Record<string, unknown> = {}
   ({
     DISCORD_PUBLIC_KEY: publicKeyHex,
     DISCORD_APPLICATION_ID: "application-id",
+    ASSETS: {
+      fetch: async () => new Response("ok", { status: 200 }),
+    },
     DB: {
       prepare: () => {
         throw new Error("DB should not be used in this test");
@@ -1607,94 +1611,62 @@ test("queue handler uses a configured partner model and parses the OpenAI respon
   }
 });
 
-// Admin RPC tests use a fake auth gateway issuer: a real ES256 keypair whose
+// Admin HTTP tests use a fake auth gateway issuer: a real ES256 keypair whose
 // public JWKS is served from the well-known endpoint via a mocked fetch.
 
-const rpcRequest = (path: string, body: unknown, token?: string) =>
-  new Request(`https://example.com${path}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(body),
-  });
+let adminDpopKey: DpopKey | null = null;
 
-const envelopConnectJSON = (payload: string) => {
-  const body = new TextEncoder().encode(payload);
-  const frame = new Uint8Array(5 + body.length);
-  frame[0] = 0;
-  new DataView(frame.buffer).setUint32(1, body.length, false);
-  frame.set(body, 5);
-  return frame;
+const ensureAdminDpopKey = async () => {
+  adminDpopKey ??= await generateDpopKey();
+  return adminDpopKey;
 };
 
-const readConnectStream = async (response: Response) => {
-  const reader = response.body?.getReader();
-  if (!reader) {
-    throw new Error("missing response body");
-  }
-  const chunks: Array<Record<string, unknown>> = [];
-  let buffer = new Uint8Array(0);
-  const append = (value: Uint8Array) => {
-    const next = new Uint8Array(buffer.length + value.length);
-    next.set(buffer);
-    next.set(value, buffer.length);
-    buffer = next;
+const httpRequest = async (
+  method: string,
+  path: string,
+  body: unknown,
+  token?: string,
+) => {
+  const headers: Record<string, string> = {
+    ...(method !== "GET" && method !== "DELETE" ? { "content-type": "application/json" } : {}),
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
   };
-  while (true) {
-    const { done, value } = await reader.read();
-    if (value) {
-      append(value);
-    }
-    while (buffer.length >= 5) {
-      const flags = buffer[0];
-      const length = new DataView(buffer.buffer, buffer.byteOffset + 1, 4).getUint32(0, false);
-      if (buffer.length < 5 + length) {
-        break;
-      }
-      const payload = buffer.slice(5, 5 + length);
-      buffer = buffer.slice(5 + length);
-      if (flags & 0x2) {
-        if (length > 0) {
-          const end = JSON.parse(new TextDecoder().decode(payload)) as { error?: { code?: string } };
-          if (end.error?.code) {
-            throw new Error(end.error.code);
-          }
-        }
-        return chunks;
-      }
-      chunks.push(JSON.parse(new TextDecoder().decode(payload)) as Record<string, unknown>);
-    }
-    if (done) {
-      return chunks;
-    }
+  if (token) {
+    const key = await ensureAdminDpopKey();
+    const url = `https://example.com${path}`;
+    headers.dpop = await createDpopProof(key, { method, url }, token);
   }
+  return new Request(`https://example.com${path}`, {
+    method,
+    headers,
+    ...(method === "GET" || method === "DELETE"
+      ? {}
+      : { body: JSON.stringify({ data: body }) }),
+  });
 };
 
-const streamingRpcRequest = (path: string, body: unknown, token?: string) =>
-  new Request(`https://example.com${path}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/connect+json",
-      "connect-protocol-version": "1",
-      "connect-content-encoding": "identity",
-      "connect-accept-encoding": "identity",
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-    body: envelopConnectJSON(JSON.stringify(body)),
-  });
+const readNdjsonStream = async (response: Response) => {
+  const text = await response.text();
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+};
 
-test("admin RPCs reject requests when the auth gateway is not configured", async () => {
+const streamingHttpRequest = async (path: string, body: unknown, token?: string) =>
+  httpRequest("POST", path, body, token);
+
+test("admin HTTP routes reject requests when the auth gateway is not configured", async () => {
   const response = await worker.fetch(
-    rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}, await signToken()),
+    await httpRequest("GET", "/platform/ragbot/v1/configurations", {}, await signToken()),
     createEnv("unused", { DB: createDbMock({}) }),
     {} as never,
   );
   assert.equal(response.status, 401);
 });
 
-test("admin RPCs reject missing, invalid, and wrong-audience tokens", async () => {
+test("admin HTTP routes reject missing, invalid, and wrong-audience tokens", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = authGatewayFetch as never;
 
@@ -1702,22 +1674,23 @@ test("admin RPCs reject missing, invalid, and wrong-audience tokens", async () =
     const env = stsEnv({ DB: createDbMock({}) });
 
     const missingToken = await worker.fetch(
-      rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}),
+      await httpRequest("GET", "/platform/ragbot/v1/configurations", {}),
       env,
       {} as never,
     );
     assert.equal(missingToken.status, 401);
 
     const invalidBearer = await worker.fetch(
-      rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}, "not-a-jwt"),
+      await httpRequest("GET", "/platform/ragbot/v1/configurations", {}, "not-a-jwt"),
       env,
       {} as never,
     );
     assert.equal(invalidBearer.status, 401);
 
     const wrongAudience = await worker.fetch(
-      rpcRequest(
-        "/ragbot.v1.ConfigService/ListConfig",
+      await httpRequest(
+        "GET",
+        "/platform/ragbot/v1/configurations",
         {},
         await signToken({ audience: "another-app" }),
       ),
@@ -1730,7 +1703,7 @@ test("admin RPCs reject missing, invalid, and wrong-audience tokens", async () =
   }
 });
 
-test("config list RPC returns entries with a valid gateway token", async () => {
+test("config list HTTP route returns entries with a valid gateway token", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = authGatewayFetch as never;
 
@@ -1739,25 +1712,27 @@ test("config list RPC returns entries with a valid gateway token", async () => {
       DB: createDbMock({ settings: [{ key: "ai_response_model", value: "xai/grok-4.3" }] }),
     });
     const response = await worker.fetch(
-      rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}, await signToken()),
+      await httpRequest("GET", "/platform/ragbot/v1/configurations", {}, await signToken()),
       env,
       {} as never,
     );
 
     assert.equal(response.status, 200);
     const body = (await response.json()) as {
-      entries: Array<{ key: string; value: string; overridden?: boolean }>;
+      data: {
+        entries: Array<{ key: string; value: string; overridden?: boolean }>;
+      };
     };
-    const overridden = body.entries.find((entry) => entry.key === "ai_response_model");
+    const overridden = body.data.entries.find((entry) => entry.key === "ai_response_model");
     assert.equal(overridden?.value, "xai/grok-4.3");
     assert.equal(overridden?.overridden, true);
-    assert.ok(body.entries.find((entry) => entry.key === "ai_temperature"));
+    assert.ok(body.data.entries.find((entry) => entry.key === "ai_temperature"));
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("chat RPC returns a model response for a mention-style prompt", async () => {
+test("chat HTTP route returns a model response for a mention-style prompt", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = authGatewayFetch as never;
 
@@ -1770,8 +1745,9 @@ test("chat RPC returns a model response for a mention-style prompt", async () =>
       ...aiHarness.env,
     });
     const response = await worker.fetch(
-      rpcRequest(
-        "/ragbot.v1.ChatService/Chat",
+      await httpRequest(
+        "POST",
+        "/platform/ragbot/v1/chat/completions",
         { prompt: "anyone know how queues work" },
         await signToken(),
       ),
@@ -1781,12 +1757,14 @@ test("chat RPC returns a model response for a mention-style prompt", async () =>
 
     assert.equal(response.status, 200);
     const body = (await response.json()) as {
-      responseText: string;
-      model: string;
-      aiDurationMs: string;
-      totalDurationMs: string;
+      data: {
+        responseText: string;
+        model: string;
+        aiDurationMs: number;
+        totalDurationMs: number;
+      };
     };
-    assert.equal(body.responseText, "Short answer.");
+    assert.equal(body.data.responseText, "Short answer.");
     assert.equal(aiHarness.completeCalls.length, 1);
     assert.equal(aiHarness.completeCalls[0].messages.at(-1)?.content, "[jack] anyone know how queues work");
   } finally {
@@ -1794,7 +1772,7 @@ test("chat RPC returns a model response for a mention-style prompt", async () =>
   }
 });
 
-test("stream chat RPC streams model deltas and a final chunk", async () => {
+test("stream chat HTTP route streams model deltas and a final chunk", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = authGatewayFetch as never;
 
@@ -1810,8 +1788,8 @@ test("stream chat RPC streams model deltas and a final chunk", async () => {
       ...aiHarness.env,
     });
     const response = await worker.fetch(
-      streamingRpcRequest(
-        "/ragbot.v1.ChatService/StreamChat",
+      await streamingHttpRequest(
+        "/platform/ragbot/v1/chat/completions/stream",
         { prompt: "stream this please" },
         await signToken(),
       ),
@@ -1820,7 +1798,7 @@ test("stream chat RPC streams model deltas and a final chunk", async () => {
     );
 
     assert.equal(response.status, 200);
-    const chunks = await readConnectStream(response);
+    const chunks = await readNdjsonStream(response);
     assert.deepEqual(
       chunks.filter((chunk) => !chunk.done).map((chunk) => chunk.delta),
       ["Hel", "lo"],
@@ -1832,7 +1810,7 @@ test("stream chat RPC streams model deltas and a final chunk", async () => {
   }
 });
 
-test("gateway start RPC requires STS auth and forwards to the durable object", async () => {
+test("gateway start HTTP route requires STS auth and forwards to the durable object", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = authGatewayFetch as never;
   let doFetchCalls = 0;
@@ -1852,7 +1830,7 @@ test("gateway start RPC requires STS auth and forwards to the durable object", a
     });
 
     const unauthorized = await worker.fetch(
-      rpcRequest("/ragbot.v1.GatewayControlService/StartGateway", {}),
+      await httpRequest("POST", "/platform/ragbot/v1/gateway/starts", {}),
       env,
       {} as never,
     );
@@ -1860,7 +1838,7 @@ test("gateway start RPC requires STS auth and forwards to the durable object", a
     assert.equal(doFetchCalls, 0);
 
     const authorized = await worker.fetch(
-      rpcRequest("/ragbot.v1.GatewayControlService/StartGateway", {}, await signToken()),
+      await httpRequest("POST", "/platform/ragbot/v1/gateway/starts", {}, await signToken()),
       env,
       {} as never,
     );
@@ -1871,7 +1849,7 @@ test("gateway start RPC requires STS auth and forwards to the durable object", a
   }
 });
 
-test("admin RPCs enforce per-method scopes from the token", async () => {
+test("admin HTTP routes enforce per-method scopes from the token", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = authGatewayFetch as never;
 
@@ -1880,16 +1858,17 @@ test("admin RPCs enforce per-method scopes from the token", async () => {
     const narrowToken = await signToken({ scope: "ragbot/ConfigService.ListConfig" });
 
     const allowed = await worker.fetch(
-      rpcRequest("/ragbot.v1.ConfigService/ListConfig", {}, narrowToken),
+      await httpRequest("GET", "/platform/ragbot/v1/configurations", {}, narrowToken),
       env,
       {} as never,
     );
     assert.equal(allowed.status, 200);
 
     const denied = await worker.fetch(
-      rpcRequest(
-        "/ragbot.v1.ConfigService/UpdateConfig",
-        { key: "ai_temperature", value: "0.5" },
+      await httpRequest(
+        "PATCH",
+        "/platform/ragbot/v1/configurations/ai_temperature",
+        { value: "0.5" },
         narrowToken,
       ),
       env,
@@ -1901,7 +1880,7 @@ test("admin RPCs enforce per-method scopes from the token", async () => {
   }
 });
 
-test("config update RPC writes the setting and reports the new entry", async () => {
+test("config update HTTP route writes the setting and reports the new entry", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = authGatewayFetch as never;
 
@@ -1910,9 +1889,10 @@ test("config update RPC writes the setting and reports the new entry", async () 
       DB: createDbMock({ settings: [{ key: "ai_temperature", value: "0.5" }] }),
     });
     const response = await worker.fetch(
-      rpcRequest(
-        "/ragbot.v1.ConfigService/UpdateConfig",
-        { key: "ai_temperature", value: "0.5" },
+      await httpRequest(
+        "PATCH",
+        "/platform/ragbot/v1/configurations/ai_temperature",
+        { value: "0.5" },
         await signToken(),
       ),
       env,
@@ -1921,15 +1901,18 @@ test("config update RPC writes the setting and reports the new entry", async () 
 
     assert.equal(response.status, 200);
     const body = (await response.json()) as {
-      entry: { key: string; value: string; overridden?: boolean };
+      data: {
+        entry: { key: string; value: string; overridden?: boolean };
+      };
     };
-    assert.equal(body.entry.key, "ai_temperature");
-    assert.equal(body.entry.value, "0.5");
+    assert.equal(body.data.entry.key, "ai_temperature");
+    assert.equal(body.data.entry.value, "0.5");
 
     const unknownKey = await worker.fetch(
-      rpcRequest(
-        "/ragbot.v1.ConfigService/UpdateConfig",
-        { key: "not_a_key", value: "x" },
+      await httpRequest(
+        "PATCH",
+        "/platform/ragbot/v1/configurations/not_a_key",
+        { value: "x" },
         await signToken(),
       ),
       env,

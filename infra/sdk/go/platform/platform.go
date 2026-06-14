@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"jsmunro.me/platy/sdk/apps/discovery"
+	"jsmunro.me/platy/sdk/catalog"
 	"jsmunro.me/platy/sdk/client"
 	"jsmunro.me/platy/sdk/gateway"
 	"jsmunro.me/platy/sdk/oauth2/oauthclient"
@@ -48,12 +49,12 @@ func RepoRoot() (string, error) {
 		return "", fmt.Errorf("getwd: %w", err)
 	}
 	for {
-		if _, err := os.Stat(filepath.Join(dir, "infra", "proto", "buf.yaml")); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, "infra", "applications", "applications.yaml")); err == nil {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("could not locate repository root containing infra/proto/buf.yaml")
+			return "", fmt.Errorf("could not locate repository root containing infra/applications/applications.yaml")
 		}
 		dir = parent
 	}
@@ -165,5 +166,11 @@ func NewClient(ctx context.Context, logger *slog.Logger) (*client.Client, error)
 	if err != nil {
 		return nil, err
 	}
-	return client.New(session), nil
+	c := client.New(session)
+	if root, err := RepoRoot(); err == nil {
+		if cat, err := catalog.Load(root); err == nil {
+			c.Catalog = cat
+		}
+	}
+	return c, nil
 }

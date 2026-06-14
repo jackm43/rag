@@ -2,18 +2,13 @@ package app
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
-	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/descriptorpb"
 
-	idpv1 "jsmunro.me/platy/applications/idp/client/idp/v1"
 	"jsmunro.me/platy/cli/internal/applications"
 	"jsmunro.me/platy/cli/internal/bffgen"
 	"jsmunro.me/platy/cli/internal/display"
@@ -22,6 +17,8 @@ import (
 	"jsmunro.me/platy/cli/internal/platform"
 	"jsmunro.me/platy/cli/internal/provider"
 	"jsmunro.me/platy/cli/internal/secrets"
+	"jsmunro.me/platy/sdk/apps/discovery"
+	"jsmunro.me/platy/sdk/gateway"
 	sdksecrets "jsmunro.me/platy/sdk/secrets"
 )
 
@@ -58,7 +55,7 @@ func registerCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&endpoint, "endpoint", "", "endpoint override for the registered application")
 	cmd.Flags().StringVar(&description, "description", "", "description override for the registered application")
-	cmd.Flags().BoolVar(&skipCodegen, "skip-codegen", false, "skip protobuf code generation after registration")
+	cmd.Flags().BoolVar(&skipCodegen, "skip-codegen", false, "skip platform codegen after registration")
 	return cmd
 }
 
@@ -151,77 +148,22 @@ func rotateProviderOAuthCommand() *cobra.Command {
 	}
 }
 
-func protoResources(root, name string) ([]*idpv1.Resource, map[string]string) {
-	outputPath := filepath.Join(os.TempDir(), fmt.Sprintf("platy-%s.binpb", name))
-	defer os.Remove(outputPath)
-	build := exec.Command(
-		"buf", "build", filepath.Join(root, "infra", "proto"),
-		"--path", filepath.Join(root, "infra", "proto", name),
-		"-o", outputPath,
-	)
-	build.Stderr = os.Stderr
-	if err := build.Run(); err != nil {
-		output.Fail("buf build for %s: %v", name, err)
-	}
-
-	data, err := os.ReadFile(outputPath)
-	if err != nil {
-		output.Fail("read descriptor set: %v", err)
-	}
-	descriptorSet := &descriptorpb.FileDescriptorSet{}
-	if err := proto.Unmarshal(data, descriptorSet); err != nil {
-		output.Fail("decode descriptor set: %v", err)
-	}
-
-	resources := []*idpv1.Resource{}
-	fullNames := map[string]string{}
-	for _, file := range descriptorSet.GetFile() {
-		pkg := file.GetPackage()
-		if !strings.HasPrefix(pkg, name+".") {
-			continue
-		}
-		for _, service := range file.GetService() {
-			resource := &idpv1.Resource{Name: service.GetName()}
-			fullNames[service.GetName()] = pkg + "." + service.GetName()
-			for _, method := range service.GetMethod() {
-				resource.Methods = append(resource.Methods, &idpv1.ResourceMethod{
-					Name:  method.GetName(),
-					Scope: fmt.Sprintf("%s/%s.%s", name, service.GetName(), method.GetName()),
-				})
-			}
-			resources = append(resources, resource)
-		}
-	}
-	if len(resources) == 0 {
-		output.Fail("no services found in infra/proto/%s", name)
-	}
-	return resources, fullNames
-}
-
-func generateCode(root, name string) {
-	script := filepath.Join(root, "infra", "scripts", "generate.sh")
-	command := exec.Command(script, name)
+func generatePlatform(root string) {
+	script := filepath.Join(root, "infra", "scripts", "generate-platform.ts")
+	command := exec.Command("npx", "tsx", script)
 	command.Dir = root
 	command.Stdout = os.Stderr
 	command.Stderr = os.Stderr
 	if err := command.Run(); err != nil {
-		output.Fail("code generation for %s: %v", name, err)
+		output.Fail("platform codegen: %v", err)
 	}
-	output.Logger.Info("generated client and server code", "app", name, "dir", filepath.Join("infra", "applications", name))
+	output.Logger.Info("generated platform catalog and bindings")
 }
 
-func Register(ctx context.Context, name, endpoint, description string, skipCodegen bool) {
-	root := platform.RepoRoot()
-	loaded := manifest.Load(root)
-	result := registerApplication(ctx, root, loaded, name, endpoint, description, skipCodegen)
-	platform.SyncDiscovery(ctx)
-	output.PrintJSON(result)
-}
-
-func manifestDelegations(app *manifest.Application) []*idpv1.Delegation {
-	delegations := []*idpv1.Delegation{}
+func manifestDelegations(app *manifest.Application) []gateway.DelegationInput {
+	delegations := []gateway.DelegationInput{}
 	for _, delegation := range app.Delegations {
-		delegations = append(delegations, &idpv1.Delegation{
+		delegations = append(delegations, gateway.DelegationInput{
 			Audience: delegation.Audience,
 			Scopes:   delegation.Scopes,
 		})
@@ -229,7 +171,7 @@ func manifestDelegations(app *manifest.Application) []*idpv1.Delegation {
 	return delegations
 }
 
-func manifestTrustBoundary(app *manifest.Application, config provider.ProviderConfig) *idpv1.TrustBoundary {
+func manifestTrustBoundary(app *manifest.Application, config provider.ProviderConfig) *gateway.TrustBoundaryInput {
 	boundary := config.Boundary
 	if app.TrustBoundary.AccountID != "" {
 		boundary.AccountID = app.TrustBoundary.AccountID
@@ -243,27 +185,35 @@ func manifestTrustBoundary(app *manifest.Application, config provider.ProviderCo
 	if app.TrustBoundary.TeamDomain != "" {
 		boundary.TeamDomain = app.TrustBoundary.TeamDomain
 	}
-	return &idpv1.TrustBoundary{
+	return &gateway.TrustBoundaryInput{
 		Provider:   string(boundary.Provider),
-		AccountId:  boundary.AccountID,
-		TeamId:     boundary.TeamID,
+		AccountID:  boundary.AccountID,
+		TeamID:     boundary.TeamID,
 		TeamName:   boundary.TeamName,
 		TeamDomain: boundary.TeamDomain,
 	}
 }
 
-func manifestAccess(app *manifest.Application, config provider.ProviderConfig) *idpv1.ApplicationAccess {
+func manifestAccess(app *manifest.Application, config provider.ProviderConfig) *gateway.AccessInput {
 	postureRequired := config.Posture.Enabled
 	if app.Access.PostureRequired != nil {
 		postureRequired = *app.Access.PostureRequired
 	} else if config.Organization.PostureRequiredForZone(app.ResolvedTrustZone()) {
 		postureRequired = true
 	}
-	return &idpv1.ApplicationAccess{
+	return &gateway.AccessInput{
 		AllowedGroups:   app.Access.AllowedGroups,
-		AllowedIdps:     app.Access.AllowedIdPs,
+		AllowedIdPs:     app.Access.AllowedIdPs,
 		PostureRequired: postureRequired,
 	}
+}
+
+func Register(ctx context.Context, name, endpoint, description string, skipCodegen bool) {
+	root := platform.RepoRoot()
+	loaded := manifest.Load(root)
+	result := registerApplication(ctx, root, loaded, name, endpoint, description, skipCodegen)
+	platform.SyncDiscovery(ctx)
+	output.PrintJSON(result)
 }
 
 func registerApplication(
@@ -286,12 +236,9 @@ func registerApplication(
 		description = descriptionOverride
 	}
 
-	// Applications without a proto package are client-only principals
-	// (confidential web clients, connectors): they register for a service
-	// credential and delegations but expose no RPC resources of their own.
-	resources, fullNames, hasProto := applicationResources(root, name)
-	if !hasProto {
-		output.Logger.Info("no proto package; registering client-only application", "application", name)
+	resources, hasResources := applicationResources(root, name)
+	if !hasResources {
+		output.Logger.Info("no HTTP resources; registering client-only application", "application", name)
 	}
 	providerConfig := provider.LoadConfig(root)
 	impersonationClientID := ""
@@ -302,7 +249,7 @@ func registerApplication(
 	}
 	providerOAuthClientID, providerOAuth := provisionProviderOAuth(ctx, name, app, providerConfig)
 	s := platform.Session(ctx)
-	response, err := s.RegistryClient().RegisterApplication(ctx, connect.NewRequest(&idpv1.RegisterApplicationRequest{
+	response, err := s.RegisterApplicationHTTP(ctx, gateway.RegisterApplicationInput{
 		Name:                        name,
 		Endpoint:                    endpoint,
 		Description:                 description,
@@ -312,29 +259,29 @@ func registerApplication(
 		TrustBoundary:               manifestTrustBoundary(app, providerConfig),
 		Access:                      manifestAccess(app, providerConfig),
 		TrustZone:                   app.ResolvedTrustZone(),
-		ImpersonationAccessClientId: impersonationClientID,
-		ProviderOauthClientId:       providerOAuthClientID,
+		ImpersonationAccessClientID: impersonationClientID,
+		ProviderOauthClientID:       providerOAuthClientID,
 		ProviderOauthScopes:         app.ProviderAPIScopes,
-	}))
+	})
 	if err != nil {
 		output.Fail("register application: %v", err)
 	}
 
 	if !skipCodegen {
-		if hasProto {
-			generateCode(root, name)
+		if hasResources || app.BrowserAuthClient {
+			generatePlatform(root)
 		} else if err := bffgen.Generate(root, name); err != nil {
 			output.Fail("generate bff worker for %s: %v", name, err)
 		}
 	}
 
 	var credential *sdksecrets.ClientCredential
-	if response.Msg.Credential.GetClientId() != "" {
+	if cred, ok := sdksecrets.ServiceClientCredential(response.Credential.ClientID, response.Credential.ClientSecret); ok {
 		credential = secrets.StoreServiceCredential(
 			ctx,
 			name,
-			response.Msg.Credential.GetClientId(),
-			response.Msg.Credential.GetClientSecret(),
+			cred.ClientID,
+			cred.ClientSecret,
 			app.Provider(),
 		)
 	} else if existing := platform.CredentialDocument(root, name); existing != nil {
@@ -343,7 +290,11 @@ func registerApplication(
 	} else {
 		output.Logger.Info("application has a registered client but no local credential; run platy app rotate-client", "application", name)
 	}
-	document := applications.Document(response.Msg.Application, s.GatewayURL(), credential, providerOAuth, fullNames)
+	registered := &discovery.Application{}
+	if err := json.Unmarshal(response.Application, registered); err != nil {
+		output.Fail("decode registered application: %v", err)
+	}
+	document := applications.Document(registered, s.GatewayURL(), credential, providerOAuth)
 	applications.MergeRepoMetadata(root, document)
 	applications.WriteRepoMetadata(root, document)
 	syncGatewayProviderOAuthVars(root)
@@ -357,7 +308,7 @@ func registerApplication(
 	}
 	platform.Session(ctx).InvalidateDiscovery()
 	return map[string]any{
-		"application": applications.JSON(response.Msg.Application),
+		"application": applications.JSON(registered),
 		"credential":  credential,
 	}
 }
@@ -374,28 +325,29 @@ func Sync(ctx context.Context, prune bool) {
 }
 
 func List(ctx context.Context) {
-	response, err := platform.Session(ctx).RegistryClient().ListApplications(ctx, connect.NewRequest(&idpv1.ListApplicationsRequest{}))
+	apps, err := platform.Session(ctx).ListApplicationsHTTP(ctx)
 	if err != nil {
 		output.Fail("list applications: %v", err)
 	}
-	for index, registered := range response.Msg.Applications {
+	for index := range apps {
 		if index > 0 {
 			output.PrintLines("")
 		}
-		display.PrintApplicationSummary(applications.Document(registered, "", nil, nil, nil))
+		app := apps[index]
+		display.PrintApplicationSummary(applications.Document(&app, "", nil, nil))
 	}
 }
 
 func Get(ctx context.Context, name string) {
-	response, err := platform.Session(ctx).RegistryClient().GetApplication(ctx, connect.NewRequest(&idpv1.GetApplicationRequest{Name: name}))
+	app, err := platform.Session(ctx).GetApplicationHTTP(ctx, name)
 	if err != nil {
 		output.Fail("get application: %v", err)
 	}
-	output.PrintJSON(applications.JSON(response.Msg.Application))
+	output.PrintJSON(applications.JSON(app))
 }
 
 func Delete(ctx context.Context, name string) {
-	response, err := platform.Session(ctx).RegistryClient().DeleteApplication(ctx, connect.NewRequest(&idpv1.DeleteApplicationRequest{Name: name}))
+	deleted, err := platform.Session(ctx).DeleteApplicationHTTP(ctx, name)
 	if err != nil {
 		output.Fail("delete application: %v", err)
 	}
@@ -403,19 +355,19 @@ func Delete(ctx context.Context, name string) {
 		output.Fail("remove application metadata: %v", err)
 	}
 	platform.SyncDiscovery(ctx)
-	output.PrintJSON(map[string]any{"deleted": response.Msg.Deleted, "name": name})
+	output.PrintJSON(map[string]any{"deleted": deleted, "name": name})
 }
 
 func RotateClient(ctx context.Context, name string) {
 	root := platform.RepoRoot()
 	loaded := manifest.Load(root)
-	provider := loaded.Application(name).Provider()
+	providerName := loaded.Application(name).Provider()
 	s := platform.Session(ctx)
-	response, err := s.RegistryClient().RegisterClient(ctx, connect.NewRequest(&idpv1.RegisterClientRequest{Application: name}))
+	credentialHTTP, err := s.RegisterClientHTTP(ctx, name)
 	if err != nil {
 		output.Fail("rotate client: %v", err)
 	}
-	credential := secrets.StoreServiceCredential(ctx, name, response.Msg.Credential.GetClientId(), response.Msg.Credential.GetClientSecret(), provider)
+	credential := secrets.StoreServiceCredential(ctx, name, credentialHTTP.ClientID, credentialHTTP.ClientSecret, providerName)
 	registered, err := s.Application(ctx, name)
 	if err != nil {
 		output.Fail("application metadata: %v", err)

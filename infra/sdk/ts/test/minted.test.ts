@@ -79,8 +79,8 @@ const gatewayFetch: typeof fetch = async (input, init) => {
   if (url === `${issuer}/api/discovery`) {
     return new Response(JSON.stringify({ error: "unauthenticated" }), { status: 401 });
   }
-  if (url === `${issuer}/idp.v1.DiscoveryService/Discover`) {
-    return new Response(JSON.stringify(discovery), {
+  if (url === `${issuer}/platform/gateway/v1/discovery`) {
+    return new Response(JSON.stringify({ data: discovery }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });

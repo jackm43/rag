@@ -1,4 +1,4 @@
-import { Code, ConnectError } from "@connectrpc/connect";
+import { OAuthError, OAuthErrorCode } from "./oauth-error";
 import { createLocalJWKSet, jwtVerify } from "jose";
 
 import { logger, resolveSecret } from "@platy/sdk";
@@ -58,7 +58,7 @@ const resolveProviderClient = async (env: Env, application: string) => {
   const clients = await parseProviderClients(env);
   const client = clients[application];
   if (!client) {
-    throw new ConnectError(`provider oauth client is not configured for ${application}`, Code.FailedPrecondition);
+    throw new OAuthError(`provider oauth client is not configured for ${application}`, OAuthErrorCode.FailedPrecondition);
   }
   return client;
 };
@@ -66,7 +66,7 @@ const resolveProviderClient = async (env: Env, application: string) => {
 const verifySubjectForApplication = async (env: Env, subjectToken: string, audience: string) => {
   const identity = await verifyGatewayStsToken(env, subjectToken, audience);
   if (!identity) {
-    throw new ConnectError("invalid subject token", Code.Unauthenticated);
+    throw new OAuthError("invalid subject token", OAuthErrorCode.Unauthenticated);
   }
   return identity;
 };
@@ -110,7 +110,7 @@ const refreshProviderAccessToken = async (
     error?: string;
   };
   if (!response.ok || !body.access_token) {
-    throw new ConnectError(`provider token refresh failed (${response.status})`, Code.Unauthenticated);
+    throw new OAuthError(`provider token refresh failed (${response.status})`, OAuthErrorCode.Unauthenticated);
   }
   return {
     access_token: body.access_token,
@@ -217,15 +217,15 @@ export const exchangeProviderAccessToken = async (
   const identity = await verifySubjectForApplication(env, subjectToken, application);
   const registered = await getApplication(env, application);
   if (!registered?.providerOauthClientId) {
-    throw new ConnectError(`application ${application} has no provider oauth client`, Code.FailedPrecondition);
+    throw new OAuthError(`application ${application} has no provider oauth client`, OAuthErrorCode.FailedPrecondition);
   }
   const grant = await getGrant(env, identity.subject, application);
   if (!grant) {
     const client = await resolveProviderClient(env, application);
     if (client.client_id !== registered.providerOauthClientId) {
-      throw new ConnectError(
+      throw new OAuthError(
         `provider oauth client_id mismatch for ${application}`,
-        Code.FailedPrecondition,
+        OAuthErrorCode.FailedPrecondition,
       );
     }
     return {

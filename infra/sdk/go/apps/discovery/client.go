@@ -4,23 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
-	"connectrpc.com/connect"
-
-	discoveryv1 "jsmunro.me/platy/applications/discovery/client/discovery/v1"
-	"jsmunro.me/platy/applications/discovery/client/discovery/v1/discoveryv1connect"
+	"jsmunro.me/platy/sdk/httpapi"
 )
 
 const DefaultCacheTTL = 5 * time.Minute
 
-// TokenSource supplies an STS token with the discovery audience for each
-// request the client makes.
 type TokenSource func(ctx context.Context) (string, error)
+
+type DPoPAttacher func(ctx context.Context, header http.Header, method, url, accessToken string) error
 
 type DelegationEdge struct {
 	Application string   `json:"application"`
@@ -32,15 +30,13 @@ type SyncState struct {
 	Applications int32 `json:"applications"`
 	Delegations  int32 `json:"delegations"`
 	Methods      int32 `json:"methods"`
-	SyncedAt     int64 `json:"synced_at"`
+	SyncedAt     int64 `json:"syncedAt"`
 }
 
-// Client reads the platform registry through the discovery application's
-// GraphQL Query RPC. Results are cached in process so one CLI invocation
-// performs at most one query.
 type Client struct {
 	Endpoint   string
 	Token      TokenSource
+	AttachDPoP DPoPAttacher
 	HTTPClient *http.Client
 	Logger     *slog.Logger
 	TTL        time.Duration
@@ -67,83 +63,88 @@ func (c *Client) logger() *slog.Logger {
 	return slog.Default()
 }
 
-type bearerInterceptor struct {
-	token TokenSource
-}
-
-func (i *bearerInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
-	return func(ctx context.Context, request connect.AnyRequest) (connect.AnyResponse, error) {
-		token, err := i.token(ctx)
-		if err != nil {
+func (c *Client) do(ctx context.Context, path string, body any) ([]byte, error) {
+	token, err := c.Token(ctx)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := httpapi.WrapData(body)
+	if err != nil {
+		return nil, err
+	}
+	url := c.Endpoint + path
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(payload)))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+token)
+	if c.AttachDPoP != nil {
+		if err := c.AttachDPoP(ctx, request.Header, http.MethodPost, url, token); err != nil {
 			return nil, err
 		}
-		request.Header().Set("Authorization", "Bearer "+token)
-		return next(ctx, request)
 	}
-}
-
-func (i *bearerInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
-	return next
-}
-
-func (i *bearerInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
-	return next
-}
-
-func (c *Client) rpc() discoveryv1connect.DiscoveryServiceClient {
 	httpClient := c.HTTPClient
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return discoveryv1connect.NewDiscoveryServiceClient(
-		httpClient,
-		c.Endpoint,
-		connect.WithProtoJSON(),
-		connect.WithInterceptors(&bearerInterceptor{token: c.Token}),
-	)
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 10<<20))
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("%s", httpapi.ErrorMessage(raw, response.StatusCode))
+	}
+	return httpapi.UnwrapData(raw)
 }
 
-// Query executes one GraphQL request and returns the raw data document.
-// GraphQL-level errors come back as one Go error.
 func (c *Client) Query(ctx context.Context, query string, variables map[string]any) (json.RawMessage, error) {
-	request := &discoveryv1.QueryRequest{Query: query}
+	body := map[string]any{"query": query}
 	if len(variables) > 0 {
-		encoded, err := json.Marshal(variables)
-		if err != nil {
-			return nil, fmt.Errorf("encode query variables: %w", err)
-		}
-		request.VariablesJson = string(encoded)
+		body["variables"] = variables
 	}
-	response, err := c.rpc().Query(ctx, connect.NewRequest(request))
+	payload, err := c.do(ctx, "/platform/discovery/v1/graphql/queries", body)
 	if err != nil {
 		return nil, fmt.Errorf("discovery query: %w", err)
 	}
-	if len(response.Msg.Errors) > 0 {
-		messages := make([]string, 0, len(response.Msg.Errors))
-		for _, queryError := range response.Msg.Errors {
-			messages = append(messages, queryError.GetMessage())
+	var response struct {
+		DataJSON string `json:"dataJson"`
+		Errors   []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(payload, &response); err != nil {
+		return nil, fmt.Errorf("discovery query decode: %w", err)
+	}
+	if len(response.Errors) > 0 {
+		messages := make([]string, 0, len(response.Errors))
+		for _, queryError := range response.Errors {
+			messages = append(messages, queryError.Message)
 		}
 		return nil, fmt.Errorf("discovery query: %s", strings.Join(messages, "; "))
 	}
-	if response.Msg.DataJson == "" {
+	if response.DataJSON == "" {
 		return nil, fmt.Errorf("discovery query returned no data")
 	}
-	return json.RawMessage(response.Msg.DataJson), nil
+	return json.RawMessage(response.DataJSON), nil
 }
 
-// Sync asks the discovery application to re-ingest the gateway registry.
 func (c *Client) Sync(ctx context.Context) (*SyncState, error) {
-	response, err := c.rpc().Sync(ctx, connect.NewRequest(&discoveryv1.SyncRequest{}))
+	payload, err := c.do(ctx, "/platform/discovery/v1/synchronisations", map[string]any{})
 	if err != nil {
 		return nil, fmt.Errorf("discovery sync: %w", err)
 	}
+	state := &SyncState{}
+	if err := json.Unmarshal(payload, state); err != nil {
+		return nil, fmt.Errorf("discovery sync decode: %w", err)
+	}
 	c.Invalidate()
-	return &SyncState{
-		Applications: response.Msg.Applications,
-		Delegations:  response.Msg.Delegations,
-		Methods:      response.Msg.Methods,
-		SyncedAt:     response.Msg.SyncedAt,
-	}, nil
+	return state, nil
 }
 
 func (c *Client) Invalidate() {
@@ -237,8 +238,6 @@ func (c *Client) registry(ctx context.Context) ([]*Application, []DelegationEdge
 	return apps, document.DelegationGraph, nil
 }
 
-// ListApplications returns every registered application with its audience,
-// endpoint, and resources/methods (scope and qualified name).
 func (c *Client) ListApplications(ctx context.Context) ([]*Application, error) {
 	apps, _, err := c.registry(ctx)
 	if err != nil {
@@ -261,7 +260,6 @@ func (c *Client) Application(ctx context.Context, name string) (*Application, er
 	return nil, fmt.Errorf("application %s is not registered with the discovery service", name)
 }
 
-// DelegationGraph returns every delegation edge in the registry.
 func (c *Client) DelegationGraph(ctx context.Context) ([]DelegationEdge, error) {
 	_, edges, err := c.registry(ctx)
 	if err != nil {

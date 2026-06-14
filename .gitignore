@@ -1,26 +1,16 @@
 node_modules
-infra/roo/docs/roo_*
 .wrangler
 dist
 *.log
-/platy
-/roo
-infra/cli/cli
-infra/tools/protoc-gen-platy-clients
 .env
 .dev.vars
 .platy/
-*.pb.go
-*_pb.ts
-# Generated protobuf and Connect code (regenerate with infra/scripts/generate.sh)
-infra/applications/*/client/
-infra/applications/*/server/
 
 # Web client bundles (regenerate with npm run chat:build / console:build)
 infra/applications/chat/worker/public/app.js
 infra/applications/console/worker/public/app.js
 
-# Terraform metadata and registration outputs (regenerate with terraform apply / platy app sync)
+# Terraform metadata and registration outputs (regenerate with terraform apply)
 infra/applications/provider_config.json
 infra/applications/client_metadata.json
 infra/applications/*/metadata.json
@@ -29,3 +19,5 @@ infra/applications/*/metadata.json
 infra/terraform/.terraform/
 infra/terraform/*.tfstate
 infra/terraform/*.tfstate.*
+platy
+roo

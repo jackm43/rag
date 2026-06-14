@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Client } from "@connectrpc/connect";
 
-import type { DiscoveryService } from "../../discovery/server/discovery/v1/discovery_service_pb";
-
-import { delegationGraphQuery, queryDiscovery, type DelegationEdge } from "../../discovery/web";
+import { delegationGraphQuery, queryDiscovery, type DelegationEdge, type DiscoveryClient } from "../../discovery/web";
 import { useAuth } from "@platy/web/react";
 
 // Delegation graph view: a bipartite SVG rendering of the registry's
@@ -19,7 +16,7 @@ const PAD_TOP = 12;
 export function Delegations({
   discovery,
 }: {
-  discovery: Client<typeof DiscoveryService> | null;
+  discovery: DiscoveryClient | null;
 }) {
   const { signedIn } = useAuth();
   const [edges, setEdges] = useState<DelegationEdge[]>([]);

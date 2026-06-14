@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"jsmunro.me/platy/cli/internal/output"
 	"jsmunro.me/platy/cli/internal/secrets"
 	"jsmunro.me/platy/cli/internal/wrangler"
+	sdksecrets "jsmunro.me/platy/sdk/secrets"
 )
 
 // ResolvedProviderOAuthClients gathers every oauth-mode application's
@@ -69,8 +71,45 @@ func PushProviderOAuthClients(root string, env []string, out io.Writer, payload 
 	return wrangler.Run(root, env, string(body), out, "secret", "bulk", "-c", app.Config)
 }
 
+func syncGatewayProviderOAuthSecretsStore(ctx context.Context, root string, payload map[string]string) error {
+	encoded := payload["PROVIDER_OAUTH_CLIENTS"]
+	if encoded == "" {
+		return nil
+	}
+	loaded := manifest.Load(root)
+	app := loaded.Application("idp")
+	factory := secrets.CloudflareSecretsStoreFactory(root)
+	reference, err := factory.SyncWorkerSecret(ctx, "idp", "PROVIDER_OAUTH_CLIENTS", encoded)
+	if err != nil {
+		return fmt.Errorf("sync provider oauth secrets store: %w", err)
+	}
+	storeID, err := factory.EnsureStore(ctx)
+	if err != nil {
+		return fmt.Errorf("ensure secrets store: %w", err)
+	}
+	_, secretName, ok := sdksecrets.ParseCFSSReference(reference)
+	if !ok {
+		return fmt.Errorf("invalid synced reference for PROVIDER_OAUTH_CLIENTS")
+	}
+	configPath := filepath.Join(root, filepath.FromSlash(app.Config))
+	return manifest.InjectSecretsStoreBindings(configPath, storeID, []manifest.SecretsStoreBinding{{
+		Binding:    "PROVIDER_OAUTH_CLIENTS",
+		StoreID:    storeID,
+		SecretName: secretName,
+	}})
+}
+
 func pushGatewayProviderOAuthSecrets(ctx context.Context, root string, env []string) error {
-	return PushProviderOAuthClients(root, env, nil, ResolvedProviderOAuthClients(ctx, root))
+	payload := ResolvedProviderOAuthClients(ctx, root)
+	if len(payload) == 0 {
+		return nil
+	}
+	loaded := manifest.Load(root)
+	if loaded.Application("idp").UsesSecretsStore() {
+		output.Logger.Info("syncing provider oauth clients to gateway secrets store", "keys", len(payload))
+		return syncGatewayProviderOAuthSecretsStore(ctx, root, payload)
+	}
+	return PushProviderOAuthClients(root, env, nil, payload)
 }
 
 func PushGatewayProviderOAuthSecrets(ctx context.Context, root string, env []string) {

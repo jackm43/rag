@@ -5,6 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./oauth2/dpop": "./src/oauth2/dpop.ts"
+    "./http": "./src/http/index.ts",
+    "./oauth2/dpop": "./src/oauth2/dpop.ts",
+    "./client/platform-auth": "./src/client/platform-auth.ts",
+    "./client/platform-web": "./src/client/platform-web.ts"
   }
 }

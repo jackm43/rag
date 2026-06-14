@@ -17,23 +17,40 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "run_worker_first": [
-      "/ragbot.v1.*"
+      "/client/*",
+      "/platform/aigateway/v1/*",
+      "/platform/applications/v1/*",
+      "/platform/deploy/v1/*",
+      "/platform/gateway/v1/*",
+      "/platform/ragbot/v1/*",
+      "/platform/traces/v1/*"
     ]
   },
   "vars": {
+    "PLATY_APPLICATION": "ragbot",
     "AUTH_GATEWAY_URL": "https://auth-gateway.jsmunro.me",
     "AIGATEWAY_ENDPOINT": "https://aigateway.jsmunro.me",
+    "DEPLOY_ENDPOINT": "https://deploy.jsmunro.me",
+    "RAGBOT_ENDPOINT": "https://ragbot.jsmunro.me",
     "ALLOWED_GUILD_IDS": "457689460096630794",
     "OTEL_SERVICE_NAME": "ragbot"
   },
   "services": [
     {
+      "binding": "AIGATEWAY",
+      "service": "aigateway"
+    },
+    {
       "binding": "AUTH_GATEWAY",
       "service": "auth-gateway"
     },
     {
-      "binding": "AIGATEWAY",
-      "service": "aigateway"
+      "binding": "DEPLOY",
+      "service": "deploy"
+    },
+    {
+      "binding": "RAGBOT",
+      "service": "ragbot-worker"
     }
   ],
   "d1_databases": [
@@ -82,5 +99,27 @@
         "dead_letter_queue": "ai-jobs-dlq"
       }
     ]
+  },
+  "secrets_store_secrets": [
+  {
+    "binding": "DISCORD_BOT_TOKEN",
+    "store_id": "2bca8b5b9f7a46999c37ff8eafbf7ba3",
+    "secret_name": "platy-ragbot-discord-bot-token"
+  },
+  {
+    "binding": "SERVICE_CLIENT_SECRET",
+    "store_id": "2bca8b5b9f7a46999c37ff8eafbf7ba3",
+    "secret_name": "platy-ragbot-service-client-secret"
+  },
+  {
+    "binding": "DISCORD_APPLICATION_ID",
+    "store_id": "2bca8b5b9f7a46999c37ff8eafbf7ba3",
+    "secret_name": "platy-ragbot-discord-application-id"
+  },
+  {
+    "binding": "DISCORD_PUBLIC_KEY",
+    "store_id": "2bca8b5b9f7a46999c37ff8eafbf7ba3",
+    "secret_name": "platy-ragbot-discord-public-key"
   }
+]
 }

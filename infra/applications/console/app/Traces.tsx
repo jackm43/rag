@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { idp } from "../../idp/web";
-import type { TraceSummary } from "../../idp/server/idp/v1/trace_service_pb";
+import { createPlatformWebClient, type TraceSummary } from "@platy/web";
 import {
   registerChatInstance,
   type ChatInstance,
@@ -133,7 +132,7 @@ function Waterfall({ spans }: { spans: SpanRow[] }) {
 
 export function Traces() {
   const { auth, signedIn } = useAuth();
-  const traceClient = useMemo(() => idp.traceServiceClient(auth), [auth]);
+  const traceClient = useMemo(() => createPlatformWebClient(auth, "idp").traceServiceClient(), [auth]);
   const [summaries, setSummaries] = useState<TraceSummary[]>([]);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [detailSpans, setDetailSpans] = useState<SpanRow[]>([]);
@@ -177,7 +176,7 @@ export function Traces() {
     setDetailSpans([]);
     try {
       const result = await traceClient.getTrace({ traceId });
-      setDetailSpans(result.spans.map(parseSpan).sort((a, b) => a.startMs - b.startMs));
+      setDetailSpans((result.spans ?? []).map(parseSpan).sort((a: SpanRow, b: SpanRow) => a.startMs - b.startMs));
     } catch (err) {
       setNote((err as Error).message);
     }
@@ -200,15 +199,16 @@ export function Traces() {
     while (!abort.signal.aborted) {
       try {
         setLiveNote("streaming");
-        const client = idp.traceServiceClient(
+        const client = createPlatformWebClient(
           auth,
+          "idp",
           tracingIdentity.current ? { headers: tracingIdentity.current.headers } : {},
-        );
+        ).traceServiceClient();
         for await (const message of client.streamTraces({}, { signal: abort.signal })) {
           const span = message.span;
           if (!span) continue;
           // Don't render the tail's own polling as traffic.
-          if (span.name.includes("TraceService/StreamTraces")) continue;
+          if (span.name.includes("streamTraces")) continue;
           const live = parseSpan(span);
           setLiveTraces((current) => {
             const next = [...current];

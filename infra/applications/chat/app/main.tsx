@@ -18,10 +18,9 @@ const mount = (auth: BrowserAuth) => {
 };
 
 (async () => {
-  // Discovery and all API calls are same-origin: zone routes put the gateway
-  // (/idp.v1.*, /api/*, jwks) and the AI Gateway (/aigateway.v1.*) on this
-  // host, so no CORS is involved. One call handles discovery, the OIDC
-  // callback, and silent refresh / login redirect.
+  // Discovery and API calls are same-origin: zone routes put the gateway on
+  // auth-gateway.jsmunro.me; the BFF proxies /platform/aigateway/v1/* and
+  // /platform/ragbot/v1/* on this host.
   try {
     const { auth, status } = await BrowserAuth.bootstrap(`${location.origin}/api/discovery`, {
       sameOrigin: ["gateway", "idp", "aigateway", "ragbot"],

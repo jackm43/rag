@@ -33,14 +33,16 @@ func registryServer(t *testing.T, queries *int) *httptest.Server {
 			t.Errorf("missing bearer token, got %q", r.Header.Get("Authorization"))
 		}
 		switch r.URL.Path {
-		case "/discovery.v1.DiscoveryService/Query":
+		case "/platform/discovery/v1/graphql/queries":
 			*queries++
 			w.Header().Set("Content-Type", "application/json")
-			payload, _ := json.Marshal(map[string]any{"dataJson": testRegistry})
+			payload, _ := json.Marshal(map[string]any{
+				"data": map[string]any{"dataJson": testRegistry},
+			})
 			w.Write(payload)
-		case "/discovery.v1.DiscoveryService/Sync":
+		case "/platform/discovery/v1/synchronisations":
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"applications": 1, "delegations": 1, "methods": 1, "syncedAt": "42"}`))
+			w.Write([]byte(`{"data":{"applications":1,"delegations":1,"methods":1,"syncedAt":42}}`))
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -66,13 +68,6 @@ func TestListApplicationsCachesOneQuery(t *testing.T) {
 	}
 	if len(apps) != 1 || apps[0].Name != "ragbot" || apps[0].Audience != "ragbot" {
 		t.Fatalf("unexpected applications: %+v", apps)
-	}
-	path, err := apps[0].MethodPath("ConfigService", "ListConfig")
-	if err != nil {
-		t.Fatalf("MethodPath: %v", err)
-	}
-	if path != "/ragbot.v1.ConfigService/ListConfig" {
-		t.Fatalf("unexpected method path %s", path)
 	}
 
 	edges, err := client.DelegationGraph(context.Background())

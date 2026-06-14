@@ -1,5 +1,3 @@
-import { Code, ConnectError } from "@connectrpc/connect";
-
 type ExchangeProviderTokenResponse = {
   accessToken?: string;
   expiresIn?: number | string;
@@ -12,6 +10,13 @@ export type ProviderAccessToken = {
   expiresIn: number;
 };
 
+export class ProviderExchangeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderExchangeError";
+  }
+}
+
 export const exchangeProviderAccessToken = async (
   gatewayURL: string,
   application: string,
@@ -19,27 +24,31 @@ export const exchangeProviderAccessToken = async (
   gatewayFetch: typeof fetch = fetch,
 ): Promise<ProviderAccessToken> => {
   const response = await gatewayFetch(
-    `${gatewayURL.replace(/\/$/, "")}/idp.v1.IdentityService/ExchangeProviderToken`,
+    `${gatewayURL.replace(/\/$/, "")}/platform/gateway/v1/provider/token/exchanges`,
     {
       method: "POST",
       headers: {
         authorization,
         "content-type": "application/json",
-        "connect-protocol-version": "1",
       },
-      body: JSON.stringify({ application }),
+      body: JSON.stringify({ data: { application } }),
     },
   );
-  const body = (await response.json()) as ExchangeProviderTokenResponse;
+  const envelope = (await response.json()) as {
+    data?: ExchangeProviderTokenResponse;
+    errors?: Array<{ detail?: string; title?: string }>;
+  };
+  const body = envelope.data ?? {};
   if (!response.ok) {
-    throw new ConnectError(body.message ?? `provider token exchange failed (${response.status})`, Code.Internal);
-  }
-  if (body.authorizeUrl) {
-    throw new ConnectError(`provider authorization required: ${body.authorizeUrl}`, Code.FailedPrecondition);
+    throw new ProviderExchangeError(
+      envelope.errors?.[0]?.detail ?? body.message ?? `provider token exchange failed (${response.status})`,
+    );
   }
   if (!body.accessToken) {
-    throw new ConnectError("provider token exchange returned no access token", Code.Internal);
+    throw new ProviderExchangeError(body.message ?? "provider authorization required");
   }
-  const expiresIn = Number(body.expiresIn ?? 300);
-  return { accessToken: body.accessToken, expiresIn: Number.isFinite(expiresIn) ? expiresIn : 300 };
+  return {
+    accessToken: body.accessToken,
+    expiresIn: Number(body.expiresIn ?? 300),
+  };
 };

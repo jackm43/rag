@@ -32,36 +32,15 @@ const jwtSubject = (token: string): string => {
   return decoded.sub ?? TEST_SERVICE_CLIENT_ID;
 };
 
-const envelopConnectJSON = (payload: string, flags = 0) => {
-  const body = new TextEncoder().encode(payload);
-  const frame = new Uint8Array(5 + body.length);
-  frame[0] = flags;
-  new DataView(frame.buffer).setUint32(1, body.length, false);
-  frame.set(body, 5);
-  return frame;
-};
-
-const END_STREAM_FLAG = 0b00000010;
-
-const readConnectJsonBody = async (init?: RequestInit): Promise<Record<string, unknown>> => {
+const readJsonBody = async (init?: RequestInit): Promise<Record<string, unknown>> => {
   if (!init?.body) {
     return {};
   }
-  let bytes: Uint8Array;
-  if (typeof init.body === "string") {
-    bytes = new TextEncoder().encode(init.body);
-  } else if (init.body instanceof Uint8Array) {
-    bytes = init.body;
-  } else {
-    bytes = new Uint8Array(await new Response(init.body as BodyInit).arrayBuffer());
-  }
-  if (bytes.length >= 5) {
-    const length = new DataView(bytes.buffer, bytes.byteOffset + 1, 4).getUint32(0, false);
-    if (5 + length <= bytes.length) {
-      return JSON.parse(new TextDecoder().decode(bytes.slice(5, 5 + length))) as Record<string, unknown>;
-    }
-  }
-  return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+  const text = typeof init.body === "string"
+    ? init.body
+    : new TextDecoder().decode(await new Response(init.body as BodyInit).arrayBuffer());
+  const parsed = JSON.parse(text) as { data?: Record<string, unknown> };
+  return parsed.data ?? parsed;
 };
 
 export const createAigatewayTestHarness = await (async () => {
@@ -72,18 +51,44 @@ export const createAigatewayTestHarness = await (async () => {
   jwk.use = "sig";
 
   const discovery = {
+    issuer: GATEWAY_ISSUER,
+    jwksUri: `${GATEWAY_ISSUER}/.well-known/jwks.json`,
+    endpoints: {
+      tokenExchange: `${GATEWAY_ISSUER}/oauth/token`,
+      tokenRevoke: `${GATEWAY_ISSUER}/oauth/revoke`,
+      introspect: `${GATEWAY_ISSUER}/oauth/introspect`,
+      discovery: `${GATEWAY_ISSUER}/api/discovery`,
+      jwks: `${GATEWAY_ISSUER}/.well-known/jwks.json`,
+    },
+    oidc: {
+      issuer: "https://access.test",
+      clientId: "access-client",
+      authorizationEndpoint: "https://access.test/authorization",
+      tokenEndpoint: "https://access.test/token",
+      jwksEndpoint: "https://access.test/jwks",
+    },
     applications: [
       {
         name: "ragbot",
+        audience: "ragbot",
+        endpoint: "https://example.com",
         delegations: [
           {
             audience: "aigateway",
             scopes: ["aigateway/ChatService.Complete", "aigateway/ChatService.StreamComplete"],
           },
         ],
+        resources: [],
       },
-      { name: "aigateway", delegations: [{ audience: "ragbot", scopes: [] }] },
+      {
+        name: "aigateway",
+        audience: "aigateway",
+        endpoint: "https://aigateway.test",
+        delegations: [{ audience: "ragbot", scopes: [] }],
+        resources: [],
+      },
     ],
+    provider: {},
   };
 
   const signToken = (options: {
@@ -114,26 +119,20 @@ export const createAigatewayTestHarness = await (async () => {
     }
     if (url === `${GATEWAY_ISSUER}/api/discovery?view=bootstrap`) {
       return Response.json({
-        endpoints: {
-          token_exchange: `${GATEWAY_ISSUER}/oauth/token`,
-          token_revoke: `${GATEWAY_ISSUER}/oauth/revoke`,
-          introspect: `${GATEWAY_ISSUER}/oauth/introspect`,
-          discovery: `${GATEWAY_ISSUER}/api/discovery`,
-          jwks: `${GATEWAY_ISSUER}/.well-known/jwks.json`,
-        },
+        endpoints: discovery.endpoints,
         oidc: {
-          issuer: "https://access.test",
-          client_id: "access-client",
-          authorization_endpoint: "https://access.test/authorization",
-          token_endpoint: "https://access.test/token",
-          jwks_endpoint: "https://access.test/jwks",
+          issuer: discovery.oidc.issuer,
+          client_id: discovery.oidc.clientId,
+          authorization_endpoint: discovery.oidc.authorizationEndpoint,
+          token_endpoint: discovery.oidc.tokenEndpoint,
+          jwks_endpoint: discovery.oidc.jwksEndpoint,
         },
       });
     }
     if (url === `${GATEWAY_ISSUER}/api/discovery`) {
       return new Response(JSON.stringify({ error: "unauthenticated" }), { status: 401 });
     }
-    if (url.endsWith("/idp.v1.DiscoveryService/Discover")) {
+    if (url.endsWith("/platform/gateway/v1/discovery")) {
       const headers = new Headers(init?.headers);
       if (input instanceof Request) {
         input.headers.forEach((value, key) => headers.set(key, value));
@@ -141,7 +140,7 @@ export const createAigatewayTestHarness = await (async () => {
       if (!headers.get("authorization")) {
         return new Response("unauthenticated", { status: 401 });
       }
-      return Response.json(discovery);
+      return Response.json({ data: discovery });
     }
     if (url === `${GATEWAY_ISSUER}/oauth/token`) {
       const body = new URLSearchParams(String(init?.body ?? ""));
@@ -183,53 +182,54 @@ export const createAigatewayTestHarness = await (async () => {
 
     const aigatewayFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = new URL(String(input instanceof Request ? input.url : input));
-      const body = (await readConnectJsonBody(init)) as AiCompleteRequest;
+      const body = await readJsonBody(init);
+      const request: AiCompleteRequest = {
+        model: String(body.model ?? ""),
+        messages: (body.messages as AiCompleteRequest["messages"]) ?? [],
+        maxTokens: body.maxTokens as number | undefined,
+        temperature: body.temperature as number | undefined,
+      };
 
-      if (url.pathname.endsWith("/StreamComplete")) {
+      if (url.pathname.endsWith("/chat/completions/stream")) {
         const stream = options.stream?.() ?? {
           deltas: ["Hel", "lo"],
-          final: { content: "Hello", model: body.model },
+          final: { content: "Hello", model: request.model },
         };
+        const encoder = new TextEncoder();
         const responseStream = new ReadableStream({
           start(controller) {
             for (const delta of stream.deltas) {
-              controller.enqueue(envelopConnectJSON(JSON.stringify({ delta, done: false })));
+              controller.enqueue(encoder.encode(`${JSON.stringify({ delta, done: false })}\n`));
             }
-            controller.enqueue(
-              envelopConnectJSON(
-                JSON.stringify({
-                  delta: "",
-                  done: true,
-                  content: stream.final.content,
-                  model: stream.final.model ?? body.model,
-                  finishReason: "stop",
-                  durationMs: "1",
-                  usage: { promptTokens: "0", completionTokens: "0", totalTokens: "0" },
-                }),
-              ),
-            );
-            controller.enqueue(envelopConnectJSON("{}", END_STREAM_FLAG));
+            controller.enqueue(encoder.encode(`${JSON.stringify({
+              delta: "",
+              done: true,
+              content: stream.final.content,
+              model: stream.final.model ?? request.model,
+              finishReason: "stop",
+              durationMs: 1,
+              usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+            })}\n`));
             controller.close();
           },
         });
         return new Response(responseStream, {
-          headers: {
-            "content-type": "application/connect+json",
-            "connect-content-encoding": "identity",
-          },
+          headers: { "content-type": "application/x-ndjson" },
         });
       }
 
-      completeCalls.push(body);
+      completeCalls.push(request);
       const result =
-        options.complete?.(body, completeIndex++) ??
-        ({ content: "Short answer.", model: body.model } satisfies { content: string; model?: string });
+        options.complete?.(request, completeIndex++) ??
+        ({ content: "Short answer.", model: request.model } satisfies { content: string; model?: string });
       return Response.json({
-        content: result.content,
-        model: result.model ?? body.model,
-        finishReason: "stop",
-        usage: { promptTokens: "0", completionTokens: "0", totalTokens: "0" },
-        durationMs: "1",
+        data: {
+          content: result.content,
+          model: result.model ?? request.model,
+          finishReason: "stop",
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          durationMs: 1,
+        },
       });
     };
 
