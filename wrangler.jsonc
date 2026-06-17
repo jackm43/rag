@@ -1,0 +1,77 @@
+{
+  "name": "ragbot-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "ragbot.jsmunro.me",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "DISCORD_APPLICATION_ID": "1496842508251172895",
+    // Cloudflare Access for SaaS (OIDC) application that issues admin API
+    // tokens. ACCESS_TEAM_DOMAIN is https://<team>.cloudflareaccess.com and
+    // ACCESS_OIDC_CLIENT_ID is the oidc_client_id Terraform output. The admin
+    // API rejects all requests until both are set.
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_OIDC_CLIENT_ID": "",
+    // When set with the CF_AIG_TOKEN secret and ai_gateway_id config key,
+    // ragbot calls Cloudflare AI Gateway directly without the proto stack.
+    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ragbot",
+      "database_id": "97005495-76d4-49af-ab5f-1c130e54ee2a",
+      "preview_database_id": "97005495-76d4-49af-ab5f-1c130e54ee2a"
+    }
+  ],
+  "ai": {
+    "binding": "AI"
+  },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DISCORD_GATEWAY",
+        "class_name": "DiscordGateway"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": [
+        "DiscordGateway"
+      ]
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "AI_JOBS",
+        "queue": "ai-jobs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "ai-jobs",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 2,
+        "dead_letter_queue": "ai-jobs-dlq"
+      }
+    ]
+  }
+}
