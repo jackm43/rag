@@ -1,5 +1,5 @@
 {
-  "model": "@cf/meta/llama-3.2-1b-instruct",
+  "model": "google/gemini-3.5-flash",
   "maxTokens": 64,
   "temperature": 0.95,
   "gatewayId": "platy"

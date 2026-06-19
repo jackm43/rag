@@ -20,7 +20,7 @@ This project expects these environment variables:
   - `src/gateway.ts` `DiscordGateway` Durable Object (`DISCORD_GATEWAY` binding)
   - `src/access.ts` OIDC token verification against the Access application JWKS
   - `src/mention.ts` mention handling and AI queue consumer (channel history context)
-  - `src/ai.ts` model-agnostic chat calls (Workers AI `@cf/...` and partner models such as `xai/grok-4.3`), optional AI Gateway routing
+  - `src/ai.ts` model-agnostic chat calls through the Workers AI binding (`env.AI.run`), with AI Gateway routing via binding options (`gateway: { id }`) for Workers AI `@cf/...` models and Unified Billing partner models such as `grok/grok-4.3`
   - `src/config.ts` loads source-controlled AI config from `src/ai-config`
   - `src/admin.ts` Cloudflare Access protected admin API
   - `src/logger.ts` structured logging
@@ -43,9 +43,9 @@ This project expects these environment variables:
 ## Runtime Configuration
 
 AI config lives in `src/ai-config`:
-- `discord-response.json`: mention response model, max tokens, temperature, channel history limit, AI Gateway id
+- `discord-response.json`: mention response model, max tokens, temperature, channel history limit, AI Gateway id used by the AI binding
 - `discord-response-system-prompt.md`: mention response system prompt
-- `rag-roast.json`: `/rag` roast model, max tokens, temperature, AI Gateway id
+- `rag-roast.json`: `/rag` roast model, max tokens, temperature, AI Gateway id used by the AI binding
 - `rag-roast-system-prompt.md`: `/rag` roast system prompt
 
 Inspect runtime state with the CLI:

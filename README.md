@@ -7,7 +7,7 @@ Cloudflare Worker Discord bot for rag tracking and mention-triggered AI replies.
 - Runtime: Cloudflare Workers (`src/index.ts`)
 - Language: TypeScript
 - Database: Cloudflare D1 (`DB`)
-- AI: Workers AI binding (`AI`); model and prompt config live in `src/ai-config` (`@cf/...` Workers AI models or partner models such as `xai/grok-4.3`), optionally routed through AI Gateway
+- AI: Workers AI binding (`AI`); model and prompt config live in `src/ai-config` (`@cf/...` Workers AI models or Unified Billing partner models such as `grok/grok-4.3`), routed through AI Gateway with binding options when a gateway id is configured
 - Queue: Cloudflare Queues (`AI_JOBS`, `ai-jobs`, `ai-jobs-dlq`)
 - Stateful connection: Durable Objects (`DiscordGateway`)
 - Admin auth: Cloudflare Access for SaaS as OIDC identity provider (authorization code + PKCE, Cloudflare-managed refresh tokens)

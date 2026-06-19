@@ -23,15 +23,13 @@
   ],
   "vars": {
     "DISCORD_APPLICATION_ID": "1496842508251172895",
+    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
     // Cloudflare Access for SaaS (OIDC) application that issues admin API
     // tokens. ACCESS_TEAM_DOMAIN is https://<team>.cloudflareaccess.com and
     // ACCESS_OIDC_CLIENT_ID is the oidc_client_id Terraform output. The admin
     // API rejects all requests until both are set.
     "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_OIDC_CLIENT_ID": "",
-    // When set with the CF_AIG_TOKEN secret and gatewayId in src/ai-config,
-    // ragbot calls Cloudflare AI Gateway directly without the proto stack.
-    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271"
+    "ACCESS_OIDC_CLIENT_ID": ""
   },
   "d1_databases": [
     {
