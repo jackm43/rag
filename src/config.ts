@@ -1,22 +1,40 @@
-import { errorMessage, logger } from "./logger";
+import responseConfig from "./ai-config/discord-response.json";
+import roastConfig from "./ai-config/rag-roast.json";
 import type { Env } from "./types";
 
+const isNodeRuntime = () =>
+  typeof process !== "undefined" &&
+  process.versions?.node !== undefined &&
+  process.versions?.workerd === undefined &&
+  typeof WebSocketPair === "undefined";
+
+const readPromptFile = async (filename: string) => {
+  const fs = await import("node:fs/promises");
+  return fs.readFile(new URL(`./ai-config/${filename}`, import.meta.url), "utf8");
+};
+
+const loadResponseSystemPrompt = async () =>
+  isNodeRuntime()
+    ? readPromptFile("discord-response-system-prompt.md")
+    : (await import("./ai-config/discord-response-system-prompt.md")).default;
+
+const loadRoastSystemPrompt = async () =>
+  isNodeRuntime()
+    ? readPromptFile("rag-roast-system-prompt.md")
+    : (await import("./ai-config/rag-roast-system-prompt.md")).default;
+
 export const CONFIG_DEFAULTS = {
-  ai_response_model: "@cf/meta/llama-3.1-8b-instruct",
-  ai_roast_model: "@cf/meta/llama-3.1-8b-instruct",
-  ai_system_prompt:
-    "You are Ragbot, a bot in a casual Discord server for friends. Reply in plain text, briefly and directly. Default to one or two short sentences and match the length of your reply to the question. Dry humour is welcome when it fits, but never force banter and never pad your answers. Only write something long when the question genuinely needs it.",
-  ai_roast_system_prompt:
-    "You are a sharp, inventive roast writer for a Discord 'rag' bot. Write ONE original roast sentence under 140 characters teasing both people by display name. Be creative and specific: vary your imagery, reach for unexpected comparisons, and never settle for generic or formulaic phrasing. Plain text only, exactly one sentence. Never include @ mentions, Discord IDs, tags, or handles. Be playful and a little mean, never genuinely cruel.",
-  ai_max_tokens: "256",
-  ai_temperature: "0.7",
-  ai_history_limit: "12",
-  ai_gateway_id: "",
+  ai_response_model: responseConfig.model,
+  ai_roast_model: roastConfig.model,
+  ai_system_prompt: "",
+  ai_roast_system_prompt: "",
+  ai_max_tokens: String(responseConfig.maxTokens),
+  ai_temperature: String(responseConfig.temperature),
+  ai_history_limit: String(responseConfig.historyLimit),
+  ai_gateway_id: responseConfig.gatewayId,
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_DEFAULTS;
-
-export const CONFIG_KEYS = Object.keys(CONFIG_DEFAULTS) as ConfigKey[];
 
 export const isConfigKey = (key: string): key is ConfigKey => key in CONFIG_DEFAULTS;
 
@@ -29,6 +47,9 @@ export type BotConfig = {
   temperature: number;
   historyLimit: number;
   gatewayId: string | null;
+  roastMaxTokens: number;
+  roastTemperature: number;
+  roastGatewayId: string | null;
 };
 
 const parsePositiveInt = (value: string, fallback: number) => {
@@ -41,46 +62,23 @@ const parseTemperature = (value: string, fallback: number) => {
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 2 ? parsed : fallback;
 };
 
-export const getSettings = async (env: Env): Promise<Record<string, string>> => {
-  try {
-    const result = await env.DB.prepare("SELECT key, value FROM rag_settings").run<{
-      key: string;
-      value: string;
-    }>();
-    return Object.fromEntries((result.results ?? []).map((row) => [row.key, row.value]));
-  } catch (error) {
-    logger.warn("settings_load_failed", { error: errorMessage(error) });
-    return {};
-  }
-};
-
-export const loadConfig = async (env: Env): Promise<BotConfig> => {
-  const settings = await getSettings(env);
-  const value = (key: ConfigKey) => {
-    const stored = settings[key]?.trim();
-    return stored && stored.length > 0 ? stored : CONFIG_DEFAULTS[key];
-  };
+export const loadConfig = async (_env: Env): Promise<BotConfig> => {
+  const [systemPrompt, roastSystemPrompt] = await Promise.all([
+    loadResponseSystemPrompt(),
+    loadRoastSystemPrompt(),
+  ]);
 
   return {
-    responseModel: value("ai_response_model"),
-    roastModel: value("ai_roast_model"),
-    systemPrompt: value("ai_system_prompt"),
-    roastSystemPrompt: value("ai_roast_system_prompt"),
-    maxTokens: parsePositiveInt(value("ai_max_tokens"), 256),
-    temperature: parseTemperature(value("ai_temperature"), 0.7),
-    historyLimit: parsePositiveInt(value("ai_history_limit"), 12),
-    gatewayId: value("ai_gateway_id") || null,
+    responseModel: responseConfig.model,
+    roastModel: roastConfig.model,
+    systemPrompt: systemPrompt.trim(),
+    roastSystemPrompt: roastSystemPrompt.trim(),
+    maxTokens: parsePositiveInt(String(responseConfig.maxTokens), 256),
+    temperature: parseTemperature(String(responseConfig.temperature), 0.7),
+    historyLimit: parsePositiveInt(String(responseConfig.historyLimit), 12),
+    gatewayId: responseConfig.gatewayId.trim() || null,
+    roastMaxTokens: parsePositiveInt(String(roastConfig.maxTokens), 64),
+    roastTemperature: parseTemperature(String(roastConfig.temperature), 0.95),
+    roastGatewayId: roastConfig.gatewayId.trim() || null,
   };
-};
-
-export const setSetting = async (env: Env, key: ConfigKey, value: string) => {
-  await env.DB.prepare(
-    "INSERT INTO rag_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-  )
-    .bind(key, value)
-    .run();
-};
-
-export const deleteSetting = async (env: Env, key: ConfigKey) => {
-  await env.DB.prepare("DELETE FROM rag_settings WHERE key = ?").bind(key).run();
 };

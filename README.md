@@ -7,7 +7,7 @@ Cloudflare Worker Discord bot for rag tracking and mention-triggered AI replies.
 - Runtime: Cloudflare Workers (`src/index.ts`)
 - Language: TypeScript
 - Database: Cloudflare D1 (`DB`)
-- AI: Workers AI binding (`AI`); model is runtime-configurable (`@cf/...` Workers AI models or partner models such as `xai/grok-4.3`), optionally routed through AI Gateway
+- AI: Workers AI binding (`AI`); model and prompt config live in `src/ai-config` (`@cf/...` Workers AI models or partner models such as `xai/grok-4.3`), optionally routed through AI Gateway
 - Queue: Cloudflare Queues (`AI_JOBS`, `ai-jobs`, `ai-jobs-dlq`)
 - Stateful connection: Durable Objects (`DiscordGateway`)
 - Admin auth: Cloudflare Access for SaaS as OIDC identity provider (authorization code + PKCE, Cloudflare-managed refresh tokens)
@@ -57,7 +57,7 @@ flowchart TD
   Admin -->|Bearer access token| AA[/admin API/]
   AA -->|verify via app JWKS| CFA
   AA --> W
-  AA --> DB4[(D1: rag_settings)]
+  AA --> DB4[(D1: data tables)]
 
   Admin2[Operator] -->|POST /gateway/start| W
   W --> DO[Durable Object DiscordGateway]
@@ -113,9 +113,13 @@ flowchart TD
 
 ## Configuration
 
-Runtime config is stored in the D1 `rag_settings` table with code defaults in
-`src/config.ts`, and managed through the admin API or CLI. See `AGENTS.md` for
-the key list, Cloudflare Access setup, and CLI usage.
+AI config is checked into `src/ai-config`:
+
+- `discord-response.json` and `discord-response-system-prompt.md` control mention replies.
+- `rag-roast.json` and `rag-roast-system-prompt.md` control `/rag` roast generation.
+
+The admin API and CLI can still report the active AI config, but mutations are
+rejected because AI behavior is source-controlled.
 
 ## Local and Deploy Commands
 

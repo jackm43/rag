@@ -54,10 +54,8 @@ const createEnv = (publicKeyHex: string, overrides: Record<string, unknown> = {}
     ...overrides,
   }) as never;
 
-// DB mock that supports both prepare().run() (settings load) and
-// prepare().bind().run()/first() (everything else).
+// DB mock that supports prepare().run(), prepare().bind().run(), and first().
 const createDbMock = (options: {
-  settings?: Array<{ key: string; value: string }>;
   roasts?: Array<{ roast_text: string }>;
   ragCount?: number;
   reportCount?: number;
@@ -71,9 +69,6 @@ const createDbMock = (options: {
       sql,
       args,
       run: async () => {
-        if (sql.includes("rag_settings")) {
-          return { results: options.settings ?? [] };
-        }
         if (sql.includes("rag_roasts")) {
           return { results: options.roasts ?? [] };
         }
@@ -960,7 +955,7 @@ test("queue handler sanitizes mentions and IDs from the model output", async () 
   }
 });
 
-test("queue handler uses a configured partner model and parses the OpenAI response shape", async () => {
+test("queue handler uses the source-controlled partner model and parses the OpenAI response shape", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   globalThis.fetch = async (url, init) => {
@@ -972,16 +967,11 @@ test("queue handler uses a configured partner model and parses the OpenAI respon
   try {
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
-      DB: createDbMock({
-        settings: [
-          { key: "ai_response_model", value: "xai/grok-4.3" },
-          { key: "ai_gateway_id", value: "ragbot-gateway" },
-        ],
-      }),
+      DB: createDbMock(),
       AI: {
         run: async (model: unknown, input: unknown, options: unknown) => {
           aiCalls.push({ model, input: input as Record<string, unknown> });
-          assert.deepEqual(options, { gateway: { id: "ragbot-gateway" } });
+          assert.deepEqual(options, { gateway: { id: "platy" } });
           return { choices: [{ message: { content: "grok response" } }] };
         },
       },
@@ -1001,7 +991,7 @@ test("queue handler uses a configured partner model and parses the OpenAI respon
     await worker.queue({ messages: [message] } as never, env);
 
     assert.equal(aiCalls.length, 1);
-    assert.equal(aiCalls[0].model, "xai/grok-4.3");
+    assert.equal(aiCalls[0].model, "grok/grok-4.3");
     assert.equal(aiCalls[0].input.max_completion_tokens, 256);
     assert.equal(aiCalls[0].input.max_tokens, undefined);
 
@@ -1024,7 +1014,7 @@ test("queue handler calls AI Gateway directly when gateway credentials are confi
     fetchCalls.push({ url: String(url), init });
     if (String(url).includes("gateway.ai.cloudflare.com")) {
       return Response.json({
-        model: "xai/grok-4.3",
+        model: "grok/grok-4.3",
         choices: [{ message: { content: "Ragbot: gateway response" } }],
         usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
       });
@@ -1038,10 +1028,6 @@ test("queue handler calls AI Gateway directly when gateway credentials are confi
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
       DB: createDbMock({
-        settings: [
-          { key: "ai_response_model", value: "xai/grok-4.3" },
-          { key: "ai_gateway_id", value: "ragbot-gateway" },
-        ],
         onBatch: () => undefined,
       }),
       AI: {
@@ -1053,12 +1039,7 @@ test("queue handler calls AI Gateway directly when gateway credentials are confi
     env.DB = {
       ...env.DB,
       prepare: (sql: string) => {
-        const base = createDbMock({
-          settings: [
-            { key: "ai_response_model", value: "xai/grok-4.3" },
-            { key: "ai_gateway_id", value: "ragbot-gateway" },
-          ],
-        }).prepare(sql);
+        const base = createDbMock().prepare(sql);
         return {
           ...base,
           bind: (...args: unknown[]) => ({
@@ -1091,11 +1072,11 @@ test("queue handler calls AI Gateway directly when gateway credentials are confi
     assert.ok(gatewayCall);
     assert.equal(
       gatewayCall.url,
-      "https://gateway.ai.cloudflare.com/v1/account-id/ragbot-gateway/compat/chat/completions",
+      "https://gateway.ai.cloudflare.com/v1/account-id/platy/compat/chat/completions",
     );
     assert.equal(new Headers(gatewayCall.init?.headers).get("cf-aig-authorization"), "Bearer gateway-token");
     assert.deepEqual(JSON.parse(String(gatewayCall.init?.body)), {
-      model: "xai/grok-4.3",
+      model: "grok/grok-4.3",
       messages: [
         {
           role: "system",

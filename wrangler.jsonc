@@ -2,6 +2,15 @@
   "name": "ragbot-worker",
   "main": "src/index.ts",
   "compatibility_date": "2026-04-23",
+  "rules": [
+    {
+      "type": "Text",
+      "globs": [
+        "**/*.md"
+      ],
+      "fallthrough": true
+    }
+  ],
   "compatibility_flags": [
     "nodejs_compat"
   ],
@@ -20,7 +29,7 @@
     // API rejects all requests until both are set.
     "ACCESS_TEAM_DOMAIN": "",
     "ACCESS_OIDC_CLIENT_ID": "",
-    // When set with the CF_AIG_TOKEN secret and ai_gateway_id config key,
+    // When set with the CF_AIG_TOKEN secret and gatewayId in src/ai-config,
     // ragbot calls Cloudflare AI Gateway directly without the proto stack.
     "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271"
   },

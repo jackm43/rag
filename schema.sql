@@ -22,11 +22,6 @@ CREATE TABLE IF NOT EXISTS rag_roasts (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS rag_settings (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-
 DROP TABLE IF EXISTS oauth_refresh_tokens;
 
 CREATE TABLE IF NOT EXISTS rag_ai_interactions (

@@ -182,7 +182,12 @@ const generateRoast = async (
               content: `Reporter display name: ${reporterDisplayName}. Reporter has filed ${reporterCount} rag reports total. Reported user display name: ${targetDisplayName}. Reported user has been ragged ${targetCount} times total. Write one punchy, original line teasing both by display name only. Do not reuse or closely paraphrase any of these previous roast lines: ${blockedList}.`,
             },
           ],
-          { model: config.roastModel, maxTokens: 64, temperature: 0.95 },
+          {
+            model: config.roastModel,
+            maxTokens: config.roastMaxTokens,
+            temperature: config.roastTemperature,
+            gatewayId: config.roastGatewayId,
+          },
         ),
         ROAST_TIMEOUT_MS,
       );

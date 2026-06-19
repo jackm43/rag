@@ -82,6 +82,7 @@ export type ChatOptions = {
   model?: string;
   maxTokens?: number;
   temperature?: number;
+  gatewayId?: string | null;
 };
 
 export type ChatModelResult = {
@@ -149,9 +150,10 @@ export const runChatCompletion = async (
   const model = options.model ?? config.responseModel;
   const maxTokens = options.maxTokens ?? config.maxTokens;
   const temperature = options.temperature ?? config.temperature;
+  const requestConfig = { ...config, gatewayId: options.gatewayId ?? config.gatewayId };
 
-  if (canUseAiGateway(env, config)) {
-    return runAiGatewayChat(env, config, model, messages, maxTokens, temperature);
+  if (canUseAiGateway(env, requestConfig)) {
+    return runAiGatewayChat(env, requestConfig, model, messages, maxTokens, temperature);
   }
 
   // Workers AI models use max_tokens; partner models (xai/, openai/, ...)
@@ -160,7 +162,7 @@ export const runChatCompletion = async (
     ? { messages, max_tokens: maxTokens, temperature }
     : { messages, max_completion_tokens: maxTokens, temperature };
 
-  const runOptions = config.gatewayId ? { gateway: { id: config.gatewayId } } : undefined;
+  const runOptions = requestConfig.gatewayId ? { gateway: { id: requestConfig.gatewayId } } : undefined;
   const result = await env.AI.run(model as never, input as never, runOptions as never);
   const payload = result as ChatResult;
   return {

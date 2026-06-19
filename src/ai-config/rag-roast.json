@@ -1,0 +1,6 @@
+{
+  "model": "@cf/meta/llama-3.2-1b-instruct",
+  "maxTokens": 64,
+  "temperature": 0.95,
+  "gatewayId": "platy"
+}
