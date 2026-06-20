@@ -1,0 +1,7 @@
+{
+  "model": "grok/grok-4.3",
+  "maxTokens": 1000,
+  "temperature": 0.9,
+  "historyLimit": 12,
+  "gatewayId": "platy"
+}

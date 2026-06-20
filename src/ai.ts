@@ -17,8 +17,11 @@ type ChatResult = {
 };
 
 const isWorkersAiModel = (model: string) => model.startsWith("@cf/");
+const isGatewayWorkersAiModel = (model: string) => model.startsWith("workers-ai/");
+const isBindingModel = (model: string) => isWorkersAiModel(model) || isGatewayWorkersAiModel(model);
 
-const toGatewayModel = (model: string) => (isWorkersAiModel(model) ? `workers-ai/${model}` : model);
+const toBindingModel = (model: string) =>
+  isGatewayWorkersAiModel(model) ? model.slice("workers-ai/".length) : model;
 
 const extractText = (result: unknown): string => {
   if (typeof result === "string") {
@@ -39,6 +42,47 @@ const usageFrom = (usage: ChatResult["usage"]) =>
       totalTokens: usage.total_tokens ?? 0,
     }
     : undefined;
+
+const gatewayChatCompletions = async (
+  env: Env,
+  gatewayId: string,
+  model: string,
+  messages: ChatMessage[],
+  maxTokens: number,
+  temperature: number,
+) => {
+  if (!env.CF_ACCOUNT_ID || !env.CF_AIG_TOKEN) {
+    throw new Error("CF_ACCOUNT_ID and CF_AIG_TOKEN are required for partner AI Gateway models");
+  }
+
+  const response = await fetch(
+    `https://gateway.ai.cloudflare.com/v1/${env.CF_ACCOUNT_ID}/${gatewayId}/compat/chat/completions`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "cf-aig-authorization": `Bearer ${env.CF_AIG_TOKEN}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        max_tokens: maxTokens,
+        temperature,
+      }),
+    },
+  );
+
+  const payload = (await response.json().catch(() => ({}))) as ChatResult;
+  if (!response.ok) {
+    const detail =
+      Array.isArray(payload.error) ? payload.error.map((item) => item.message).filter(Boolean).join("; ")
+        : typeof payload.error === "string" ? payload.error
+          : payload.error?.message ?? payload.message ?? payload.description ?? response.statusText;
+    throw new Error(`AI Gateway request failed (${response.status}): ${detail}`);
+  }
+
+  return payload;
+};
 
 const looksLikeSpeakerLine = (line: string) => {
   const colon = line.indexOf(":");
@@ -82,6 +126,7 @@ export type ChatOptions = {
   model?: string;
   maxTokens?: number;
   temperature?: number;
+  gatewayId?: string | null;
 };
 
 export type ChatModelResult = {
@@ -94,52 +139,6 @@ export type ChatModelResult = {
   };
 };
 
-const canUseAiGateway = (env: Env, config: BotConfig) =>
-  Boolean(config.gatewayId && env.CF_ACCOUNT_ID && env.CF_AIG_TOKEN);
-
-const runAiGatewayChat = async (
-  env: Env,
-  config: BotConfig,
-  model: string,
-  messages: ChatMessage[],
-  maxTokens: number,
-  temperature: number,
-): Promise<ChatModelResult> => {
-  const requestedModel = toGatewayModel(model);
-  const url = `https://gateway.ai.cloudflare.com/v1/${env.CF_ACCOUNT_ID}/${config.gatewayId}/compat/chat/completions`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "cf-aig-authorization": `Bearer ${env.CF_AIG_TOKEN}`,
-    },
-    body: JSON.stringify({
-      model: requestedModel,
-      messages,
-      max_tokens: maxTokens,
-      temperature,
-    }),
-  });
-
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = result as ChatResult;
-    const detail = typeof error.error === "string"
-      ? error.error
-      : Array.isArray(error.error)
-        ? error.error.map((entry) => entry.message).filter(Boolean).join("; ")
-        : error.error?.message ?? error.message ?? error.description;
-    throw new Error(detail || `AI Gateway returned ${response.status}`);
-  }
-
-  const payload = result as ChatResult;
-  return {
-    content: extractText(payload),
-    model: payload.model ?? requestedModel,
-    usage: usageFrom(payload.usage),
-  };
-};
-
 export const runChatCompletion = async (
   env: Env,
   config: BotConfig,
@@ -149,23 +148,23 @@ export const runChatCompletion = async (
   const model = options.model ?? config.responseModel;
   const maxTokens = options.maxTokens ?? config.maxTokens;
   const temperature = options.temperature ?? config.temperature;
+  const requestConfig = { ...config, gatewayId: options.gatewayId ?? config.gatewayId };
+  const bindingModel = toBindingModel(model);
 
-  if (canUseAiGateway(env, config)) {
-    return runAiGatewayChat(env, config, model, messages, maxTokens, temperature);
-  }
+  const input = { messages, max_tokens: maxTokens, temperature };
 
-  // Workers AI models use max_tokens; partner models (xai/, openai/, ...)
-  // expose the OpenAI-compatible max_completion_tokens parameter.
-  const input = isWorkersAiModel(model)
-    ? { messages, max_tokens: maxTokens, temperature }
-    : { messages, max_completion_tokens: maxTokens, temperature };
-
-  const runOptions = config.gatewayId ? { gateway: { id: config.gatewayId } } : undefined;
-  const result = await env.AI.run(model as never, input as never, runOptions as never);
+  const result =
+    requestConfig.gatewayId && !isBindingModel(model)
+      ? await gatewayChatCompletions(env, requestConfig.gatewayId, model, messages, maxTokens, temperature)
+      : await env.AI.run(
+        bindingModel as never,
+        input as never,
+        requestConfig.gatewayId ? ({ gateway: { id: requestConfig.gatewayId } } as never) : undefined,
+      );
   const payload = result as ChatResult;
   return {
     content: extractText(payload),
-    model: payload.model ?? model,
+    model: payload.model ?? bindingModel,
     usage: usageFrom(payload.usage),
   };
 };

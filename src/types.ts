@@ -43,7 +43,11 @@ export type DiscordMessage = {
   author?: {
     id: string;
     username: string;
+    global_name?: string | null;
     bot?: boolean;
+  };
+  member?: {
+    nick?: string | null;
   };
   mentions?: Array<{ id: string; username?: string }>;
   mention_roles?: string[];
@@ -64,10 +68,10 @@ export interface Env {
   DISCORD_PUBLIC_KEY: string;
   DISCORD_APPLICATION_ID: string;
   DISCORD_BOT_TOKEN: string;
-  ACCESS_TEAM_DOMAIN?: string;
-  ACCESS_OIDC_CLIENT_ID?: string;
   CF_ACCOUNT_ID?: string;
   CF_AIG_TOKEN?: string;
+  ACCESS_TEAM_DOMAIN?: string;
+  ACCESS_OIDC_CLIENT_ID?: string;
   DISCORD_GATEWAY: DurableObjectNamespace;
   DB: D1Database;
   AI: Ai;

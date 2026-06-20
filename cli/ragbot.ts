@@ -23,10 +23,10 @@ const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 const usage = `usage: ragbot <command>
 
 commands:
-  config list                 show all config keys with values and defaults
+  config list                 show source-controlled AI config values
   config get <key>            show one config value
-  config set <key> <value>    override a config value
-  config unset <key>          reset a config value to its default
+  config set <key> <value>    rejected; edit src/ai-config instead
+  config unset <key>          rejected; edit src/ai-config instead
   db <sql> [param ...]        run a SQL statement against D1
   interactions [limit]        show recent AI interactions
   ragboard                    show the rag leaderboard

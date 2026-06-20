@@ -1,5 +1,5 @@
 import { verifyOidcToken, type AccessIdentity } from "./access";
-import { CONFIG_DEFAULTS, deleteSetting, getSettings, isConfigKey, setSetting } from "./config";
+import { isConfigKey, loadConfig } from "./config";
 import { forwardToGateway } from "./gateway";
 import { jsonResponse } from "./http";
 import { errorMessage, logger } from "./logger";
@@ -31,17 +31,41 @@ const readJsonBody = async <T>(request: Request): Promise<T | null> => {
 };
 
 const handleConfigList = async (env: Env) => {
-  const settings = await getSettings(env);
-  const config = Object.fromEntries(
-    Object.entries(CONFIG_DEFAULTS).map(([key, fallback]) => [
-      key,
-      {
-        value: settings[key] ?? fallback,
-        default: fallback,
-        overridden: key in settings,
-      },
-    ]),
-  );
+  const loaded = await loadConfig(env);
+  const config = {
+    ai_response_model: {
+      value: loaded.responseModel,
+      source: "src/ai-config/discord-response.json",
+    },
+    ai_roast_model: {
+      value: loaded.roastModel,
+      source: "src/ai-config/rag-roast.json",
+    },
+    ai_system_prompt: {
+      value: loaded.systemPrompt,
+      source: "src/ai-config/discord-response-system-prompt.md",
+    },
+    ai_roast_system_prompt: {
+      value: loaded.roastSystemPrompt,
+      source: "src/ai-config/rag-roast-system-prompt.md",
+    },
+    ai_max_tokens: {
+      value: String(loaded.maxTokens),
+      source: "src/ai-config/discord-response.json",
+    },
+    ai_temperature: {
+      value: String(loaded.temperature),
+      source: "src/ai-config/discord-response.json",
+    },
+    ai_history_limit: {
+      value: String(loaded.historyLimit),
+      source: "src/ai-config/discord-response.json",
+    },
+    ai_gateway_id: {
+      value: loaded.gatewayId ?? "",
+      source: "src/ai-config/discord-response.json",
+    },
+  };
   return jsonResponse({ config });
 };
 
@@ -52,18 +76,16 @@ const handleConfigSet = async (request: Request, env: Env, identity: AccessIdent
   if (!key || !isConfigKey(key) || typeof value !== "string") {
     return jsonResponse({ error: "expected body {key, value} with a known config key" }, 400);
   }
-  await setSetting(env, key, value);
-  logger.info("config_updated", { key, actor: identity.email ?? identity.sub });
-  return jsonResponse({ ok: true, key, value });
+  logger.info("config_update_rejected", { key, actor: identity.email ?? identity.sub });
+  return jsonResponse({ error: "AI config is managed in src/ai-config" }, 410);
 };
 
 const handleConfigDelete = async (env: Env, key: string, identity: AccessIdentity) => {
   if (!isConfigKey(key)) {
     return jsonResponse({ error: "unknown config key" }, 400);
   }
-  await deleteSetting(env, key);
-  logger.info("config_reset", { key, actor: identity.email ?? identity.sub });
-  return jsonResponse({ ok: true, key, value: CONFIG_DEFAULTS[key] });
+  logger.info("config_reset_rejected", { key, actor: identity.email ?? identity.sub });
+  return jsonResponse({ error: "AI config is managed in src/ai-config" }, 410);
 };
 
 const handleDbQuery = async (request: Request, env: Env, identity: AccessIdentity) => {

@@ -54,10 +54,8 @@ const createEnv = (publicKeyHex: string, overrides: Record<string, unknown> = {}
     ...overrides,
   }) as never;
 
-// DB mock that supports both prepare().run() (settings load) and
-// prepare().bind().run()/first() (everything else).
+// DB mock that supports prepare().run(), prepare().bind().run(), and first().
 const createDbMock = (options: {
-  settings?: Array<{ key: string; value: string }>;
   roasts?: Array<{ roast_text: string }>;
   ragCount?: number;
   reportCount?: number;
@@ -71,9 +69,6 @@ const createDbMock = (options: {
       sql,
       args,
       run: async () => {
-        if (sql.includes("rag_settings")) {
-          return { results: options.settings ?? [] };
-        }
         if (sql.includes("rag_roasts")) {
           return { results: options.roasts ?? [] };
         }
@@ -465,6 +460,7 @@ test("gateway message create enqueues a raw channel AI job", async () => {
       channel_id: "channel-id",
       content: "<@bot-user-id> Explain queues",
       author: { id: "1", username: "alice" },
+      member: { nick: "Tarkaus" },
     },
     env,
     "bot-user-id",
@@ -477,7 +473,7 @@ test("gateway message create enqueues a raw channel AI job", async () => {
       messageId: "message-id",
       botUserId: "bot-user-id",
       requesterUserId: "1",
-      requesterUsername: "alice",
+      requesterUsername: "Tarkaus",
       prompt: "Explain queues",
       replyMessageId: undefined,
       replyContext: undefined,
@@ -501,7 +497,7 @@ test("gateway message create enqueues jobs when the bot is mentioned at the end"
       channel_id: "channel-id",
       content: "hey <@bot-user-id>",
       mentions: [{ id: "bot-user-id" }],
-      author: { id: "1", username: "alice" },
+      author: { id: "1", username: "alice", global_name: "Alice Display" },
     },
     env,
     "bot-user-id",
@@ -514,7 +510,7 @@ test("gateway message create enqueues jobs when the bot is mentioned at the end"
       messageId: "message-id",
       botUserId: "bot-user-id",
       requesterUserId: "1",
-      requesterUsername: "alice",
+      requesterUsername: "Alice Display",
       prompt: "hey",
       replyMessageId: undefined,
       replyContext: undefined,
@@ -824,6 +820,9 @@ test("queue handler builds a conversation from channel history and posts the rep
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   globalThis.fetch = async (url, init) => {
     fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({ response: "Short answer." });
+    }
     if (String(url).includes("/messages?")) {
       // Discord returns newest-first.
       return Response.json([
@@ -831,7 +830,7 @@ test("queue handler builds a conversation from channel history and posts the rep
           id: "m3",
           channel_id: "channel-id",
           content: "anyone know how queues work",
-          author: { id: "1", username: "alice" },
+          author: { id: "1", username: "._jak", global_name: "jak" },
         },
         {
           id: "m2",
@@ -843,25 +842,19 @@ test("queue handler builds a conversation from channel history and posts the rep
           id: "m1",
           channel_id: "channel-id",
           content: "<@999000000000000001> hello",
-          author: { id: "2", username: "bob" },
+          author: { id: "2", username: "bob", global_name: "Bob Display" },
         },
       ]);
     }
     return new Response("{}", { status: 200 });
   };
 
-  const aiInputs: unknown[] = [];
-
   try {
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
       DB: createDbMock({}),
-      AI: {
-        run: async (_model: unknown, input: unknown) => {
-          aiInputs.push(input);
-          return { response: "Short answer." };
-        },
-      },
     });
     const ackedMessages: unknown[] = [];
     const message = {
@@ -871,7 +864,7 @@ test("queue handler builds a conversation from channel history and posts the rep
         messageId: "trigger-id",
         botUserId: "bot-user-id",
         requesterUserId: "1",
-        requesterUsername: "alice",
+        requesterUsername: "metro goonin",
         prompt: "and what about retries",
       },
       ack: () => {
@@ -891,14 +884,15 @@ test("queue handler builds a conversation from channel history and posts the rep
       "https://discord.com/api/v10/channels/channel-id/messages?before=trigger-id&limit=12",
     );
 
-    assert.equal(aiInputs.length, 1);
-    const input = aiInputs[0] as { messages: Array<{ role: string; content: string }> };
+    const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
+    assert.ok(gatewayCall);
+    const input = JSON.parse(String(gatewayCall.init?.body)) as { messages: Array<{ role: string; content: string }> };
     assert.equal(input.messages[0].role, "system");
     assert.deepEqual(input.messages.slice(1), [
-      { role: "user", content: "bob: hello" },
+      { role: "user", content: "Bob Display: hello" },
       { role: "assistant", content: "Queues deliver messages asynchronously." },
-      { role: "user", content: "alice: anyone know how queues work" },
-      { role: "user", content: "alice: and what about retries" },
+      { role: "user", content: "metro goonin: anyone know how queues work" },
+      { role: "user", content: "metro goonin: and what about retries" },
     ]);
 
     const postCall = fetchCalls.find(
@@ -917,21 +911,89 @@ test("queue handler builds a conversation from channel history and posts the rep
   }
 });
 
-test("queue handler sanitizes mentions and IDs from the model output", async () => {
+test("queue handler excludes rag command bot output from chat history", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   globalThis.fetch = async (url, init) => {
     fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({ response: "Normal chat reply." });
+    }
+    if (String(url).includes("/messages?")) {
+      return Response.json([
+        {
+          id: "m2",
+          channel_id: "channel-id",
+          content: "<@2> has just ragged. Total: 32\nName One still farming reports.",
+          author: { id: "bot-user-id", username: "ragbot", bot: true },
+        },
+        {
+          id: "m1",
+          channel_id: "channel-id",
+          content: "who was in paris",
+          author: { id: "1", username: "alice" },
+        },
+      ]);
+    }
     return new Response("{}", { status: 200 });
   };
 
   try {
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
       DB: createDbMock({}),
-      AI: {
-        run: async () => ({ response: "Hello <@123456789012345678> there 123456789012345678" }),
+    });
+    const message = {
+      body: {
+        kind: "channel",
+        channelId: "channel-id",
+        messageId: "trigger-id",
+        botUserId: "bot-user-id",
+        requesterUsername: "alice",
+        prompt: "who was in paris",
       },
+      ack: () => undefined,
+      retry: () => {
+        throw new Error("message should not be retried");
+      },
+    };
+
+    await worker.queue({ messages: [message] } as never, env);
+
+    const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
+    assert.ok(gatewayCall);
+    const input = JSON.parse(String(gatewayCall.init?.body)) as { messages: Array<{ role: string; content: string }> };
+    assert.match(input.messages[0].content, /normal chat reply, not the \/rag command/);
+    assert.deepEqual(input.messages.slice(1), [
+      { role: "user", content: "alice: who was in paris" },
+      { role: "user", content: "alice: who was in paris" },
+    ]);
+    assert.equal(JSON.stringify(input.messages.slice(1)).includes("has just ragged"), false);
+    assert.equal(JSON.stringify(input.messages.slice(1)).includes("Total: 32"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("queue handler sanitizes mentions and IDs from the model output", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({ response: "Hello <@123456789012345678> there 123456789012345678" });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
+      DB: createDbMock({}),
     });
     const message = {
       body: {
@@ -947,9 +1009,11 @@ test("queue handler sanitizes mentions and IDs from the model output", async () 
 
     await worker.queue({ messages: [message] } as never, env);
 
-    assert.equal(fetchCalls.length, 1);
-    assert.equal(fetchCalls[0].url, "https://discord.com/api/v10/channels/channel-id/messages");
-    assert.deepEqual(JSON.parse(String(fetchCalls[0].init?.body)), {
+    const postCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/channels/channel-id/messages",
+    );
+    assert.ok(postCall);
+    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
       content: "Hello there",
       allowed_mentions: {
         parse: [],
@@ -960,31 +1024,23 @@ test("queue handler sanitizes mentions and IDs from the model output", async () 
   }
 });
 
-test("queue handler uses a configured partner model and parses the OpenAI response shape", async () => {
+test("queue handler uses the source-controlled partner model", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   globalThis.fetch = async (url, init) => {
     fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({ choices: [{ message: { content: "grok response" } }] });
+    }
     return new Response("{}", { status: 200 });
   };
-  const aiCalls: Array<{ model: unknown; input: Record<string, unknown> }> = [];
 
   try {
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
-      DB: createDbMock({
-        settings: [
-          { key: "ai_response_model", value: "xai/grok-4.3" },
-          { key: "ai_gateway_id", value: "ragbot-gateway" },
-        ],
-      }),
-      AI: {
-        run: async (model: unknown, input: unknown, options: unknown) => {
-          aiCalls.push({ model, input: input as Record<string, unknown> });
-          assert.deepEqual(options, { gateway: { id: "ragbot-gateway" } });
-          return { choices: [{ message: { content: "grok response" } }] };
-        },
-      },
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
+      DB: createDbMock(),
     });
     const message = {
       body: {
@@ -1000,12 +1056,23 @@ test("queue handler uses a configured partner model and parses the OpenAI respon
 
     await worker.queue({ messages: [message] } as never, env);
 
-    assert.equal(aiCalls.length, 1);
-    assert.equal(aiCalls[0].model, "xai/grok-4.3");
-    assert.equal(aiCalls[0].input.max_completion_tokens, 256);
-    assert.equal(aiCalls[0].input.max_tokens, undefined);
+    const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
+    assert.ok(gatewayCall);
+    assert.equal(
+      gatewayCall.url,
+      "https://gateway.ai.cloudflare.com/v1/account-id/platy/compat/chat/completions",
+    );
+    assert.equal(gatewayCall.init?.headers?.["cf-aig-authorization" as never], "Bearer gateway-token");
+    const gatewayBody = JSON.parse(String(gatewayCall.init?.body));
+    assert.equal(gatewayBody.model, "grok/grok-4.3");
+    assert.equal(gatewayBody.max_tokens, 256);
+    assert.equal(gatewayBody.max_completion_tokens, undefined);
 
-    assert.deepEqual(JSON.parse(String(fetchCalls[0].init?.body)), {
+    const discordCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/channels/channel-id/messages",
+    );
+    assert.ok(discordCall);
+    assert.deepEqual(JSON.parse(String(discordCall.init?.body)), {
       content: "grok response",
       allowed_mentions: {
         parse: [],
@@ -1016,7 +1083,7 @@ test("queue handler uses a configured partner model and parses the OpenAI respon
   }
 });
 
-test("queue handler calls AI Gateway directly when gateway credentials are configured", async () => {
+test("queue handler records partner AI Gateway usage", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   const insertedInteractions: Array<{ sql: string; args: unknown[] }> = [];
@@ -1024,7 +1091,7 @@ test("queue handler calls AI Gateway directly when gateway credentials are confi
     fetchCalls.push({ url: String(url), init });
     if (String(url).includes("gateway.ai.cloudflare.com")) {
       return Response.json({
-        model: "xai/grok-4.3",
+        model: "grok-4.3",
         choices: [{ message: { content: "Ragbot: gateway response" } }],
         usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
       });
@@ -1038,27 +1105,13 @@ test("queue handler calls AI Gateway directly when gateway credentials are confi
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
       DB: createDbMock({
-        settings: [
-          { key: "ai_response_model", value: "xai/grok-4.3" },
-          { key: "ai_gateway_id", value: "ragbot-gateway" },
-        ],
         onBatch: () => undefined,
       }),
-      AI: {
-        run: async () => {
-          throw new Error("AI binding should not be used when AI Gateway credentials are configured");
-        },
-      },
     });
     env.DB = {
       ...env.DB,
       prepare: (sql: string) => {
-        const base = createDbMock({
-          settings: [
-            { key: "ai_response_model", value: "xai/grok-4.3" },
-            { key: "ai_gateway_id", value: "ragbot-gateway" },
-          ],
-        }).prepare(sql);
+        const base = createDbMock().prepare(sql);
         return {
           ...base,
           bind: (...args: unknown[]) => ({
@@ -1089,24 +1142,13 @@ test("queue handler calls AI Gateway directly when gateway credentials are confi
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
-    assert.equal(
-      gatewayCall.url,
-      "https://gateway.ai.cloudflare.com/v1/account-id/ragbot-gateway/compat/chat/completions",
-    );
-    assert.equal(new Headers(gatewayCall.init?.headers).get("cf-aig-authorization"), "Bearer gateway-token");
-    assert.deepEqual(JSON.parse(String(gatewayCall.init?.body)), {
-      model: "xai/grok-4.3",
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are Ragbot, a bot in a casual Discord server for friends. Reply in plain text, briefly and directly. Default to one or two short sentences and match the length of your reply to the question. Dry humour is welcome when it fits, but never force banter and never pad your answers. Only write something long when the question genuinely needs it.",
-        },
-        { role: "user", content: "user: Say hello" },
-      ],
-      max_tokens: 256,
-      temperature: 0.7,
-    });
+    const gatewayBody = JSON.parse(String(gatewayCall.init?.body));
+    assert.equal(gatewayBody.model, "grok/grok-4.3");
+    assert.equal(gatewayBody.messages[0].role, "system");
+    assert.match(gatewayBody.messages[0].content, /normal chat reply, not the \/rag command/);
+    assert.deepEqual(gatewayBody.messages.slice(1), [{ role: "user", content: "user: Say hello" }]);
+    assert.equal(gatewayBody.max_tokens, 256);
+    assert.equal(gatewayBody.temperature, 0.7);
 
     const postCall = fetchCalls.find(
       (call) => call.url === "https://discord.com/api/v10/channels/channel-id/messages",
