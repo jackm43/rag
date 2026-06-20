@@ -43,7 +43,11 @@ export type DiscordMessage = {
   author?: {
     id: string;
     username: string;
+    global_name?: string | null;
     bot?: boolean;
+  };
+  member?: {
+    nick?: string | null;
   };
   mentions?: Array<{ id: string; username?: string }>;
   mention_roles?: string[];

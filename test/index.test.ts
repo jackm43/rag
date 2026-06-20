@@ -460,6 +460,7 @@ test("gateway message create enqueues a raw channel AI job", async () => {
       channel_id: "channel-id",
       content: "<@bot-user-id> Explain queues",
       author: { id: "1", username: "alice" },
+      member: { nick: "Tarkaus" },
     },
     env,
     "bot-user-id",
@@ -472,7 +473,7 @@ test("gateway message create enqueues a raw channel AI job", async () => {
       messageId: "message-id",
       botUserId: "bot-user-id",
       requesterUserId: "1",
-      requesterUsername: "alice",
+      requesterUsername: "Tarkaus",
       prompt: "Explain queues",
       replyMessageId: undefined,
       replyContext: undefined,
@@ -496,7 +497,7 @@ test("gateway message create enqueues jobs when the bot is mentioned at the end"
       channel_id: "channel-id",
       content: "hey <@bot-user-id>",
       mentions: [{ id: "bot-user-id" }],
-      author: { id: "1", username: "alice" },
+      author: { id: "1", username: "alice", global_name: "Alice Display" },
     },
     env,
     "bot-user-id",
@@ -509,7 +510,7 @@ test("gateway message create enqueues jobs when the bot is mentioned at the end"
       messageId: "message-id",
       botUserId: "bot-user-id",
       requesterUserId: "1",
-      requesterUsername: "alice",
+      requesterUsername: "Alice Display",
       prompt: "hey",
       replyMessageId: undefined,
       replyContext: undefined,
@@ -829,7 +830,7 @@ test("queue handler builds a conversation from channel history and posts the rep
           id: "m3",
           channel_id: "channel-id",
           content: "anyone know how queues work",
-          author: { id: "1", username: "alice" },
+          author: { id: "1", username: "._jak", global_name: "jak" },
         },
         {
           id: "m2",
@@ -841,7 +842,7 @@ test("queue handler builds a conversation from channel history and posts the rep
           id: "m1",
           channel_id: "channel-id",
           content: "<@999000000000000001> hello",
-          author: { id: "2", username: "bob" },
+          author: { id: "2", username: "bob", global_name: "Bob Display" },
         },
       ]);
     }
@@ -863,7 +864,7 @@ test("queue handler builds a conversation from channel history and posts the rep
         messageId: "trigger-id",
         botUserId: "bot-user-id",
         requesterUserId: "1",
-        requesterUsername: "alice",
+        requesterUsername: "metro goonin",
         prompt: "and what about retries",
       },
       ack: () => {
@@ -888,10 +889,10 @@ test("queue handler builds a conversation from channel history and posts the rep
     const input = JSON.parse(String(gatewayCall.init?.body)) as { messages: Array<{ role: string; content: string }> };
     assert.equal(input.messages[0].role, "system");
     assert.deepEqual(input.messages.slice(1), [
-      { role: "user", content: "bob: hello" },
+      { role: "user", content: "Bob Display: hello" },
       { role: "assistant", content: "Queues deliver messages asynchronously." },
-      { role: "user", content: "alice: anyone know how queues work" },
-      { role: "user", content: "alice: and what about retries" },
+      { role: "user", content: "metro goonin: anyone know how queues work" },
+      { role: "user", content: "metro goonin: and what about retries" },
     ]);
 
     const postCall = fetchCalls.find(
@@ -905,6 +906,72 @@ test("queue handler builds a conversation from channel history and posts the rep
       },
     });
     assert.deepEqual(ackedMessages, [message.body]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("queue handler excludes rag command bot output from chat history", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({ response: "Normal chat reply." });
+    }
+    if (String(url).includes("/messages?")) {
+      return Response.json([
+        {
+          id: "m2",
+          channel_id: "channel-id",
+          content: "<@2> has just ragged. Total: 32\nName One still farming reports.",
+          author: { id: "bot-user-id", username: "ragbot", bot: true },
+        },
+        {
+          id: "m1",
+          channel_id: "channel-id",
+          content: "who was in paris",
+          author: { id: "1", username: "alice" },
+        },
+      ]);
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
+      DB: createDbMock({}),
+    });
+    const message = {
+      body: {
+        kind: "channel",
+        channelId: "channel-id",
+        messageId: "trigger-id",
+        botUserId: "bot-user-id",
+        requesterUsername: "alice",
+        prompt: "who was in paris",
+      },
+      ack: () => undefined,
+      retry: () => {
+        throw new Error("message should not be retried");
+      },
+    };
+
+    await worker.queue({ messages: [message] } as never, env);
+
+    const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
+    assert.ok(gatewayCall);
+    const input = JSON.parse(String(gatewayCall.init?.body)) as { messages: Array<{ role: string; content: string }> };
+    assert.match(input.messages[0].content, /normal chat reply, not the \/rag command/);
+    assert.deepEqual(input.messages.slice(1), [
+      { role: "user", content: "alice: who was in paris" },
+      { role: "user", content: "alice: who was in paris" },
+    ]);
+    assert.equal(JSON.stringify(input.messages.slice(1)).includes("has just ragged"), false);
+    assert.equal(JSON.stringify(input.messages.slice(1)).includes("Total: 32"), false);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1077,14 +1144,9 @@ test("queue handler records partner AI Gateway usage", async () => {
     assert.ok(gatewayCall);
     const gatewayBody = JSON.parse(String(gatewayCall.init?.body));
     assert.equal(gatewayBody.model, "grok/grok-4.3");
-    assert.deepEqual(gatewayBody.messages, [
-      {
-        role: "system",
-        content:
-          "You are Ragbot, a bot in a casual Discord server for friends. Reply in plain text, briefly and directly. Default to one or two short sentences and match the length of your reply to the question. Dry humour is welcome when it fits, but never force banter and never pad your answers. Only write something long when the question genuinely needs it.",
-      },
-      { role: "user", content: "user: Say hello" },
-    ]);
+    assert.equal(gatewayBody.messages[0].role, "system");
+    assert.match(gatewayBody.messages[0].content, /normal chat reply, not the \/rag command/);
+    assert.deepEqual(gatewayBody.messages.slice(1), [{ role: "user", content: "user: Say hello" }]);
     assert.equal(gatewayBody.max_tokens, 256);
     assert.equal(gatewayBody.temperature, 0.7);
 

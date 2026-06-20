@@ -82,6 +82,17 @@ const formatReplyContext = (message: DiscordMessage) => {
   return `${label}\n${parts.join("\n")}`;
 };
 
+const getMessageAuthorDisplayName = (message: DiscordMessage) =>
+  message.member?.nick?.trim() ||
+  message.author?.global_name?.trim() ||
+  message.author?.username?.trim() ||
+  "user";
+
+const getConversationAuthorDisplayName = (message: DiscordMessage, job: AiChannelJob) =>
+  message.author?.id && message.author.id === job.requesterUserId && job.requesterUsername
+    ? job.requesterUsername
+    : getMessageAuthorDisplayName(message);
+
 export const handleGatewayMessageCreate = async (
   message: DiscordMessage,
   env: Env,
@@ -118,7 +129,7 @@ export const handleGatewayMessageCreate = async (
     messageId: message.id,
     botUserId,
     requesterUserId: message.author?.id,
-    requesterUsername: message.author?.username,
+    requesterUsername: getMessageAuthorDisplayName(message),
     prompt,
     replyMessageId,
     replyContext,
@@ -128,8 +139,16 @@ export const handleGatewayMessageCreate = async (
 const cleanHistoryContent = (content: string) =>
   stripMentionTokens(content).slice(0, MAX_HISTORY_ENTRY_LENGTH);
 
+const isRagCommandOutput = (content: string) =>
+  /\bhas just ragged\. Total: \d+\b/.test(content) || content.trimStart().startsWith("Ragboard\n");
+
 const buildConversation = async (env: Env, config: BotConfig, job: AiChannelJob): Promise<ChatMessage[]> => {
-  const messages: ChatMessage[] = [{ role: "system", content: config.systemPrompt }];
+  const messages: ChatMessage[] = [
+    {
+      role: "system",
+      content: `${config.systemPrompt}\n\nThis is a normal chat reply, not the /rag command. Do not include rag counts, leaderboard totals, or phrases like "has just ragged" unless the user explicitly asks about the rag leaderboard. If the same user appears under different account names, global names, or nicknames in context, treat them as one person and do not mention multiple aliases in the same reply.`,
+    },
+  ];
 
   let history: DiscordMessage[] = [];
   if (job.messageId) {
@@ -149,10 +168,13 @@ const buildConversation = async (env: Env, config: BotConfig, job: AiChannelJob)
       continue;
     }
     if (job.botUserId && message.author?.id === job.botUserId) {
+      if (isRagCommandOutput(content)) {
+        continue;
+      }
       messages.push({ role: "assistant", content });
       continue;
     }
-    const username = message.author?.username ?? "user";
+    const username = getConversationAuthorDisplayName(message, job);
     messages.push({ role: "user", content: `${username}: ${content}` });
   }
 
