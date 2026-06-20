@@ -28,6 +28,19 @@ const commands = [
     name: "ragboard",
     description: "Show the rag leaderboard",
   },
+  {
+    name: "image",
+    description: "Generate an image from a prompt",
+    options: [
+      {
+        name: "prompt",
+        description: "Image prompt",
+        type: 3,
+        required: true,
+        max_length: 2048,
+      },
+    ],
+  },
 ];
 
 const response = await fetch(`https://discord.com/api/v10/applications/${applicationId}/commands`, {

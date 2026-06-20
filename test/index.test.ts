@@ -240,6 +240,129 @@ test("/rag interaction is deferred and edits the original response from waitUnti
   }
 });
 
+test("/image interaction is deferred and edits the original response with an attachment", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    return new Response("{}", { status: 200 });
+  };
+
+  const waitUntilPromises: Promise<unknown>[] = [];
+
+  try {
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      AI: {
+        run: async (model: string, input: { prompt: string }) => {
+          assert.equal(model, "@cf/black-forest-labs/flux-1-schnell");
+          assert.equal(input.prompt, "a neon robot writing tests");
+          return { image: btoa("fake-jpeg-bytes") };
+        },
+      },
+    });
+    const request = createSignedRequest(
+      {
+        application_id: "application-id",
+        token: "interaction-token",
+        type: 2,
+        data: {
+          name: "image",
+          options: [{ name: "prompt", value: "a neon robot writing tests" }],
+        },
+      },
+      keyPair.secretKey,
+    );
+    const ctx = {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise);
+      },
+    };
+
+    const response = await worker.fetch(request, env, ctx as never);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { type: 5 });
+
+    await Promise.all(waitUntilPromises);
+
+    assert.equal(fetchCalls.length, 1);
+    assert.equal(
+      fetchCalls[0].url,
+      "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+    );
+    assert.equal(fetchCalls[0].init?.method, "PATCH");
+    assert.ok(fetchCalls[0].init?.body instanceof FormData);
+
+    const form = fetchCalls[0].init.body;
+    assert.deepEqual(JSON.parse(String(form.get("payload_json"))), {
+      content: "Generated image for: a neon robot writing tests",
+      allowed_mentions: { parse: [] },
+      attachments: [
+        {
+          id: 0,
+          filename: "ragbot-image.jpg",
+          description: "a neon robot writing tests",
+        },
+      ],
+    });
+
+    const file = form.get("files[0]");
+    assert.ok(file instanceof Blob);
+    assert.equal(file.type, "image/jpeg");
+    assert.equal(await file.text(), "fake-jpeg-bytes");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("/image interaction without prompt edits the original response with validation text", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const waitUntilPromises: Promise<unknown>[] = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+    const request = createSignedRequest(
+      {
+        application_id: "application-id",
+        token: "interaction-token",
+        type: 2,
+        data: {
+          name: "image",
+          options: [],
+        },
+      },
+      keyPair.secretKey,
+    );
+    const ctx = {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise);
+      },
+    };
+
+    const response = await worker.fetch(request, env, ctx as never);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { type: 5 });
+
+    await Promise.all(waitUntilPromises);
+
+    assert.equal(fetchCalls.length, 1);
+    assert.deepEqual(JSON.parse(String(fetchCalls[0].init?.body)), {
+      content: "An image prompt is required.",
+      allowed_mentions: { parse: [] },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("/rag interaction fetches target username when Discord does not include resolved users", async () => {
   const keyPair = nacl.sign.keyPair();
   const originalFetch = globalThis.fetch;

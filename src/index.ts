@@ -1,5 +1,6 @@
 import { getOidcConfig } from "./access";
 import { handleAdminRequest } from "./admin";
+import { handleDeferredImageCommand } from "./commands/image";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
 import { DiscordGateway, forwardToGateway } from "./gateway";
@@ -59,6 +60,10 @@ const handleInteractionRequest = async (
     const commandName = interaction.data?.name;
     if (commandName === "rag") {
       return handleDeferredRagCommand(interaction, env, ctx);
+    }
+
+    if (commandName === "image") {
+      return handleDeferredImageCommand(interaction, env, ctx);
     }
 
     if (commandName === "ragboard") {
