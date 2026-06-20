@@ -61,7 +61,10 @@ flowchart TD
 
   Admin2[Operator] -->|POST /gateway/start| W
   W --> DO[Durable Object DiscordGateway]
+  DO -->|setAlarm watchdog| AL[Durable Object alarm]
+  AL -->|reconnect/start if enabled| DO
   DO -->|WebSocket| DG[Discord Gateway]
+  DO -->|Gateway heartbeats| DG
   DG -->|MESSAGE_CREATE mention| DO
   DO --> Q[(Queue: ai-jobs)]
   Q --> QC[Queue Consumer]
