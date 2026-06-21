@@ -1,9 +1,7 @@
-import { getOidcConfig } from "./access";
-import { handleAdminRequest } from "./admin";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
-import { DiscordGateway, forwardToGateway } from "./gateway";
-import { jsonResponse, secretsMatch, verifyDiscordRequest } from "./http";
+import { DiscordGateway, getGatewayHealth, startGateway } from "./gateway";
+import { bearerTokenMatches, jsonResponse, verifyDiscordRequest } from "./http";
 import { errorMessage, logger } from "./logger";
 import { extractBotMentionPrompt, handleGatewayMessageCreate, processAiQueueMessage } from "./mention";
 import {
@@ -16,19 +14,26 @@ import {
 
 export { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
 
+const hasRequiredHeaders = (request: Request, headers: string[]) =>
+  headers.every((header) => request.headers.has(header));
+
 const handleGatewayControlRequest = async (request: Request, env: Env): Promise<Response> => {
   const url = new URL(request.url);
+  if (!hasRequiredHeaders(request, ["authorization"])) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
+  const authorization = request.headers.get("authorization") ?? "";
+  if (!bearerTokenMatches(authorization, env.DISCORD_BOT_TOKEN)) {
+    return new Response("Unauthorized", { status: 401 });
+  }
 
   if (url.pathname === "/gateway/health" && request.method === "GET") {
-    return forwardToGateway(request, env, "/gateway/health");
+    return Response.json(await getGatewayHealth(env));
   }
 
   if (url.pathname === "/gateway/start" && request.method === "POST") {
-    const authorization = request.headers.get("authorization") ?? "";
-    if (!(await secretsMatch(authorization, `Bearer ${env.DISCORD_BOT_TOKEN}`))) {
-      return new Response("Unauthorized", { status: 401 });
-    }
-    return forwardToGateway(request, env, "/gateway/start");
+    return Response.json(await startGateway(env));
   }
 
   return new Response("Not found", { status: 404 });
@@ -39,6 +44,10 @@ const handleInteractionRequest = async (
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> => {
+  if (!hasRequiredHeaders(request, ["x-signature-ed25519", "x-signature-timestamp"])) {
+    return new Response("Bad request signature", { status: 401 });
+  }
+
   const interaction = await verifyDiscordRequest(request, env.DISCORD_PUBLIC_KEY);
   if (!interaction) {
     return new Response("Bad request signature", { status: 401 });
@@ -82,31 +91,16 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    // Public OIDC client metadata so the CLI only needs the worker URL. The
-    // client id of a PKCE public client is not a secret.
-    if (url.pathname === "/oauth/config" && request.method === "GET") {
-      const oidc = getOidcConfig(env);
-      if (!oidc) {
-        return jsonResponse({ error: "oidc is not configured" }, 503);
-      }
-      return jsonResponse({
-        issuer: oidc.issuer,
-        client_id: oidc.clientId,
-        authorization_endpoint: oidc.authorizationEndpoint,
-        token_endpoint: oidc.tokenEndpoint,
-      });
-    }
-
-    if (url.pathname.startsWith("/admin")) {
-      return handleAdminRequest(request, env);
-    }
-
     if (url.pathname.startsWith("/gateway/")) {
       return handleGatewayControlRequest(request, env);
     }
 
-    if (request.method === "GET") {
+    if (url.pathname === "/" && request.method === "GET") {
       return new Response("ok");
+    }
+
+    if (url.pathname !== "/") {
+      return new Response("Not found", { status: 404 });
     }
 
     if (request.method !== "POST") {

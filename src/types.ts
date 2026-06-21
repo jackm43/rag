@@ -30,7 +30,7 @@ export type AiChannelJob = {
   requesterUsername?: string;
   prompt: string;
   replyMessageId?: string;
-  replyContext?: string;
+  replyChannelId?: string;
 };
 
 export type AiJob = AiChannelJob;
@@ -64,19 +64,9 @@ export type DiscordMessage = {
   referenced_message?: DiscordMessage | null;
 };
 
-export interface Env {
-  DISCORD_PUBLIC_KEY: string;
-  DISCORD_APPLICATION_ID: string;
-  DISCORD_BOT_TOKEN: string;
-  CF_ACCOUNT_ID?: string;
-  CF_AIG_TOKEN?: string;
-  ACCESS_TEAM_DOMAIN?: string;
-  ACCESS_OIDC_CLIENT_ID?: string;
-  DISCORD_GATEWAY: DurableObjectNamespace;
-  DB: D1Database;
-  AI: Ai;
+export type Env = Cloudflare.Env & {
   AI_JOBS: Queue<AiJob>;
-}
+};
 
 export const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
 

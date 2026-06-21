@@ -3,6 +3,7 @@ import { loadConfig, type BotConfig } from "./config";
 import { fetchBotRoleIds, fetchChannelMessages, fetchMessage, postChannelMessage } from "./discord";
 import { errorMessage, logger } from "./logger";
 import type { AiChannelJob, AiJob, DiscordMessage, Env } from "./types";
+import { isAiJob } from "./validation";
 
 const MAX_DISCORD_MESSAGE_LENGTH = 1900;
 const MAX_HISTORY_ENTRY_LENGTH = 600;
@@ -112,16 +113,9 @@ export const handleGatewayMessageCreate = async (
     return;
   }
 
-  let replyContext: string | undefined;
-  let replyMessageId = message.message_reference?.message_id;
-  if (message.referenced_message) {
-    replyContext = formatReplyContext(message.referenced_message) ?? undefined;
-    replyMessageId = message.referenced_message.id;
-  } else if (replyMessageId) {
-    const channelId = message.message_reference?.channel_id ?? message.channel_id;
-    const referenced = await fetchMessage(env, channelId, replyMessageId).catch(() => null);
-    replyContext = referenced ? formatReplyContext(referenced) ?? undefined : undefined;
-  }
+  const replyMessageId = message.message_reference?.message_id ?? message.referenced_message?.id;
+  const replyChannelId =
+    message.message_reference?.channel_id ?? message.referenced_message?.channel_id;
 
   await env.AI_JOBS.send({
     kind: "channel",
@@ -132,7 +126,7 @@ export const handleGatewayMessageCreate = async (
     requesterUsername: getMessageAuthorDisplayName(message),
     prompt,
     replyMessageId,
-    replyContext,
+    replyChannelId,
   });
 };
 
@@ -179,8 +173,16 @@ const buildConversation = async (env: Env, config: BotConfig, job: AiChannelJob)
   }
 
   const promptParts: string[] = [];
-  if (job.replyContext && (!job.replyMessageId || !historyIds.has(job.replyMessageId))) {
-    promptParts.push(job.replyContext);
+  if (job.replyMessageId && !historyIds.has(job.replyMessageId)) {
+    const replyChannelId = job.replyChannelId ?? job.channelId;
+    const referenced = await fetchMessage(env, replyChannelId, job.replyMessageId).catch((error) => {
+      logger.warn("reply_context_fetch_failed", { error: errorMessage(error) });
+      return null;
+    });
+    const replyContext = referenced ? formatReplyContext(referenced) : null;
+    if (replyContext) {
+      promptParts.push(replyContext);
+    }
   }
   const username = job.requesterUsername ?? "user";
   promptParts.push(`${username}: ${job.prompt}`);
@@ -256,6 +258,12 @@ const recordAiInteraction = async (
 export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) => {
   const startedAt = Date.now();
   const job = message.body;
+  if (!isAiJob(job)) {
+    logger.warn("ai_job_invalid");
+    message.ack();
+    return;
+  }
+
   let model = "unknown";
   let aiDurationMs: number | null = null;
   let content: string | null = null;

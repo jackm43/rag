@@ -1,24 +1,26 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import { exportJWK, generateKeyPair, SignJWT } from "jose";
+import { assert, test } from "vitest";
 import nacl from "tweetnacl";
+import { env as testEnv } from "cloudflare:workers";
+import { runInDurableObject } from "cloudflare:test";
 
 import worker, {
   DiscordGateway,
   extractBotMentionPrompt,
   handleGatewayMessageCreate,
 } from "../src/index.ts";
+import { fetchChannelMessages } from "../src/discord.ts";
+import { bearerTokenMatches, secretsMatch } from "../src/http.ts";
 
 const encoder = new TextEncoder();
 
-const createSignedRequest = (payload: unknown, secretKey: Uint8Array) => {
+const createSignedRequest = (payload: unknown, secretKey: Uint8Array, path = "/") => {
   const timestamp = String(Math.floor(Date.now() / 1000));
   const rawBody = JSON.stringify(payload);
   const message = encoder.encode(timestamp + rawBody);
   const signature = nacl.sign.detached(message, secretKey);
   const signatureHex = Buffer.from(signature).toString("hex");
 
-  return new Request("https://example.com/interactions", {
+  return new Request(`https://example.com${path}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -92,6 +94,19 @@ const createDbMock = (options: {
   },
 });
 
+test("secretsMatch compares bearer tokens without string equality", () => {
+  assert.equal(secretsMatch("Bearer bot-token", "Bearer bot-token"), true);
+  assert.equal(secretsMatch("Bearer bot-tokem", "Bearer bot-token"), false);
+  assert.equal(secretsMatch("Bearer bot-token-extra", "Bearer bot-token"), false);
+});
+
+test("bearerTokenMatches parses authorization before comparing the token", () => {
+  assert.equal(bearerTokenMatches("Bearer bot-token", "bot-token"), true);
+  assert.equal(bearerTokenMatches("bearer bot-token", "bot-token"), true);
+  assert.equal(bearerTokenMatches("Bot bot-token", "bot-token"), false);
+  assert.equal(bearerTokenMatches("Bearer bot-tokem", "bot-token"), false);
+});
+
 test("GET / returns ok", async () => {
   const keyPair = nacl.sign.keyPair();
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
@@ -103,10 +118,10 @@ test("GET / returns ok", async () => {
   assert.equal(await response.text(), "ok");
 });
 
-test("non-POST methods return 405", async () => {
+test("non-POST methods on the interaction route return 405", async () => {
   const keyPair = nacl.sign.keyPair();
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
-  const request = new Request("https://example.com/interactions", { method: "PUT" });
+  const request = new Request("https://example.com/", { method: "PUT" });
 
   const response = await worker.fetch(request, env, {} as never);
 
@@ -126,10 +141,38 @@ test("invalid Discord signature returns 401", async () => {
   assert.equal(await response.text(), "Bad request signature");
 });
 
+test("signed malformed Discord interaction returns 401", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const request = createSignedRequest({ token: "interaction-token" }, keyPair.secretKey);
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 401);
+  assert.equal(await response.text(), "Bad request signature");
+});
+
+test("missing Discord signature headers return 401", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const response = await worker.fetch(
+    new Request("https://example.com/", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: 1 }),
+    }),
+    env,
+    {} as never,
+  );
+
+  assert.equal(response.status, 401);
+  assert.equal(await response.text(), "Bad request signature");
+});
+
 test("malformed signature header returns 401 without throwing", async () => {
   const keyPair = nacl.sign.keyPair();
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
-  const request = new Request("https://example.com/interactions", {
+  const request = new Request("https://example.com/", {
     method: "POST",
     headers: {
       "x-signature-ed25519": "not-hex!",
@@ -181,6 +224,11 @@ test("/rag interaction is deferred and edits the original response from waitUnti
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   globalThis.fetch = async (url, init) => {
     fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({
+        choices: [{ message: { content: "Alice booked the scoreboard, and Bob keeps signing receipts." } }],
+      });
+    }
     return new Response("{}", { status: 200 });
   };
 
@@ -188,10 +236,9 @@ test("/rag interaction is deferred and edits the original response from waitUnti
 
   try {
     const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
       DB: createDbMock({ ragCount: 7, reportCount: 3 }),
-      AI: {
-        run: async () => ({ response: "Alice booked the scoreboard, and Bob keeps signing receipts." }),
-      },
     });
     const request = createSignedRequest(
       {
@@ -222,13 +269,16 @@ test("/rag interaction is deferred and edits the original response from waitUnti
 
     await Promise.all(waitUntilPromises);
 
-    assert.equal(fetchCalls.length, 1);
+    const discordCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+    );
+    assert.ok(discordCall);
     assert.equal(
-      fetchCalls[0].url,
+      discordCall.url,
       "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
     );
-    assert.equal(fetchCalls[0].init?.method, "PATCH");
-    assert.deepEqual(JSON.parse(String(fetchCalls[0].init?.body)), {
+    assert.equal(discordCall.init?.method, "PATCH");
+    assert.deepEqual(JSON.parse(String(discordCall.init?.body)), {
       content: "<@2> has just ragged. Total: 7\nAlice booked the scoreboard, and Bob keeps signing receipts.",
       allowed_mentions: {
         parse: [],
@@ -252,20 +302,24 @@ test("/rag interaction fetches target username when Discord does not include res
       assert.deepEqual(init?.headers, { authorization: "Bot bot-token" });
       return Response.json({ id: "2", username: "bob" });
     }
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({
+        choices: [{ message: { content: "Alice rang the bell, and someone added another mark." } }],
+      });
+    }
     return new Response("{}", { status: 200 });
   };
 
   try {
     const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
       DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
       DB: createDbMock({
         onBatch: (statements) => {
           batchStatements.push(...statements);
         },
       }),
-      AI: {
-        run: async () => ({ response: "Alice rang the bell, and someone added another mark." }),
-      },
     });
     const request = createSignedRequest(
       {
@@ -303,30 +357,29 @@ test("/rag retries the roast generation when the model repeats a recent line", a
   const keyPair = nacl.sign.keyPair();
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
-  globalThis.fetch = async (url, init) => {
-    fetchCalls.push({ url: String(url), init });
-    return new Response("{}", { status: 200 });
-  };
-
   const duplicateLine = "Bob did the exact same thing again today.";
   const freshLine = "Bob set a brand new personal record for chaos.";
   const aiResponses = [duplicateLine, freshLine];
   let aiCalls = 0;
   const waitUntilPromises: Promise<unknown>[] = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      aiCalls += 1;
+      return Response.json({ choices: [{ message: { content: aiResponses.shift() ?? freshLine } }] });
+    }
+    return new Response("{}", { status: 200 });
+  };
 
   try {
     const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
       DB: createDbMock({
         ragCount: 4,
         reportCount: 2,
         roasts: [{ roast_text: duplicateLine }],
       }),
-      AI: {
-        run: async () => {
-          aiCalls += 1;
-          return { response: aiResponses.shift() ?? freshLine };
-        },
-      },
     });
     const request = createSignedRequest(
       {
@@ -358,8 +411,11 @@ test("/rag retries the roast generation when the model repeats a recent line", a
     // The first generation duplicated a recent roast, so it must retry rather
     // than fall back to a canned line.
     assert.equal(aiCalls, 2);
-    assert.equal(fetchCalls.length, 1);
-    const body = JSON.parse(String(fetchCalls[0].init?.body));
+    const discordCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+    );
+    assert.ok(discordCall);
+    const body = JSON.parse(String(discordCall.init?.body));
     assert.equal(body.content, `<@2> has just ragged. Total: 4\n${freshLine}`);
   } finally {
     globalThis.fetch = originalFetch;
@@ -370,29 +426,28 @@ test("/rag uses the model's line over a canned fallback even when it repeats", a
   const keyPair = nacl.sign.keyPair();
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
-  globalThis.fetch = async (url, init) => {
-    fetchCalls.push({ url: String(url), init });
-    return new Response("{}", { status: 200 });
-  };
-
   // Every attempt returns a line that already exists in recent roasts.
   const repeatedLine = "Bob keeps speedrunning bad decisions while Alice keeps the receipts.";
   let aiCalls = 0;
   const waitUntilPromises: Promise<unknown>[] = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      aiCalls += 1;
+      return Response.json({ choices: [{ message: { content: repeatedLine } }] });
+    }
+    return new Response("{}", { status: 200 });
+  };
 
   try {
     const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
       DB: createDbMock({
         ragCount: 9,
         reportCount: 5,
         roasts: [{ roast_text: repeatedLine }],
       }),
-      AI: {
-        run: async () => {
-          aiCalls += 1;
-          return { response: repeatedLine };
-        },
-      },
     });
     const request = createSignedRequest(
       {
@@ -423,7 +478,11 @@ test("/rag uses the model's line over a canned fallback even when it repeats", a
     // It exhausts its attempts trying for something fresh, then still returns
     // the model's line rather than a canned fallback.
     assert.equal(aiCalls, 3);
-    const body = JSON.parse(String(fetchCalls[0].init?.body));
+    const discordCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+    );
+    assert.ok(discordCall);
+    const body = JSON.parse(String(discordCall.init?.body));
     assert.equal(body.content, `<@2> has just ragged. Total: 9\n${repeatedLine}`);
   } finally {
     globalThis.fetch = originalFetch;
@@ -476,7 +535,7 @@ test("gateway message create enqueues a raw channel AI job", async () => {
       requesterUsername: "Tarkaus",
       prompt: "Explain queues",
       replyMessageId: undefined,
-      replyContext: undefined,
+      replyChannelId: undefined,
     },
   ]);
 });
@@ -513,7 +572,7 @@ test("gateway message create enqueues jobs when the bot is mentioned at the end"
       requesterUsername: "Alice Display",
       prompt: "hey",
       replyMessageId: undefined,
-      replyContext: undefined,
+      replyChannelId: undefined,
     },
   ]);
 });
@@ -562,7 +621,7 @@ test("gateway message create enqueues jobs when the bot's role is mentioned", as
         requesterUsername: "alice",
         prompt: "whats up",
         replyMessageId: undefined,
-        replyContext: undefined,
+        replyChannelId: undefined,
       },
     ]);
   } finally {
@@ -570,7 +629,7 @@ test("gateway message create enqueues jobs when the bot's role is mentioned", as
   }
 });
 
-test("gateway message create includes replied-to message content in the job", async () => {
+test("gateway message create enqueues only replied-to message metadata", async () => {
   const queuedJobs: unknown[] = [];
   const env = createEnv("unused", {
     AI_JOBS: {
@@ -607,31 +666,18 @@ test("gateway message create includes replied-to message content in the job", as
       requesterUsername: "alice",
       prompt: "Summarize this",
       replyMessageId: "referenced-message-id",
-      replyContext: "Replied-to message from bob:\nWorkers queues deliver AI jobs asynchronously.",
+      replyChannelId: "channel-id",
     },
   ]);
 });
 
-test("gateway message create fetches referenced messages when Discord omits inline context", async () => {
+test("gateway message create does not fetch referenced message content", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   const queuedJobs: unknown[] = [];
   globalThis.fetch = async (url, init) => {
     fetchCalls.push({ url: String(url), init });
-    return Response.json({
-      id: "referenced-message-id",
-      channel_id: "referenced-channel-id",
-      content: "This label says approved for launch.",
-      author: { id: "2", username: "bob" },
-      attachments: [
-        {
-          id: "attachment-id",
-          filename: "label.png",
-          content_type: "image/png",
-          url: "https://cdn.discordapp.com/attachments/label.png",
-        },
-      ],
-    });
+    return Response.json({});
   };
 
   try {
@@ -659,16 +705,7 @@ test("gateway message create fetches referenced messages when Discord omits inli
       "bot-user-id",
     );
 
-    assert.deepEqual(fetchCalls, [
-      {
-        url: "https://discord.com/api/v10/channels/referenced-channel-id/messages/referenced-message-id",
-        init: {
-          headers: {
-            authorization: "Bot bot-token",
-          },
-        },
-      },
-    ]);
+    assert.deepEqual(fetchCalls, []);
     assert.deepEqual(queuedJobs, [
       {
         kind: "channel",
@@ -679,8 +716,7 @@ test("gateway message create fetches referenced messages when Discord omits inli
         requesterUsername: "alice",
         prompt: "what does this say",
         replyMessageId: "referenced-message-id",
-        replyContext:
-          "Replied-to message from bob:\nThis label says approved for launch.\nAttachment: label.png (image/png) https://cdn.discordapp.com/attachments/label.png",
+        replyChannelId: "referenced-channel-id",
       },
     ]);
   } finally {
@@ -732,16 +768,65 @@ test("gateway message create ignores bots and empty mention prompts", async () =
   assert.deepEqual(queuedJobs, []);
 });
 
+test("fetchChannelMessages drops malformed Discord messages", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json([
+      {
+        id: "message-id",
+        channel_id: "channel-id",
+        content: "hello",
+        author: { id: "user-id", username: "alice" },
+      },
+      {
+        id: "missing-channel-id",
+        content: "bad",
+      },
+      "bad",
+    ]);
+
+  try {
+    const env = createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" });
+    const messages = await fetchChannelMessages(env, "channel-id");
+
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].id, "message-id");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("queue handler acknowledges malformed AI jobs without side effects", async () => {
+  let acked = false;
+  const env = createEnv("unused");
+
+  await worker.queue(
+    {
+      messages: [
+        {
+          body: { kind: "channel", channelId: "channel-id" },
+          ack: () => {
+            acked = true;
+          },
+        },
+      ],
+    } as never,
+    env,
+  );
+
+  assert.equal(acked, true);
+});
+
 test("worker rejects /gateway/start without bot token auth", async () => {
-  let doFetchCalls = 0;
+  let startCalls = 0;
   const env = createEnv("unused", {
     DISCORD_BOT_TOKEN: "bot-token",
     DISCORD_GATEWAY: {
       idFromName: () => "id",
       get: () => ({
-        fetch: async () => {
-          doFetchCalls += 1;
-          return Response.json({ ok: true });
+        start: async () => {
+          startCalls += 1;
+          return { ok: true };
         },
       }),
     },
@@ -753,7 +838,7 @@ test("worker rejects /gateway/start without bot token auth", async () => {
     {} as never,
   );
   assert.equal(unauthorized.status, 401);
-  assert.equal(doFetchCalls, 0);
+  assert.equal(startCalls, 0);
 
   const authorized = await worker.fetch(
     new Request("https://example.com/gateway/start", {
@@ -764,13 +849,111 @@ test("worker rejects /gateway/start without bot token auth", async () => {
     {} as never,
   );
   assert.equal(authorized.status, 200);
-  assert.equal(doFetchCalls, 1);
+  assert.deepEqual(await authorized.json(), { ok: true });
+  assert.equal(startCalls, 1);
 });
 
-test("gateway durable object persists enabled state and schedules an alarm", async () => {
+test("worker rejects /gateway/health without bot token auth", async () => {
+  let healthCalls = 0;
+  const env = createEnv("unused", {
+    DISCORD_BOT_TOKEN: "bot-token",
+    DISCORD_GATEWAY: {
+      idFromName: () => "id",
+      get: () => ({
+        health: async () => {
+          healthCalls += 1;
+          return { connected: false, resumable: false };
+        },
+      }),
+    },
+  });
+
+  const unauthorized = await worker.fetch(
+    new Request("https://example.com/gateway/health", { method: "GET" }),
+    env,
+    {} as never,
+  );
+  assert.equal(unauthorized.status, 401);
+  assert.equal(healthCalls, 0);
+
+  const authorized = await worker.fetch(
+    new Request("https://example.com/gateway/health", {
+      method: "GET",
+      headers: { authorization: "Bearer bot-token" },
+    }),
+    env,
+    {} as never,
+  );
+  assert.equal(authorized.status, 200);
+  assert.deepEqual(await authorized.json(), { connected: false, resumable: false });
+  assert.equal(healthCalls, 1);
+});
+
+test("worker fails closed for unconfigured public paths", async () => {
+  const keyPair = nacl.sign.keyPair();
+  let gatewayFetchCalls = 0;
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    DISCORD_BOT_TOKEN: "bot-token",
+    DISCORD_GATEWAY: {
+      idFromName: () => "id",
+      get: () => ({
+        start: async () => {
+          gatewayFetchCalls += 1;
+          return { ok: true };
+        },
+        health: async () => {
+          gatewayFetchCalls += 1;
+          return { connected: false, resumable: false };
+        },
+      }),
+    },
+  });
+
+  const unknownGet = await worker.fetch(
+    new Request("https://example.com/anything", { method: "GET" }),
+    env,
+    {} as never,
+  );
+  assert.equal(unknownGet.status, 404);
+
+  const unknownPost = await worker.fetch(
+    createSignedRequest({ type: 1 }, keyPair.secretKey, "/anything"),
+    env,
+    {} as never,
+  );
+  assert.equal(unknownPost.status, 404);
+
+  const oauth = await worker.fetch(
+    new Request("https://example.com/oauth/config", { method: "GET" }),
+    env,
+    {} as never,
+  );
+  assert.equal(oauth.status, 404);
+
+  const admin = await worker.fetch(
+    new Request("https://example.com/admin/config", {
+      method: "GET",
+      headers: { authorization: "Bearer anything" },
+    }),
+    env,
+    {} as never,
+  );
+  assert.equal(admin.status, 404);
+
+  const unknownGateway = await worker.fetch(
+    new Request("https://example.com/gateway/unknown", {
+      method: "POST",
+      headers: { authorization: "Bearer bot-token" },
+    }),
+    env,
+    {} as never,
+  );
+  assert.equal(unknownGateway.status, 404);
+  assert.equal(gatewayFetchCalls, 0);
+});
+
+test("gateway durable object start RPC persists enabled state and schedules an alarm", async () => {
   const originalWebSocket = globalThis.WebSocket;
-  const storedValues = new Map<string, unknown>();
-  const alarmTimes: number[] = [];
   class FakeWebSocket extends EventTarget {
     static CONNECTING = 0;
     static OPEN = 1;
@@ -788,28 +971,21 @@ test("gateway durable object persists enabled state and schedules an alarm", asy
   globalThis.WebSocket = FakeWebSocket as never;
 
   try {
-    const gateway = new DiscordGateway(
-      {
-        storage: {
-          get: async (key: string) => storedValues.get(key),
-          put: async (key: string, value: unknown) => {
-            storedValues.set(key, value);
-          },
-          setAlarm: async (scheduledTime: number) => {
-            alarmTimes.push(scheduledTime);
-          },
-        },
-      } as never,
-      createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" }),
-    );
-    const response = await gateway.fetch(
-      new Request("https://example.com/gateway/start", { method: "POST" }),
-    );
+    const id = testEnv.DISCORD_GATEWAY.idFromName(`rpc-test-${crypto.randomUUID()}`);
+    const gateway = testEnv.DISCORD_GATEWAY.get(id);
 
-    assert.equal(response.status, 200);
-    assert.equal(storedValues.get("gatewayEnabled"), true);
-    assert.equal(alarmTimes.length, 1);
-    assert.ok(alarmTimes[0] > Date.now());
+    const initialHealth = await gateway.health();
+    assert.deepEqual(initialHealth, { connected: false, resumable: false });
+
+    const response = await gateway.start();
+    assert.deepEqual(response, { ok: true });
+
+    await runInDurableObject(gateway, async (_instance, state) => {
+      assert.equal(await state.storage.get("gatewayEnabled"), true);
+      const alarmTime = await state.storage.getAlarm();
+      assert.equal(typeof alarmTime, "number");
+      assert.ok((alarmTime ?? 0) > Date.now());
+    });
   } finally {
     globalThis.WebSocket = originalWebSocket;
   }
@@ -881,7 +1057,7 @@ test("queue handler builds a conversation from channel history and posts the rep
     assert.ok(historyCall);
     assert.equal(
       historyCall.url,
-      "https://discord.com/api/v10/channels/channel-id/messages?before=trigger-id&limit=12",
+      "https://discord.com/api/v10/channels/channel-id/messages?before=trigger-id&limit=3",
     );
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
@@ -977,6 +1153,83 @@ test("queue handler excludes rag command bot output from chat history", async ()
   }
 });
 
+test("queue handler fetches replied-to context from Discord REST", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({ response: "It says approved for launch." });
+    }
+    if (String(url).includes("/messages?")) {
+      return Response.json([]);
+    }
+    if (String(url) === "https://discord.com/api/v10/channels/referenced-channel-id/messages/referenced-message-id") {
+      return Response.json({
+        id: "referenced-message-id",
+        channel_id: "referenced-channel-id",
+        content: "This label says approved for launch.",
+        author: { id: "2", username: "bob" },
+        attachments: [
+          {
+            id: "attachment-id",
+            filename: "label.png",
+            content_type: "image/png",
+            url: "https://cdn.discordapp.com/attachments/label.png",
+          },
+        ],
+      });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
+      DB: createDbMock({}),
+    });
+    const message = {
+      body: {
+        kind: "channel",
+        channelId: "channel-id",
+        messageId: "trigger-id",
+        botUserId: "bot-user-id",
+        requesterUsername: "alice",
+        prompt: "what does this say",
+        replyMessageId: "referenced-message-id",
+        replyChannelId: "referenced-channel-id",
+      },
+      ack: () => undefined,
+      retry: () => {
+        throw new Error("message should not be retried");
+      },
+    };
+
+    await worker.queue({ messages: [message] } as never, env);
+
+    assert.ok(
+      fetchCalls.find(
+        (call) =>
+          call.url === "https://discord.com/api/v10/channels/referenced-channel-id/messages/referenced-message-id",
+      ),
+    );
+    const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
+    assert.ok(gatewayCall);
+    const input = JSON.parse(String(gatewayCall.init?.body)) as { messages: Array<{ role: string; content: string }> };
+    assert.deepEqual(input.messages.slice(1), [
+      {
+        role: "user",
+        content:
+          "Replied-to message from bob:\nThis label says approved for launch.\nAttachment: label.png (image/png) https://cdn.discordapp.com/attachments/label.png\n\nalice: what does this say",
+      },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("queue handler sanitizes mentions and IDs from the model output", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
@@ -1065,7 +1318,7 @@ test("queue handler uses the source-controlled partner model", async () => {
     assert.equal(gatewayCall.init?.headers?.["cf-aig-authorization" as never], "Bearer gateway-token");
     const gatewayBody = JSON.parse(String(gatewayCall.init?.body));
     assert.equal(gatewayBody.model, "grok/grok-4.3");
-    assert.equal(gatewayBody.max_tokens, 256);
+    assert.equal(gatewayBody.max_tokens, 1000);
     assert.equal(gatewayBody.max_completion_tokens, undefined);
 
     const discordCall = fetchCalls.find(
@@ -1147,8 +1400,8 @@ test("queue handler records partner AI Gateway usage", async () => {
     assert.equal(gatewayBody.messages[0].role, "system");
     assert.match(gatewayBody.messages[0].content, /normal chat reply, not the \/rag command/);
     assert.deepEqual(gatewayBody.messages.slice(1), [{ role: "user", content: "user: Say hello" }]);
-    assert.equal(gatewayBody.max_tokens, 256);
-    assert.equal(gatewayBody.temperature, 0.7);
+    assert.equal(gatewayBody.max_tokens, 1000);
+    assert.equal(gatewayBody.temperature, 0.9);
 
     const postCall = fetchCalls.find(
       (call) => call.url === "https://discord.com/api/v10/channels/channel-id/messages",
@@ -1163,145 +1416,6 @@ test("queue handler records partner AI Gateway usage", async () => {
     assert.equal(insertedInteractions.length, 1);
     assert.ok(insertedInteractions[0].sql.includes("prompt_tokens"));
     assert.deepEqual(insertedInteractions[0].args.slice(-3), [10, 2, 12]);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-// OIDC tests use a fake Access for SaaS issuer: a real RS256 keypair whose
-// public JWKS is served from the per-application endpoint via a mocked fetch.
-const TEAM_DOMAIN = "https://team.cloudflareaccess.com";
-const OIDC_CLIENT_ID = "oidc-client-id";
-
-const oidcIssuer = await (async () => {
-  const { publicKey, privateKey } = await generateKeyPair("RS256");
-  const jwk = await exportJWK(publicKey);
-  jwk.kid = "test-kid";
-  jwk.alg = "RS256";
-  jwk.use = "sig";
-
-  const signToken = (audience = OIDC_CLIENT_ID) =>
-    new SignJWT({ email: "admin@example.com" })
-      .setProtectedHeader({ alg: "RS256", kid: "test-kid" })
-      .setIssuer(TEAM_DOMAIN)
-      .setAudience(audience)
-      .setSubject("access-user-sub")
-      .setIssuedAt()
-      .setExpirationTime("5m")
-      .sign(privateKey);
-
-  const fetchMock = async (url: unknown): Promise<Response> => {
-    if (String(url) === `${TEAM_DOMAIN}/cdn-cgi/access/sso/oidc/${OIDC_CLIENT_ID}/jwks`) {
-      return Response.json({ keys: [jwk] });
-    }
-    return new Response("{}", { status: 200 });
-  };
-
-  return { signToken, fetchMock };
-})();
-
-const createOidcEnv = (overrides: Record<string, unknown> = {}) =>
-  createEnv("unused", {
-    ACCESS_TEAM_DOMAIN: TEAM_DOMAIN,
-    ACCESS_OIDC_CLIENT_ID: OIDC_CLIENT_ID,
-    ...overrides,
-  });
-
-test("oauth config endpoint publishes client metadata and fails closed when unset", async () => {
-  const configured = await worker.fetch(
-    new Request("https://example.com/oauth/config", { method: "GET" }),
-    createOidcEnv(),
-    {} as never,
-  );
-  assert.equal(configured.status, 200);
-  assert.deepEqual(await configured.json(), {
-    issuer: TEAM_DOMAIN,
-    client_id: OIDC_CLIENT_ID,
-    authorization_endpoint: `${TEAM_DOMAIN}/cdn-cgi/access/sso/oidc/${OIDC_CLIENT_ID}/authorization`,
-    token_endpoint: `${TEAM_DOMAIN}/cdn-cgi/access/sso/oidc/${OIDC_CLIENT_ID}/token`,
-  });
-
-  const unconfigured = await worker.fetch(
-    new Request("https://example.com/oauth/config", { method: "GET" }),
-    createEnv("unused"),
-    {} as never,
-  );
-  assert.equal(unconfigured.status, 503);
-});
-
-test("admin API rejects requests when OIDC is not configured", async () => {
-  const env = createEnv("unused");
-  const response = await worker.fetch(
-    new Request("https://example.com/admin/config", {
-      method: "GET",
-      headers: { authorization: `Bearer ${await oidcIssuer.signToken()}` },
-    }),
-    env,
-    {} as never,
-  );
-  assert.equal(response.status, 401);
-});
-
-test("admin API rejects requests without a valid bearer token", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = oidcIssuer.fetchMock as never;
-
-  try {
-    const env = createOidcEnv();
-
-    const missingToken = await worker.fetch(
-      new Request("https://example.com/admin/config", { method: "GET" }),
-      env,
-      {} as never,
-    );
-    assert.equal(missingToken.status, 401);
-
-    const invalidBearer = await worker.fetch(
-      new Request("https://example.com/admin/config", {
-        method: "GET",
-        headers: { authorization: "Bearer not-a-jwt" },
-      }),
-      env,
-      {} as never,
-    );
-    assert.equal(invalidBearer.status, 401);
-
-    const wrongAudience = await worker.fetch(
-      new Request("https://example.com/admin/config", {
-        method: "GET",
-        headers: { authorization: `Bearer ${await oidcIssuer.signToken("another-app")}` },
-      }),
-      env,
-      {} as never,
-    );
-    assert.equal(wrongAudience.status, 401);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("admin API accepts an Access-issued OIDC token and reports identity", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = oidcIssuer.fetchMock as never;
-
-  try {
-    const env = createOidcEnv();
-    const whoami = await worker.fetch(
-      new Request("https://example.com/admin/whoami", {
-        method: "GET",
-        headers: { authorization: `Bearer ${await oidcIssuer.signToken()}` },
-      }),
-      env,
-      {} as never,
-    );
-
-    assert.equal(whoami.status, 200);
-    assert.deepEqual(await whoami.json(), {
-      identity: {
-        sub: "access-user-sub",
-        email: "admin@example.com",
-      },
-    });
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -10,8 +10,6 @@ Cloudflare Worker Discord bot for rag tracking and mention-triggered AI replies.
 - AI: Workers AI binding (`AI`); model and prompt config live in `src/ai-config` (`@cf/...` Workers AI models or Unified Billing partner models such as `grok/grok-4.3`), routed through AI Gateway with binding options when a gateway id is configured
 - Queue: Cloudflare Queues (`AI_JOBS`, `ai-jobs`, `ai-jobs-dlq`)
 - Stateful connection: Durable Objects (`DiscordGateway`)
-- Admin auth: Cloudflare Access for SaaS as OIDC identity provider (authorization code + PKCE, Cloudflare-managed refresh tokens)
-- Infrastructure: Terraform for the Access OIDC application and policy (`terraform/`)
 - Discord integration:
   - Interactions webhook
   - REST API for command registration, message posting, and channel history
@@ -26,53 +24,94 @@ Cloudflare Worker Discord bot for rag tracking and mention-triggered AI replies.
   - `GET /` health
   - `POST /` Discord interactions
   - `POST /gateway/start` start gateway connection (bot token auth)
-  - `GET /gateway/health` gateway status
-  - `GET /oauth/config` public OIDC client metadata for the CLI
-  - `/admin/*` admin API (config, db, interactions, gateway, whoami); requires an Access-issued OIDC bearer token
-- CLI (`npm run cli`): config management, db queries, interaction logs, gateway control; authenticates with OIDC authorization code + PKCE against Cloudflare Access
+  - `GET /gateway/health` gateway status (bot token auth)
+- All other public paths return `404`.
 
-## End-to-End Flow Diagram
+## Public Route Boundary
 
 ```mermaid
-flowchart TD
-  U[Discord User] -->|/rag or /ragboard| D1[Discord Interactions]
-  D1 -->|POST /| W[Cloudflare Worker]
-  W --> V[Ed25519 Signature Verify]
-  V --> R{Command}
+flowchart LR
+  Client[Public HTTP client] -->|GET /| Worker[Cloudflare Worker]
+  Worker -->|200 text/plain: ok| Client
 
-  R -->|rag| CR[handleDeferredRagCommand]
-  CR --> DB1[(D1: rag_events)]
-  CR --> DB2[(D1: rag_totals)]
-  CR --> DB3[(D1: rag_roasts)]
-  CR --> AI1[AI roast generation]
-  AI1 --> CR
-  CR --> DResp1[Discord Interaction Response]
+  Discord[Discord Interactions] -->|POST /: signed interaction JSON| Worker
+  Worker -->|200 JSON: interaction response| Discord
 
-  R -->|ragboard| CB[handleRagboardCommand]
-  CB --> DB2
-  CB --> DResp2[Discord Interaction Response]
+  Operator[Operator] -->|POST /gateway/start: Bearer DISCORD_BOT_TOKEN| Worker
+  Operator -->|GET /gateway/health: Bearer DISCORD_BOT_TOKEN| Worker
+  Worker -->|typed Durable Object RPC: start or health| GatewayDO[DiscordGateway Durable Object]
+  GatewayDO -->|JSON: start result or health state| Worker
+  Worker -->|JSON response| Operator
 
-  Admin[Operator CLI] -->|authorization code + PKCE| CFA[Cloudflare Access OIDC]
-  CFA -->|access + refresh tokens| Admin
-  Admin -->|Bearer access token| AA[/admin API/]
-  AA -->|verify via app JWKS| CFA
-  AA --> W
-  AA --> DB4[(D1: data tables)]
+  Unknown[Other public request] -->|any unconfigured path or method| Worker
+  Worker -->|404 Not found, or 405 on / non-POST| Unknown
+```
 
-  Admin2[Operator] -->|POST /gateway/start| W
-  W --> DO[Durable Object DiscordGateway]
-  DO -->|setAlarm watchdog| AL[Durable Object alarm]
-  AL -->|reconnect/start if enabled| DO
-  DO -->|WebSocket| DG[Discord Gateway]
-  DO -->|Gateway heartbeats| DG
-  DG -->|MESSAGE_CREATE mention| DO
-  DO --> Q[(Queue: ai-jobs)]
-  Q --> QC[Queue Consumer]
-  QC --> H[Discord REST channel history]
-  H --> QC
-  QC --> AI2[AI chat completion]
-  AI2 --> QC
-  QC --> DR[Discord REST POST channel message]
+## Slash Command Flow
+
+```mermaid
+sequenceDiagram
+  actor User as Discord user
+  participant Discord as Discord Interactions API
+  participant Worker as Cloudflare Worker POST /
+  participant DB as D1 DB
+  participant AI as AI Gateway / Workers AI
+
+  User->>Discord: Slash command: /rag user or /ragboard
+  Discord->>Worker: POST / with interaction JSON + Ed25519 headers
+  Worker->>Worker: Verify signature and route interaction.data.name
+
+  alt /rag
+    Worker->>Discord: Immediate JSON: deferred interaction response
+    Worker->>DB: INSERT rag_events: target user, reporter, timestamp
+    Worker->>DB: UPSERT rag_totals: increment target count
+    Worker->>DB: SELECT rag total, reporter count, recent roast text
+    Worker->>AI: Chat request: roast prompt, model, max_tokens, temperature
+    AI-->>Worker: Chat response: roast line + optional usage
+    Worker->>DB: INSERT OR IGNORE rag_roasts: generated line
+    Worker->>Discord: PATCH original response: mention, total, roast, allowed_mentions
+  else /ragboard
+    Worker->>DB: SELECT top rag_totals: user, count, updated_at
+    DB-->>Worker: Leaderboard rows
+    Worker-->>Discord: JSON interaction response: leaderboard text
+  end
+```
+
+## Gateway Mention Flow
+
+```mermaid
+sequenceDiagram
+  actor Operator
+  actor User as Discord user
+  participant Worker as Cloudflare Worker
+  participant GatewayDO as DiscordGateway Durable Object
+  participant DiscordGateway as Discord Gateway WebSocket
+  participant Queue as Cloudflare Queue ai-jobs
+  participant Consumer as Queue consumer
+  participant DiscordREST as Discord REST API
+  participant AI as AI Gateway / Workers AI
+  participant DB as D1 DB
+
+  Operator->>Worker: POST /gateway/start with Authorization: Bearer bot token
+  Worker->>GatewayDO: start() Durable Object RPC
+  GatewayDO->>GatewayDO: Store gatewayEnabled=true and set watchdog alarm
+  GatewayDO->>DiscordGateway: WebSocket IDENTIFY/RESUME with bot token and intents
+  DiscordGateway-->>GatewayDO: READY, heartbeat ACKs, MESSAGE_CREATE events
+
+  User->>DiscordGateway: Channel message mentioning bot
+  DiscordGateway-->>GatewayDO: MESSAGE_CREATE payload: author, channel_id, content, mentions
+  GatewayDO->>Queue: Enqueue compact AiJob: channelId, messageId, botUserId, requester, prompt, reply ids
+  Queue-->>Consumer: Deliver AiJob batch
+  Consumer->>DiscordREST: GET channel messages: before messageId, limit historyLimit
+  DiscordREST-->>Consumer: Message history JSON: users, bot replies, content
+  Consumer->>DiscordREST: Optional GET replied-to message if not already in history
+  DiscordREST-->>Consumer: Replied-to message JSON: author, content, attachments
+  Consumer->>AI: Chat request: system prompt + channel context + user prompt
+  AI-->>Consumer: Chat response: generated text + optional usage
+  Consumer->>DB: INSERT rag_ai_interactions: prompt, response, model, status, token usage
+  Consumer->>DiscordREST: POST channel message: sanitized content, allowed_mentions parse=[]
+  DiscordREST-->>Consumer: Created message JSON or API error
+  Consumer->>Queue: ack on success/terminal 4xx, retry on transient errors
 ```
 
 ## Command-by-Command Details
@@ -104,12 +143,12 @@ flowchart TD
 ### Mention-based AI (not a slash command)
 
 - Entry:
-  - `POST /gateway/start` starts Durable Object gateway client
+  - authenticated `POST /gateway/start` starts Durable Object gateway client
   - gateway listens for Discord `MESSAGE_CREATE`
 - Handlers: `src/gateway.ts` (connection) and `src/mention.ts` (logic)
 - Queue and worker:
-  - gateway enqueues the raw mention job in `AI_JOBS`
-  - consumer fetches recent channel history and builds a chat conversation
+  - gateway enqueues a compact mention job in `AI_JOBS` with IDs, requester, and prompt
+  - consumer fetches recent channel history and any missing replied-to message context, then builds a chat conversation
   - generates a reply with the configured model, sanitizes mentions/IDs
 - Delivery:
   - posts message with Discord REST API
@@ -120,9 +159,6 @@ AI config is checked into `src/ai-config`:
 
 - `discord-response.json` and `discord-response-system-prompt.md` control mention replies.
 - `rag-roast.json` and `rag-roast-system-prompt.md` control `/rag` roast generation.
-
-The admin API and CLI can still report the active AI config, but mutations are
-rejected because AI behavior is source-controlled.
 
 ## Local and Deploy Commands
 

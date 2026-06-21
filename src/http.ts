@@ -1,6 +1,8 @@
 import nacl from "tweetnacl";
 
+import { timingSafeEqual } from "./timing-safe-equal";
 import type { DiscordInteraction } from "./types";
+import { isDiscordInteraction } from "./validation";
 
 const encoder = new TextEncoder();
 
@@ -54,26 +56,29 @@ export const verifyDiscordRequest = async (
   }
 
   try {
-    return JSON.parse(rawBody) as DiscordInteraction;
+    const parsed = JSON.parse(rawBody);
+    return isDiscordInteraction(parsed) ? parsed : null;
   } catch {
     return null;
   }
 };
 
-// Constant-time string comparison via fixed-length digests, safe for secrets
-// of differing lengths.
-export const secretsMatch = async (actual: string, expected: string) => {
+export const secretsMatch = (actual: string, expected: string) => {
   const actualBytes = encoder.encode(actual);
   const expectedBytes = encoder.encode(expected);
-  const [actualHash, expectedHash] = await Promise.all([
-    crypto.subtle.digest("SHA-256", actualBytes),
-    crypto.subtle.digest("SHA-256", expectedBytes),
-  ]);
-  const actualDigest = new Uint8Array(actualHash);
-  const expectedDigest = new Uint8Array(expectedHash);
-  let difference = actualBytes.length ^ expectedBytes.length;
-  for (let index = 0; index < actualDigest.length; index += 1) {
-    difference |= actualDigest[index] ^ expectedDigest[index];
+  return timingSafeEqual(actualBytes, expectedBytes);
+};
+
+export const bearerTokenMatches = (authorization: string, expectedToken: string) => {
+  const separatorIndex = authorization.indexOf(" ");
+  if (separatorIndex === -1) {
+    return false;
   }
-  return difference === 0;
+
+  const scheme = authorization.slice(0, separatorIndex);
+  if (scheme.toLowerCase() !== "bearer") {
+    return false;
+  }
+
+  return secretsMatch(authorization.slice(separatorIndex + 1), expectedToken);
 };

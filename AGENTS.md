@@ -6,8 +6,6 @@ This project expects these environment variables:
 - `DISCORD_APPLICATION_ID`
 - `DISCORD_PUBLIC_KEY`
 - `DISCORD_BOT_TOKEN`
-- `CLIENT_ID`
-- `CLIENT_SECRET`
 
 `.env` is set to 1Password references (`op://...`), so run project commands through `op run`.
 
@@ -18,22 +16,13 @@ This project expects these environment variables:
   - `src/http.ts` Discord signature verification, JSON responses, constant-time compare
   - `src/discord.ts` Discord REST helpers
   - `src/gateway.ts` `DiscordGateway` Durable Object (`DISCORD_GATEWAY` binding)
-  - `src/access.ts` OIDC token verification against the Access application JWKS
   - `src/mention.ts` mention handling and AI queue consumer (channel history context)
   - `src/ai.ts` model-agnostic chat calls through the Workers AI binding (`env.AI.run`), with AI Gateway routing via binding options (`gateway: { id }`) for Workers AI `@cf/...` models and Unified Billing partner models such as `grok/grok-4.3`
   - `src/config.ts` loads source-controlled AI config from `src/ai-config`
-  - `src/admin.ts` Cloudflare Access protected admin API
   - `src/logger.ts` structured logging
 - Discord interactions route: `POST /`
-- Gateway control routes: `POST /gateway/start` (bot token auth), `GET /gateway/health`
-- OIDC client metadata: `GET /oauth/config` (public; issuer, client_id, endpoints)
-- Admin API (fails closed; requires a bearer token issued by the Access for SaaS OIDC application):
-  - `GET /admin/whoami`
-  - `GET /admin/config`, `PUT /admin/config`, `DELETE /admin/config/:key`
-  - `POST /admin/db` body `{sql, params?}`
-  - `GET /admin/interactions?limit=`
-  - `GET /admin/gateway/health`, `POST /admin/gateway/start`
-  - mutations are audit-logged with the authenticated identity
+- Gateway control routes: `POST /gateway/start`, `GET /gateway/health` (both require `Authorization: Bearer $DISCORD_BOT_TOKEN`)
+- Public routes are allowlisted. Any path not listed here returns `404`.
 - Database: D1 (`DB` binding) using `schema.sql`
 - AI model binding: `AI`
 - Queue bindings:
@@ -47,42 +36,6 @@ AI config lives in `src/ai-config`:
 - `discord-response-system-prompt.md`: mention response system prompt
 - `rag-roast.json`: `/rag` roast model, max tokens, temperature, AI Gateway id used by the AI binding
 - `rag-roast-system-prompt.md`: `/rag` roast system prompt
-
-Inspect runtime state with the CLI:
-
-```bash
-npm run cli -- config list
-npm run cli -- db "SELECT * FROM rag_totals LIMIT 5"
-npm run cli -- interactions 10
-npm run cli -- gateway health
-npm run cli -- whoami
-npm run cli -- logout
-```
-
-CLI auth flow (override worker URL with `RAGBOT_URL`):
-1. The CLI discovers the OIDC client metadata from `GET /oauth/config`.
-2. It runs the OIDC authorization code flow with PKCE as a public client: it opens the browser to the Access authorization endpoint and receives the code on `http://127.0.0.1:8976/callback`.
-3. Access issues access + refresh tokens; the CLI caches them with mode 0600 in `~/.config/ragbot/tokens.json` and refreshes automatically, falling back to a fresh browser login when the refresh token expires or is revoked.
-4. Admin requests send `Authorization: Bearer <access token>`.
-
-`ragbot login` forces a fresh browser login; `ragbot logout` drops cached tokens.
-
-## Cloudflare Access Setup (admin API auth)
-
-Access acts as the OIDC identity provider via an Access for SaaS application, managed with Terraform (`terraform/`, provider `cloudflare/cloudflare ~> 5.19`). Cloudflare issues, signs, stores, and revokes all tokens; revoking a user's Zero Trust session invalidates their refresh tokens.
-
-```bash
-cp terraform/terraform.tfvars.example terraform/terraform.tfvars
-# edit account_id and allowed_emails, then (CLOUDFLARE_API_TOKEN must be in the op item)
-op run --env-file=.env -- terraform -chdir=terraform init
-op run --env-file=.env -- terraform -chdir=terraform apply
-```
-
-Then set in `wrangler.jsonc` vars and deploy:
-1. `ACCESS_TEAM_DOMAIN`: `https://<team>.cloudflareaccess.com`
-2. `ACCESS_OIDC_CLIENT_ID`: the `oidc_client_id` Terraform output
-
-The Worker validates every bearer token against the application's JWKS endpoint (`/cdn-cgi/access/sso/oidc/<client_id>/jwks`) with issuer and audience checks, so the admin API is denied-by-default until both vars are set.
 
 ## Setup and Run Commands
 

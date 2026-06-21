@@ -1,6 +1,9 @@
+import { DurableObject } from "cloudflare:workers";
+
 import { errorMessage, logger } from "./logger";
 import { handleGatewayMessageCreate } from "./mention";
-import type { DiscordMessage, Env } from "./types";
+import type { Env } from "./types";
+import { isDiscordMessage, isRecord } from "./validation";
 
 type DiscordGatewayPayload = {
   op: number;
@@ -21,6 +24,11 @@ type DiscordGatewayReady = {
   };
 };
 
+export type DiscordGatewayHealth = {
+  connected: boolean;
+  resumable: boolean;
+};
+
 const DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
 const GUILD_MESSAGES_INTENT = 1 << 9;
 const DIRECT_MESSAGES_INTENT = 1 << 12;
@@ -29,19 +37,32 @@ const GATEWAY_INTENTS = GUILD_MESSAGES_INTENT | DIRECT_MESSAGES_INTENT | MESSAGE
 const GATEWAY_ENABLED_KEY = "gatewayEnabled";
 const GATEWAY_WATCHDOG_INTERVAL_MS = 60_000;
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;
+const isGatewayPayload = (value: unknown): value is DiscordGatewayPayload =>
+  isRecord(value) &&
+  typeof value.op === "number" &&
+  (value.s === undefined || value.s === null || typeof value.s === "number") &&
+  (value.t === undefined || value.t === null || typeof value.t === "string");
 
-// Auth for these routes is enforced by the Worker before it forwards to the
-// Durable Object, which is only reachable through its binding.
-export const forwardToGateway = (request: Request, env: Env, path: string) => {
+const isGatewayHello = (value: unknown): value is DiscordGatewayHello =>
+  isRecord(value) && typeof value.heartbeat_interval === "number" && value.heartbeat_interval > 0;
+
+const isGatewayReady = (value: unknown): value is DiscordGatewayReady =>
+  isRecord(value) &&
+  typeof value.session_id === "string" &&
+  (value.resume_gateway_url === undefined || typeof value.resume_gateway_url === "string") &&
+  (value.user === undefined ||
+    (isRecord(value.user) && typeof value.user.id === "string"));
+
+const gatewayStub = (env: Env) => {
   const id = env.DISCORD_GATEWAY.idFromName("discord-gateway");
-  const url = new URL(request.url);
-  url.pathname = path;
-  return env.DISCORD_GATEWAY.get(id).fetch(new Request(url, request));
+  return env.DISCORD_GATEWAY.get(id);
 };
 
-export class DiscordGateway {
+export const startGateway = async (env: Env) => gatewayStub(env).start();
+
+export const getGatewayHealth = async (env: Env) => gatewayStub(env).health();
+
+export class DiscordGateway extends DurableObject<Env> {
   private webSocket: WebSocket | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -52,34 +73,29 @@ export class DiscordGateway {
   private heartbeatAcknowledged = true;
 
   constructor(
-    private readonly state: DurableObjectState,
-    private readonly env: Env,
+    state: DurableObjectState,
+    env: Env,
   ) {
-    this.state.blockConcurrencyWhile?.(async () => {
+    super(state, env);
+    this.ctx.blockConcurrencyWhile?.(async () => {
       if (await this.isGatewayEnabled()) {
         await this.scheduleWatchdog();
-        this.connect();
+        this.connectGateway();
       }
     });
   }
 
-  async fetch(request: Request) {
-    const url = new URL(request.url);
+  async health(): Promise<DiscordGatewayHealth> {
+    return {
+      connected: this.webSocket?.readyState === WebSocket.OPEN,
+      resumable: Boolean(this.sessionId && this.resumeGatewayUrl),
+    };
+  }
 
-    if (url.pathname === "/gateway/health" && request.method === "GET") {
-      return Response.json({
-        connected: this.webSocket?.readyState === WebSocket.OPEN,
-        resumable: Boolean(this.sessionId && this.resumeGatewayUrl),
-      });
-    }
-
-    if (url.pathname === "/gateway/start" && request.method === "POST") {
-      await this.enableGateway();
-      this.connect();
-      return Response.json({ ok: true });
-    }
-
-    return new Response("Not found", { status: 404 });
+  async start() {
+    await this.enableGateway();
+    this.connectGateway();
+    return { ok: true };
   }
 
   async alarm() {
@@ -87,24 +103,24 @@ export class DiscordGateway {
       return;
     }
 
-    this.connect();
+    this.connectGateway();
     await this.scheduleWatchdog();
   }
 
   private async enableGateway() {
-    await this.state.storage.put(GATEWAY_ENABLED_KEY, true);
+    await this.ctx.storage.put(GATEWAY_ENABLED_KEY, true);
     await this.scheduleWatchdog();
   }
 
   private async isGatewayEnabled() {
-    return (await this.state.storage.get<boolean>(GATEWAY_ENABLED_KEY)) === true;
+    return (await this.ctx.storage.get<boolean>(GATEWAY_ENABLED_KEY)) === true;
   }
 
   private scheduleWatchdog() {
-    return this.state.storage.setAlarm(Date.now() + GATEWAY_WATCHDOG_INTERVAL_MS);
+    return this.ctx.storage.setAlarm(Date.now() + GATEWAY_WATCHDOG_INTERVAL_MS);
   }
 
-  private connect() {
+  private connectGateway() {
     if (this.webSocket?.readyState === WebSocket.OPEN || this.webSocket?.readyState === WebSocket.CONNECTING) {
       return;
     }
@@ -129,13 +145,25 @@ export class DiscordGateway {
   }
 
   private async handleMessage(event: MessageEvent) {
-    const payload = JSON.parse(String(event.data)) as DiscordGatewayPayload;
+    let payload: DiscordGatewayPayload;
+    try {
+      const parsed = JSON.parse(String(event.data));
+      if (!isGatewayPayload(parsed)) {
+        logger.warn("gateway_payload_invalid");
+        return;
+      }
+      payload = parsed;
+    } catch (error) {
+      logger.warn("gateway_payload_parse_failed", { error: errorMessage(error) });
+      return;
+    }
+
     if (typeof payload.s === "number") {
       this.lastSequence = payload.s;
     }
 
-    if (payload.op === 10 && isRecord(payload.d)) {
-      this.startHeartbeat(payload.d as DiscordGatewayHello);
+    if (payload.op === 10 && isGatewayHello(payload.d)) {
+      this.startHeartbeat(payload.d);
       this.identifyOrResume();
       return;
     }
@@ -169,8 +197,8 @@ export class DiscordGateway {
       return;
     }
 
-    if (payload.t === "READY" && isRecord(payload.d)) {
-      const ready = payload.d as DiscordGatewayReady;
+    if (payload.t === "READY" && isGatewayReady(payload.d)) {
+      const ready = payload.d;
       this.sessionId = ready.session_id;
       this.resumeGatewayUrl = ready.resume_gateway_url ?? this.resumeGatewayUrl;
       this.botUserId = ready.user?.id ?? this.botUserId;
@@ -178,9 +206,9 @@ export class DiscordGateway {
       return;
     }
 
-    if (payload.t === "MESSAGE_CREATE" && isRecord(payload.d)) {
+    if (payload.t === "MESSAGE_CREATE" && isDiscordMessage(payload.d)) {
       try {
-        await handleGatewayMessageCreate(payload.d as DiscordMessage, this.env, this.botUserId);
+        await handleGatewayMessageCreate(payload.d, this.env, this.botUserId);
       } catch (error) {
         logger.error("gateway_message_create_failed", { error: errorMessage(error) });
       }
@@ -254,7 +282,7 @@ export class DiscordGateway {
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
-      this.connect();
+      this.connectGateway();
     }, 5_000);
   }
 

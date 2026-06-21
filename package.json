@@ -6,21 +6,20 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "tsc --noEmit && tsc --noEmit -p cli",
-    "test": "node --test --import tsx",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
     "register:commands": "tsx scripts/register-commands.ts",
-    "cli": "tsx cli/ragbot.ts",
     "d1:migrate:local": "wrangler d1 execute ragbot --local --file=./schema.sql"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260417.0",
+    "@cloudflare/vitest-pool-workers": "^0.16.18",
     "@types/node": "^25.6.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
+    "vitest": "^4.1.9",
     "wrangler": "^4.13.2"
   },
   "dependencies": {
-    "jose": "^6.0.13",
     "tweetnacl": "^1.0.3"
   }
 }

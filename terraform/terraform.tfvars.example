@@ -1,2 +1,0 @@
-account_id     = "your-cloudflare-account-id"
-allowed_emails = ["you@example.com"]

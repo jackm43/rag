@@ -23,13 +23,7 @@
   ],
   "vars": {
     "DISCORD_APPLICATION_ID": "1496842508251172895",
-    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
-    // Cloudflare Access for SaaS (OIDC) application that issues admin API
-    // tokens. ACCESS_TEAM_DOMAIN is https://<team>.cloudflareaccess.com and
-    // ACCESS_OIDC_CLIENT_ID is the oidc_client_id Terraform output. The admin
-    // API rejects all requests until both are set.
-    "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_OIDC_CLIENT_ID": ""
+    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271"
   },
   "d1_databases": [
     {
@@ -46,6 +40,9 @@
     "logs": {
       "enabled": true,
       "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true
     }
   },
   "durable_objects": {

@@ -1,19 +1,10 @@
 import type { BotConfig } from "./config";
 import type { Env } from "./types";
+import { isRecord } from "./validation";
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
-};
-
-type ChatResult = {
-  response?: string;
-  choices?: Array<{ message?: { content?: string | null } }>;
-  model?: string;
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-  error?: { message?: string } | Array<{ message?: string }> | string;
-  message?: string;
-  description?: string;
 };
 
 const isWorkersAiModel = (model: string) => model.startsWith("@cf/");
@@ -27,21 +18,60 @@ const extractText = (result: unknown): string => {
   if (typeof result === "string") {
     return result;
   }
-  const chat = result as ChatResult;
-  if (typeof chat?.response === "string") {
-    return chat.response;
+  if (!isRecord(result)) {
+    return "";
   }
-  return chat?.choices?.[0]?.message?.content ?? "";
+  if (typeof result.response === "string") {
+    return result.response;
+  }
+  const firstChoice = Array.isArray(result.choices) ? result.choices[0] : undefined;
+  if (!isRecord(firstChoice) || !isRecord(firstChoice.message)) {
+    return "";
+  }
+  return typeof firstChoice.message.content === "string" ? firstChoice.message.content : "";
 };
 
-const usageFrom = (usage: ChatResult["usage"]) =>
-  usage
+const optionalUsageNumber = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+
+const usageFrom = (usage: unknown) =>
+  isRecord(usage)
     ? {
-      promptTokens: usage.prompt_tokens ?? 0,
-      completionTokens: usage.completion_tokens ?? 0,
-      totalTokens: usage.total_tokens ?? 0,
+      promptTokens: optionalUsageNumber(usage.prompt_tokens),
+      completionTokens: optionalUsageNumber(usage.completion_tokens),
+      totalTokens: optionalUsageNumber(usage.total_tokens),
     }
     : undefined;
+
+const errorDetailFrom = (payload: unknown, fallback: string) => {
+  if (!isRecord(payload)) {
+    return fallback;
+  }
+
+  const error = payload.error;
+  if (Array.isArray(error)) {
+    return error
+      .map((item) => isRecord(item) && typeof item.message === "string" ? item.message : null)
+      .filter((message): message is string => Boolean(message))
+      .join("; ") || fallback;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (isRecord(error) && typeof error.message === "string") {
+    return error.message;
+  }
+  if (typeof payload.message === "string") {
+    return payload.message;
+  }
+  if (typeof payload.description === "string") {
+    return payload.description;
+  }
+  return fallback;
+};
+
+const modelFrom = (payload: unknown, fallback: string) =>
+  isRecord(payload) && typeof payload.model === "string" ? payload.model : fallback;
 
 const gatewayChatCompletions = async (
   env: Env,
@@ -72,12 +102,9 @@ const gatewayChatCompletions = async (
     },
   );
 
-  const payload = (await response.json().catch(() => ({}))) as ChatResult;
+  const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const detail =
-      Array.isArray(payload.error) ? payload.error.map((item) => item.message).filter(Boolean).join("; ")
-        : typeof payload.error === "string" ? payload.error
-          : payload.error?.message ?? payload.message ?? payload.description ?? response.statusText;
+    const detail = errorDetailFrom(payload, response.statusText);
     throw new Error(`AI Gateway request failed (${response.status}): ${detail}`);
   }
 
@@ -161,11 +188,10 @@ export const runChatCompletion = async (
         input as never,
         requestConfig.gatewayId ? ({ gateway: { id: requestConfig.gatewayId } } as never) : undefined,
       );
-  const payload = result as ChatResult;
   return {
-    content: extractText(payload),
-    model: payload.model ?? bindingModel,
-    usage: usageFrom(payload.usage),
+    content: extractText(result),
+    model: modelFrom(result, bindingModel),
+    usage: isRecord(result) ? usageFrom(result.usage) : undefined,
   };
 };
 
