@@ -39,7 +39,7 @@ flowchart LR
 
   Operator[Operator] -->|POST /gateway/start: Bearer DISCORD_BOT_TOKEN| Worker
   Operator -->|GET /gateway/health: Bearer DISCORD_BOT_TOKEN| Worker
-  Worker -->|forward request + internal auth header| GatewayDO[DiscordGateway Durable Object]
+  Worker -->|typed Durable Object RPC: start or health| GatewayDO[DiscordGateway Durable Object]
   GatewayDO -->|JSON: start result or health state| Worker
   Worker -->|JSON response| Operator
 
@@ -93,7 +93,7 @@ sequenceDiagram
   participant DB as D1 DB
 
   Operator->>Worker: POST /gateway/start with Authorization: Bearer bot token
-  Worker->>GatewayDO: Forward start request + x-ragbot-gateway-authorization
+  Worker->>GatewayDO: start() Durable Object RPC
   GatewayDO->>GatewayDO: Store gatewayEnabled=true and set watchdog alarm
   GatewayDO->>DiscordGateway: WebSocket IDENTIFY/RESUME with bot token and intents
   DiscordGateway-->>GatewayDO: READY, heartbeat ACKs, MESSAGE_CREATE events

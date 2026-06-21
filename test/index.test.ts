@@ -1,12 +1,15 @@
-import test from "node:test";
-import assert from "node:assert/strict";
+import { assert, test } from "vitest";
 import nacl from "tweetnacl";
+import { env as testEnv } from "cloudflare:workers";
+import { runInDurableObject } from "cloudflare:test";
 
 import worker, {
   DiscordGateway,
   extractBotMentionPrompt,
   handleGatewayMessageCreate,
 } from "../src/index.ts";
+import { fetchChannelMessages } from "../src/discord.ts";
+import { bearerTokenMatches, secretsMatch } from "../src/http.ts";
 
 const encoder = new TextEncoder();
 
@@ -91,6 +94,19 @@ const createDbMock = (options: {
   },
 });
 
+test("secretsMatch compares bearer tokens without string equality", () => {
+  assert.equal(secretsMatch("Bearer bot-token", "Bearer bot-token"), true);
+  assert.equal(secretsMatch("Bearer bot-tokem", "Bearer bot-token"), false);
+  assert.equal(secretsMatch("Bearer bot-token-extra", "Bearer bot-token"), false);
+});
+
+test("bearerTokenMatches parses authorization before comparing the token", () => {
+  assert.equal(bearerTokenMatches("Bearer bot-token", "bot-token"), true);
+  assert.equal(bearerTokenMatches("bearer bot-token", "bot-token"), true);
+  assert.equal(bearerTokenMatches("Bot bot-token", "bot-token"), false);
+  assert.equal(bearerTokenMatches("Bearer bot-tokem", "bot-token"), false);
+});
+
 test("GET / returns ok", async () => {
   const keyPair = nacl.sign.keyPair();
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
@@ -120,6 +136,34 @@ test("invalid Discord signature returns 401", async () => {
   const request = createSignedRequest({ type: 1 }, mismatchedPair.secretKey);
 
   const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 401);
+  assert.equal(await response.text(), "Bad request signature");
+});
+
+test("signed malformed Discord interaction returns 401", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const request = createSignedRequest({ token: "interaction-token" }, keyPair.secretKey);
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 401);
+  assert.equal(await response.text(), "Bad request signature");
+});
+
+test("missing Discord signature headers return 401", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const response = await worker.fetch(
+    new Request("https://example.com/", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: 1 }),
+    }),
+    env,
+    {} as never,
+  );
 
   assert.equal(response.status, 401);
   assert.equal(await response.text(), "Bad request signature");
@@ -724,20 +768,65 @@ test("gateway message create ignores bots and empty mention prompts", async () =
   assert.deepEqual(queuedJobs, []);
 });
 
+test("fetchChannelMessages drops malformed Discord messages", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json([
+      {
+        id: "message-id",
+        channel_id: "channel-id",
+        content: "hello",
+        author: { id: "user-id", username: "alice" },
+      },
+      {
+        id: "missing-channel-id",
+        content: "bad",
+      },
+      "bad",
+    ]);
+
+  try {
+    const env = createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" });
+    const messages = await fetchChannelMessages(env, "channel-id");
+
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].id, "message-id");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("queue handler acknowledges malformed AI jobs without side effects", async () => {
+  let acked = false;
+  const env = createEnv("unused");
+
+  await worker.queue(
+    {
+      messages: [
+        {
+          body: { kind: "channel", channelId: "channel-id" },
+          ack: () => {
+            acked = true;
+          },
+        },
+      ],
+    } as never,
+    env,
+  );
+
+  assert.equal(acked, true);
+});
+
 test("worker rejects /gateway/start without bot token auth", async () => {
-  let doFetchCalls = 0;
-  let forwardedUrl = "";
-  let forwardedAuth = "";
+  let startCalls = 0;
   const env = createEnv("unused", {
     DISCORD_BOT_TOKEN: "bot-token",
     DISCORD_GATEWAY: {
       idFromName: () => "id",
       get: () => ({
-        fetch: async (request: Request) => {
-          doFetchCalls += 1;
-          forwardedUrl = request.url;
-          forwardedAuth = request.headers.get("x-ragbot-gateway-authorization") ?? "";
-          return Response.json({ ok: true });
+        start: async () => {
+          startCalls += 1;
+          return { ok: true };
         },
       }),
     },
@@ -749,7 +838,7 @@ test("worker rejects /gateway/start without bot token auth", async () => {
     {} as never,
   );
   assert.equal(unauthorized.status, 401);
-  assert.equal(doFetchCalls, 0);
+  assert.equal(startCalls, 0);
 
   const authorized = await worker.fetch(
     new Request("https://example.com/gateway/start", {
@@ -760,21 +849,20 @@ test("worker rejects /gateway/start without bot token auth", async () => {
     {} as never,
   );
   assert.equal(authorized.status, 200);
-  assert.equal(doFetchCalls, 1);
-  assert.equal(new URL(forwardedUrl).pathname, "/gateway/start");
-  assert.equal(forwardedAuth, "Bearer bot-token");
+  assert.deepEqual(await authorized.json(), { ok: true });
+  assert.equal(startCalls, 1);
 });
 
 test("worker rejects /gateway/health without bot token auth", async () => {
-  let doFetchCalls = 0;
+  let healthCalls = 0;
   const env = createEnv("unused", {
     DISCORD_BOT_TOKEN: "bot-token",
     DISCORD_GATEWAY: {
       idFromName: () => "id",
       get: () => ({
-        fetch: async () => {
-          doFetchCalls += 1;
-          return Response.json({ connected: false, resumable: false });
+        health: async () => {
+          healthCalls += 1;
+          return { connected: false, resumable: false };
         },
       }),
     },
@@ -786,7 +874,7 @@ test("worker rejects /gateway/health without bot token auth", async () => {
     {} as never,
   );
   assert.equal(unauthorized.status, 401);
-  assert.equal(doFetchCalls, 0);
+  assert.equal(healthCalls, 0);
 
   const authorized = await worker.fetch(
     new Request("https://example.com/gateway/health", {
@@ -797,7 +885,8 @@ test("worker rejects /gateway/health without bot token auth", async () => {
     {} as never,
   );
   assert.equal(authorized.status, 200);
-  assert.equal(doFetchCalls, 1);
+  assert.deepEqual(await authorized.json(), { connected: false, resumable: false });
+  assert.equal(healthCalls, 1);
 });
 
 test("worker fails closed for unconfigured public paths", async () => {
@@ -808,9 +897,13 @@ test("worker fails closed for unconfigured public paths", async () => {
     DISCORD_GATEWAY: {
       idFromName: () => "id",
       get: () => ({
-        fetch: async () => {
+        start: async () => {
           gatewayFetchCalls += 1;
-          return Response.json({ ok: true });
+          return { ok: true };
+        },
+        health: async () => {
+          gatewayFetchCalls += 1;
+          return { connected: false, resumable: false };
         },
       }),
     },
@@ -859,10 +952,8 @@ test("worker fails closed for unconfigured public paths", async () => {
   assert.equal(gatewayFetchCalls, 0);
 });
 
-test("gateway durable object persists enabled state and schedules an alarm", async () => {
+test("gateway durable object start RPC persists enabled state and schedules an alarm", async () => {
   const originalWebSocket = globalThis.WebSocket;
-  const storedValues = new Map<string, unknown>();
-  const alarmTimes: number[] = [];
   class FakeWebSocket extends EventTarget {
     static CONNECTING = 0;
     static OPEN = 1;
@@ -880,37 +971,21 @@ test("gateway durable object persists enabled state and schedules an alarm", asy
   globalThis.WebSocket = FakeWebSocket as never;
 
   try {
-    const gateway = new DiscordGateway(
-      {
-        storage: {
-          get: async (key: string) => storedValues.get(key),
-          put: async (key: string, value: unknown) => {
-            storedValues.set(key, value);
-          },
-          setAlarm: async (scheduledTime: number) => {
-            alarmTimes.push(scheduledTime);
-          },
-        },
-      } as never,
-      createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" }),
-    );
-    const unauthorized = await gateway.fetch(
-      new Request("https://example.com/gateway/start", { method: "POST" }),
-    );
-    assert.equal(unauthorized.status, 401);
-    assert.equal(storedValues.get("gatewayEnabled"), undefined);
+    const id = testEnv.DISCORD_GATEWAY.idFromName(`rpc-test-${crypto.randomUUID()}`);
+    const gateway = testEnv.DISCORD_GATEWAY.get(id);
 
-    const response = await gateway.fetch(
-      new Request("https://example.com/gateway/start", {
-        method: "POST",
-        headers: { "x-ragbot-gateway-authorization": "Bearer bot-token" },
-      }),
-    );
+    const initialHealth = await gateway.health();
+    assert.deepEqual(initialHealth, { connected: false, resumable: false });
 
-    assert.equal(response.status, 200);
-    assert.equal(storedValues.get("gatewayEnabled"), true);
-    assert.equal(alarmTimes.length, 1);
-    assert.ok(alarmTimes[0] > Date.now());
+    const response = await gateway.start();
+    assert.deepEqual(response, { ok: true });
+
+    await runInDurableObject(gateway, async (_instance, state) => {
+      assert.equal(await state.storage.get("gatewayEnabled"), true);
+      const alarmTime = await state.storage.getAlarm();
+      assert.equal(typeof alarmTime, "number");
+      assert.ok((alarmTime ?? 0) > Date.now());
+    });
   } finally {
     globalThis.WebSocket = originalWebSocket;
   }

@@ -3,6 +3,7 @@ import { loadConfig, type BotConfig } from "./config";
 import { fetchBotRoleIds, fetchChannelMessages, fetchMessage, postChannelMessage } from "./discord";
 import { errorMessage, logger } from "./logger";
 import type { AiChannelJob, AiJob, DiscordMessage, Env } from "./types";
+import { isAiJob } from "./validation";
 
 const MAX_DISCORD_MESSAGE_LENGTH = 1900;
 const MAX_HISTORY_ENTRY_LENGTH = 600;
@@ -257,6 +258,12 @@ const recordAiInteraction = async (
 export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) => {
   const startedAt = Date.now();
   const job = message.body;
+  if (!isAiJob(job)) {
+    logger.warn("ai_job_invalid");
+    message.ack();
+    return;
+  }
+
   let model = "unknown";
   let aiDurationMs: number | null = null;
   let content: string | null = null;

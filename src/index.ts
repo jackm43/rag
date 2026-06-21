@@ -1,7 +1,7 @@
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
-import { DiscordGateway, forwardToGateway } from "./gateway";
-import { jsonResponse, secretsMatch, verifyDiscordRequest } from "./http";
+import { DiscordGateway, getGatewayHealth, startGateway } from "./gateway";
+import { bearerTokenMatches, jsonResponse, verifyDiscordRequest } from "./http";
 import { errorMessage, logger } from "./logger";
 import { extractBotMentionPrompt, handleGatewayMessageCreate, processAiQueueMessage } from "./mention";
 import {
@@ -14,19 +14,26 @@ import {
 
 export { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
 
+const hasRequiredHeaders = (request: Request, headers: string[]) =>
+  headers.every((header) => request.headers.has(header));
+
 const handleGatewayControlRequest = async (request: Request, env: Env): Promise<Response> => {
   const url = new URL(request.url);
+  if (!hasRequiredHeaders(request, ["authorization"])) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
   const authorization = request.headers.get("authorization") ?? "";
-  if (!(await secretsMatch(authorization, `Bearer ${env.DISCORD_BOT_TOKEN}`))) {
+  if (!bearerTokenMatches(authorization, env.DISCORD_BOT_TOKEN)) {
     return new Response("Unauthorized", { status: 401 });
   }
 
   if (url.pathname === "/gateway/health" && request.method === "GET") {
-    return forwardToGateway(request, env, "/gateway/health");
+    return Response.json(await getGatewayHealth(env));
   }
 
   if (url.pathname === "/gateway/start" && request.method === "POST") {
-    return forwardToGateway(request, env, "/gateway/start");
+    return Response.json(await startGateway(env));
   }
 
   return new Response("Not found", { status: 404 });
@@ -37,6 +44,10 @@ const handleInteractionRequest = async (
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> => {
+  if (!hasRequiredHeaders(request, ["x-signature-ed25519", "x-signature-timestamp"])) {
+    return new Response("Bad request signature", { status: 401 });
+  }
+
   const interaction = await verifyDiscordRequest(request, env.DISCORD_PUBLIC_KEY);
   if (!interaction) {
     return new Response("Bad request signature", { status: 401 });

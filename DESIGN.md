@@ -47,7 +47,7 @@ flowchart LR
   Worker -->|JSON: Discord interaction callback| Discord
 
   Operator[Operator] -->|POST /gateway/start or GET /gateway/health + bot bearer token| Worker
-  Worker -->|same request + x-ragbot-gateway-authorization| DO[DiscordGateway Durable Object]
+  Worker -->|typed Durable Object RPC: start or health| DO[DiscordGateway Durable Object]
   DO -->|JSON: ok or health state| Worker
   Worker -->|JSON response| Operator
 
@@ -103,8 +103,8 @@ sequenceDiagram
   participant DB as D1
 
   Operator->>Worker: POST /gateway/start: Authorization Bearer DISCORD_BOT_TOKEN
-  Worker->>DO: Forward request: path + x-ragbot-gateway-authorization
-  DO->>DO: Validate internal auth, persist gatewayEnabled, set alarm
+  Worker->>DO: start() Durable Object RPC after public bearer auth
+  DO->>DO: Persist gatewayEnabled, set alarm
   DO->>GW: WebSocket IDENTIFY: bot token, intents
   GW-->>DO: READY + session metadata
   GW-->>DO: MESSAGE_CREATE: channel_id, message id, author, content, mentions, reply reference

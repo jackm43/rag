@@ -1,4 +1,5 @@
 import { DISCORD_API_BASE_URL, type DiscordMessage, type Env } from "./types";
+import { isDiscordMessage, isRecord } from "./validation";
 
 const botHeaders = (env: Env) => ({
   authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
@@ -45,7 +46,8 @@ export const fetchChannelMessages = async (
   if (!response.ok) {
     return [];
   }
-  return (await response.json()) as DiscordMessage[];
+  const payload = await response.json().catch(() => null);
+  return Array.isArray(payload) ? payload.filter(isDiscordMessage) : [];
 };
 
 export const fetchMessage = async (
@@ -60,7 +62,8 @@ export const fetchMessage = async (
   if (!response.ok) {
     return null;
   }
-  return (await response.json()) as DiscordMessage;
+  const payload = await response.json().catch(() => null);
+  return isDiscordMessage(payload) ? payload : null;
 };
 
 export const fetchUsername = async (env: Env, userId: string): Promise<string | null> => {
@@ -70,8 +73,8 @@ export const fetchUsername = async (env: Env, userId: string): Promise<string | 
   if (!response?.ok) {
     return null;
   }
-  const user = (await response.json()) as { username?: string };
-  return user.username ?? null;
+  const user = await response.json().catch(() => null);
+  return isRecord(user) && typeof user.username === "string" ? user.username : null;
 };
 
 const BOT_ROLE_CACHE_TTL_MS = 5 * 60_000;
@@ -95,8 +98,10 @@ export const fetchBotRoleIds = async (
     return cached?.roleIds ?? [];
   }
 
-  const member = (await response.json()) as { roles?: string[] };
-  const roleIds = (member.roles ?? []).map(String);
+  const member = await response.json().catch(() => null);
+  const roleIds = isRecord(member) && Array.isArray(member.roles)
+    ? member.roles.filter((role): role is string => typeof role === "string")
+    : [];
   botRoleCache.set(key, { roleIds, expiresAt: Date.now() + BOT_ROLE_CACHE_TTL_MS });
   return roleIds;
 };
