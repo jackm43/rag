@@ -13,8 +13,6 @@ declare namespace Cloudflare {
 		DISCORD_APPLICATION_ID: string;
 		DISCORD_PUBLIC_KEY: string;
 		DISCORD_BOT_TOKEN: string;
-		CLIENT_ID: string;
-		CLIENT_SECRET: string;
 		DISCORD_GATEWAY: DurableObjectNamespace<import("./src/index").DiscordGateway>;
 	}
 }
@@ -23,7 +21,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "DISCORD_APPLICATION_ID" | "DISCORD_PUBLIC_KEY" | "DISCORD_BOT_TOKEN" | "CLIENT_ID" | "CLIENT_SECRET">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "DISCORD_APPLICATION_ID" | "DISCORD_PUBLIC_KEY" | "DISCORD_BOT_TOKEN">> {}
 }
 
 // Begin runtime types

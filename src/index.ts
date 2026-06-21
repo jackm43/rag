@@ -1,5 +1,3 @@
-import { getOidcConfig } from "./access";
-import { handleAdminRequest } from "./admin";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
 import { DiscordGateway, forwardToGateway } from "./gateway";
@@ -18,16 +16,16 @@ export { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
 
 const handleGatewayControlRequest = async (request: Request, env: Env): Promise<Response> => {
   const url = new URL(request.url);
+  const authorization = request.headers.get("authorization") ?? "";
+  if (!(await secretsMatch(authorization, `Bearer ${env.DISCORD_BOT_TOKEN}`))) {
+    return new Response("Unauthorized", { status: 401 });
+  }
 
   if (url.pathname === "/gateway/health" && request.method === "GET") {
     return forwardToGateway(request, env, "/gateway/health");
   }
 
   if (url.pathname === "/gateway/start" && request.method === "POST") {
-    const authorization = request.headers.get("authorization") ?? "";
-    if (!(await secretsMatch(authorization, `Bearer ${env.DISCORD_BOT_TOKEN}`))) {
-      return new Response("Unauthorized", { status: 401 });
-    }
     return forwardToGateway(request, env, "/gateway/start");
   }
 
@@ -82,31 +80,16 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    // Public OIDC client metadata so the CLI only needs the worker URL. The
-    // client id of a PKCE public client is not a secret.
-    if (url.pathname === "/oauth/config" && request.method === "GET") {
-      const oidc = getOidcConfig(env);
-      if (!oidc) {
-        return jsonResponse({ error: "oidc is not configured" }, 503);
-      }
-      return jsonResponse({
-        issuer: oidc.issuer,
-        client_id: oidc.clientId,
-        authorization_endpoint: oidc.authorizationEndpoint,
-        token_endpoint: oidc.tokenEndpoint,
-      });
-    }
-
-    if (url.pathname.startsWith("/admin")) {
-      return handleAdminRequest(request, env);
-    }
-
     if (url.pathname.startsWith("/gateway/")) {
       return handleGatewayControlRequest(request, env);
     }
 
-    if (request.method === "GET") {
+    if (url.pathname === "/" && request.method === "GET") {
       return new Response("ok");
+    }
+
+    if (url.pathname !== "/") {
+      return new Response("Not found", { status: 404 });
     }
 
     if (request.method !== "POST") {

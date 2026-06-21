@@ -23,8 +23,8 @@ Core components:
 - Slash command handlers:
   - `src/commands/rag.ts`
   - `src/commands/ragboard.ts`
-- AI queue producer/consumer logic: `src/commands/ai.ts`
-- Gateway ingestion and connection lifecycle: `src/discord-gateway.ts`
+- Mention queue producer/consumer logic: `src/mention.ts`
+- Gateway ingestion and connection lifecycle: `src/gateway.ts`
 - Command registration script: `scripts/register-commands.ts`
 
 Cloudflare bindings from `wrangler.jsonc`:
@@ -36,26 +36,92 @@ Cloudflare bindings from `wrangler.jsonc`:
 
 ## Request and Event Flows
 
+### Public Route Boundary
+
+```mermaid
+flowchart LR
+  Public[Public HTTP request] -->|GET /| Worker[Worker fetch handler]
+  Worker -->|200 body: ok| Public
+
+  Discord[Discord] -->|POST /: interaction JSON + signature headers| Worker
+  Worker -->|JSON: Discord interaction callback| Discord
+
+  Operator[Operator] -->|POST /gateway/start or GET /gateway/health + bot bearer token| Worker
+  Worker -->|same request + x-ragbot-gateway-authorization| DO[DiscordGateway Durable Object]
+  DO -->|JSON: ok or health state| Worker
+  Worker -->|JSON response| Operator
+
+  Other[Anything else] -->|unconfigured path, including /admin/* and /oauth/*| Worker
+  Worker -->|404 Not found| Other
+```
+
 ### Slash Command Flow
 
-1. Discord sends interaction webhook to Worker.
-2. Worker verifies Ed25519 signature (`x-signature-ed25519`, `x-signature-timestamp`).
-3. Worker routes command by `interaction.data.name`.
-4. Handler executes D1 and AI logic as needed.
-5. Worker returns Discord interaction response payload.
+```mermaid
+sequenceDiagram
+  participant Discord as Discord Interactions API
+  participant Worker as Worker POST /
+  participant Rag as rag command handler
+  participant Board as ragboard handler
+  participant DB as D1
+  participant AI as AI Gateway / Workers AI
+
+  Discord->>Worker: POST /: interaction JSON, x-signature-ed25519, x-signature-timestamp
+  Worker->>Worker: Verify Ed25519 signature over timestamp + raw body
+  Worker->>Worker: Route by interaction.data.name
+
+  alt /rag
+    Worker->>Rag: Interaction payload: target option, requester, token, application_id
+    Rag-->>Discord: JSON: deferred channel message response
+    Rag->>DB: INSERT rag_events: ragged user, reporter, created_at
+    Rag->>DB: UPSERT rag_totals: ragged user and incremented count
+    Rag->>DB: SELECT: total count, reporter count, recent rag_roasts
+    Rag->>AI: Chat request: roast system prompt + target/reporter/counts
+    AI-->>Rag: Generated roast text
+    Rag->>DB: INSERT OR IGNORE rag_roasts: roast_text
+    Rag->>Discord: PATCH webhook message: target mention, count, roast, allowed_mentions
+  else /ragboard
+    Worker->>Board: Interaction payload
+    Board->>DB: SELECT top 10 rag_totals
+    DB-->>Board: Rows: ragged_user_id, ragged_username, rag_count
+    Board-->>Discord: JSON: leaderboard response text
+  end
+```
 
 ### Gateway Mention-to-AI Flow
 
-1. Gateway is started via authenticated `POST /gateway/start`.
-2. Durable Object establishes and maintains Discord gateway WebSocket.
-3. On `MESSAGE_CREATE`, message is ignored unless:
-   - author is not a bot
-   - message starts with a mention of this bot
-4. Prompt is enriched with replied-to message context (if present).
-5. Prompt is pushed to `AI_JOBS`.
-6. Queue consumer generates AI text using Workers AI.
-7. Consumer posts result to Discord channel API.
-8. Queue message is `ack`ed or `retry`ed based on response/error class.
+```mermaid
+sequenceDiagram
+  participant Operator
+  participant Worker as Worker /gateway/*
+  participant DO as DiscordGateway Durable Object
+  participant GW as Discord Gateway
+  participant Queue as AI_JOBS / ai-jobs
+  participant Consumer as Queue consumer
+  participant REST as Discord REST API
+  participant AI as AI Gateway / Workers AI
+  participant DB as D1
+
+  Operator->>Worker: POST /gateway/start: Authorization Bearer DISCORD_BOT_TOKEN
+  Worker->>DO: Forward request: path + x-ragbot-gateway-authorization
+  DO->>DO: Validate internal auth, persist gatewayEnabled, set alarm
+  DO->>GW: WebSocket IDENTIFY: bot token, intents
+  GW-->>DO: READY + session metadata
+  GW-->>DO: MESSAGE_CREATE: channel_id, message id, author, content, mentions, reply reference
+  DO->>DO: Ignore unless author is not bot and content mentions this bot
+  DO->>Queue: Send compact AiJob: channelId, messageId, botUserId, requester, prompt, reply ids
+  Queue-->>Consumer: Deliver job body
+  Consumer->>REST: GET channel history: before messageId, limit historyLimit
+  REST-->>Consumer: Recent messages JSON
+  Consumer->>REST: Optional GET replied-to message if missing from history
+  REST-->>Consumer: Replied-to message JSON: author, content, attachments
+  Consumer->>AI: Chat request: system prompt, normalized history, prompt, model settings
+  AI-->>Consumer: AI response text + optional usage tokens
+  Consumer->>DB: INSERT rag_ai_interactions: prompt, response, model, duration, status, usage
+  Consumer->>REST: POST channel message: sanitized response, allowed_mentions parse=[]
+  REST-->>Consumer: Message create response or error
+  Consumer->>Queue: ack success/terminal errors, retry transient errors
+```
 
 ## Command Behavior
 
@@ -99,13 +165,14 @@ Behavior:
 
 - Interaction route enforces Discord Ed25519 signature verification.
 - Invalid signatures return `401`.
-- Gateway control endpoint uses bearer token auth against bot token.
+- Gateway control endpoints use bearer token auth against the bot token before forwarding to the Durable Object.
+- Any path not explicitly configured in the Worker route allowlist returns `404`.
 - AI output is sanitized to remove mentions/IDs before posting.
 - Channel posts include `allowed_mentions` restrictions.
 
 ## Operational Model
 
 - `GET /` returns `ok` for basic health check.
-- `GET /gateway/health` returns gateway connection status.
+- `GET /gateway/health` returns gateway connection status when called with the bot bearer token.
 - Queue consumer processes one message at a time (`max_batch_size: 1`).
 - Transient failures are retried with delay; terminal 4xx (except 429) are acknowledged to prevent poison retries.

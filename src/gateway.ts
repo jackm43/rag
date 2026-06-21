@@ -1,3 +1,4 @@
+import { secretsMatch } from "./http";
 import { errorMessage, logger } from "./logger";
 import { handleGatewayMessageCreate } from "./mention";
 import type { DiscordMessage, Env } from "./types";
@@ -28,17 +29,20 @@ const MESSAGE_CONTENT_INTENT = 1 << 15;
 const GATEWAY_INTENTS = GUILD_MESSAGES_INTENT | DIRECT_MESSAGES_INTENT | MESSAGE_CONTENT_INTENT;
 const GATEWAY_ENABLED_KEY = "gatewayEnabled";
 const GATEWAY_WATCHDOG_INTERVAL_MS = 60_000;
+const GATEWAY_INTERNAL_AUTH_HEADER = "x-ragbot-gateway-authorization";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
-// Auth for these routes is enforced by the Worker before it forwards to the
-// Durable Object, which is only reachable through its binding.
+// Auth for these routes is enforced by the Worker before forwarding and again
+// by the Durable Object before it starts or reports gateway state.
 export const forwardToGateway = (request: Request, env: Env, path: string) => {
   const id = env.DISCORD_GATEWAY.idFromName("discord-gateway");
   const url = new URL(request.url);
   url.pathname = path;
-  return env.DISCORD_GATEWAY.get(id).fetch(new Request(url, request));
+  const forwarded = new Request(url, request);
+  forwarded.headers.set(GATEWAY_INTERNAL_AUTH_HEADER, request.headers.get("authorization") ?? "");
+  return env.DISCORD_GATEWAY.get(id).fetch(forwarded);
 };
 
 export class DiscordGateway {
@@ -65,6 +69,10 @@ export class DiscordGateway {
 
   async fetch(request: Request) {
     const url = new URL(request.url);
+    const authorization = request.headers.get(GATEWAY_INTERNAL_AUTH_HEADER) ?? "";
+    if (!(await secretsMatch(authorization, `Bearer ${this.env.DISCORD_BOT_TOKEN}`))) {
+      return new Response("Unauthorized", { status: 401 });
+    }
 
     if (url.pathname === "/gateway/health" && request.method === "GET") {
       return Response.json({

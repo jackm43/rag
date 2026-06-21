@@ -30,7 +30,7 @@ export type AiChannelJob = {
   requesterUsername?: string;
   prompt: string;
   replyMessageId?: string;
-  replyContext?: string;
+  replyChannelId?: string;
 };
 
 export type AiJob = AiChannelJob;
@@ -70,8 +70,6 @@ export interface Env {
   DISCORD_BOT_TOKEN: string;
   CF_ACCOUNT_ID?: string;
   CF_AIG_TOKEN?: string;
-  ACCESS_TEAM_DOMAIN?: string;
-  ACCESS_OIDC_CLIENT_ID?: string;
   DISCORD_GATEWAY: DurableObjectNamespace;
   DB: D1Database;
   AI: Ai;
