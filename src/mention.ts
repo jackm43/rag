@@ -3,6 +3,7 @@ import { loadConfig, type BotConfig } from "./config";
 import { fetchBotRoleIds, fetchChannelMessages, fetchMessage, postChannelMessage } from "./discord";
 import { errorMessage, logger } from "./logger";
 import { loadWorkspaceContext, recordDiscordMessage, recordDiscordMessages } from "./memory";
+import { formatToolResultsForPrompt, runAssistantTools } from "./tools";
 import type { AiChannelJob, AiJob, DiscordMessage, Env } from "./types";
 import { isAiJob } from "./validation";
 
@@ -206,21 +207,32 @@ const addAssistantContext = async (
   job: AiChannelJob,
   conversation: ChatMessage[],
 ) => {
-  const workspaceContext = await loadWorkspaceContext(env, job, job.prompt);
-  if (!workspaceContext) {
+  const [workspaceContext, toolResults] = await Promise.all([
+    loadWorkspaceContext(env, job, job.prompt),
+    runAssistantTools(env, job, job.prompt),
+  ]);
+
+  const contextMessages: ChatMessage[] = [];
+  if (workspaceContext) {
+    contextMessages.push({
+      role: "system",
+      content: `Workspace memory and usage context:\n${workspaceContext}`,
+    });
+  }
+
+  const toolContext = formatToolResultsForPrompt(toolResults);
+  if (toolContext) {
+    contextMessages.push({
+      role: "system",
+      content: toolContext,
+    });
+  }
+
+  if (contextMessages.length === 0) {
     return conversation;
   }
 
-  const workspaceMessage: ChatMessage = {
-    role: "system",
-    content: `Workspace memory and usage context:\n${workspaceContext}`,
-  };
-
-  return [
-    conversation[0],
-    workspaceMessage,
-    ...conversation.slice(1),
-  ];
+  return [conversation[0], ...contextMessages, ...conversation.slice(1)];
 };
 
 const recordAiInteraction = async (

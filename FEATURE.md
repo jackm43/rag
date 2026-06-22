@@ -1,12 +1,13 @@
-# 02-d1-workspace-memory
+# 03-assistant-tools
 
-Deploy after `01-security-boundary`.
+Deploy after `02-d1-workspace-memory`.
 
 Scope:
-- D1 tables for observed Discord messages, assistant memories, and bot-role cache.
-- D1-backed Discord bot role cache replaces module-level mutable cache.
-- Gateway and queue paths record observed/fetched Discord messages.
-- Queue prompt construction can include durable workspace memory and usage context.
+- D1 tool audit table.
+- Server-side web search tool with Brave when `BRAVE_SEARCH_API_KEY` is present and DuckDuckGo fallback otherwise.
+- Server-side ragboard lookup tool.
+- Explicit memory save tool for prompts like `remember that ...`.
+- Tool results are injected into the model prompt as trusted server context.
 
 Verify:
 - `npm run check`
@@ -14,4 +15,4 @@ Verify:
 
 Deploy notes:
 - Apply `schema.sql` before deploying this worktree.
-- No new Cloudflare binding required.
+- `BRAVE_SEARCH_API_KEY` is optional; the no-key fallback still works.

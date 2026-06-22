@@ -79,6 +79,23 @@ CREATE TABLE IF NOT EXISTS assistant_memories (
 CREATE INDEX IF NOT EXISTS idx_assistant_memories_scope
   ON assistant_memories(scope, guild_id, channel_id, user_id, updated_at);
 
+CREATE TABLE IF NOT EXISTS assistant_tool_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tool_name TEXT NOT NULL,
+  status TEXT NOT NULL,
+  channel_id TEXT,
+  message_id TEXT,
+  requester_user_id TEXT,
+  query TEXT,
+  result_preview TEXT,
+  duration_ms INTEGER,
+  error_message TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_assistant_tool_runs_created
+  ON assistant_tool_runs(created_at);
+
 CREATE TABLE IF NOT EXISTS discord_bot_role_cache (
   guild_id TEXT NOT NULL,
   bot_user_id TEXT NOT NULL,

@@ -1155,6 +1155,76 @@ test("queue handler builds a conversation from channel history and posts the rep
   }
 });
 
+test("queue handler injects web search tool results when the prompt asks to search", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("api.duckduckgo.com")) {
+      return Response.json({
+        Heading: "Cloudflare Queues",
+        AbstractText: "Cloudflare Queues is a managed message queue for Workers.",
+        AbstractURL: "https://developers.cloudflare.com/queues/",
+        RelatedTopics: [],
+      });
+    }
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({ response: "Queues are for async work. Source: https://developers.cloudflare.com/queues/" });
+    }
+    if (String(url).includes("/messages?")) {
+      return Response.json([]);
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
+      DB: createDbMock({}),
+    });
+    const message = {
+      body: {
+        kind: "channel",
+        channelId: "channel-id",
+        messageId: "trigger-id",
+        botUserId: "bot-user-id",
+        requesterUsername: "alice",
+        prompt: "search web Cloudflare Queues retries",
+      },
+      ack: () => undefined,
+      retry: () => {
+        throw new Error("message should not be retried");
+      },
+    };
+
+    await worker.queue({ messages: [message] } as never, env);
+
+    const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
+    assert.ok(gatewayCall);
+    const input = JSON.parse(String(gatewayCall.init?.body)) as { messages: Array<{ role: string; content: string }> };
+    assert.ok(input.messages.some((item) =>
+      item.role === "system" &&
+      item.content.includes("Web search results") &&
+      item.content.includes("https://developers.cloudflare.com/queues/")
+    ));
+
+    const postCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/channels/channel-id/messages",
+    );
+    assert.ok(postCall);
+    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
+      content: "Queues are for async work. Source: https://developers.cloudflare.com/queues/",
+      allowed_mentions: {
+        parse: [],
+      },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("queue handler excludes rag command bot output from chat history", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];

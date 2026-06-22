@@ -69,8 +69,10 @@ export type DiscordMessage = {
 
 export type Env = Cloudflare.Env & {
   AI_JOBS: Queue<AiJob>;
+  BRAVE_SEARCH_API_KEY?: string;
   DISCORD_ALLOWED_GUILD_IDS?: string;
   RAGBOT_ADMIN_TOKEN?: string;
+  WEB_SEARCH_API_KEY?: string;
 };
 
 export const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
