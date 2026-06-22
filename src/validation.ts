@@ -135,6 +135,7 @@ export const isAiJob = (value: unknown): value is AiJob => {
   return (
     isString(job.channelId) &&
     isString(job.prompt) &&
+    isOptionalJobString(job.guildId) &&
     isOptionalJobString(job.messageId) &&
     isOptionalJobString(job.botUserId) &&
     isOptionalJobString(job.requesterUserId) &&

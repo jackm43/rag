@@ -2,6 +2,7 @@ import { runChatCompletion, sanitizeAiText, type ChatMessage } from "./ai";
 import { loadConfig, type BotConfig } from "./config";
 import { fetchBotRoleIds, fetchChannelMessages, fetchMessage, postChannelMessage } from "./discord";
 import { errorMessage, logger } from "./logger";
+import { loadWorkspaceContext, recordDiscordMessage, recordDiscordMessages } from "./memory";
 import type { AiChannelJob, AiJob, DiscordMessage, Env } from "./types";
 import { isAiJob } from "./validation";
 
@@ -119,6 +120,7 @@ export const handleGatewayMessageCreate = async (
 
   await env.AI_JOBS.send({
     kind: "channel",
+    ...(message.guild_id ? { guildId: message.guild_id } : {}),
     channelId: message.channel_id,
     messageId: message.id,
     botUserId,
@@ -153,6 +155,9 @@ const buildConversation = async (env: Env, config: BotConfig, job: AiChannelJob)
       logger.warn("history_fetch_failed", { error: errorMessage(error) });
       return [];
     });
+    await recordDiscordMessages(env, history).catch((error) => {
+      logger.debug("history_record_failed", { error: errorMessage(error) });
+    });
   }
 
   const historyIds = new Set(history.map((message) => message.id));
@@ -179,6 +184,11 @@ const buildConversation = async (env: Env, config: BotConfig, job: AiChannelJob)
       logger.warn("reply_context_fetch_failed", { error: errorMessage(error) });
       return null;
     });
+    if (referenced) {
+      await recordDiscordMessage(env, referenced).catch((error) => {
+        logger.debug("reply_context_record_failed", { error: errorMessage(error) });
+      });
+    }
     const replyContext = referenced ? formatReplyContext(referenced) : null;
     if (replyContext) {
       promptParts.push(replyContext);
@@ -189,6 +199,28 @@ const buildConversation = async (env: Env, config: BotConfig, job: AiChannelJob)
   messages.push({ role: "user", content: promptParts.join("\n\n") });
 
   return messages;
+};
+
+const addAssistantContext = async (
+  env: Env,
+  job: AiChannelJob,
+  conversation: ChatMessage[],
+) => {
+  const workspaceContext = await loadWorkspaceContext(env, job, job.prompt);
+  if (!workspaceContext) {
+    return conversation;
+  }
+
+  const workspaceMessage: ChatMessage = {
+    role: "system",
+    content: `Workspace memory and usage context:\n${workspaceContext}`,
+  };
+
+  return [
+    conversation[0],
+    workspaceMessage,
+    ...conversation.slice(1),
+  ];
 };
 
 const recordAiInteraction = async (
@@ -288,7 +320,11 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
   try {
     const config = await loadConfig(env);
     model = config.responseModel;
-    const conversation = await buildConversation(env, config, job);
+    const conversation = await addAssistantContext(
+      env,
+      job,
+      await buildConversation(env, config, job),
+    );
 
     const aiStartedAt = Date.now();
     const result = await runChatCompletion(env, config, conversation);

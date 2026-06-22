@@ -1,17 +1,17 @@
-# 01-security-boundary
+# 02-d1-workspace-memory
 
-Deploy first.
+Deploy after `01-security-boundary`.
 
 Scope:
-- Discord signature freshness and declared body-size guardrails.
-- Optional `DISCORD_ALLOWED_GUILD_IDS` allowlist for interactions and gateway messages.
-- Optional `RAGBOT_ADMIN_TOKEN` for `/gateway/*`, falling back to `DISCORD_BOT_TOKEN`.
-- `deploy.sh` uses the admin token when present.
+- D1 tables for observed Discord messages, assistant memories, and bot-role cache.
+- D1-backed Discord bot role cache replaces module-level mutable cache.
+- Gateway and queue paths record observed/fetched Discord messages.
+- Queue prompt construction can include durable workspace memory and usage context.
 
 Verify:
 - `npm run check`
 - `npm test`
 
 Deploy notes:
-- No schema migration required.
+- Apply `schema.sql` before deploying this worktree.
 - No new Cloudflare binding required.

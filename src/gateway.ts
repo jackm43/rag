@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 
 import { errorMessage, logger } from "./logger";
+import { recordDiscordMessage } from "./memory";
 import { handleGatewayMessageCreate } from "./mention";
 import { isDiscordGuildAllowed } from "./security";
 import type { Env } from "./types";
@@ -57,6 +58,17 @@ const isGatewayReady = (value: unknown): value is DiscordGatewayReady =>
 const gatewayStub = (env: Env) => {
   const id = env.DISCORD_GATEWAY.idFromName("discord-gateway");
   return env.DISCORD_GATEWAY.get(id);
+};
+
+const messageMentionsUser = (message: { content?: string; mentions?: Array<{ id: string }> }, userId: string | null) => {
+  if (!userId) {
+    return false;
+  }
+  if ((message.mentions ?? []).some((mention) => mention.id === userId)) {
+    return true;
+  }
+  const content = message.content ?? "";
+  return content.includes(`<@${userId}>`) || content.includes(`<@!${userId}>`);
 };
 
 export const startGateway = async (env: Env) => gatewayStub(env).start();
@@ -211,6 +223,14 @@ export class DiscordGateway extends DurableObject<Env> {
       if (!isDiscordGuildAllowed(this.env, payload.d.guild_id)) {
         return;
       }
+
+      this.ctx.waitUntil(
+        recordDiscordMessage(this.env, payload.d, {
+          mentionsBot: messageMentionsUser(payload.d, this.botUserId),
+        }).catch((error) => {
+          logger.debug("gateway_message_record_failed", { error: errorMessage(error) });
+        }),
+      );
 
       try {
         await handleGatewayMessageCreate(payload.d, this.env, this.botUserId);

@@ -62,7 +62,7 @@ const createDbMock = (options: {
   ragCount?: number;
   reportCount?: number;
   onBatch?: (statements: Array<{ sql: string; args: unknown[] }>) => void;
-}) => ({
+} = {}) => ({
   batch: async (statements: Array<{ sql: string; args: unknown[] }>) => {
     options.onBatch?.(statements);
   },
@@ -681,6 +681,7 @@ test("gateway message create enqueues jobs when the bot's role is mentioned", as
     assert.deepEqual(queuedJobs, [
       {
         kind: "channel",
+        guildId: "guild-id",
         channelId: "channel-id",
         messageId: "message-id",
         botUserId: "bot-user-id",

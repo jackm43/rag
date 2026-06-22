@@ -41,3 +41,49 @@ CREATE TABLE IF NOT EXISTS rag_ai_interactions (
   total_tokens INTEGER,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS discord_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id TEXT NOT NULL UNIQUE,
+  guild_id TEXT,
+  channel_id TEXT NOT NULL,
+  author_user_id TEXT,
+  author_username TEXT,
+  author_display_name TEXT,
+  content TEXT,
+  is_bot INTEGER NOT NULL DEFAULT 0,
+  mentions_bot INTEGER NOT NULL DEFAULT 0,
+  observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_discord_messages_channel_observed
+  ON discord_messages(channel_id, observed_at);
+
+CREATE INDEX IF NOT EXISTS idx_discord_messages_author_observed
+  ON discord_messages(author_user_id, observed_at);
+
+CREATE TABLE IF NOT EXISTS assistant_memories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope TEXT NOT NULL,
+  guild_id TEXT,
+  channel_id TEXT,
+  user_id TEXT,
+  label TEXT NOT NULL,
+  value TEXT NOT NULL,
+  source_message_id TEXT,
+  confidence REAL NOT NULL DEFAULT 1.0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_assistant_memories_scope
+  ON assistant_memories(scope, guild_id, channel_id, user_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS discord_bot_role_cache (
+  guild_id TEXT NOT NULL,
+  bot_user_id TEXT NOT NULL,
+  role_ids_json TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (guild_id, bot_user_id)
+);

@@ -78,31 +78,72 @@ export const fetchUsername = async (env: Env, userId: string): Promise<string | 
 };
 
 const BOT_ROLE_CACHE_TTL_MS = 5 * 60_000;
-const botRoleCache = new Map<string, { roleIds: string[]; expiresAt: number }>();
+
+type BotRoleCacheRow = {
+  role_ids_json: string;
+  expires_at: number;
+};
+
+const readCachedBotRoleIds = async (
+  env: Env,
+  guildId: string,
+  botUserId: string,
+): Promise<string[] | null> => {
+  try {
+    const cached = await env.DB.prepare(
+      "SELECT role_ids_json, expires_at FROM discord_bot_role_cache WHERE guild_id = ? AND bot_user_id = ?",
+    )
+      .bind(guildId, botUserId)
+      .first<BotRoleCacheRow>();
+    if (!cached || cached.expires_at <= Date.now()) {
+      return null;
+    }
+    const parsed = JSON.parse(cached.role_ids_json);
+    return Array.isArray(parsed) ? parsed.filter((role): role is string => typeof role === "string") : null;
+  } catch {
+    return null;
+  }
+};
+
+const writeCachedBotRoleIds = async (
+  env: Env,
+  guildId: string,
+  botUserId: string,
+  roleIds: string[],
+) => {
+  try {
+    await env.DB.prepare(
+      "INSERT INTO discord_bot_role_cache (guild_id, bot_user_id, role_ids_json, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT(guild_id, bot_user_id) DO UPDATE SET role_ids_json = excluded.role_ids_json, expires_at = excluded.expires_at, updated_at = CURRENT_TIMESTAMP",
+    )
+      .bind(guildId, botUserId, JSON.stringify(roleIds), Date.now() + BOT_ROLE_CACHE_TTL_MS)
+      .run();
+  } catch {
+    // Cache writes are best-effort; Discord remains the source of truth.
+  }
+};
 
 export const fetchBotRoleIds = async (
   env: Env,
   guildId: string,
   botUserId: string,
 ): Promise<string[]> => {
-  const key = `${guildId}:${botUserId}`;
-  const cached = botRoleCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.roleIds;
+  const cached = await readCachedBotRoleIds(env, guildId, botUserId);
+  if (cached) {
+    return cached;
   }
 
   const response = await fetch(`${DISCORD_API_BASE_URL}/guilds/${guildId}/members/${botUserId}`, {
     headers: botHeaders(env),
   }).catch(() => null);
   if (!response?.ok) {
-    return cached?.roleIds ?? [];
+    return [];
   }
 
   const member = await response.json().catch(() => null);
   const roleIds = isRecord(member) && Array.isArray(member.roles)
     ? member.roles.filter((role): role is string => typeof role === "string")
     : [];
-  botRoleCache.set(key, { roleIds, expiresAt: Date.now() + BOT_ROLE_CACHE_TTL_MS });
+  await writeCachedBotRoleIds(env, guildId, botUserId, roleIds);
   return roleIds;
 };
 
