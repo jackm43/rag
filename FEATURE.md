@@ -1,13 +1,12 @@
-# 03-assistant-tools
+# 04-assistant-workflows
 
-Deploy after `02-d1-workspace-memory`.
+Deploy after `03-assistant-tools`.
 
 Scope:
-- D1 tool audit table.
-- Server-side web search tool with Brave when `BRAVE_SEARCH_API_KEY` is present and DuckDuckGo fallback otherwise.
-- Server-side ragboard lookup tool.
-- Explicit memory save tool for prompts like `remember that ...`.
-- Tool results are injected into the model prompt as trusted server context.
+- Cloudflare Workflow binding `ASSISTANT_WORKFLOW`.
+- `AssistantWorkflow` durable web-search/research workflow.
+- Queue handoff for explicit prompts such as `deep search ...` or `run a workflow ...`.
+- D1 workflow audit table.
 
 Verify:
 - `npm run check`
@@ -15,4 +14,5 @@ Verify:
 
 Deploy notes:
 - Apply `schema.sql` before deploying this worktree.
-- `BRAVE_SEARCH_API_KEY` is optional; the no-key fallback still works.
+- Deploy creates/uses the Workflow binding from `wrangler.jsonc`.
+- Run `npx wrangler types worker-configuration.d.ts` after binding changes.

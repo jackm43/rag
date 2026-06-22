@@ -38,6 +38,17 @@ export type AiChannelJob = {
 
 export type AiJob = AiChannelJob;
 
+export type AssistantWorkflowParams = {
+  kind: "web_search";
+  query: string;
+  prompt: string;
+  channelId: string;
+  messageId?: string;
+  requesterUserId?: string;
+  requesterUsername?: string;
+  createdAt: string;
+};
+
 export type DiscordMessage = {
   id: string;
   guild_id?: string;
@@ -69,6 +80,7 @@ export type DiscordMessage = {
 
 export type Env = Cloudflare.Env & {
   AI_JOBS: Queue<AiJob>;
+  ASSISTANT_WORKFLOW?: Workflow<AssistantWorkflowParams>;
   BRAVE_SEARCH_API_KEY?: string;
   DISCORD_ALLOWED_GUILD_IDS?: string;
   RAGBOT_ADMIN_TOKEN?: string;

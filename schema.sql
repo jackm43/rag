@@ -96,6 +96,24 @@ CREATE TABLE IF NOT EXISTS assistant_tool_runs (
 CREATE INDEX IF NOT EXISTS idx_assistant_tool_runs_created
   ON assistant_tool_runs(created_at);
 
+CREATE TABLE IF NOT EXISTS assistant_workflows (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  instance_id TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  channel_id TEXT,
+  message_id TEXT,
+  requester_user_id TEXT,
+  query TEXT,
+  result_preview TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_assistant_workflows_status
+  ON assistant_workflows(status, updated_at);
+
 CREATE TABLE IF NOT EXISTS discord_bot_role_cache (
   guild_id TEXT NOT NULL,
   bot_user_id TEXT NOT NULL,

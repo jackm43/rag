@@ -12,8 +12,9 @@ import {
   type AiJob,
   type Env,
 } from "./types";
+import { AssistantWorkflow } from "./workflow";
 
-export { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
+export { AssistantWorkflow, DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
 
 const hasRequiredHeaders = (request: Request, headers: string[]) =>
   headers.every((header) => request.headers.has(header));

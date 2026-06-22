@@ -53,6 +53,13 @@
       }
     ]
   },
+  "workflows": [
+    {
+      "binding": "ASSISTANT_WORKFLOW",
+      "name": "ragbot-assistant-workflow",
+      "class_name": "AssistantWorkflow"
+    }
+  ],
   "migrations": [
     {
       "tag": "v1",

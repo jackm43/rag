@@ -3,7 +3,7 @@ import { loadConfig, type BotConfig } from "./config";
 import { fetchBotRoleIds, fetchChannelMessages, fetchMessage, postChannelMessage } from "./discord";
 import { errorMessage, logger } from "./logger";
 import { loadWorkspaceContext, recordDiscordMessage, recordDiscordMessages } from "./memory";
-import { formatToolResultsForPrompt, runAssistantTools } from "./tools";
+import { formatToolResultsForPrompt, runAssistantTools, shouldStartAssistantWorkflow } from "./tools";
 import type { AiChannelJob, AiJob, DiscordMessage, Env } from "./types";
 import { isAiJob } from "./validation";
 
@@ -235,6 +235,41 @@ const addAssistantContext = async (
   return [conversation[0], ...contextMessages, ...conversation.slice(1)];
 };
 
+const workflowQueryFromPrompt = (prompt: string) =>
+  prompt
+    .replace(/\b(deep search|research this|run a workflow|background search|long search)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim() || prompt.trim();
+
+const maybeStartAssistantWorkflow = async (env: Env, job: AiChannelJob) => {
+  if (!env.ASSISTANT_WORKFLOW || !shouldStartAssistantWorkflow(job.prompt)) {
+    return null;
+  }
+
+  const query = workflowQueryFromPrompt(job.prompt);
+  const workflowId = `web-search-${job.messageId ?? crypto.randomUUID()}`;
+  await env.ASSISTANT_WORKFLOW.create({
+    id: workflowId,
+    params: {
+      kind: "web_search",
+      query,
+      prompt: job.prompt,
+      channelId: job.channelId,
+      messageId: job.messageId,
+      requesterUserId: job.requesterUserId,
+      requesterUsername: job.requesterUsername,
+      createdAt: new Date().toISOString(),
+    },
+  });
+
+  const content = `Started a background web search workflow for: ${query}`;
+  const response = await postChannelMessage(env, job.channelId, content);
+  if (!response.ok) {
+    throw new Error(`Discord workflow acknowledgement failed (${response.status})`);
+  }
+  return content;
+};
+
 const recordAiInteraction = async (
   env: Env,
   job: AiChannelJob,
@@ -332,6 +367,16 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
   try {
     const config = await loadConfig(env);
     model = config.responseModel;
+
+    const workflowStartedMessage = await maybeStartAssistantWorkflow(env, job);
+    if (workflowStartedMessage) {
+      model = "assistant-workflow";
+      content = workflowStartedMessage;
+      await record("workflow_started", null);
+      message.ack();
+      return;
+    }
+
     const conversation = await addAssistantContext(
       env,
       job,
