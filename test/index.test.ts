@@ -218,6 +218,73 @@ test("unknown command returns unknown command message", async () => {
   });
 });
 
+test("signed interactions from non-allowlisted guilds are rejected before command handling", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    DISCORD_ALLOWED_GUILD_IDS: "allowed-guild-id",
+  });
+  const request = createSignedRequest(
+    {
+      type: 2,
+      guild_id: "blocked-guild-id",
+      data: { name: "does-not-exist" },
+      user: { id: "1", username: "alice" },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: {
+      content: "This bot is not enabled in this server.",
+      allowed_mentions: { parse: [] },
+    },
+  });
+});
+
+test("gateway control endpoints prefer a separate admin token when configured", async () => {
+  let startCalls = 0;
+  const env = createEnv("unused", {
+    DISCORD_BOT_TOKEN: "bot-token",
+    RAGBOT_ADMIN_TOKEN: "admin-token",
+    DISCORD_GATEWAY: {
+      idFromName: () => "id",
+      get: () => ({
+        start: async () => {
+          startCalls += 1;
+          return { ok: true };
+        },
+      }),
+    },
+  });
+
+  const botTokenResponse = await worker.fetch(
+    new Request("https://example.com/gateway/start", {
+      method: "POST",
+      headers: { authorization: "Bearer bot-token" },
+    }),
+    env,
+    {} as never,
+  );
+  assert.equal(botTokenResponse.status, 401);
+  assert.equal(startCalls, 0);
+
+  const adminTokenResponse = await worker.fetch(
+    new Request("https://example.com/gateway/start", {
+      method: "POST",
+      headers: { authorization: "Bearer admin-token" },
+    }),
+    env,
+    {} as never,
+  );
+  assert.equal(adminTokenResponse.status, 200);
+  assert.deepEqual(await adminTokenResponse.json(), { ok: true });
+  assert.equal(startCalls, 1);
+});
+
 test("/rag interaction is deferred and edits the original response from waitUntil", async () => {
   const keyPair = nacl.sign.keyPair();
   const originalFetch = globalThis.fetch;

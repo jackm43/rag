@@ -5,6 +5,8 @@ import type { DiscordInteraction } from "./types";
 import { isDiscordInteraction } from "./validation";
 
 const encoder = new TextEncoder();
+const MAX_DISCORD_REQUEST_BODY_BYTES = 64 * 1024;
+const DISCORD_SIGNATURE_TOLERANCE_SECONDS = 5 * 60;
 
 export const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -30,6 +32,23 @@ export const verifyDiscordRequest = async (
   const signature = request.headers.get("x-signature-ed25519");
   const timestamp = request.headers.get("x-signature-timestamp");
   if (!signature || !timestamp) {
+    return null;
+  }
+
+  const contentLength = request.headers.get("content-length");
+  if (contentLength !== null) {
+    const parsedLength = Number.parseInt(contentLength, 10);
+    if (!Number.isFinite(parsedLength) || parsedLength > MAX_DISCORD_REQUEST_BODY_BYTES) {
+      return null;
+    }
+  }
+
+  const timestampSeconds = Number.parseInt(timestamp, 10);
+  if (!Number.isFinite(timestampSeconds)) {
+    return null;
+  }
+  const ageSeconds = Math.abs(Date.now() / 1000 - timestampSeconds);
+  if (ageSeconds > DISCORD_SIGNATURE_TOLERANCE_SECONDS) {
     return null;
   }
 

@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 
 import { errorMessage, logger } from "./logger";
 import { handleGatewayMessageCreate } from "./mention";
+import { isDiscordGuildAllowed } from "./security";
 import type { Env } from "./types";
 import { isDiscordMessage, isRecord } from "./validation";
 
@@ -207,6 +208,10 @@ export class DiscordGateway extends DurableObject<Env> {
     }
 
     if (payload.t === "MESSAGE_CREATE" && isDiscordMessage(payload.d)) {
+      if (!isDiscordGuildAllowed(this.env, payload.d.guild_id)) {
+        return;
+      }
+
       try {
         await handleGatewayMessageCreate(payload.d, this.env, this.botUserId);
       } catch (error) {

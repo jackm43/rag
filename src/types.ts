@@ -1,5 +1,7 @@
 export type DiscordInteraction = {
   application_id?: string;
+  guild_id?: string;
+  channel_id?: string;
   token?: string;
   type: number;
   data?: {
@@ -66,6 +68,8 @@ export type DiscordMessage = {
 
 export type Env = Cloudflare.Env & {
   AI_JOBS: Queue<AiJob>;
+  DISCORD_ALLOWED_GUILD_IDS?: string;
+  RAGBOT_ADMIN_TOKEN?: string;
 };
 
 export const DISCORD_API_BASE_URL = "https://discord.com/api/v10";

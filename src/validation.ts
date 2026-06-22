@@ -76,6 +76,8 @@ export const isDiscordInteraction = (value: unknown): value is DiscordInteractio
 
   return (
     isOptionalString(value.application_id) &&
+    isOptionalString(value.guild_id) &&
+    isOptionalString(value.channel_id) &&
     isOptionalString(value.token) &&
     isInteractionData(value.data) &&
     (value.user === undefined || isDiscordUser(value.user)) &&

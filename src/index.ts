@@ -4,6 +4,7 @@ import { DiscordGateway, getGatewayHealth, startGateway } from "./gateway";
 import { bearerTokenMatches, jsonResponse, verifyDiscordRequest } from "./http";
 import { errorMessage, logger } from "./logger";
 import { extractBotMentionPrompt, handleGatewayMessageCreate, processAiQueueMessage } from "./mention";
+import { getGatewayControlToken, isDiscordGuildAllowed } from "./security";
 import {
   APPLICATION_COMMAND,
   CHANNEL_MESSAGE_WITH_SOURCE,
@@ -24,7 +25,7 @@ const handleGatewayControlRequest = async (request: Request, env: Env): Promise<
   }
 
   const authorization = request.headers.get("authorization") ?? "";
-  if (!bearerTokenMatches(authorization, env.DISCORD_BOT_TOKEN)) {
+  if (!bearerTokenMatches(authorization, getGatewayControlToken(env))) {
     return new Response("Unauthorized", { status: 401 });
   }
 
@@ -55,6 +56,16 @@ const handleInteractionRequest = async (
 
   if (interaction.type === PING) {
     return jsonResponse({ type: PING });
+  }
+
+  if (!isDiscordGuildAllowed(env, interaction.guild_id)) {
+    return jsonResponse({
+      type: CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "This bot is not enabled in this server.",
+        allowed_mentions: { parse: [] },
+      },
+    });
   }
 
   if (interaction.type !== APPLICATION_COMMAND) {
