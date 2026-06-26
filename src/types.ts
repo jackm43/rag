@@ -1,5 +1,7 @@
 export type DiscordInteraction = {
   application_id?: string;
+  channel_id?: string;
+  guild_id?: string;
   token?: string;
   type: number;
   data?: {
@@ -21,8 +23,20 @@ export type DiscordInteraction = {
   };
 };
 
-export type AiChannelJob = {
-  kind: "channel";
+export type AiThreadStartJob = {
+  kind: "thread_start";
+  channelId: string;
+  messageId: string;
+  botUserId?: string;
+  requesterUserId?: string;
+  requesterUsername?: string;
+  prompt: string;
+  replyMessageId?: string;
+  replyChannelId?: string;
+};
+
+export type AiThreadReplyJob = {
+  kind: "thread_reply";
   channelId: string;
   messageId?: string;
   botUserId?: string;
@@ -33,7 +47,29 @@ export type AiChannelJob = {
   replyChannelId?: string;
 };
 
-export type AiJob = AiChannelJob;
+export type AiChannelReplyJob = {
+  kind: "channel_reply";
+  channelId: string;
+  messageId?: string;
+  botUserId?: string;
+  requesterUserId?: string;
+  requesterUsername?: string;
+  prompt: string;
+  replyMessageId?: string;
+  replyChannelId?: string;
+};
+
+export type AiJob = AiThreadStartJob | AiThreadReplyJob | AiChannelReplyJob;
+
+export type AiThread = {
+  threadId: string;
+  parentChannelId?: string;
+  sourceMessageId?: string;
+  requesterUserId?: string;
+  requesterUsername?: string;
+  initialPrompt: string;
+  title: string;
+};
 
 export type DiscordMessage = {
   id: string;
@@ -62,6 +98,14 @@ export type DiscordMessage = {
     message_id?: string;
   };
   referenced_message?: DiscordMessage | null;
+};
+
+export type DiscordChannel = {
+  id: string;
+  type: number;
+  parent_id?: string | null;
+  name?: string;
+  thread_metadata?: Record<string, unknown>;
 };
 
 export type Env = Cloudflare.Env & {

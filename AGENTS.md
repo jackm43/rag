@@ -16,7 +16,8 @@ This project expects these environment variables:
   - `src/http.ts` Discord signature verification, JSON responses, constant-time compare
   - `src/discord.ts` Discord REST helpers
   - `src/gateway.ts` `DiscordGateway` Durable Object (`DISCORD_GATEWAY` binding)
-  - `src/mention.ts` mention handling and AI queue consumer (channel history context)
+  - `src/mention.ts` mention handling, thread tracking, AI title generation, and AI queue consumer (thread conversation context)
+  - `src/commands/ask.ts` `/ask` thread creation and AI response handling
   - `src/ai.ts` model-agnostic chat calls through the Workers AI binding (`env.AI.run`), with AI Gateway routing via binding options (`gateway: { id }`) for Workers AI `@cf/...` models and Unified Billing partner models such as `grok/grok-4.3`
   - `src/config.ts` loads source-controlled AI config from `src/ai-config`
   - `src/logger.ts` structured logging
@@ -32,7 +33,7 @@ This project expects these environment variables:
 ## Runtime Configuration
 
 AI config lives in `src/ai-config`:
-- `discord-response.json`: mention response model, max tokens, temperature, channel history limit, AI Gateway id used by the AI binding
+- `discord-response.json`: mention and `/ask` response model, max tokens, temperature, thread history limit, AI Gateway id used by the AI binding
 - `discord-response-system-prompt.md`: mention response system prompt
 - `rag-roast.json`: `/rag` roast model, max tokens, temperature, AI Gateway id used by the AI binding
 - `rag-roast-system-prompt.md`: `/rag` roast system prompt
@@ -113,7 +114,9 @@ Bot scopes:
 
 Bot permissions:
 - `Send Messages`
+- `Create Public Threads`
+- `Send Messages in Threads`
 - `Use Slash Commands`
-- `Read Message History` (required for mention conversation context)
+- `Read Message History` (required for thread conversation context)
 
 Use the deployed Worker URL as the Discord interactions endpoint.

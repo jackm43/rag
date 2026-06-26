@@ -1,9 +1,56 @@
-import { DISCORD_API_BASE_URL, type DiscordMessage, type Env } from "./types";
+import { DISCORD_API_BASE_URL, type DiscordChannel, type DiscordMessage, type Env } from "./types";
 import { isDiscordMessage, isRecord } from "./validation";
+
+const DISCORD_CHANNEL_TYPE_PUBLIC_THREAD = 11;
+const DISCORD_CHANNEL_TYPE_PRIVATE_THREAD = 12;
+const DISCORD_CHANNEL_TYPE_ANNOUNCEMENT_THREAD = 10;
+const DISCORD_CHANNEL_TYPE_PUBLIC_THREAD_CREATE = 11;
+const DISCORD_THREAD_AUTO_ARCHIVE_ONE_DAY = 1440;
+
+const channelRoute = (channelId: string) => `/channels/${channelId}` as const;
+const threadsRoute = (channelId: string, messageId?: string) =>
+  messageId
+    ? `/channels/${channelId}/messages/${messageId}/threads` as const
+    : `/channels/${channelId}/threads` as const;
 
 const botHeaders = (env: Env) => ({
   authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
 });
+
+const auditLogReasonHeader = (reason: string) => encodeURIComponent(reason);
+
+const discordJsonRequest = async (
+  env: Env,
+  path: string,
+  init: RequestInit = {},
+): Promise<unknown> => {
+  const response = await fetch(`${DISCORD_API_BASE_URL}${path}`, {
+    ...init,
+    headers: {
+      ...botHeaders(env),
+      ...(init.headers ?? {}),
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Discord API request failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json().catch(() => null);
+};
+
+const isDiscordChannel = (value: unknown): value is DiscordChannel =>
+  isRecord(value) &&
+  typeof value.id === "string" &&
+  typeof value.type === "number" &&
+  (value.parent_id === undefined || value.parent_id === null || typeof value.parent_id === "string") &&
+  (value.name === undefined || typeof value.name === "string") &&
+  (value.thread_metadata === undefined || isRecord(value.thread_metadata));
+
+export const isThreadChannel = (channel: DiscordChannel) =>
+  channel.type === DISCORD_CHANNEL_TYPE_PUBLIC_THREAD ||
+  channel.type === DISCORD_CHANNEL_TYPE_PRIVATE_THREAD ||
+  channel.type === DISCORD_CHANNEL_TYPE_ANNOUNCEMENT_THREAD;
 
 export type InteractionMessageData = {
   content: string;
@@ -27,6 +74,51 @@ export const postChannelMessage = async (env: Env, channelId: string, content: s
       },
     }),
   });
+
+export const createThreadFromMessage = async (
+  env: Env,
+  channelId: string,
+  messageId: string,
+  name: string,
+): Promise<DiscordChannel | null> => {
+  const payload = await discordJsonRequest(env, threadsRoute(channelId, messageId), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-audit-log-reason": auditLogReasonHeader("Ragbot AI conversation"),
+    },
+    body: JSON.stringify({
+      name,
+      auto_archive_duration: DISCORD_THREAD_AUTO_ARCHIVE_ONE_DAY,
+    }),
+  });
+  return isDiscordChannel(payload) ? payload : null;
+};
+
+export const createThreadWithoutMessage = async (
+  env: Env,
+  channelId: string,
+  name: string,
+): Promise<DiscordChannel | null> => {
+  const payload = await discordJsonRequest(env, threadsRoute(channelId), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-audit-log-reason": auditLogReasonHeader("Ragbot /ask conversation"),
+    },
+    body: JSON.stringify({
+      name,
+      type: DISCORD_CHANNEL_TYPE_PUBLIC_THREAD_CREATE,
+      auto_archive_duration: DISCORD_THREAD_AUTO_ARCHIVE_ONE_DAY,
+    }),
+  });
+  return isDiscordChannel(payload) ? payload : null;
+};
+
+export const fetchChannel = async (env: Env, channelId: string): Promise<DiscordChannel | null> => {
+  const payload = await discordJsonRequest(env, channelRoute(channelId)).catch(() => null);
+  return isDiscordChannel(payload) ? payload : null;
+};
 
 export const fetchChannelMessages = async (
   env: Env,

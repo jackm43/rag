@@ -1,6 +1,6 @@
 # ragbot-worker
 
-Cloudflare Worker Discord bot for rag tracking and mention-triggered AI replies.
+Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thread-based `/ask` conversations.
 
 ## Tech Stack
 
@@ -12,7 +12,7 @@ Cloudflare Worker Discord bot for rag tracking and mention-triggered AI replies.
 - Stateful connection: Durable Objects (`DiscordGateway`)
 - Discord integration:
   - Interactions webhook
-  - REST API for command registration, message posting, and channel history
+  - Discord REST calls for command registration, thread creation, and message posting
   - Gateway WebSocket for mention-based AI
 
 ## Command Surface
@@ -20,6 +20,7 @@ Cloudflare Worker Discord bot for rag tracking and mention-triggered AI replies.
 - Slash commands:
   - `/rag user:<discord-user>`
   - `/ragboard`
+  - `/ask prompt:<question>`
 - HTTP endpoints:
   - `GET /` health
   - `POST /` Discord interactions
@@ -57,7 +58,7 @@ sequenceDiagram
   participant DB as D1 DB
   participant AI as AI Gateway / Workers AI
 
-  User->>Discord: Slash command: /rag user or /ragboard
+  User->>Discord: Slash command: /rag user, /ragboard, or /ask prompt
   Discord->>Worker: POST / with interaction JSON + Ed25519 headers
   Worker->>Worker: Verify signature and route interaction.data.name
 
@@ -74,6 +75,16 @@ sequenceDiagram
     Worker->>DB: SELECT top rag_totals: user, count, updated_at
     DB-->>Worker: Leaderboard rows
     Worker-->>Discord: JSON interaction response: leaderboard text
+  else /ask
+    Worker->>Discord: Immediate JSON: deferred interaction response
+    Worker->>AI: Chat request: concise thread title
+    AI-->>Worker: Thread title
+    Worker->>Discord: POST channel thread: title, public thread, 1 day archive
+    Worker->>DB: UPSERT rag_ai_threads: thread id, prompt, requester, title
+    Worker->>AI: Chat request: fresh user prompt
+    AI-->>Worker: Chat response
+    Worker->>Discord: POST message inside created thread
+    Worker->>Discord: PATCH original response with thread link
   end
 ```
 
@@ -98,20 +109,26 @@ sequenceDiagram
   GatewayDO->>DiscordGateway: WebSocket IDENTIFY/RESUME with bot token and intents
   DiscordGateway-->>GatewayDO: READY, heartbeat ACKs, MESSAGE_CREATE events
 
-  User->>DiscordGateway: Channel message mentioning bot
+  User->>DiscordGateway: Parent channel message mentioning bot
   DiscordGateway-->>GatewayDO: MESSAGE_CREATE payload: author, channel_id, content, mentions
-  GatewayDO->>Queue: Enqueue compact AiJob: channelId, messageId, botUserId, requester, prompt, reply ids
+  GatewayDO->>Queue: Enqueue channel_reply AiJob: channel, source message, requester, prompt, reply ids
   Queue-->>Consumer: Deliver AiJob batch
-  Consumer->>DiscordREST: GET channel messages: before messageId, limit historyLimit
-  DiscordREST-->>Consumer: Message history JSON: users, bot replies, content
-  Consumer->>DiscordREST: Optional GET replied-to message if not already in history
+  Consumer->>DiscordREST: Optional GET explicit replied-to message
   DiscordREST-->>Consumer: Replied-to message JSON: author, content, attachments
-  Consumer->>AI: Chat request: system prompt + channel context + user prompt
+  Consumer->>AI: Chat request: fresh user prompt
   AI-->>Consumer: Chat response: generated text + optional usage
   Consumer->>DB: INSERT rag_ai_interactions: prompt, response, model, status, token usage
   Consumer->>DiscordREST: POST channel message: sanitized content, allowed_mentions parse=[]
   DiscordREST-->>Consumer: Created message JSON or API error
   Consumer->>Queue: ack on success/terminal 4xx, retry on transient errors
+
+  User->>DiscordGateway: Later message inside tracked thread, no @ required
+  DiscordGateway-->>GatewayDO: MESSAGE_CREATE payload for thread channel
+  GatewayDO->>DB: SELECT rag_ai_threads by thread id
+  GatewayDO->>Queue: Enqueue thread_reply AiJob
+  Consumer->>DiscordREST: GET thread messages before messageId, limit historyLimit
+  Consumer->>AI: Chat request: stored initial prompt + thread history + current message
+  Consumer->>DiscordREST: POST thread message
 ```
 
 ## Command-by-Command Details
@@ -140,6 +157,18 @@ sequenceDiagram
 - Response:
   - ranked leaderboard text or empty-state message
 
+### `/ask`
+
+- Entry: interaction command routed in `src/index.ts`
+- Handler: `src/commands/ask.ts`
+- Behavior:
+  - defers the interaction
+  - generates a concise AI thread title
+  - creates a public Discord thread in the current channel
+  - stores the thread in `rag_ai_threads`
+  - posts the sanitized AI response inside the thread
+  - edits the original interaction response with a thread link
+
 ### Mention-based AI (not a slash command)
 
 - Entry:
@@ -147,11 +176,15 @@ sequenceDiagram
   - gateway listens for Discord `MESSAGE_CREATE`
 - Handlers: `src/gateway.ts` (connection) and `src/mention.ts` (logic)
 - Queue and worker:
-  - gateway enqueues a compact mention job in `AI_JOBS` with IDs, requester, and prompt
-  - consumer fetches recent channel history and any missing replied-to message context, then builds a chat conversation
-  - generates a reply with the configured model, sanitizes mentions/IDs
+  - parent-channel mentions enqueue a `channel_reply` job in `AI_JOBS`
+  - channel reply jobs answer in the same Discord channel and do not create or record a thread
+  - `/ask` creates a Discord thread, records it in `rag_ai_threads`, and posts the answer inside that thread
+  - later messages in a tracked thread enqueue `thread_reply` jobs automatically without requiring an @ mention
+  - reply jobs build context from the stored initial prompt plus recent messages in that thread only
+  - generated replies are sanitized for mentions/IDs
 - Delivery:
-  - posts message with Discord REST API
+  - direct mentions post in the same Discord channel
+  - `/ask` and tracked-thread follow-ups post inside the Discord thread
 
 ## Configuration
 

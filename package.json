@@ -9,7 +9,8 @@
     "check": "tsc --noEmit",
     "test": "vitest run",
     "register:commands": "tsx scripts/register-commands.ts",
-    "d1:migrate:local": "wrangler d1 execute ragbot --local --file=./schema.sql"
+    "d1:migrate:local": "wrangler d1 execute ragbot --local --file=./schema.sql",
+    "d1:migrate:remote": "wrangler d1 execute ragbot --remote --file=./schema.sql"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.18",
@@ -20,6 +21,10 @@
     "wrangler": "^4.13.2"
   },
   "dependencies": {
+    "discord.js": "^14.26.4",
     "tweetnacl": "^1.0.3"
+  },
+  "overrides": {
+    "undici": "6.27.0"
   }
 }
