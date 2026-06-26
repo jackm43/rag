@@ -15,29 +15,50 @@ import {
 
 export { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
 
+const DISCORD_INTERACTIONS_PATH = "/discord";
+const GATEWAY_START_PATH = "/gateway/start";
+const GATEWAY_HEALTH_PATH = "/gateway/health";
+
 const hasRequiredHeaders = (request: Request, headers: string[]) =>
   headers.every((header) => request.headers.has(header));
 
-const handleGatewayControlRequest = async (request: Request, env: Env): Promise<Response> => {
-  const url = new URL(request.url);
-  if (!hasRequiredHeaders(request, ["authorization"])) {
-    return new Response("Unauthorized", { status: 401 });
+const methodNotAllowed = (allowedMethod: string) =>
+  new Response("Method not allowed", {
+    status: 405,
+    headers: { Allow: allowedMethod },
+  });
+
+const unauthorized = () => new Response("Unauthorized", { status: 401 });
+
+const notFound = () => new Response("Not found", { status: 404 });
+
+const isAuthorizedGatewayControlRequest = (request: Request, env: Env) => {
+  const authorization = request.headers.get("authorization");
+  return authorization !== null && bearerTokenMatches(authorization, env.DISCORD_BOT_TOKEN);
+};
+
+const handleGatewayStartRequest = async (request: Request, env: Env): Promise<Response> => {
+  if (request.method !== "POST") {
+    return methodNotAllowed("POST");
   }
 
-  const authorization = request.headers.get("authorization") ?? "";
-  if (!bearerTokenMatches(authorization, env.DISCORD_BOT_TOKEN)) {
-    return new Response("Unauthorized", { status: 401 });
+  if (!isAuthorizedGatewayControlRequest(request, env)) {
+    return unauthorized();
   }
 
-  if (url.pathname === "/gateway/health" && request.method === "GET") {
-    return Response.json(await getGatewayHealth(env));
+  return Response.json(await startGateway(env));
+};
+
+const handleGatewayHealthRequest = async (request: Request, env: Env): Promise<Response> => {
+  if (request.method !== "GET") {
+    return methodNotAllowed("GET");
   }
 
-  if (url.pathname === "/gateway/start" && request.method === "POST") {
-    return Response.json(await startGateway(env));
+  if (!isAuthorizedGatewayControlRequest(request, env)) {
+    return unauthorized();
   }
 
-  return new Response("Not found", { status: 404 });
+  return Response.json(await getGatewayHealth(env));
 };
 
 const handleInteractionRequest = async (
@@ -96,20 +117,24 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
+    if (url.pathname === GATEWAY_START_PATH) {
+      return handleGatewayStartRequest(request, env);
+    }
+
+    if (url.pathname === GATEWAY_HEALTH_PATH) {
+      return handleGatewayHealthRequest(request, env);
+    }
+
     if (url.pathname.startsWith("/gateway/")) {
-      return handleGatewayControlRequest(request, env);
+      return notFound();
     }
 
-    if (url.pathname === "/" && request.method === "GET") {
-      return new Response("ok");
-    }
-
-    if (url.pathname !== "/") {
-      return new Response("Not found", { status: 404 });
+    if (url.pathname !== DISCORD_INTERACTIONS_PATH) {
+      return notFound();
     }
 
     if (request.method !== "POST") {
-      return new Response("Method not allowed", { status: 405 });
+      return methodNotAllowed("POST");
     }
 
     return handleInteractionRequest(request, env, ctx);

@@ -14,8 +14,12 @@ import { bearerTokenMatches, secretsMatch } from "../src/http.ts";
 
 const encoder = new TextEncoder();
 
-const createSignedRequest = (payload: unknown, secretKey: Uint8Array, path = "/") => {
-  const timestamp = String(Math.floor(Date.now() / 1000));
+const createSignedRequest = (
+  payload: unknown,
+  secretKey: Uint8Array,
+  path = "/discord",
+  timestamp = String(Math.floor(Date.now() / 1000)),
+) => {
   const rawBody = JSON.stringify(payload);
   const message = encoder.encode(timestamp + rawBody);
   const signature = nacl.sign.detached(message, secretKey);
@@ -120,25 +124,37 @@ test("bearerTokenMatches parses authorization before comparing the token", () =>
   assert.equal(bearerTokenMatches("Bearer bot-tokem", "bot-token"), false);
 });
 
-test("GET / returns ok", async () => {
+test("GET / returns 404", async () => {
   const keyPair = nacl.sign.keyPair();
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
   const request = new Request("https://example.com/", { method: "GET" });
 
   const response = await worker.fetch(request, env, {} as never);
 
-  assert.equal(response.status, 200);
-  assert.equal(await response.text(), "ok");
+  assert.equal(response.status, 404);
+  assert.equal(await response.text(), "Not found");
+});
+
+test("old root interaction route returns 404", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const request = createSignedRequest({ type: 1 }, keyPair.secretKey, "/");
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 404);
+  assert.equal(await response.text(), "Not found");
 });
 
 test("non-POST methods on the interaction route return 405", async () => {
   const keyPair = nacl.sign.keyPair();
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
-  const request = new Request("https://example.com/", { method: "PUT" });
+  const request = new Request("https://example.com/discord", { method: "PUT" });
 
   const response = await worker.fetch(request, env, {} as never);
 
   assert.equal(response.status, 405);
+  assert.equal(response.headers.get("allow"), "POST");
   assert.equal(await response.text(), "Method not allowed");
 });
 
@@ -147,6 +163,41 @@ test("invalid Discord signature returns 401", async () => {
   const mismatchedPair = nacl.sign.keyPair();
   const env = createEnv(Buffer.from(validPair.publicKey).toString("hex"));
   const request = createSignedRequest({ type: 1 }, mismatchedPair.secretKey);
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 401);
+  assert.equal(await response.text(), "Bad request signature");
+});
+
+test("stale Discord interaction timestamps return 401", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const staleTimestamp = String(Math.floor(Date.now() / 1000) - 301);
+  const request = createSignedRequest({ type: 1 }, keyPair.secretKey, "/discord", staleTimestamp);
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 401);
+  assert.equal(await response.text(), "Bad request signature");
+});
+
+test("future Discord interaction timestamps return 401", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const futureTimestamp = String(Math.floor(Date.now() / 1000) + 301);
+  const request = createSignedRequest({ type: 1 }, keyPair.secretKey, "/discord", futureTimestamp);
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 401);
+  assert.equal(await response.text(), "Bad request signature");
+});
+
+test("non-numeric Discord interaction timestamps return 401", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const request = createSignedRequest({ type: 1 }, keyPair.secretKey, "/discord", "not-a-time");
 
   const response = await worker.fetch(request, env, {} as never);
 
@@ -169,7 +220,7 @@ test("missing Discord signature headers return 401", async () => {
   const keyPair = nacl.sign.keyPair();
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
   const response = await worker.fetch(
-    new Request("https://example.com/", {
+    new Request("https://example.com/discord", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ type: 1 }),
@@ -185,7 +236,7 @@ test("missing Discord signature headers return 401", async () => {
 test("malformed signature header returns 401 without throwing", async () => {
   const keyPair = nacl.sign.keyPair();
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
-  const request = new Request("https://example.com/", {
+  const request = new Request("https://example.com/discord", {
     method: "POST",
     headers: {
       "x-signature-ed25519": "not-hex!",
@@ -1245,6 +1296,15 @@ test("worker rejects /gateway/start without bot token auth", async () => {
     },
   });
 
+  const wrongMethod = await worker.fetch(
+    new Request("https://example.com/gateway/start", { method: "GET" }),
+    env,
+    {} as never,
+  );
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get("allow"), "POST");
+  assert.equal(startCalls, 0);
+
   const unauthorized = await worker.fetch(
     new Request("https://example.com/gateway/start", { method: "POST" }),
     env,
@@ -1280,6 +1340,18 @@ test("worker rejects /gateway/health without bot token auth", async () => {
       }),
     },
   });
+
+  const wrongMethod = await worker.fetch(
+    new Request("https://example.com/gateway/health", {
+      method: "POST",
+      headers: { authorization: "Bearer bot-token" },
+    }),
+    env,
+    {} as never,
+  );
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get("allow"), "GET");
+  assert.equal(healthCalls, 0);
 
   const unauthorized = await worker.fetch(
     new Request("https://example.com/gateway/health", { method: "GET" }),
@@ -1352,6 +1424,29 @@ test("worker fails closed for unconfigured public paths", async () => {
     {} as never,
   );
   assert.equal(admin.status, 404);
+
+  const sourceFilePaths = [
+    "/README.md",
+    "/AGENTS.md",
+    "/src/ai-config/discord-response-system-prompt.md",
+    "/ai-config/discord-response-system-prompt.md",
+  ];
+  for (const path of sourceFilePaths) {
+    const response = await worker.fetch(
+      new Request(`https://example.com${path}`, { method: "GET" }),
+      env,
+      {} as never,
+    );
+    assert.equal(response.status, 404, path);
+    assert.equal(await response.text(), "Not found", path);
+  }
+
+  const unknownGatewayWithoutAuth = await worker.fetch(
+    new Request("https://example.com/gateway/unknown", { method: "POST" }),
+    env,
+    {} as never,
+  );
+  assert.equal(unknownGatewayWithoutAuth.status, 404);
 
   const unknownGateway = await worker.fetch(
     new Request("https://example.com/gateway/unknown", {
