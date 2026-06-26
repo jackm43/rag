@@ -632,7 +632,7 @@ test("bot mention parser accepts prompts after the bot mention", () => {
   assert.equal(extractBotMentionPrompt("<@bot-user-id>   ", "bot-user-id"), null);
 });
 
-test("gateway message create enqueues a fresh thread-start AI job", async () => {
+test("gateway message create enqueues a channel reply AI job", async () => {
   const queuedJobs: unknown[] = [];
   const env = createEnv("unused", {
     AI_JOBS: {
@@ -656,7 +656,7 @@ test("gateway message create enqueues a fresh thread-start AI job", async () => 
 
   assert.deepEqual(queuedJobs, [
     {
-      kind: "thread_start",
+      kind: "channel_reply",
       channelId: "channel-id",
       messageId: "message-id",
       botUserId: "bot-user-id",
@@ -693,7 +693,7 @@ test("gateway message create enqueues jobs when the bot is mentioned at the end"
 
   assert.deepEqual(queuedJobs, [
     {
-      kind: "thread_start",
+      kind: "channel_reply",
       channelId: "channel-id",
       messageId: "message-id",
       botUserId: "bot-user-id",
@@ -742,7 +742,7 @@ test("gateway message create enqueues jobs when the bot's role is mentioned", as
     ]);
     assert.deepEqual(queuedJobs, [
       {
-        kind: "thread_start",
+        kind: "channel_reply",
         channelId: "channel-id",
         messageId: "message-id",
         botUserId: "bot-user-id",
@@ -787,7 +787,7 @@ test("gateway message create enqueues only replied-to message metadata", async (
 
   assert.deepEqual(queuedJobs, [
     {
-      kind: "thread_start",
+      kind: "channel_reply",
       channelId: "channel-id",
       messageId: "message-id",
       botUserId: "bot-user-id",
@@ -837,7 +837,7 @@ test("gateway message create does not fetch referenced message content", async (
     assert.deepEqual(fetchCalls, []);
     assert.deepEqual(queuedJobs, [
       {
-        kind: "thread_start",
+        kind: "channel_reply",
         channelId: "channel-id",
         messageId: "message-id",
         botUserId: "bot-user-id",
@@ -1168,7 +1168,72 @@ test("gateway durable object start RPC persists enabled state and schedules an a
   }
 });
 
-test("queue handler treats a parent-channel mention as fresh, creates a thread, and posts there", async () => {
+test("queue handler posts channel reply jobs without creating a thread", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({ response: "Short answer." });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
+      DB: createDbMock({}),
+    });
+    const ackedMessages: unknown[] = [];
+    const message = {
+      body: {
+        kind: "channel_reply",
+        channelId: "channel-id",
+        messageId: "trigger-id",
+        botUserId: "bot-user-id",
+        requesterUserId: "1",
+        requesterUsername: "metro goonin",
+        prompt: "and what about retries",
+      },
+      ack: () => {
+        ackedMessages.push(message.body);
+      },
+      retry: () => {
+        throw new Error("message should not be retried");
+      },
+    };
+
+    await worker.queue({ messages: [message] } as never, env);
+
+    assert.equal(fetchCalls.find((call) => call.url.includes("/threads")), undefined);
+    assert.equal(fetchCalls.find((call) => call.url.includes("/messages?")), undefined);
+
+    const gatewayCalls = fetchCalls.filter((call) => call.url.includes("gateway.ai.cloudflare.com"));
+    assert.equal(gatewayCalls.length, 1);
+    const input = JSON.parse(String(gatewayCalls[0].init?.body)) as { messages: Array<{ role: string; content: string }> };
+    assert.deepEqual(input.messages.slice(1), [
+      { role: "user", content: "metro goonin: and what about retries" },
+    ]);
+
+    const postCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/channels/channel-id/messages",
+    );
+    assert.ok(postCall);
+    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
+      content: "Short answer.",
+      allowed_mentions: {
+        parse: [],
+      },
+    });
+    assert.deepEqual(ackedMessages, [message.body]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("queue handler treats a thread-start job as fresh, creates a thread, and posts there", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   const insertedThreads: Array<{ sql: string; args: unknown[] }> = [];

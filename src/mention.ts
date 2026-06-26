@@ -243,7 +243,7 @@ export const handleGatewayMessageCreate = async (
   }
 
   await env.AI_JOBS.send({
-    kind: "thread_start",
+    kind: "channel_reply",
     channelId: message.channel_id,
     messageId: message.id,
     botUserId,

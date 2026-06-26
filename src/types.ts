@@ -47,7 +47,19 @@ export type AiThreadReplyJob = {
   replyChannelId?: string;
 };
 
-export type AiJob = AiThreadStartJob | AiThreadReplyJob;
+export type AiChannelReplyJob = {
+  kind: "channel_reply";
+  channelId: string;
+  messageId?: string;
+  botUserId?: string;
+  requesterUserId?: string;
+  requesterUsername?: string;
+  prompt: string;
+  replyMessageId?: string;
+  replyChannelId?: string;
+};
+
+export type AiJob = AiThreadStartJob | AiThreadReplyJob | AiChannelReplyJob;
 
 export type AiThread = {
   threadId: string;

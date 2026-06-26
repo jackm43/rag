@@ -1,4 +1,3 @@
-import { REST, type ResponseLike, type RESTOptions } from "@discordjs/rest";
 import { Routes, SlashCommandBuilder } from "discord.js";
 
 export { };
@@ -40,32 +39,41 @@ const commands = [
     ),
 ].map((command) => command.toJSON());
 
-const makeDiscordRequest = async (
-  url: Parameters<RESTOptions["makeRequest"]>[0],
-  init: Parameters<RESTOptions["makeRequest"]>[1],
-): Promise<ResponseLike> => {
-  const response = await fetch(url, {
-    method: init.method,
-    headers: init.headers as HeadersInit,
-    body: init.body as BodyInit | null | undefined,
-    signal: init.signal as AbortSignal | null | undefined,
+const discordApiRequest = async (path: string, init: RequestInit = {}) => {
+  const response = await fetch(`https://discord.com/api/v10${path}`, {
+    ...init,
+    headers: {
+      authorization: `Bot ${botToken}`,
+      ...(init.body ? { "content-type": "application/json" } : {}),
+      ...(init.headers ?? {}),
+    },
   });
-  return {
-    body: null,
-    bodyUsed: response.bodyUsed,
-    headers: response.headers as ResponseLike["headers"],
-    ok: response.ok,
-    status: response.status,
-    statusText: response.statusText,
-    arrayBuffer: () => response.arrayBuffer(),
-    json: () => response.json(),
-    text: () => response.text(),
-  };
+
+  if (!response.ok) {
+    throw new Error(`Discord API request failed: ${response.status} ${await response.text()}`);
+  }
+
+  return response.json().catch(() => null);
 };
 
-const rest = new REST({
-  version: "10",
-  makeRequest: makeDiscordRequest,
-}).setToken(botToken);
+await discordApiRequest(Routes.applicationCommands(applicationId), {
+  method: "PUT",
+  body: JSON.stringify(commands),
+});
 
-await rest.put(Routes.applicationCommands(applicationId), { body: commands });
+type DiscordGuild = {
+  id: string;
+};
+
+const guilds = await discordApiRequest("/users/@me/guilds");
+if (Array.isArray(guilds)) {
+  for (const guild of guilds) {
+    if (!guild || typeof (guild as DiscordGuild).id !== "string") {
+      continue;
+    }
+    await discordApiRequest(Routes.applicationGuildCommands(applicationId, guild.id), {
+      method: "PUT",
+      body: JSON.stringify([]),
+    });
+  }
+}

@@ -14,7 +14,7 @@ This project expects these environment variables:
 - Cloudflare Worker entrypoint: `src/index.ts` (routing only)
 - Modules:
   - `src/http.ts` Discord signature verification, JSON responses, constant-time compare
-  - `src/discord.ts` Discord REST helpers backed by `@discordjs/rest`
+  - `src/discord.ts` Discord REST helpers
   - `src/gateway.ts` `DiscordGateway` Durable Object (`DISCORD_GATEWAY` binding)
   - `src/mention.ts` mention handling, thread tracking, AI title generation, and AI queue consumer (thread conversation context)
   - `src/commands/ask.ts` `/ask` thread creation and AI response handling

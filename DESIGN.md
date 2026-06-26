@@ -14,7 +14,8 @@ User-facing slash commands:
 - `/ask prompt:<question>`
 
 Mention-driven AI behavior:
-- If a user mentions the bot in a parent channel, the gateway path enqueues a fresh AI job that creates a Discord thread from that message and posts the generated reply inside the thread.
+- If a user mentions the bot in a parent channel, the gateway path enqueues a fresh AI job that posts the generated reply directly in that channel.
+- `/ask` is the only path that creates a new AI thread.
 - Later messages inside bot-managed AI threads enqueue continuation jobs automatically and use only that thread's context.
 
 ## Architecture
@@ -130,10 +131,16 @@ sequenceDiagram
     DO->>Queue: Send thread_reply AiJob: thread id, message id, requester, prompt, reply ids
   else parent channel mention
     DO->>DO: Ignore unless author is not bot and content mentions this bot
-    DO->>Queue: Send thread_start AiJob: parent channel id, source message id, requester, prompt, reply ids
+    DO->>Queue: Send channel_reply AiJob: channel id, source message id, requester, prompt, reply ids
   end
   Queue-->>Consumer: Deliver job body
-  alt thread_start
+  alt channel_reply
+    Consumer->>REST: Optional GET explicit replied-to message
+    REST-->>Consumer: Replied-to message JSON: author, content, attachments
+    Consumer->>AI: Chat request: fresh prompt, optional reply context
+    AI-->>Consumer: AI response text + optional usage tokens
+    Consumer->>REST: POST channel message: sanitized response, allowed_mentions parse=[]
+  else thread_start
     Consumer->>REST: Optional GET explicit replied-to message
     REST-->>Consumer: Replied-to message JSON: author, content, attachments
     Consumer->>AI: Chat request: fresh prompt, optional reply context

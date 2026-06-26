@@ -9,7 +9,8 @@
     "check": "tsc --noEmit",
     "test": "vitest run",
     "register:commands": "tsx scripts/register-commands.ts",
-    "d1:migrate:local": "wrangler d1 execute ragbot --local --file=./schema.sql"
+    "d1:migrate:local": "wrangler d1 execute ragbot --local --file=./schema.sql",
+    "d1:migrate:remote": "wrangler d1 execute ragbot --remote --file=./schema.sql"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.18",

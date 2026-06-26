@@ -1,6 +1,6 @@
 # ragbot-worker
 
-Cloudflare Worker Discord bot for rag tracking and thread-based AI replies.
+Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thread-based `/ask` conversations.
 
 ## Tech Stack
 
@@ -12,7 +12,7 @@ Cloudflare Worker Discord bot for rag tracking and thread-based AI replies.
 - Stateful connection: Durable Objects (`DiscordGateway`)
 - Discord integration:
   - Interactions webhook
-  - discord.js REST tooling for command registration, thread creation, and message posting
+  - Discord REST calls for command registration, thread creation, and message posting
   - Gateway WebSocket for mention-based AI
 
 ## Command Surface
@@ -111,19 +111,14 @@ sequenceDiagram
 
   User->>DiscordGateway: Parent channel message mentioning bot
   DiscordGateway-->>GatewayDO: MESSAGE_CREATE payload: author, channel_id, content, mentions
-  GatewayDO->>Queue: Enqueue thread_start AiJob: parent channel, source message, requester, prompt, reply ids
+  GatewayDO->>Queue: Enqueue channel_reply AiJob: channel, source message, requester, prompt, reply ids
   Queue-->>Consumer: Deliver AiJob batch
   Consumer->>DiscordREST: Optional GET explicit replied-to message
   DiscordREST-->>Consumer: Replied-to message JSON: author, content, attachments
   Consumer->>AI: Chat request: fresh user prompt
   AI-->>Consumer: Chat response: generated text + optional usage
-  Consumer->>AI: Chat request: concise thread title
-  AI-->>Consumer: Thread title
-  Consumer->>DiscordREST: POST thread from source message
-  DiscordREST-->>Consumer: Created thread channel
-  Consumer->>DB: UPSERT rag_ai_threads: thread id, source message, initial prompt, title
   Consumer->>DB: INSERT rag_ai_interactions: prompt, response, model, status, token usage
-  Consumer->>DiscordREST: POST thread message: sanitized content, allowed_mentions parse=[]
+  Consumer->>DiscordREST: POST channel message: sanitized content, allowed_mentions parse=[]
   DiscordREST-->>Consumer: Created message JSON or API error
   Consumer->>Queue: ack on success/terminal 4xx, retry on transient errors
 
@@ -181,13 +176,15 @@ sequenceDiagram
   - gateway listens for Discord `MESSAGE_CREATE`
 - Handlers: `src/gateway.ts` (connection) and `src/mention.ts` (logic)
 - Queue and worker:
-  - parent-channel mentions enqueue a `thread_start` job in `AI_JOBS`
-  - the start job treats the message as fresh, optionally includes explicit replied-to context, generates an answer and thread title, creates a Discord thread from the source message, records it in `rag_ai_threads`, and posts the answer inside the thread
+  - parent-channel mentions enqueue a `channel_reply` job in `AI_JOBS`
+  - channel reply jobs answer in the same Discord channel and do not create or record a thread
+  - `/ask` creates a Discord thread, records it in `rag_ai_threads`, and posts the answer inside that thread
   - later messages in a tracked thread enqueue `thread_reply` jobs automatically without requiring an @ mention
   - reply jobs build context from the stored initial prompt plus recent messages in that thread only
   - generated replies are sanitized for mentions/IDs
 - Delivery:
-  - posts message inside the Discord thread
+  - direct mentions post in the same Discord channel
+  - `/ask` and tracked-thread follow-ups post inside the Discord thread
 
 ## Configuration
 

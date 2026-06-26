@@ -127,7 +127,10 @@ export const isDiscordMessage = (value: unknown): value is DiscordMessage =>
 const isOptionalJobString = (value: unknown) => value === undefined || isString(value);
 
 export const isAiJob = (value: unknown): value is AiJob => {
-  if (!isRecord(value) || (value.kind !== "thread_start" && value.kind !== "thread_reply")) {
+  if (
+    !isRecord(value) ||
+    (value.kind !== "thread_start" && value.kind !== "thread_reply" && value.kind !== "channel_reply")
+  ) {
     return false;
   }
 
