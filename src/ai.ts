@@ -7,6 +7,8 @@ export type ChatMessage = {
   content: string;
 };
 
+export type WebSearchContextSize = "low" | "medium" | "high";
+
 const isWorkersAiModel = (model: string) => model.startsWith("@cf/");
 const isGatewayWorkersAiModel = (model: string) => model.startsWith("workers-ai/");
 const isBindingModel = (model: string) => isWorkersAiModel(model) || isGatewayWorkersAiModel(model);
@@ -37,8 +39,8 @@ const optionalUsageNumber = (value: unknown) =>
 const usageFrom = (usage: unknown) =>
   isRecord(usage)
     ? {
-      promptTokens: optionalUsageNumber(usage.prompt_tokens),
-      completionTokens: optionalUsageNumber(usage.completion_tokens),
+      promptTokens: optionalUsageNumber(usage.prompt_tokens ?? usage.input_tokens),
+      completionTokens: optionalUsageNumber(usage.completion_tokens ?? usage.output_tokens),
       totalTokens: optionalUsageNumber(usage.total_tokens),
     }
     : undefined;
@@ -166,6 +168,26 @@ export type ChatModelResult = {
   };
 };
 
+export type WebSearchSource = {
+  url: string;
+  title?: string;
+};
+
+export type WebSearchChatOptions = {
+  model: string;
+  instructions: string;
+  maxOutputTokens: number;
+  temperature: number;
+  maxTurns: number;
+  searchContextSize: WebSearchContextSize;
+  gatewayId?: string | null;
+};
+
+export type WebSearchModelResult = ChatModelResult & {
+  sources: WebSearchSource[];
+  webSearchCalls: number;
+};
+
 export const runChatCompletion = async (
   env: Env,
   config: BotConfig,
@@ -201,6 +223,91 @@ export const runChatModel = async (
   messages: ChatMessage[],
   options: ChatOptions = {},
 ): Promise<string> => (await runChatCompletion(env, config, messages, options)).content;
+
+const extractResponsesText = (result: unknown): string => {
+  if (!isRecord(result)) {
+    return extractText(result);
+  }
+  if (typeof result.output_text === "string") {
+    return result.output_text;
+  }
+
+  const parts: string[] = [];
+  const output = Array.isArray(result.output) ? result.output : [];
+  for (const item of output) {
+    if (!isRecord(item) || !Array.isArray(item.content)) {
+      continue;
+    }
+    for (const content of item.content) {
+      if (isRecord(content) && typeof content.text === "string") {
+        parts.push(content.text);
+      }
+    }
+  }
+  return parts.join("\n\n") || extractText(result);
+};
+
+const extractResponsesSources = (result: unknown): WebSearchSource[] => {
+  if (!isRecord(result) || !Array.isArray(result.output)) {
+    return [];
+  }
+
+  const sources = new Map<string, WebSearchSource>();
+  for (const item of result.output) {
+    if (!isRecord(item) || !Array.isArray(item.content)) {
+      continue;
+    }
+    for (const content of item.content) {
+      if (!isRecord(content) || !Array.isArray(content.annotations)) {
+        continue;
+      }
+      for (const annotation of content.annotations) {
+        if (!isRecord(annotation) || typeof annotation.url !== "string") {
+          continue;
+        }
+        sources.set(annotation.url, {
+          url: annotation.url,
+          title: typeof annotation.title === "string" ? annotation.title : undefined,
+        });
+      }
+    }
+  }
+  return [...sources.values()];
+};
+
+const countWebSearchCalls = (result: unknown) =>
+  isRecord(result) && Array.isArray(result.output)
+    ? result.output.filter((item) => isRecord(item) && item.type === "web_search_call").length
+    : 0;
+
+export const runWebSearchCompletion = async (
+  env: Env,
+  input: string,
+  options: WebSearchChatOptions,
+): Promise<WebSearchModelResult> => {
+  const request = {
+    input,
+    instructions: options.instructions,
+    max_output_tokens: options.maxOutputTokens,
+    max_turns: options.maxTurns,
+    temperature: options.temperature,
+    tools: [{ type: "web_search", search_context_size: options.searchContextSize }],
+  };
+
+  const result = await env.AI.run(
+    options.model,
+    request,
+    options.gatewayId ? { gateway: { id: options.gatewayId, skipCache: true } } : undefined,
+  );
+
+  return {
+    content: extractResponsesText(result),
+    model: modelFrom(result, options.model),
+    sources: extractResponsesSources(result),
+    usage: isRecord(result) ? usageFrom(result.usage) : undefined,
+    webSearchCalls: countWebSearchCalls(result),
+  };
+};
 
 export const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
   const timeoutPromise = new Promise<never>((_, reject) => {

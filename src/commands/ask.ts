@@ -1,4 +1,10 @@
-import { runChatCompletion, sanitizeAiText, type ChatMessage } from "../ai";
+import {
+  runChatCompletion,
+  runWebSearchCompletion,
+  sanitizeAiText,
+  type ChatMessage,
+  type WebSearchSource,
+} from "../ai";
 import { loadConfig, type BotConfig } from "../config";
 import {
   createThreadWithoutMessage,
@@ -24,6 +30,11 @@ const askPrompt = (interaction: DiscordInteraction) => {
   return typeof value === "string" ? value.trim() : "";
 };
 
+const askWebSearchOverride = (interaction: DiscordInteraction) => {
+  const value = interaction.data?.options?.find((option) => option.name === "web")?.value;
+  return typeof value === "boolean" ? value : null;
+};
+
 const getInvoker = (interaction: DiscordInteraction) => interaction.member?.user ?? interaction.user;
 
 const getInvokerDisplayName = (interaction: DiscordInteraction) =>
@@ -44,6 +55,48 @@ const buildAskConversation = (config: BotConfig, prompt: string, requesterUserna
     content: `${requesterUsername}: ${prompt}`,
   },
 ];
+
+const currentDate = () => new Date().toISOString().slice(0, 10);
+
+const buildAskWebSearchInput = (prompt: string, requesterUsername: string) =>
+  [
+    `Current date: ${currentDate()}`,
+    `Requester display name: ${requesterUsername}`,
+    "Discord slash command: /ask",
+    "",
+    "User prompt:",
+    prompt,
+  ].join("\n");
+
+const explicitWebSearchPattern =
+  /\b(search|web search|look up|lookup|google|online|on the web|sources?|cite|citation)\b/i;
+const currentInfoPattern =
+  /\b(current|currently|latest|today|now|right now|recent|newest|this week|this month|202[4-9]|news|price|pricing|availability|available|released?|launch(?:ed)?|schedule|law|legal|regulation|market|stock|weather)\b/i;
+const comparisonResearchPattern =
+  /\b(best|top|compare|comparison|versus|vs\.?|recommend|recommendation|buy|worth it)\b/i;
+const productOrOrgPattern =
+  /\b(gpu|cpu|graphics card|nvidia|amd|intel|apple|laptop|phone|product|model|prices?|availability|performance|benchmark|review)\b/i;
+
+export const shouldUseAskWebSearch = (prompt: string, override: boolean | null = null) => {
+  if (override !== null) {
+    return override;
+  }
+  return (
+    explicitWebSearchPattern.test(prompt) ||
+    currentInfoPattern.test(prompt) ||
+    (comparisonResearchPattern.test(prompt) && productOrOrgPattern.test(prompt))
+  );
+};
+
+const sourceUrlPattern = /https?:\/\//i;
+
+const appendSourceFallback = (content: string, sources: WebSearchSource[]) => {
+  if (sourceUrlPattern.test(content) || sources.length === 0) {
+    return content;
+  }
+  const urls = sources.slice(0, 3).map((source) => source.url).join(" ");
+  return `${content}\n\nSources: ${urls}`;
+};
 
 const resolveThreadParentChannelId = async (env: Env, channelId: string) => {
   const channel = await fetchChannel(env, channelId);
@@ -82,8 +135,29 @@ const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
     title,
   });
 
-  const result = await runChatCompletion(env, config, buildAskConversation(config, prompt, requesterUsername));
-  const text = sanitizeAiText(result.content);
+  const webSearch = shouldUseAskWebSearch(prompt, askWebSearchOverride(interaction));
+  let responseText: string;
+  if (webSearch) {
+    const result = await runWebSearchCompletion(
+      env,
+      buildAskWebSearchInput(prompt, requesterUsername),
+      {
+        model: config.askWebSearchModel,
+        instructions: config.askWebSearchSystemPrompt,
+        maxOutputTokens: config.askWebSearchMaxOutputTokens,
+        maxTurns: config.askWebSearchMaxTurns,
+        searchContextSize: config.askWebSearchContextSize,
+        temperature: config.askWebSearchTemperature,
+        gatewayId: config.askWebSearchGatewayId,
+      },
+    );
+    responseText = appendSourceFallback(result.content, result.sources);
+  } else {
+    const result = await runChatCompletion(env, config, buildAskConversation(config, prompt, requesterUsername));
+    responseText = result.content;
+  }
+
+  const text = sanitizeAiText(responseText);
   const content =
     text.length > 0 ? text.slice(0, MAX_DISCORD_MESSAGE_LENGTH) : "I could not generate a response.";
   const response = await postChannelMessage(env, thread.id, content);

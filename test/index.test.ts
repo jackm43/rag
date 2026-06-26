@@ -8,6 +8,7 @@ import worker, {
   extractBotMentionPrompt,
   handleGatewayMessageCreate,
 } from "../src/index.ts";
+import { shouldUseAskWebSearch } from "../src/commands/ask.ts";
 import { fetchChannelMessages } from "../src/discord.ts";
 import { bearerTokenMatches, secretsMatch } from "../src/http.ts";
 
@@ -341,6 +342,155 @@ test("/ask interaction is deferred, creates a titled thread, and posts the answe
       "Alice",
       "How do queue retries work?",
       "Worker queue retries",
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("/ask web search heuristic detects current research requests and honors overrides", () => {
+  assert.equal(
+    shouldUseAskWebSearch("can you get me information on the best GPUs across nvidia and AMD currently?"),
+    true,
+  );
+  assert.equal(shouldUseAskWebSearch("How do queue retries work?"), false);
+  assert.equal(shouldUseAskWebSearch("How do queue retries work?", true), true);
+  assert.equal(shouldUseAskWebSearch("What are the latest GPU prices?", false), false);
+});
+
+test("/ask uses the web-search model for current research prompts", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const aiRuns: Array<{ model: string; input: Record<string, unknown>; options?: unknown }> = [];
+  const insertedThreads: Array<{ sql: string; args: unknown[] }> = [];
+  const waitUntilPromises: Promise<unknown>[] = [];
+
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({ response: "Current GPU picks" });
+    }
+    if (String(url) === "https://discord.com/api/v10/channels/channel-id") {
+      return Response.json({ id: "channel-id", type: 0, name: "general" });
+    }
+    if (String(url) === "https://discord.com/api/v10/channels/channel-id/threads") {
+      return Response.json({ id: "thread-id", type: 11, parent_id: "channel-id", name: "Current GPU picks" });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const baseDb = createDbMock();
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
+      AI: {
+        run: async (model: string, input: Record<string, unknown>, options?: unknown) => {
+          aiRuns.push({ model, input, options });
+          return {
+            model: "grok-4.20-multi-agent-0309",
+            output: [
+              { type: "web_search_call", status: "completed" },
+              {
+                type: "message",
+                role: "assistant",
+                content: [
+                  {
+                    type: "output_text",
+                    text: "Based on current reviews, compare RTX 5090, RTX 5080, RX 9990 XTX, and RX 9980 XT by price, power, and workload.",
+                    annotations: [
+                      {
+                        type: "url_citation",
+                        url: "https://example.com/gpu-roundup",
+                        title: "GPU roundup",
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+            usage: { input_tokens: 100, output_tokens: 30, total_tokens: 130 },
+          };
+        },
+      },
+      DB: {
+        ...baseDb,
+        prepare: (sql: string) => {
+          const base = createDbMock().prepare(sql);
+          return {
+            ...base,
+            bind: (...args: unknown[]) => ({
+              ...base.bind(...args),
+              run: async () => {
+                if (sql.includes("INSERT INTO rag_ai_threads")) {
+                  insertedThreads.push({ sql, args });
+                }
+                return base.bind(...args).run();
+              },
+            }),
+          };
+        },
+      },
+    });
+    const request = createSignedRequest(
+      {
+        application_id: "application-id",
+        channel_id: "channel-id",
+        token: "interaction-token",
+        type: 2,
+        data: {
+          name: "ask",
+          options: [
+            {
+              name: "prompt",
+              value: "can you get me information on the best GPUs across nvidia and AMD currently?",
+            },
+          ],
+        },
+        member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
+      },
+      keyPair.secretKey,
+    );
+
+    const response = await worker.fetch(request, env, {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise);
+      },
+    } as never);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { type: 5 });
+    await Promise.all(waitUntilPromises);
+
+    assert.equal(aiRuns.length, 1);
+    assert.equal(aiRuns[0].model, "xai/grok-4.20-multi-agent-0309");
+    assert.match(String(aiRuns[0].input.instructions), /careful web research assistant/);
+    assert.match(String(aiRuns[0].input.input), /best GPUs across nvidia and AMD currently/);
+    assert.equal(aiRuns[0].input.max_turns, 4);
+    assert.deepEqual(aiRuns[0].input.tools, [{ type: "web_search", search_context_size: "medium" }]);
+    assert.deepEqual(aiRuns[0].options, { gateway: { id: "platy", skipCache: true } });
+
+    const postCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/channels/thread-id/messages",
+    );
+    assert.ok(postCall);
+    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
+      content:
+        "Based on current reviews, compare RTX 5090, RTX 5080, RX 9990 XTX, and RX 9980 XT by price, power, and workload.\n\nSources: https://example.com/gpu-roundup",
+      allowed_mentions: {
+        parse: [],
+      },
+    });
+    assert.deepEqual(insertedThreads[0].args, [
+      "thread-id",
+      "channel-id",
+      null,
+      "1",
+      "Alice",
+      "can you get me information on the best GPUs across nvidia and AMD currently?",
+      "Current GPU picks",
     ]);
   } finally {
     globalThis.fetch = originalFetch;

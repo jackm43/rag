@@ -7,7 +7,7 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
 - Runtime: Cloudflare Workers (`src/index.ts`)
 - Language: TypeScript
 - Database: Cloudflare D1 (`DB`)
-- AI: Workers AI binding (`AI`); model and prompt config live in `src/ai-config` (`@cf/...` Workers AI models or Unified Billing partner models such as `grok/grok-4.3`), routed through AI Gateway with binding options when a gateway id is configured
+- AI: Workers AI binding (`AI`); model and prompt config live in `src/ai-config` (`@cf/...` Workers AI models, Unified Billing partner chat models such as `grok/grok-4.3`, and web-search models such as `xai/grok-4.20-multi-agent-0309`), routed through AI Gateway with binding options when a gateway id is configured
 - Queue: Cloudflare Queues (`AI_JOBS`, `ai-jobs`, `ai-jobs-dlq`)
 - Stateful connection: Durable Objects (`DiscordGateway`)
 - Discord integration:
@@ -20,7 +20,7 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
 - Slash commands:
   - `/rag user:<discord-user>`
   - `/ragboard`
-  - `/ask prompt:<question>`
+  - `/ask prompt:<question> [web:<true|false>]`
 - HTTP endpoints:
   - `GET /` health
   - `POST /` Discord interactions
@@ -81,8 +81,8 @@ sequenceDiagram
     AI-->>Worker: Thread title
     Worker->>Discord: POST channel thread: title, public thread, 1 day archive
     Worker->>DB: UPSERT rag_ai_threads: thread id, prompt, requester, title
-    Worker->>AI: Chat request: fresh user prompt
-    AI-->>Worker: Chat response
+    Worker->>AI: Chat request or web-search Responses request: fresh user prompt
+    AI-->>Worker: Chat response or cited research response
     Worker->>Discord: POST message inside created thread
     Worker->>Discord: PATCH original response with thread link
   end
@@ -167,6 +167,7 @@ sequenceDiagram
   - creates a public Discord thread in the current channel
   - stores the thread in `rag_ai_threads`
   - posts the sanitized AI response inside the thread
+  - uses neutral web-search research mode when the prompt asks for current information, or when `web:true` is supplied
   - edits the original interaction response with a thread link
 
 ### Mention-based AI (not a slash command)
@@ -191,6 +192,7 @@ sequenceDiagram
 AI config is checked into `src/ai-config`:
 
 - `discord-response.json` and `discord-response-system-prompt.md` control mention replies.
+- `ask-web-search.json` and `ask-web-search-system-prompt.md` control `/ask` research mode.
 - `rag-roast.json` and `rag-roast-system-prompt.md` control `/rag` roast generation.
 
 ## Local and Deploy Commands
