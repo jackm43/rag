@@ -8,6 +8,7 @@ import worker, {
   extractBotMentionPrompt,
   handleGatewayMessageCreate,
 } from "../src/index.ts";
+import { shouldUseAskWebSearch } from "../src/commands/ask.ts";
 import { fetchChannelMessages } from "../src/discord.ts";
 import { bearerTokenMatches, secretsMatch } from "../src/http.ts";
 
@@ -342,6 +343,241 @@ test("/ask interaction is deferred, creates a titled thread, and posts the answe
       "How do queue retries work?",
       "Worker queue retries",
     ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("/ask web search heuristic detects current research requests", () => {
+  assert.equal(
+    shouldUseAskWebSearch("can you get me information on the best GPUs across nvidia and AMD currently?"),
+    true,
+  );
+  assert.equal(shouldUseAskWebSearch("How do queue retries work?"), false);
+  assert.equal(shouldUseAskWebSearch("What are the latest GPU prices?"), true);
+});
+
+test("/ask uses the web-search model for current research prompts", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const insertedThreads: Array<{ sql: string; args: unknown[] }> = [];
+  const waitUntilPromises: Promise<unknown>[] = [];
+  let gatewayCalls = 0;
+
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      gatewayCalls += 1;
+      if (gatewayCalls === 1) {
+        return Response.json({ response: "Current GPU picks" });
+      }
+      return Response.json({
+        model: "gpt-4o-search-preview-2025-03-11",
+        choices: [
+          {
+            message: {
+              content:
+                "Based on current reviews, compare RTX 5090, RTX 5080, RX 9990 XTX, and RX 9980 XT by price, power, and workload.",
+              annotations: [
+                {
+                  type: "url_citation",
+                  url_citation: {
+                    url: "https://example.com/gpu-roundup",
+                    title: "GPU roundup",
+                  },
+                },
+              ],
+            },
+          },
+        ],
+        usage: { prompt_tokens: 100, completion_tokens: 30, total_tokens: 130 },
+      });
+    }
+    if (String(url) === "https://discord.com/api/v10/channels/channel-id") {
+      return Response.json({ id: "channel-id", type: 0, name: "general" });
+    }
+    if (String(url) === "https://discord.com/api/v10/channels/channel-id/threads") {
+      return Response.json({ id: "thread-id", type: 11, parent_id: "channel-id", name: "Current GPU picks" });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const baseDb = createDbMock();
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
+      DB: {
+        ...baseDb,
+        prepare: (sql: string) => {
+          const base = createDbMock().prepare(sql);
+          return {
+            ...base,
+            bind: (...args: unknown[]) => ({
+              ...base.bind(...args),
+              run: async () => {
+                if (sql.includes("INSERT INTO rag_ai_threads")) {
+                  insertedThreads.push({ sql, args });
+                }
+                return base.bind(...args).run();
+              },
+            }),
+          };
+        },
+      },
+    });
+    const request = createSignedRequest(
+      {
+        application_id: "application-id",
+        channel_id: "channel-id",
+        token: "interaction-token",
+        type: 2,
+        data: {
+          name: "ask",
+          options: [
+            {
+              name: "prompt",
+              value: "can you get me information on the best GPUs across nvidia and AMD currently?",
+            },
+          ],
+        },
+        member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
+      },
+      keyPair.secretKey,
+    );
+
+    const response = await worker.fetch(request, env, {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise);
+      },
+    } as never);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { type: 5 });
+    await Promise.all(waitUntilPromises);
+
+    const webSearchCall = fetchCalls.filter((call) => call.url.includes("gateway.ai.cloudflare.com"))[1];
+    assert.ok(webSearchCall);
+    assert.equal(
+      webSearchCall.url,
+      "https://gateway.ai.cloudflare.com/v1/account-id/platy/compat/chat/completions",
+    );
+    assert.equal(
+      (webSearchCall.init?.headers as Record<string, string>)["cf-aig-authorization"],
+      "Bearer gateway-token",
+    );
+    const webSearchBody = JSON.parse(String(webSearchCall.init?.body));
+    assert.equal(webSearchBody.model, "openai/gpt-4o-search-preview");
+    assert.match(webSearchBody.messages[0].content, /careful web research assistant/);
+    assert.match(webSearchBody.messages[1].content, /best GPUs across nvidia and AMD currently/);
+    assert.equal(webSearchBody.max_tokens, 1200);
+    assert.deepEqual(webSearchBody.web_search_options, { search_context_size: "medium" });
+
+    const postCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/channels/thread-id/messages",
+    );
+    assert.ok(postCall);
+    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
+      content:
+        "Based on current reviews, compare RTX 5090, RTX 5080, RX 9990 XTX, and RX 9980 XT by price, power, and workload.\n\nSources: https://example.com/gpu-roundup",
+      allowed_mentions: {
+        parse: [],
+      },
+    });
+    assert.deepEqual(insertedThreads[0].args, [
+      "thread-id",
+      "channel-id",
+      null,
+      "1",
+      "Alice",
+      "can you get me information on the best GPUs across nvidia and AMD currently?",
+      "Current GPU picks",
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("/ask reports AI response failures after creating the thread", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const waitUntilPromises: Promise<unknown>[] = [];
+  let gatewayCalls = 0;
+
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      gatewayCalls += 1;
+      if (gatewayCalls === 2) {
+        return Response.json({ error: { message: "web search model unavailable" } }, { status: 500 });
+      }
+      return Response.json({ response: "Current GPU picks" });
+    }
+    if (String(url) === "https://discord.com/api/v10/channels/channel-id") {
+      return Response.json({ id: "channel-id", type: 0, name: "general" });
+    }
+    if (String(url) === "https://discord.com/api/v10/channels/channel-id/threads") {
+      return Response.json({ id: "thread-id", type: 11, parent_id: "channel-id", name: "Current GPU picks" });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
+      DB: createDbMock(),
+    });
+    const request = createSignedRequest(
+      {
+        application_id: "application-id",
+        channel_id: "channel-id",
+        token: "interaction-token",
+        type: 2,
+        data: {
+          name: "ask",
+          options: [{ name: "prompt", value: "What are the latest GPU prices?" }],
+        },
+        member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
+      },
+      keyPair.secretKey,
+    );
+
+    const response = await worker.fetch(request, env, {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise);
+      },
+    } as never);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { type: 5 });
+    await Promise.all(waitUntilPromises);
+
+    const threadMessage = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/channels/thread-id/messages",
+    );
+    assert.ok(threadMessage);
+    assert.deepEqual(JSON.parse(String(threadMessage.init?.body)), {
+      content: "I started this thread, but the AI response failed. Try again in a moment.",
+      allowed_mentions: {
+        parse: [],
+      },
+    });
+
+    const editCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+    );
+    assert.ok(editCall);
+    assert.deepEqual(JSON.parse(String(editCall.init?.body)), {
+      content: "Started <#thread-id>, but the AI response failed.",
+      allowed_mentions: {
+        parse: [],
+      },
+    });
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1444,6 +1680,177 @@ test("queue handler builds a conversation from tracked thread history and posts 
       },
     });
     assert.deepEqual(ackedMessages, [message.body]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("queue handler keeps non-search replies inside /ask thread mode", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({ response: "The practical difference is delivery timing." });
+    }
+    if (String(url).includes("/messages?")) {
+      return Response.json([
+        {
+          id: "m1",
+          channel_id: "thread-id",
+          content: "Queues deliver work later.",
+          author: { id: "bot-user-id", username: "ragbot", bot: true },
+        },
+      ]);
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
+      DB: createDbMock({
+        aiThread: {
+          thread_id: "thread-id",
+          parent_channel_id: "channel-id",
+          source_message_id: null,
+          requester_user_id: "1",
+          requester_username: "Alice",
+          initial_prompt: "Explain queues",
+          title: "Queue explanation",
+        },
+      }),
+    });
+    const message = {
+      body: {
+        kind: "thread_reply",
+        channelId: "thread-id",
+        messageId: "trigger-id",
+        botUserId: "bot-user-id",
+        requesterUserId: "1",
+        requesterUsername: "Alice",
+        prompt: "how is that different from a cron trigger?",
+      },
+      ack: () => undefined,
+      retry: () => {
+        throw new Error("message should not be retried");
+      },
+    };
+
+    await worker.queue({ messages: [message] } as never, env);
+
+    const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
+    assert.ok(gatewayCall);
+    const input = JSON.parse(String(gatewayCall.init?.body)) as { messages: Array<{ role: string; content: string }> };
+    assert.match(input.messages[0].content, /This is a \/ask thread/);
+    assert.equal(/normal chat reply/.test(input.messages[0].content), false);
+    assert.deepEqual(input.messages.slice(1), [
+      { role: "user", content: "Alice: Explain queues" },
+      { role: "assistant", content: "Queues deliver work later." },
+      { role: "user", content: "Alice: how is that different from a cron trigger?" },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("queue handler uses web search for current follow-ups in /ask threads", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({
+        model: "gpt-4o-search-preview-2025-03-11",
+        choices: [
+          {
+            message: {
+              content: "The current pick is ExampleDB based on recent pricing.",
+              annotations: [
+                {
+                  type: "url_citation",
+                  url_citation: {
+                    url: "https://example.com/current-db-pricing",
+                    title: "Current DB pricing",
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      });
+    }
+    if (String(url).includes("/messages?")) {
+      return Response.json([
+        {
+          id: "m1",
+          channel_id: "thread-id",
+          content: "Earlier answer.",
+          author: { id: "bot-user-id", username: "ragbot", bot: true },
+        },
+      ]);
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
+      DB: createDbMock({
+        aiThread: {
+          thread_id: "thread-id",
+          parent_channel_id: "channel-id",
+          source_message_id: null,
+          requester_user_id: "1",
+          requester_username: "Alice",
+          initial_prompt: "Compare serverless databases",
+          title: "Serverless databases",
+        },
+      }),
+    });
+    const message = {
+      body: {
+        kind: "thread_reply",
+        channelId: "thread-id",
+        messageId: "trigger-id",
+        botUserId: "bot-user-id",
+        requesterUserId: "1",
+        requesterUsername: "Alice",
+        prompt: "what is the latest pricing?",
+      },
+      ack: () => undefined,
+      retry: () => {
+        throw new Error("message should not be retried");
+      },
+    };
+
+    await worker.queue({ messages: [message] } as never, env);
+
+    const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
+    assert.ok(gatewayCall);
+    const body = JSON.parse(String(gatewayCall.init?.body));
+    assert.equal(body.model, "openai/gpt-4o-search-preview");
+    assert.match(body.messages[0].content, /careful web research assistant/);
+    assert.match(body.messages[1].content, /Thread conversation context/);
+    assert.match(body.messages[1].content, /Compare serverless databases/);
+    assert.match(body.messages[1].content, /what is the latest pricing/);
+    assert.deepEqual(body.web_search_options, { search_context_size: "medium" });
+
+    const postCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/channels/thread-id/messages",
+    );
+    assert.ok(postCall);
+    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
+      content:
+        "The current pick is ExampleDB based on recent pricing.\n\nSources: https://example.com/current-db-pricing",
+      allowed_mentions: {
+        parse: [],
+      },
+    });
   } finally {
     globalThis.fetch = originalFetch;
   }

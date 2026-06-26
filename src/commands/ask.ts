@@ -1,5 +1,15 @@
-import { runChatCompletion, sanitizeAiText, type ChatMessage } from "../ai";
-import { loadConfig, type BotConfig } from "../config";
+import {
+  runChatCompletion,
+  runWebSearchCompletion,
+  sanitizeAiText,
+} from "../ai";
+import {
+  appendSourceFallback,
+  buildAskConversation,
+  buildAskWebSearchInput,
+  shouldUseAskWebSearch,
+} from "../ask-mode";
+import { loadConfig } from "../config";
 import {
   createThreadWithoutMessage,
   editOriginalInteractionResponse,
@@ -19,6 +29,8 @@ import {
 
 const MAX_DISCORD_MESSAGE_LENGTH = 1900;
 
+export { shouldUseAskWebSearch } from "../ask-mode";
+
 const askPrompt = (interaction: DiscordInteraction) => {
   const value = interaction.data?.options?.find((option) => option.name === "prompt")?.value;
   return typeof value === "string" ? value.trim() : "";
@@ -33,17 +45,6 @@ const getInvokerDisplayName = (interaction: DiscordInteraction) =>
   interaction.member?.user?.username?.trim() ||
   interaction.user?.username?.trim() ||
   "user";
-
-const buildAskConversation = (config: BotConfig, prompt: string, requesterUsername: string): ChatMessage[] => [
-  {
-    role: "system",
-    content: `${config.systemPrompt}\n\nThis is a fresh /ask thread. Answer the current user prompt without using unrelated channel history. Do not include Discord mentions or raw IDs.`,
-  },
-  {
-    role: "user",
-    content: `${requesterUsername}: ${prompt}`,
-  },
-];
 
 const resolveThreadParentChannelId = async (env: Env, channelId: string) => {
   const channel = await fetchChannel(env, channelId);
@@ -68,7 +69,13 @@ const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
   const requesterUsername = getInvokerDisplayName(interaction);
   const title = await generateThreadTitle(env, config, prompt);
   const targetChannelId = await resolveThreadParentChannelId(env, parentChannelId);
-  const thread = await createThreadWithoutMessage(env, targetChannelId, title);
+  const thread = await createThreadWithoutMessage(env, targetChannelId, title).catch((error) => {
+    logger.warn("ask_thread_create_failed", {
+      error: errorMessage(error),
+      channelId: targetChannelId,
+    });
+    return null;
+  });
   if (!thread) {
     return { content: "I could not create a thread for that question.", allowed_mentions: { parse: [] } };
   }
@@ -82,8 +89,50 @@ const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
     title,
   });
 
-  const result = await runChatCompletion(env, config, buildAskConversation(config, prompt, requesterUsername));
-  const text = sanitizeAiText(result.content);
+  const webSearch = shouldUseAskWebSearch(prompt);
+  let responseText: string;
+  try {
+    if (webSearch) {
+      const result = await runWebSearchCompletion(
+        env,
+        buildAskWebSearchInput(prompt, requesterUsername),
+        {
+          model: config.askWebSearchModel,
+          instructions: config.askWebSearchSystemPrompt,
+          maxOutputTokens: config.askWebSearchMaxOutputTokens,
+          maxTurns: config.askWebSearchMaxTurns,
+          searchContextSize: config.askWebSearchContextSize,
+          temperature: config.askWebSearchTemperature,
+          gatewayId: config.askWebSearchGatewayId,
+        },
+      );
+      responseText = appendSourceFallback(result.content, result.sources);
+    } else {
+      const result = await runChatCompletion(
+        env,
+        config,
+        buildAskConversation(config, [{ role: "user", content: `${requesterUsername}: ${prompt}` }]),
+      );
+      responseText = result.content;
+    }
+  } catch (error) {
+    logger.error("ask_ai_response_failed", {
+      error: errorMessage(error),
+      threadId: thread.id,
+      webSearch,
+    });
+    await postChannelMessage(
+      env,
+      thread.id,
+      "I started this thread, but the AI response failed. Try again in a moment.",
+    ).catch(() => undefined);
+    return {
+      content: `Started <#${thread.id}>, but the AI response failed.`,
+      allowed_mentions: { parse: [] },
+    };
+  }
+
+  const text = sanitizeAiText(responseText);
   const content =
     text.length > 0 ? text.slice(0, MAX_DISCORD_MESSAGE_LENGTH) : "I could not generate a response.";
   const response = await postChannelMessage(env, thread.id, content);

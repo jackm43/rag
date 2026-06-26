@@ -1,0 +1,8 @@
+{
+  "model": "openai/gpt-4o-search-preview",
+  "maxOutputTokens": 1200,
+  "temperature": 0.3,
+  "maxTurns": 4,
+  "searchContextSize": "medium",
+  "gatewayId": "platy"
+}
