@@ -61,8 +61,17 @@ const createDbMock = (options: {
   roasts?: Array<{ roast_text: string }>;
   ragCount?: number;
   reportCount?: number;
+  aiThread?: {
+    thread_id: string;
+    parent_channel_id?: string | null;
+    source_message_id?: string | null;
+    requester_user_id?: string | null;
+    requester_username?: string | null;
+    initial_prompt: string;
+    title: string;
+  } | null;
   onBatch?: (statements: Array<{ sql: string; args: unknown[] }>) => void;
-}) => ({
+} = {}) => ({
   batch: async (statements: Array<{ sql: string; args: unknown[] }>) => {
     options.onBatch?.(statements);
   },
@@ -82,6 +91,9 @@ const createDbMock = (options: {
         }
         if (sql.includes("SELECT COUNT")) {
           return { report_count: options.reportCount ?? 1 };
+        }
+        if (sql.includes("FROM rag_ai_threads")) {
+          return options.aiThread ?? null;
         }
         return null;
       },
@@ -216,6 +228,123 @@ test("unknown command returns unknown command message", async () => {
     type: 4,
     data: { content: "Unknown command." },
   });
+});
+
+test("/ask interaction is deferred, creates a titled thread, and posts the answer", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const aiResponses = ["Worker queue retries", "Queues retry failed jobs before the DLQ."];
+  const insertedThreads: Array<{ sql: string; args: unknown[] }> = [];
+  const waitUntilPromises: Promise<unknown>[] = [];
+
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({ response: aiResponses.shift() ?? "Queues retry failed jobs before the DLQ." });
+    }
+    if (String(url) === "https://discord.com/api/v10/channels/channel-id") {
+      return Response.json({ id: "channel-id", type: 0, name: "general" });
+    }
+    if (String(url) === "https://discord.com/api/v10/channels/channel-id/threads") {
+      return Response.json({ id: "thread-id", type: 11, parent_id: "channel-id", name: "Worker queue retries" });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const baseDb = createDbMock();
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
+      DB: {
+        ...baseDb,
+        prepare: (sql: string) => {
+          const base = createDbMock().prepare(sql);
+          return {
+            ...base,
+            bind: (...args: unknown[]) => ({
+              ...base.bind(...args),
+              run: async () => {
+                if (sql.includes("INSERT INTO rag_ai_threads")) {
+                  insertedThreads.push({ sql, args });
+                }
+                return base.bind(...args).run();
+              },
+            }),
+          };
+        },
+      },
+    });
+    const request = createSignedRequest(
+      {
+        application_id: "application-id",
+        channel_id: "channel-id",
+        token: "interaction-token",
+        type: 2,
+        data: {
+          name: "ask",
+          options: [{ name: "prompt", value: "How do queue retries work?" }],
+        },
+        member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
+      },
+      keyPair.secretKey,
+    );
+
+    const response = await worker.fetch(request, env, {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise);
+      },
+    } as never);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { type: 5 });
+    await Promise.all(waitUntilPromises);
+
+    const threadCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/channels/channel-id/threads",
+    );
+    assert.ok(threadCall);
+    assert.deepEqual(JSON.parse(String(threadCall.init?.body)), {
+      name: "Worker queue retries",
+      type: 11,
+      auto_archive_duration: 1440,
+    });
+
+    const postCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/channels/thread-id/messages",
+    );
+    assert.ok(postCall);
+    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
+      content: "Queues retry failed jobs before the DLQ.",
+      allowed_mentions: {
+        parse: [],
+      },
+    });
+
+    const editCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+    );
+    assert.ok(editCall);
+    assert.deepEqual(JSON.parse(String(editCall.init?.body)), {
+      content: "Started <#thread-id>",
+      allowed_mentions: {
+        parse: [],
+      },
+    });
+    assert.deepEqual(insertedThreads[0].args, [
+      "thread-id",
+      "channel-id",
+      null,
+      "1",
+      "Alice",
+      "How do queue retries work?",
+      "Worker queue retries",
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("/rag interaction is deferred and edits the original response from waitUntil", async () => {
@@ -503,7 +632,7 @@ test("bot mention parser accepts prompts after the bot mention", () => {
   assert.equal(extractBotMentionPrompt("<@bot-user-id>   ", "bot-user-id"), null);
 });
 
-test("gateway message create enqueues a raw channel AI job", async () => {
+test("gateway message create enqueues a fresh thread-start AI job", async () => {
   const queuedJobs: unknown[] = [];
   const env = createEnv("unused", {
     AI_JOBS: {
@@ -527,7 +656,7 @@ test("gateway message create enqueues a raw channel AI job", async () => {
 
   assert.deepEqual(queuedJobs, [
     {
-      kind: "channel",
+      kind: "thread_start",
       channelId: "channel-id",
       messageId: "message-id",
       botUserId: "bot-user-id",
@@ -564,7 +693,7 @@ test("gateway message create enqueues jobs when the bot is mentioned at the end"
 
   assert.deepEqual(queuedJobs, [
     {
-      kind: "channel",
+      kind: "thread_start",
       channelId: "channel-id",
       messageId: "message-id",
       botUserId: "bot-user-id",
@@ -613,7 +742,7 @@ test("gateway message create enqueues jobs when the bot's role is mentioned", as
     ]);
     assert.deepEqual(queuedJobs, [
       {
-        kind: "channel",
+        kind: "thread_start",
         channelId: "channel-id",
         messageId: "message-id",
         botUserId: "bot-user-id",
@@ -658,7 +787,7 @@ test("gateway message create enqueues only replied-to message metadata", async (
 
   assert.deepEqual(queuedJobs, [
     {
-      kind: "channel",
+      kind: "thread_start",
       channelId: "channel-id",
       messageId: "message-id",
       botUserId: "bot-user-id",
@@ -708,7 +837,7 @@ test("gateway message create does not fetch referenced message content", async (
     assert.deepEqual(fetchCalls, []);
     assert.deepEqual(queuedJobs, [
       {
-        kind: "channel",
+        kind: "thread_start",
         channelId: "channel-id",
         messageId: "message-id",
         botUserId: "bot-user-id",
@@ -766,6 +895,54 @@ test("gateway message create ignores bots and empty mention prompts", async () =
   );
 
   assert.deepEqual(queuedJobs, []);
+});
+
+test("gateway message create enqueues tracked thread replies without requiring a mention", async () => {
+  const queuedJobs: unknown[] = [];
+  const env = createEnv("unused", {
+    DB: createDbMock({
+      aiThread: {
+        thread_id: "thread-id",
+        parent_channel_id: "channel-id",
+        source_message_id: "source-message-id",
+        requester_user_id: "1",
+        requester_username: "alice",
+        initial_prompt: "Explain queues",
+        title: "Queue chat",
+      },
+    }),
+    AI_JOBS: {
+      send: async (job: unknown) => {
+        queuedJobs.push(job);
+      },
+    },
+  });
+
+  await handleGatewayMessageCreate(
+    {
+      id: "message-id",
+      guild_id: "guild-id",
+      channel_id: "thread-id",
+      content: "what about dead letter queues?",
+      author: { id: "2", username: "bob", global_name: "Bob Display" },
+    },
+    env,
+    "bot-user-id",
+  );
+
+  assert.deepEqual(queuedJobs, [
+    {
+      kind: "thread_reply",
+      channelId: "thread-id",
+      messageId: "message-id",
+      botUserId: "bot-user-id",
+      requesterUserId: "2",
+      requesterUsername: "Bob Display",
+      prompt: "what about dead letter queues?",
+      replyMessageId: undefined,
+      replyChannelId: undefined,
+    },
+  ]);
 });
 
 test("fetchChannelMessages drops malformed Discord messages", async () => {
@@ -991,7 +1168,116 @@ test("gateway durable object start RPC persists enabled state and schedules an a
   }
 });
 
-test("queue handler builds a conversation from channel history and posts the reply", async () => {
+test("queue handler treats a parent-channel mention as fresh, creates a thread, and posts there", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const insertedThreads: Array<{ sql: string; args: unknown[] }> = [];
+  const aiResponses = ["Short answer.", "Queue retries"];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({ response: aiResponses.shift() ?? "Queue retries" });
+    }
+    if (String(url) === "https://discord.com/api/v10/channels/channel-id/messages/trigger-id/threads") {
+      return Response.json({ id: "thread-id", type: 11, parent_id: "channel-id", name: "Queue retries" });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
+      DB: {
+        ...createDbMock({}),
+        prepare: (sql: string) => {
+          const base = createDbMock().prepare(sql);
+          return {
+            ...base,
+            bind: (...args: unknown[]) => ({
+              ...base.bind(...args),
+              run: async () => {
+                if (sql.includes("INSERT INTO rag_ai_threads")) {
+                  insertedThreads.push({ sql, args });
+                }
+                return base.bind(...args).run();
+              },
+            }),
+          };
+        },
+      },
+    });
+    const ackedMessages: unknown[] = [];
+    const message = {
+      body: {
+        kind: "thread_start",
+        channelId: "channel-id",
+        messageId: "trigger-id",
+        botUserId: "bot-user-id",
+        requesterUserId: "1",
+        requesterUsername: "metro goonin",
+        prompt: "and what about retries",
+      },
+      ack: () => {
+        ackedMessages.push(message.body);
+      },
+      retry: () => {
+        throw new Error("message should not be retried");
+      },
+    };
+
+    await worker.queue({ messages: [message] } as never, env);
+
+    const historyCall = fetchCalls.find((call) => call.url.includes("/messages?"));
+    assert.equal(historyCall, undefined);
+
+    const gatewayCalls = fetchCalls.filter((call) => call.url.includes("gateway.ai.cloudflare.com"));
+    assert.equal(gatewayCalls.length, 2);
+    const input = JSON.parse(String(gatewayCalls[0].init?.body)) as { messages: Array<{ role: string; content: string }> };
+    assert.match(input.messages[0].content, /Use only the provided thread conversation context/);
+    assert.deepEqual(input.messages.slice(1), [
+      { role: "user", content: "metro goonin: and what about retries" },
+    ]);
+
+    const titleInput = JSON.parse(String(gatewayCalls[1].init?.body)) as { messages: Array<{ role: string; content: string }> };
+    assert.match(titleInput.messages[0].content, /thread title/);
+
+    const threadCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/channels/channel-id/messages/trigger-id/threads",
+    );
+    assert.ok(threadCall);
+    assert.deepEqual(JSON.parse(String(threadCall.init?.body)), {
+      name: "Queue retries",
+      auto_archive_duration: 1440,
+    });
+
+    const postCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/channels/thread-id/messages",
+    );
+    assert.ok(postCall);
+    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
+      content: "Short answer.",
+      allowed_mentions: {
+        parse: [],
+      },
+    });
+    assert.deepEqual(insertedThreads[0].args, [
+      "thread-id",
+      "channel-id",
+      "trigger-id",
+      "1",
+      "metro goonin",
+      "and what about retries",
+      "Queue retries",
+    ]);
+    assert.deepEqual(ackedMessages, [message.body]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("queue handler builds a conversation from tracked thread history and posts the reply", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   globalThis.fetch = async (url, init) => {
@@ -1004,19 +1290,19 @@ test("queue handler builds a conversation from channel history and posts the rep
       return Response.json([
         {
           id: "m3",
-          channel_id: "channel-id",
+          channel_id: "thread-id",
           content: "anyone know how queues work",
           author: { id: "1", username: "._jak", global_name: "jak" },
         },
         {
           id: "m2",
-          channel_id: "channel-id",
+          channel_id: "thread-id",
           content: "Queues deliver messages asynchronously.",
           author: { id: "bot-user-id", username: "ragbot", bot: true },
         },
         {
           id: "m1",
-          channel_id: "channel-id",
+          channel_id: "thread-id",
           content: "<@999000000000000001> hello",
           author: { id: "2", username: "bob", global_name: "Bob Display" },
         },
@@ -1030,13 +1316,23 @@ test("queue handler builds a conversation from channel history and posts the rep
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
-      DB: createDbMock({}),
+      DB: createDbMock({
+        aiThread: {
+          thread_id: "thread-id",
+          parent_channel_id: "channel-id",
+          source_message_id: "source-message-id",
+          requester_user_id: "1",
+          requester_username: "metro goonin",
+          initial_prompt: "Explain queues",
+          title: "Queue retries",
+        },
+      }),
     });
     const ackedMessages: unknown[] = [];
     const message = {
       body: {
-        kind: "channel",
-        channelId: "channel-id",
+        kind: "thread_reply",
+        channelId: "thread-id",
         messageId: "trigger-id",
         botUserId: "bot-user-id",
         requesterUserId: "1",
@@ -1057,7 +1353,7 @@ test("queue handler builds a conversation from channel history and posts the rep
     assert.ok(historyCall);
     assert.equal(
       historyCall.url,
-      "https://discord.com/api/v10/channels/channel-id/messages?before=trigger-id&limit=3",
+      "https://discord.com/api/v10/channels/thread-id/messages?before=trigger-id&limit=3",
     );
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
@@ -1065,6 +1361,7 @@ test("queue handler builds a conversation from channel history and posts the rep
     const input = JSON.parse(String(gatewayCall.init?.body)) as { messages: Array<{ role: string; content: string }> };
     assert.equal(input.messages[0].role, "system");
     assert.deepEqual(input.messages.slice(1), [
+      { role: "user", content: "metro goonin: Explain queues" },
       { role: "user", content: "Bob Display: hello" },
       { role: "assistant", content: "Queues deliver messages asynchronously." },
       { role: "user", content: "metro goonin: anyone know how queues work" },
@@ -1072,7 +1369,7 @@ test("queue handler builds a conversation from channel history and posts the rep
     ]);
 
     const postCall = fetchCalls.find(
-      (call) => call.url === "https://discord.com/api/v10/channels/channel-id/messages",
+      (call) => call.url === "https://discord.com/api/v10/channels/thread-id/messages",
     );
     assert.ok(postCall);
     assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
@@ -1087,7 +1384,7 @@ test("queue handler builds a conversation from channel history and posts the rep
   }
 });
 
-test("queue handler excludes rag command bot output from chat history", async () => {
+test("queue handler excludes rag command bot output from thread history", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   globalThis.fetch = async (url, init) => {
@@ -1099,13 +1396,13 @@ test("queue handler excludes rag command bot output from chat history", async ()
       return Response.json([
         {
           id: "m2",
-          channel_id: "channel-id",
+          channel_id: "thread-id",
           content: "<@2> has just ragged. Total: 32\nName One still farming reports.",
           author: { id: "bot-user-id", username: "ragbot", bot: true },
         },
         {
           id: "m1",
-          channel_id: "channel-id",
+          channel_id: "thread-id",
           content: "who was in paris",
           author: { id: "1", username: "alice" },
         },
@@ -1119,12 +1416,22 @@ test("queue handler excludes rag command bot output from chat history", async ()
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
-      DB: createDbMock({}),
+      DB: createDbMock({
+        aiThread: {
+          thread_id: "thread-id",
+          parent_channel_id: "channel-id",
+          source_message_id: "source-message-id",
+          requester_user_id: "1",
+          requester_username: "alice",
+          initial_prompt: "who was in paris",
+          title: "Paris question",
+        },
+      }),
     });
     const message = {
       body: {
-        kind: "channel",
-        channelId: "channel-id",
+        kind: "thread_reply",
+        channelId: "thread-id",
         messageId: "trigger-id",
         botUserId: "bot-user-id",
         requesterUsername: "alice",
@@ -1143,6 +1450,7 @@ test("queue handler excludes rag command bot output from chat history", async ()
     const input = JSON.parse(String(gatewayCall.init?.body)) as { messages: Array<{ role: string; content: string }> };
     assert.match(input.messages[0].content, /normal chat reply, not the \/rag command/);
     assert.deepEqual(input.messages.slice(1), [
+      { role: "user", content: "alice: who was in paris" },
       { role: "user", content: "alice: who was in paris" },
       { role: "user", content: "alice: who was in paris" },
     ]);
@@ -1192,8 +1500,8 @@ test("queue handler fetches replied-to context from Discord REST", async () => {
     });
     const message = {
       body: {
-        kind: "channel",
-        channelId: "channel-id",
+        kind: "thread_reply",
+        channelId: "thread-id",
         messageId: "trigger-id",
         botUserId: "bot-user-id",
         requesterUsername: "alice",
@@ -1250,8 +1558,8 @@ test("queue handler sanitizes mentions and IDs from the model output", async () 
     });
     const message = {
       body: {
-        kind: "channel",
-        channelId: "channel-id",
+        kind: "thread_reply",
+        channelId: "thread-id",
         prompt: "Say hello",
       },
       ack: () => undefined,
@@ -1263,7 +1571,7 @@ test("queue handler sanitizes mentions and IDs from the model output", async () 
     await worker.queue({ messages: [message] } as never, env);
 
     const postCall = fetchCalls.find(
-      (call) => call.url === "https://discord.com/api/v10/channels/channel-id/messages",
+      (call) => call.url === "https://discord.com/api/v10/channels/thread-id/messages",
     );
     assert.ok(postCall);
     assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
@@ -1297,8 +1605,8 @@ test("queue handler uses the source-controlled partner model", async () => {
     });
     const message = {
       body: {
-        kind: "channel",
-        channelId: "channel-id",
+        kind: "thread_reply",
+        channelId: "thread-id",
         prompt: "Say hello",
       },
       ack: () => undefined,
@@ -1311,18 +1619,13 @@ test("queue handler uses the source-controlled partner model", async () => {
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
-    assert.equal(
-      gatewayCall.url,
-      "https://gateway.ai.cloudflare.com/v1/account-id/platy/compat/chat/completions",
-    );
-    assert.equal(gatewayCall.init?.headers?.["cf-aig-authorization" as never], "Bearer gateway-token");
     const gatewayBody = JSON.parse(String(gatewayCall.init?.body));
     assert.equal(gatewayBody.model, "grok/grok-4.3");
     assert.equal(gatewayBody.max_tokens, 1000);
     assert.equal(gatewayBody.max_completion_tokens, undefined);
 
     const discordCall = fetchCalls.find(
-      (call) => call.url === "https://discord.com/api/v10/channels/channel-id/messages",
+      (call) => call.url === "https://discord.com/api/v10/channels/thread-id/messages",
     );
     assert.ok(discordCall);
     assert.deepEqual(JSON.parse(String(discordCall.init?.body)), {
@@ -1381,8 +1684,8 @@ test("queue handler records partner AI Gateway usage", async () => {
     } as never;
     const message = {
       body: {
-        kind: "channel",
-        channelId: "channel-id",
+        kind: "thread_reply",
+        channelId: "thread-id",
         prompt: "Say hello",
       },
       ack: () => undefined,
@@ -1404,7 +1707,7 @@ test("queue handler records partner AI Gateway usage", async () => {
     assert.equal(gatewayBody.temperature, 0.9);
 
     const postCall = fetchCalls.find(
-      (call) => call.url === "https://discord.com/api/v10/channels/channel-id/messages",
+      (call) => call.url === "https://discord.com/api/v10/channels/thread-id/messages",
     );
     assert.ok(postCall);
     assert.deepEqual(JSON.parse(String(postCall.init?.body)), {

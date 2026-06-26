@@ -1,9 +1,65 @@
-import { DISCORD_API_BASE_URL, type DiscordMessage, type Env } from "./types";
+import { REST, type ResponseLike, type RESTOptions } from "@discordjs/rest";
+
+import { DISCORD_API_BASE_URL, type DiscordChannel, type DiscordMessage, type Env } from "./types";
 import { isDiscordMessage, isRecord } from "./validation";
+
+const DISCORD_CHANNEL_TYPE_PUBLIC_THREAD = 11;
+const DISCORD_CHANNEL_TYPE_PRIVATE_THREAD = 12;
+const DISCORD_CHANNEL_TYPE_ANNOUNCEMENT_THREAD = 10;
+const DISCORD_CHANNEL_TYPE_PUBLIC_THREAD_CREATE = 11;
+const DISCORD_THREAD_AUTO_ARCHIVE_ONE_DAY = 1440;
+
+const channelRoute = (channelId: string) => `/channels/${channelId}` as const;
+const threadsRoute = (channelId: string, messageId?: string) =>
+  messageId
+    ? `/channels/${channelId}/messages/${messageId}/threads` as const
+    : `/channels/${channelId}/threads` as const;
 
 const botHeaders = (env: Env) => ({
   authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
 });
+
+const makeDiscordRequest = async (
+  url: Parameters<RESTOptions["makeRequest"]>[0],
+  init: Parameters<RESTOptions["makeRequest"]>[1],
+): Promise<ResponseLike> => {
+  const response = await fetch(url, {
+    method: init.method,
+    headers: init.headers as HeadersInit,
+    body: init.body as BodyInit | null | undefined,
+    signal: init.signal as AbortSignal | null | undefined,
+  });
+  return {
+    body: null,
+    bodyUsed: response.bodyUsed,
+    headers: response.headers as ResponseLike["headers"],
+    ok: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+    arrayBuffer: () => response.arrayBuffer(),
+    json: () => response.json(),
+    text: () => response.text(),
+  };
+};
+
+const discordRest = (env: Env) =>
+  new REST({
+    version: "10",
+    makeRequest: makeDiscordRequest,
+  }).setToken(env.DISCORD_BOT_TOKEN);
+
+const isDiscordChannel = (value: unknown): value is DiscordChannel =>
+  isRecord(value) &&
+  typeof value.id === "string" &&
+  typeof value.type === "number" &&
+  (value.parent_id === undefined || value.parent_id === null || typeof value.parent_id === "string") &&
+  (value.name === undefined || typeof value.name === "string") &&
+  (value.thread_metadata === undefined || isRecord(value.thread_metadata));
+
+export const isThreadChannel = (channel: DiscordChannel) =>
+  channel.type === DISCORD_CHANNEL_TYPE_PUBLIC_THREAD ||
+  channel.type === DISCORD_CHANNEL_TYPE_PRIVATE_THREAD ||
+  channel.type === DISCORD_CHANNEL_TYPE_ANNOUNCEMENT_THREAD;
 
 export type InteractionMessageData = {
   content: string;
@@ -27,6 +83,43 @@ export const postChannelMessage = async (env: Env, channelId: string, content: s
       },
     }),
   });
+
+export const createThreadFromMessage = async (
+  env: Env,
+  channelId: string,
+  messageId: string,
+  name: string,
+): Promise<DiscordChannel | null> => {
+  const payload = await discordRest(env).post(threadsRoute(channelId, messageId), {
+    body: {
+      name,
+      auto_archive_duration: DISCORD_THREAD_AUTO_ARCHIVE_ONE_DAY,
+    },
+    reason: "Ragbot AI conversation",
+  });
+  return isDiscordChannel(payload) ? payload : null;
+};
+
+export const createThreadWithoutMessage = async (
+  env: Env,
+  channelId: string,
+  name: string,
+): Promise<DiscordChannel | null> => {
+  const payload = await discordRest(env).post(threadsRoute(channelId), {
+    body: {
+      name,
+      type: DISCORD_CHANNEL_TYPE_PUBLIC_THREAD_CREATE,
+      auto_archive_duration: DISCORD_THREAD_AUTO_ARCHIVE_ONE_DAY,
+    },
+    reason: "Ragbot /ask conversation",
+  });
+  return isDiscordChannel(payload) ? payload : null;
+};
+
+export const fetchChannel = async (env: Env, channelId: string): Promise<DiscordChannel | null> => {
+  const payload = await discordRest(env).get(channelRoute(channelId)).catch(() => null);
+  return isDiscordChannel(payload) ? payload : null;
+};
 
 export const fetchChannelMessages = async (
   env: Env,

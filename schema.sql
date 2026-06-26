@@ -41,3 +41,18 @@ CREATE TABLE IF NOT EXISTS rag_ai_interactions (
   total_tokens INTEGER,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS rag_ai_threads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  thread_id TEXT NOT NULL UNIQUE,
+  parent_channel_id TEXT,
+  source_message_id TEXT,
+  requester_user_id TEXT,
+  requester_username TEXT,
+  initial_prompt TEXT NOT NULL,
+  title TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_ai_threads_parent ON rag_ai_threads(parent_channel_id);

@@ -20,6 +20,10 @@
     "wrangler": "^4.13.2"
   },
   "dependencies": {
+    "discord.js": "^14.26.4",
     "tweetnacl": "^1.0.3"
+  },
+  "overrides": {
+    "undici": "6.27.0"
   }
 }

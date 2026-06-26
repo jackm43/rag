@@ -1,3 +1,6 @@
+import { REST, type ResponseLike, type RESTOptions } from "@discordjs/rest";
+import { Routes, SlashCommandBuilder } from "discord.js";
+
 export { };
 
 declare const process: {
@@ -12,36 +15,57 @@ if (!applicationId || !botToken) {
 }
 
 const commands = [
-  {
-    name: "rag",
-    description: "Record a rag against a user",
-    options: [
-      {
-        name: "user",
-        description: "User to mark as ragging",
-        type: 6,
-        required: true,
-      },
-    ],
-  },
-  {
-    name: "ragboard",
-    description: "Show the rag leaderboard",
-  },
-];
+  new SlashCommandBuilder()
+    .setName("rag")
+    .setDescription("Record a rag against a user")
+    .addUserOption((option) =>
+      option
+        .setName("user")
+        .setDescription("User to mark as ragging")
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
+    .setName("ragboard")
+    .setDescription("Show the rag leaderboard"),
+  new SlashCommandBuilder()
+    .setName("ask")
+    .setDescription("Start an AI conversation in a new thread")
+    .addStringOption((option) =>
+      option
+        .setName("prompt")
+        .setDescription("Question or topic for the new thread")
+        .setRequired(true)
+        .setMinLength(1)
+        .setMaxLength(6000),
+    ),
+].map((command) => command.toJSON());
 
-const response = await fetch(`https://discord.com/api/v10/applications/${applicationId}/commands`, {
-  method: "PUT",
-  headers: {
-    Authorization: `Bot ${botToken}`,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify(commands),
-});
+const makeDiscordRequest = async (
+  url: Parameters<RESTOptions["makeRequest"]>[0],
+  init: Parameters<RESTOptions["makeRequest"]>[1],
+): Promise<ResponseLike> => {
+  const response = await fetch(url, {
+    method: init.method,
+    headers: init.headers as HeadersInit,
+    body: init.body as BodyInit | null | undefined,
+    signal: init.signal as AbortSignal | null | undefined,
+  });
+  return {
+    body: null,
+    bodyUsed: response.bodyUsed,
+    headers: response.headers as ResponseLike["headers"],
+    ok: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+    arrayBuffer: () => response.arrayBuffer(),
+    json: () => response.json(),
+    text: () => response.text(),
+  };
+};
 
-if (!response.ok) {
-  const text = await response.text();
-  throw new Error(`Command registration failed: ${response.status} ${text}`);
-}
+const rest = new REST({
+  version: "10",
+  makeRequest: makeDiscordRequest,
+}).setToken(botToken);
 
-await response.json();
+await rest.put(Routes.applicationCommands(applicationId), { body: commands });

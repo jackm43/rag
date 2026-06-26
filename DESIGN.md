@@ -6,14 +6,16 @@
 - Discord interaction webhooks for slash commands
 - A Discord Gateway connection via Durable Objects
 - AI response generation via Workers AI and Cloudflare Queues
-- D1-backed persistence for rag events, totals, and roast history
+- D1-backed persistence for rag events, totals, roast history, and AI thread ownership
 
 User-facing slash commands:
 - `/rag user:<discord-user>`
 - `/ragboard`
+- `/ask prompt:<question>`
 
 Mention-driven AI behavior:
-- If a user mentions the bot in a normal message, the gateway path enqueues an AI job and posts a generated reply to the channel.
+- If a user mentions the bot in a parent channel, the gateway path enqueues a fresh AI job that creates a Discord thread from that message and posts the generated reply inside the thread.
+- Later messages inside bot-managed AI threads enqueue continuation jobs automatically and use only that thread's context.
 
 ## Architecture
 
@@ -23,6 +25,7 @@ Core components:
 - Slash command handlers:
   - `src/commands/rag.ts`
   - `src/commands/ragboard.ts`
+  - `src/commands/ask.ts`
 - Mention queue producer/consumer logic: `src/mention.ts`
 - Gateway ingestion and connection lifecycle: `src/gateway.ts`
 - Command registration script: `scripts/register-commands.ts`
@@ -63,7 +66,9 @@ sequenceDiagram
   participant Worker as Worker POST /
   participant Rag as rag command handler
   participant Board as ragboard handler
+  participant Ask as ask command handler
   participant DB as D1
+  participant REST as Discord REST API
   participant AI as AI Gateway / Workers AI
 
   Discord->>Worker: POST /: interaction JSON, x-signature-ed25519, x-signature-timestamp
@@ -85,6 +90,18 @@ sequenceDiagram
     Board->>DB: SELECT top 10 rag_totals
     DB-->>Board: Rows: ragged_user_id, ragged_username, rag_count
     Board-->>Discord: JSON: leaderboard response text
+  else /ask
+    Worker->>Ask: Interaction payload: prompt, requester, channel id, token, application_id
+    Ask-->>Discord: JSON: deferred channel message response
+    Ask->>AI: Chat request: concise thread title
+    AI-->>Ask: Generated title
+    Ask->>REST: POST /channels/{channel.id}/threads
+    REST-->>Ask: Created public thread
+    Ask->>DB: UPSERT rag_ai_threads: thread id, prompt, requester, title
+    Ask->>AI: Chat request: fresh prompt
+    AI-->>Ask: AI response text
+    Ask->>REST: POST /channels/{thread.id}/messages
+    Ask->>Discord: PATCH webhook message: thread link
   end
 ```
 
@@ -108,17 +125,34 @@ sequenceDiagram
   DO->>GW: WebSocket IDENTIFY: bot token, intents
   GW-->>DO: READY + session metadata
   GW-->>DO: MESSAGE_CREATE: channel_id, message id, author, content, mentions, reply reference
-  DO->>DO: Ignore unless author is not bot and content mentions this bot
-  DO->>Queue: Send compact AiJob: channelId, messageId, botUserId, requester, prompt, reply ids
+  DO->>DB: Check whether channel_id is a tracked AI thread
+  alt tracked thread
+    DO->>Queue: Send thread_reply AiJob: thread id, message id, requester, prompt, reply ids
+  else parent channel mention
+    DO->>DO: Ignore unless author is not bot and content mentions this bot
+    DO->>Queue: Send thread_start AiJob: parent channel id, source message id, requester, prompt, reply ids
+  end
   Queue-->>Consumer: Deliver job body
-  Consumer->>REST: GET channel history: before messageId, limit historyLimit
-  REST-->>Consumer: Recent messages JSON
-  Consumer->>REST: Optional GET replied-to message if missing from history
-  REST-->>Consumer: Replied-to message JSON: author, content, attachments
-  Consumer->>AI: Chat request: system prompt, normalized history, prompt, model settings
-  AI-->>Consumer: AI response text + optional usage tokens
+  alt thread_start
+    Consumer->>REST: Optional GET explicit replied-to message
+    REST-->>Consumer: Replied-to message JSON: author, content, attachments
+    Consumer->>AI: Chat request: fresh prompt, optional reply context
+    AI-->>Consumer: AI response text + optional usage tokens
+    Consumer->>AI: Chat request: concise thread title
+    AI-->>Consumer: Generated title
+    Consumer->>REST: POST thread from source message
+    REST-->>Consumer: Created public thread
+    Consumer->>DB: UPSERT rag_ai_threads: thread id, source message, initial prompt, title
+  else thread_reply
+    Consumer->>DB: SELECT rag_ai_threads by thread id
+    Consumer->>REST: GET thread messages: before messageId, limit historyLimit
+    REST-->>Consumer: Recent thread messages JSON
+    Consumer->>REST: Optional GET replied-to message if missing from thread history
+    Consumer->>AI: Chat request: stored initial prompt, normalized thread history, current prompt
+    AI-->>Consumer: AI response text + optional usage tokens
+  end
   Consumer->>DB: INSERT rag_ai_interactions: prompt, response, model, duration, status, usage
-  Consumer->>REST: POST channel message: sanitized response, allowed_mentions parse=[]
+  Consumer->>REST: POST thread message: sanitized response, allowed_mentions parse=[]
   REST-->>Consumer: Message create response or error
   Consumer->>Queue: ack success/terminal errors, retry transient errors
 ```
@@ -147,6 +181,19 @@ Behavior:
 - Returns ranked text leaderboard.
 - Returns empty-state message if no data exists.
 
+### `/ask`
+
+Inputs:
+- required `prompt` string option from Discord interaction data
+
+Behavior:
+- Defers the interaction response.
+- Generates a concise AI title from the prompt.
+- Creates a public Discord thread in the invoking channel.
+- Stores thread metadata and the initial prompt in `rag_ai_threads`.
+- Generates a fresh AI response and posts it inside the thread.
+- Edits the original interaction response with a thread link.
+
 ## Data Model
 
 `rag_events`:
@@ -161,6 +208,10 @@ Behavior:
 - dedupe memory for recent roast lines
 - columns: `id`, `roast_text` (unique), `created_at`
 
+`rag_ai_threads`:
+- tracks Discord threads owned by the AI chat flow
+- columns: `id`, `thread_id` (unique), `parent_channel_id`, `source_message_id`, `requester_user_id`, `requester_username`, `initial_prompt`, `title`, `created_at`, `updated_at`
+
 ## Security Model
 
 - Interaction route enforces Discord Ed25519 signature verification.
@@ -168,7 +219,7 @@ Behavior:
 - Gateway control endpoints use bearer token auth against the bot token before forwarding to the Durable Object.
 - Any path not explicitly configured in the Worker route allowlist returns `404`.
 - AI output is sanitized to remove mentions/IDs before posting.
-- Channel posts include `allowed_mentions` restrictions.
+- Thread posts include `allowed_mentions` restrictions.
 
 ## Operational Model
 

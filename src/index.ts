@@ -1,3 +1,4 @@
+import { handleAskCommand } from "./commands/ask";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
 import { DiscordGateway, getGatewayHealth, startGateway } from "./gateway";
@@ -72,6 +73,10 @@ const handleInteractionRequest = async (
 
     if (commandName === "ragboard") {
       return handleRagboardCommand(env);
+    }
+
+    if (commandName === "ask") {
+      return handleAskCommand(interaction, env, ctx);
     }
 
     return jsonResponse({

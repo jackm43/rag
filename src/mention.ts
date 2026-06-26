@@ -1,12 +1,19 @@
 import { runChatCompletion, sanitizeAiText, type ChatMessage } from "./ai";
 import { loadConfig, type BotConfig } from "./config";
-import { fetchBotRoleIds, fetchChannelMessages, fetchMessage, postChannelMessage } from "./discord";
+import {
+  createThreadFromMessage,
+  fetchBotRoleIds,
+  fetchChannelMessages,
+  fetchMessage,
+  postChannelMessage,
+} from "./discord";
 import { errorMessage, logger } from "./logger";
-import type { AiChannelJob, AiJob, DiscordMessage, Env } from "./types";
+import type { AiJob, AiThread, DiscordMessage, Env } from "./types";
 import { isAiJob } from "./validation";
 
 const MAX_DISCORD_MESSAGE_LENGTH = 1900;
 const MAX_HISTORY_ENTRY_LENGTH = 600;
+const MAX_THREAD_TITLE_LENGTH = 80;
 
 export type ChannelPromptMessage = Pick<DiscordMessage, "content" | "mentions" | "mention_roles">;
 
@@ -89,10 +96,106 @@ const getMessageAuthorDisplayName = (message: DiscordMessage) =>
   message.author?.username?.trim() ||
   "user";
 
-const getConversationAuthorDisplayName = (message: DiscordMessage, job: AiChannelJob) =>
+const getConversationAuthorDisplayName = (message: DiscordMessage, job: AiJob) =>
   message.author?.id && message.author.id === job.requesterUserId && job.requesterUsername
     ? job.requesterUsername
     : getMessageAuthorDisplayName(message);
+
+type AiThreadRow = {
+  thread_id: string;
+  parent_channel_id: string | null;
+  source_message_id: string | null;
+  requester_user_id: string | null;
+  requester_username: string | null;
+  initial_prompt: string;
+  title: string;
+};
+
+const toAiThread = (row: AiThreadRow): AiThread => ({
+  threadId: row.thread_id,
+  parentChannelId: row.parent_channel_id ?? undefined,
+  sourceMessageId: row.source_message_id ?? undefined,
+  requesterUserId: row.requester_user_id ?? undefined,
+  requesterUsername: row.requester_username ?? undefined,
+  initialPrompt: row.initial_prompt,
+  title: row.title,
+});
+
+const getAiThread = async (env: Env, threadId: string): Promise<AiThread | null> => {
+  const row = await env.DB.prepare(
+    "SELECT thread_id, parent_channel_id, source_message_id, requester_user_id, requester_username, initial_prompt, title FROM rag_ai_threads WHERE thread_id = ?",
+  )
+    .bind(threadId)
+    .first<AiThreadRow>();
+  return row ? toAiThread(row) : null;
+};
+
+const findAiThread = async (env: Env, threadId: string): Promise<AiThread | null> =>
+  getAiThread(env, threadId).catch((error) => {
+    logger.warn("ai_thread_lookup_failed", { error: errorMessage(error) });
+    return null;
+  });
+
+export const recordAiThread = async (env: Env, thread: AiThread) => {
+  await env.DB.prepare(
+    "INSERT INTO rag_ai_threads (thread_id, parent_channel_id, source_message_id, requester_user_id, requester_username, initial_prompt, title, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(thread_id) DO UPDATE SET parent_channel_id = excluded.parent_channel_id, source_message_id = excluded.source_message_id, requester_user_id = excluded.requester_user_id, requester_username = excluded.requester_username, initial_prompt = excluded.initial_prompt, title = excluded.title, updated_at = CURRENT_TIMESTAMP",
+  )
+    .bind(
+      thread.threadId,
+      thread.parentChannelId ?? null,
+      thread.sourceMessageId ?? null,
+      thread.requesterUserId ?? null,
+      thread.requesterUsername ?? null,
+      thread.initialPrompt,
+      thread.title,
+    )
+    .run();
+};
+
+const trimToTitleLength = (value: string) => {
+  if (value.length <= MAX_THREAD_TITLE_LENGTH) {
+    return value;
+  }
+  const sliced = value.slice(0, MAX_THREAD_TITLE_LENGTH).trim();
+  const lastSpace = sliced.lastIndexOf(" ");
+  return (lastSpace >= 24 ? sliced.slice(0, lastSpace) : sliced).trim();
+};
+
+export const sanitizeThreadTitle = (value: string) => {
+  const title = sanitizeAiText(value)
+    .split("\n")[0]
+    .replace(/^["'`]+/, "")
+    .replace(/["'`.!?]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return title ? trimToTitleLength(title) : null;
+};
+
+const fallbackThreadTitle = (prompt: string) =>
+  sanitizeThreadTitle(prompt) ?? "Chat with Ragbot";
+
+export const generateThreadTitle = async (env: Env, config: BotConfig, prompt: string) => {
+  const fallback = fallbackThreadTitle(prompt);
+  try {
+    const result = await runChatCompletion(
+      env,
+      config,
+      [
+        {
+          role: "system",
+          content:
+            "Create a concise Discord thread title for this user question. Plain text only, no quotes, no mentions, no IDs, 8 words or fewer.",
+        },
+        { role: "user", content: prompt },
+      ],
+      { maxTokens: 32, temperature: 0.2 },
+    );
+    return sanitizeThreadTitle(result.content) ?? fallback;
+  } catch (error) {
+    logger.warn("thread_title_generation_failed", { error: errorMessage(error) });
+    return fallback;
+  }
+};
 
 export const handleGatewayMessageCreate = async (
   message: DiscordMessage,
@@ -100,6 +203,32 @@ export const handleGatewayMessageCreate = async (
   botUserId: string | null,
 ) => {
   if (message.author?.bot || !botUserId) {
+    return;
+  }
+
+  const replyMessageId = message.message_reference?.message_id ?? message.referenced_message?.id;
+  const replyChannelId =
+    message.message_reference?.channel_id ?? message.referenced_message?.channel_id;
+  const requesterUsername = getMessageAuthorDisplayName(message);
+
+  const existingThread = message.guild_id ? await findAiThread(env, message.channel_id) : null;
+  if (existingThread) {
+    const prompt = stripMentionTokens(message.content ?? "");
+    if (!prompt) {
+      return;
+    }
+
+    await env.AI_JOBS.send({
+      kind: "thread_reply",
+      channelId: message.channel_id,
+      messageId: message.id,
+      botUserId,
+      requesterUserId: message.author?.id,
+      requesterUsername,
+      prompt,
+      replyMessageId,
+      replyChannelId,
+    });
     return;
   }
 
@@ -113,17 +242,13 @@ export const handleGatewayMessageCreate = async (
     return;
   }
 
-  const replyMessageId = message.message_reference?.message_id ?? message.referenced_message?.id;
-  const replyChannelId =
-    message.message_reference?.channel_id ?? message.referenced_message?.channel_id;
-
   await env.AI_JOBS.send({
-    kind: "channel",
+    kind: "thread_start",
     channelId: message.channel_id,
     messageId: message.id,
     botUserId,
     requesterUserId: message.author?.id,
-    requesterUsername: getMessageAuthorDisplayName(message),
+    requesterUsername,
     prompt,
     replyMessageId,
     replyChannelId,
@@ -136,16 +261,25 @@ const cleanHistoryContent = (content: string) =>
 const isRagCommandOutput = (content: string) =>
   /\bhas just ragged\. Total: \d+\b/.test(content) || content.trimStart().startsWith("Ragboard\n");
 
-const buildConversation = async (env: Env, config: BotConfig, job: AiChannelJob): Promise<ChatMessage[]> => {
+const buildConversation = async (env: Env, config: BotConfig, job: AiJob): Promise<ChatMessage[]> => {
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content: `${config.systemPrompt}\n\nThis is a normal chat reply, not the /rag command. Do not include rag counts, leaderboard totals, or phrases like "has just ragged" unless the user explicitly asks about the rag leaderboard. If the same user appears under different account names, global names, or nicknames in context, treat them as one person and do not mention multiple aliases in the same reply.`,
+      content: `${config.systemPrompt}\n\nThis is a normal chat reply, not the /rag command. Use only the provided thread conversation context and the current user message; do not infer context from unrelated channel history. Do not include rag counts, leaderboard totals, or phrases like "has just ragged" unless the user explicitly asks about the rag leaderboard. If the same user appears under different account names, global names, or nicknames in context, treat them as one person and do not mention multiple aliases in the same reply.`,
     },
   ];
 
   let history: DiscordMessage[] = [];
-  if (job.messageId) {
+  let thread: AiThread | null = null;
+  if (job.kind === "thread_reply") {
+    thread = await findAiThread(env, job.channelId);
+    if (thread?.initialPrompt) {
+      const username = thread.requesterUsername ?? "user";
+      messages.push({ role: "user", content: `${username}: ${thread.initialPrompt}` });
+    }
+  }
+
+  if (job.kind === "thread_reply" && job.messageId) {
     history = await fetchChannelMessages(env, job.channelId, {
       before: job.messageId,
       limit: config.historyLimit,
@@ -193,7 +327,7 @@ const buildConversation = async (env: Env, config: BotConfig, job: AiChannelJob)
 
 const recordAiInteraction = async (
   env: Env,
-  job: AiChannelJob,
+  job: AiJob,
   model: string,
   totalDurationMs: number,
   status: string,
@@ -302,7 +436,29 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
     content =
       text.length > 0 ? text.slice(0, MAX_DISCORD_MESSAGE_LENGTH) : "I could not generate a response.";
 
-    const response = await postChannelMessage(env, job.channelId, content);
+    let responseChannelId = job.channelId;
+    if (job.kind === "thread_start") {
+      const title = await generateThreadTitle(env, config, job.prompt);
+      const thread = await createThreadFromMessage(env, job.channelId, job.messageId, title);
+      if (!thread) {
+        await record("discord_thread_create_invalid", null);
+        message.ack();
+        return;
+      }
+
+      responseChannelId = thread.id;
+      await recordAiThread(env, {
+        threadId: thread.id,
+        parentChannelId: job.channelId,
+        sourceMessageId: job.messageId,
+        requesterUserId: job.requesterUserId,
+        requesterUsername: job.requesterUsername,
+        initialPrompt: job.prompt,
+        title,
+      });
+    }
+
+    const response = await postChannelMessage(env, responseChannelId, content);
     if (response.ok) {
       await record("ok", null);
     } else {
