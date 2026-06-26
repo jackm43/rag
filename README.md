@@ -22,20 +22,16 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
   - `/ragboard`
   - `/ask prompt:<question>`
 - HTTP endpoints:
-  - `GET /` health
-  - `POST /` Discord interactions
+  - `POST /discord` Discord interactions
   - `POST /gateway/start` start gateway connection (bot token auth)
   - `GET /gateway/health` gateway status (bot token auth)
-- All other public paths return `404`.
+- All other public paths, including `/` and source-file-looking paths, return `404`.
 
 ## Public Route Boundary
 
 ```mermaid
 flowchart LR
-  Client[Public HTTP client] -->|GET /| Worker[Cloudflare Worker]
-  Worker -->|200 text/plain: ok| Client
-
-  Discord[Discord Interactions] -->|POST /: signed interaction JSON| Worker
+  Discord[Discord Interactions] -->|POST /discord: signed interaction JSON| Worker
   Worker -->|200 JSON: interaction response| Discord
 
   Operator[Operator] -->|POST /gateway/start: Bearer DISCORD_BOT_TOKEN| Worker
@@ -45,7 +41,7 @@ flowchart LR
   Worker -->|JSON response| Operator
 
   Unknown[Other public request] -->|any unconfigured path or method| Worker
-  Worker -->|404 Not found, or 405 on / non-POST| Unknown
+  Worker -->|404 Not found, or 405 on configured paths with the wrong method| Unknown
 ```
 
 ## Slash Command Flow
@@ -54,12 +50,12 @@ flowchart LR
 sequenceDiagram
   actor User as Discord user
   participant Discord as Discord Interactions API
-  participant Worker as Cloudflare Worker POST /
+  participant Worker as Cloudflare Worker POST /discord
   participant DB as D1 DB
   participant AI as AI Gateway / Workers AI
 
   User->>Discord: Slash command: /rag user, /ragboard, or /ask prompt
-  Discord->>Worker: POST / with interaction JSON + Ed25519 headers
+  Discord->>Worker: POST /discord with interaction JSON + Ed25519 headers
   Worker->>Worker: Verify signature and route interaction.data.name
 
   alt /rag

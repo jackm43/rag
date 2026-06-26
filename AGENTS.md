@@ -21,7 +21,7 @@ This project expects these environment variables:
   - `src/ai.ts` model-agnostic chat calls through the Workers AI binding (`env.AI.run`) or AI Gateway REST. Workers AI `@cf/...` models use binding options (`gateway: { id }`), Unified Billing partner chat models use AI Gateway compat chat completions, and `/ask` research mode uses an OpenAI search model such as `openai/gpt-4o-search-preview` via AI Gateway.
   - `src/config.ts` loads source-controlled AI config from `src/ai-config`
   - `src/logger.ts` structured logging
-- Discord interactions route: `POST /`
+- Discord interactions route: `POST /discord`
 - Gateway control routes: `POST /gateway/start`, `GET /gateway/health` (both require `Authorization: Bearer $DISCORD_BOT_TOKEN`)
 - Public routes are allowlisted. Any path not listed here returns `404`.
 - Database: D1 (`DB` binding) using `schema.sql`
@@ -121,4 +121,4 @@ Bot permissions:
 - `Use Slash Commands`
 - `Read Message History` (required for thread conversation context)
 
-Use the deployed Worker URL as the Discord interactions endpoint.
+Use the deployed Worker URL plus `/discord` as the Discord interactions endpoint.
