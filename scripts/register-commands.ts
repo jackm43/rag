@@ -36,11 +36,6 @@ const commands = [
         .setRequired(true)
         .setMinLength(1)
         .setMaxLength(6000),
-    )
-    .addBooleanOption((option) =>
-      option
-        .setName("web")
-        .setDescription("Use web search for current information"),
     ),
 ].map((command) => command.toJSON());
 

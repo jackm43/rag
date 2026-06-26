@@ -18,7 +18,7 @@ This project expects these environment variables:
   - `src/gateway.ts` `DiscordGateway` Durable Object (`DISCORD_GATEWAY` binding)
   - `src/mention.ts` mention handling, thread tracking, AI title generation, and AI queue consumer (thread conversation context)
   - `src/commands/ask.ts` `/ask` thread creation, normal AI response handling, and web-search research mode
-  - `src/ai.ts` model-agnostic chat calls through the Workers AI binding (`env.AI.run`), with AI Gateway routing via binding options (`gateway: { id }`) for Workers AI `@cf/...` models, Unified Billing partner chat models such as `grok/grok-4.3`, and Responses-style web-search models such as `xai/grok-4.20-multi-agent-0309`
+  - `src/ai.ts` model-agnostic chat calls through the Workers AI binding (`env.AI.run`) or AI Gateway REST. Workers AI `@cf/...` models use binding options (`gateway: { id }`), Unified Billing partner chat models use AI Gateway compat chat completions, and `/ask` research mode uses an OpenAI search model such as `openai/gpt-4o-search-preview` via AI Gateway.
   - `src/config.ts` loads source-controlled AI config from `src/ai-config`
   - `src/logger.ts` structured logging
 - Discord interactions route: `POST /`

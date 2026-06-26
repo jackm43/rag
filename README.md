@@ -7,7 +7,7 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
 - Runtime: Cloudflare Workers (`src/index.ts`)
 - Language: TypeScript
 - Database: Cloudflare D1 (`DB`)
-- AI: Workers AI binding (`AI`); model and prompt config live in `src/ai-config` (`@cf/...` Workers AI models, Unified Billing partner chat models such as `grok/grok-4.3`, and web-search models such as `xai/grok-4.20-multi-agent-0309`), routed through AI Gateway with binding options when a gateway id is configured
+- AI: Workers AI binding (`AI`) and AI Gateway REST; model and prompt config live in `src/ai-config` (`@cf/...` Workers AI models, Unified Billing partner chat models such as `grok/grok-4.3`, and web-search models such as `openai/gpt-4o-search-preview`)
 - Queue: Cloudflare Queues (`AI_JOBS`, `ai-jobs`, `ai-jobs-dlq`)
 - Stateful connection: Durable Objects (`DiscordGateway`)
 - Discord integration:
@@ -20,7 +20,7 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
 - Slash commands:
   - `/rag user:<discord-user>`
   - `/ragboard`
-  - `/ask prompt:<question> [web:<true|false>]`
+  - `/ask prompt:<question>`
 - HTTP endpoints:
   - `GET /` health
   - `POST /` Discord interactions
@@ -167,7 +167,7 @@ sequenceDiagram
   - creates a public Discord thread in the current channel
   - stores the thread in `rag_ai_threads`
   - posts the sanitized AI response inside the thread
-  - uses neutral web-search research mode when the prompt asks for current information, or when `web:true` is supplied
+  - automatically uses neutral web-search research mode when the prompt asks for current information
   - edits the original interaction response with a thread link
 
 ### Mention-based AI (not a slash command)

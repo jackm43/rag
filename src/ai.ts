@@ -113,6 +113,48 @@ const gatewayChatCompletions = async (
   return payload;
 };
 
+const gatewayWebSearchChatCompletions = async (
+  env: Env,
+  gatewayId: string,
+  model: string,
+  input: string,
+  instructions: string,
+  maxTokens: number,
+  searchContextSize: WebSearchContextSize,
+) => {
+  if (!env.CF_ACCOUNT_ID || !env.CF_AIG_TOKEN) {
+    throw new Error("CF_ACCOUNT_ID and CF_AIG_TOKEN are required for AI Gateway web-search models");
+  }
+
+  const response = await fetch(
+    `https://gateway.ai.cloudflare.com/v1/${env.CF_ACCOUNT_ID}/${gatewayId}/compat/chat/completions`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "cf-aig-authorization": `Bearer ${env.CF_AIG_TOKEN}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: instructions },
+          { role: "user", content: input },
+        ],
+        max_tokens: maxTokens,
+        web_search_options: { search_context_size: searchContextSize },
+      }),
+    },
+  );
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = errorDetailFrom(payload, response.statusText);
+    throw new Error(`AI Gateway web-search request failed (${response.status}): ${detail}`);
+  }
+
+  return payload;
+};
+
 const looksLikeSpeakerLine = (line: string) => {
   const colon = line.indexOf(":");
   if (colon <= 0 || colon > 32) {
@@ -275,6 +317,32 @@ const extractResponsesSources = (result: unknown): WebSearchSource[] => {
   return [...sources.values()];
 };
 
+const extractChatCompletionSources = (result: unknown): WebSearchSource[] => {
+  if (!isRecord(result) || !Array.isArray(result.choices)) {
+    return [];
+  }
+
+  const sources = new Map<string, WebSearchSource>();
+  for (const choice of result.choices) {
+    if (!isRecord(choice) || !isRecord(choice.message) || !Array.isArray(choice.message.annotations)) {
+      continue;
+    }
+    for (const annotation of choice.message.annotations) {
+      if (!isRecord(annotation) || annotation.type !== "url_citation" || !isRecord(annotation.url_citation)) {
+        continue;
+      }
+      const { url, title } = annotation.url_citation;
+      if (typeof url === "string") {
+        sources.set(url, {
+          url,
+          title: typeof title === "string" ? title : undefined,
+        });
+      }
+    }
+  }
+  return [...sources.values()];
+};
+
 const countWebSearchCalls = (result: unknown) =>
   isRecord(result) && Array.isArray(result.output)
     ? result.output.filter((item) => isRecord(item) && item.type === "web_search_call").length
@@ -294,16 +362,22 @@ export const runWebSearchCompletion = async (
     tools: [{ type: "web_search", search_context_size: options.searchContextSize }],
   };
 
-  const result = await env.AI.run(
-    options.model,
-    request,
-    options.gatewayId ? { gateway: { id: options.gatewayId, skipCache: true } } : undefined,
-  );
+  const result = options.gatewayId
+    ? await gatewayWebSearchChatCompletions(
+      env,
+      options.gatewayId,
+      options.model,
+      input,
+      options.instructions,
+      options.maxOutputTokens,
+      options.searchContextSize,
+    )
+    : await env.AI.run(options.model, request, undefined);
 
   return {
     content: extractResponsesText(result),
     model: modelFrom(result, options.model),
-    sources: extractResponsesSources(result),
+    sources: [...extractResponsesSources(result), ...extractChatCompletionSources(result)],
     usage: isRecord(result) ? usageFrom(result.usage) : undefined,
     webSearchCalls: countWebSearchCalls(result),
   };

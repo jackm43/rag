@@ -1,4 +1,15 @@
-import { runChatCompletion, sanitizeAiText, type ChatMessage } from "./ai";
+import {
+  runChatCompletion,
+  runWebSearchCompletion,
+  sanitizeAiText,
+  type ChatMessage,
+} from "./ai";
+import {
+  appendSourceFallback,
+  buildAskConversation,
+  buildAskWebSearchInput,
+  shouldUseAskWebSearch,
+} from "./ask-mode";
 import { loadConfig, type BotConfig } from "./config";
 import {
   createThreadFromMessage,
@@ -261,16 +272,22 @@ const cleanHistoryContent = (content: string) =>
 const isRagCommandOutput = (content: string) =>
   /\bhas just ragged\. Total: \d+\b/.test(content) || content.trimStart().startsWith("Ragboard\n");
 
-const buildConversation = async (env: Env, config: BotConfig, job: AiJob): Promise<ChatMessage[]> => {
-  const messages: ChatMessage[] = [
-    {
-      role: "system",
-      content: `${config.systemPrompt}\n\nThis is a normal chat reply, not the /rag command. Use only the provided thread conversation context and the current user message; do not infer context from unrelated channel history. Do not include rag counts, leaderboard totals, or phrases like "has just ragged" unless the user explicitly asks about the rag leaderboard. If the same user appears under different account names, global names, or nicknames in context, treat them as one person and do not mention multiple aliases in the same reply.`,
-    },
-  ];
+type BuiltThreadConversation = {
+  messages: ChatMessage[];
+  thread: AiThread | null;
+};
 
-  let history: DiscordMessage[] = [];
+const isAskThread = (thread: AiThread | null) => Boolean(thread && !thread.sourceMessageId);
+
+const buildThreadConversationMessages = async (
+  env: Env,
+  config: BotConfig,
+  job: AiJob,
+): Promise<BuiltThreadConversation> => {
   let thread: AiThread | null = null;
+  const messages: ChatMessage[] = [];
+  let history: DiscordMessage[] = [];
+
   if (job.kind === "thread_reply") {
     thread = await findAiThread(env, job.channelId);
     if (thread?.initialPrompt) {
@@ -318,12 +335,34 @@ const buildConversation = async (env: Env, config: BotConfig, job: AiJob): Promi
       promptParts.push(replyContext);
     }
   }
+
   const username = job.requesterUsername ?? "user";
   promptParts.push(`${username}: ${job.prompt}`);
   messages.push({ role: "user", content: promptParts.join("\n\n") });
 
-  return messages;
+  return { messages, thread };
 };
+
+const buildNormalThreadConversation = async (
+  env: Env,
+  config: BotConfig,
+  job: AiJob,
+): Promise<BuiltThreadConversation> => {
+  const { messages, thread } = await buildThreadConversationMessages(env, config, job);
+  return {
+    thread,
+    messages: [
+      {
+        role: "system",
+        content: `${config.systemPrompt}\n\nThis is a normal chat reply, not the /rag command. Use only the provided thread conversation context and the current user message; do not infer context from unrelated channel history. Do not include rag counts, leaderboard totals, or phrases like "has just ragged" unless the user explicitly asks about the rag leaderboard. If the same user appears under different account names, global names, or nicknames in context, treat them as one person and do not mention multiple aliases in the same reply.`,
+      },
+      ...messages,
+    ],
+  };
+};
+
+const buildConversation = async (env: Env, config: BotConfig, job: AiJob): Promise<ChatMessage[]> =>
+  (await buildNormalThreadConversation(env, config, job)).messages;
 
 const recordAiInteraction = async (
   env: Env,
@@ -422,17 +461,60 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
   try {
     const config = await loadConfig(env);
     model = config.responseModel;
-    const conversation = await buildConversation(env, config, job);
+    const builtConversation = job.kind === "thread_reply"
+      ? await buildNormalThreadConversation(env, config, job)
+      : { messages: await buildConversation(env, config, job), thread: null };
+
+    let responseText: string;
 
     const aiStartedAt = Date.now();
-    const result = await runChatCompletion(env, config, conversation);
+    if (job.kind === "thread_reply" && isAskThread(builtConversation.thread)) {
+      if (shouldUseAskWebSearch(job.prompt)) {
+        const result = await runWebSearchCompletion(
+          env,
+          buildAskWebSearchInput(
+            job.prompt,
+            job.requesterUsername ?? "user",
+            builtConversation.messages.filter((message) => message.role !== "system"),
+          ),
+          {
+            model: config.askWebSearchModel,
+            instructions: config.askWebSearchSystemPrompt,
+            maxOutputTokens: config.askWebSearchMaxOutputTokens,
+            maxTurns: config.askWebSearchMaxTurns,
+            searchContextSize: config.askWebSearchContextSize,
+            temperature: config.askWebSearchTemperature,
+            gatewayId: config.askWebSearchGatewayId,
+          },
+        );
+        responseText = appendSourceFallback(result.content, result.sources);
+        model = result.model;
+        promptTokens = result.usage?.promptTokens ?? null;
+        completionTokens = result.usage?.completionTokens ?? null;
+        totalTokens = result.usage?.totalTokens ?? null;
+      } else {
+        const result = await runChatCompletion(
+          env,
+          config,
+          buildAskConversation(config, builtConversation.messages.filter((message) => message.role !== "system")),
+        );
+        responseText = result.content;
+        model = result.model;
+        promptTokens = result.usage?.promptTokens ?? null;
+        completionTokens = result.usage?.completionTokens ?? null;
+        totalTokens = result.usage?.totalTokens ?? null;
+      }
+    } else {
+      const result = await runChatCompletion(env, config, builtConversation.messages);
+      responseText = result.content;
+      model = result.model;
+      promptTokens = result.usage?.promptTokens ?? null;
+      completionTokens = result.usage?.completionTokens ?? null;
+      totalTokens = result.usage?.totalTokens ?? null;
+    }
     aiDurationMs = Date.now() - aiStartedAt;
-    model = result.model;
-    promptTokens = result.usage?.promptTokens ?? null;
-    completionTokens = result.usage?.completionTokens ?? null;
-    totalTokens = result.usage?.totalTokens ?? null;
 
-    const text = sanitizeAiText(result.content);
+    const text = sanitizeAiText(responseText);
     content =
       text.length > 0 ? text.slice(0, MAX_DISCORD_MESSAGE_LENGTH) : "I could not generate a response.";
 
