@@ -40,6 +40,7 @@ const createEnv = (publicKeyHex: string, overrides: Record<string, unknown> = {}
   ({
     DISCORD_PUBLIC_KEY: publicKeyHex,
     DISCORD_APPLICATION_ID: "application-id",
+    DISCORD_BOT_TOKEN: "bot-token",
     DB: {
       prepare: () => {
         throw new Error("DB should not be used in this test");
@@ -224,6 +225,17 @@ test("missing Discord signature headers return 401", async () => {
     env,
     {} as never,
   );
+
+  assert.equal(response.status, 401);
+  assert.equal(await response.text(), "Bad request signature");
+});
+
+test("bare Discord interaction POST returns 401", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const request = new Request("https://example.com/discord", { method: "POST" });
+
+  const response = await worker.fetch(request, env, {} as never);
 
   assert.equal(response.status, 401);
   assert.equal(await response.text(), "Bad request signature");
@@ -684,7 +696,7 @@ test("/rag interaction is deferred and edits the original response from waitUnti
     );
     assert.equal(discordCall.init?.method, "PATCH");
     assert.deepEqual(JSON.parse(String(discordCall.init?.body)), {
-      content: "<@2> has just ragged. Total: 7",
+      content: "<@2> just ragged. Total: 7",
       allowed_mentions: {
         parse: [],
         users: ["2"],

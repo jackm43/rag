@@ -19,9 +19,6 @@ const DISCORD_INTERACTIONS_PATH = "/discord";
 const GATEWAY_START_PATH = "/gateway/start";
 const GATEWAY_HEALTH_PATH = "/gateway/health";
 
-const hasRequiredHeaders = (request: Request, headers: string[]) =>
-  headers.every((header) => request.headers.has(header));
-
 const methodNotAllowed = (allowedMethod: string) =>
   new Response("Method not allowed", {
     status: 405,
@@ -66,10 +63,6 @@ const handleInteractionRequest = async (
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> => {
-  if (!hasRequiredHeaders(request, ["x-signature-ed25519", "x-signature-timestamp"])) {
-    return new Response("Bad request signature", { status: 401 });
-  }
-
   const interaction = await verifyDiscordRequest(request, env.DISCORD_PUBLIC_KEY);
   if (!interaction) {
     return new Response("Bad request signature", { status: 401 });
