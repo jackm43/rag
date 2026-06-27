@@ -6,7 +6,7 @@
 - Discord interaction webhooks for slash commands
 - A Discord Gateway connection via Durable Objects
 - AI response generation via Workers AI and Cloudflare Queues
-- D1-backed persistence for rag events, totals, roast history, and AI thread ownership
+- D1-backed persistence for rag events, totals, and AI thread ownership
 
 User-facing slash commands:
 - `/rag user:<discord-user>`
@@ -81,11 +81,8 @@ sequenceDiagram
     Rag-->>Discord: JSON: deferred channel message response
     Rag->>DB: INSERT rag_events: ragged user, reporter, created_at
     Rag->>DB: UPSERT rag_totals: ragged user and incremented count
-    Rag->>DB: SELECT: total count, reporter count, recent rag_roasts
-    Rag->>AI: Chat request: roast system prompt + target/reporter/counts
-    AI-->>Rag: Generated roast text
-    Rag->>DB: INSERT OR IGNORE rag_roasts: roast_text
-    Rag->>Discord: PATCH webhook message: target mention, count, roast, allowed_mentions
+    Rag->>DB: SELECT: total count
+    Rag->>Discord: PATCH webhook message: target mention, count, allowed_mentions
   else /ragboard
     Worker->>Board: Interaction payload
     Board->>DB: SELECT top 10 rag_totals
@@ -175,11 +172,8 @@ Behavior:
 - Validates target user option.
 - Inserts event row into `rag_events`.
 - Upserts total in `rag_totals` and increments `rag_count`.
-- Reads current target total and reporter submission count.
-- Reads recent roast history (`rag_roasts`) and generates a non-duplicate short roast using Workers AI.
-- Falls back to deterministic roast lines if AI fails/duplicates/timeout.
-- Stores roast line using `INSERT OR IGNORE`.
-- Returns message with target mention, updated total, and roast.
+- Reads current target total.
+- Returns message with target mention and updated total.
 
 ### `/ragboard`
 
@@ -210,10 +204,6 @@ Behavior:
 `rag_totals`:
 - aggregate materialization for fast leaderboard reads
 - columns: `ragged_user_id` (PK), `ragged_username`, `rag_count`, `updated_at`
-
-`rag_roasts`:
-- dedupe memory for recent roast lines
-- columns: `id`, `roast_text` (unique), `created_at`
 
 `rag_ai_threads`:
 - tracks Discord threads owned by the AI chat flow
