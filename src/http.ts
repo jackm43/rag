@@ -9,7 +9,6 @@ const DISCORD_SIGNATURE_MAX_SKEW_SECONDS = 5 * 60;
 const DISCORD_SIGNATURE_PATTERN = /^[0-9a-fA-F]{128}$/;
 const DISCORD_TIMESTAMP_PATTERN = /^\d+$/;
 const REQUIRED_DISCORD_SECURITY_HEADERS = [
-  "authorization",
   "x-signature-ed25519",
   "x-signature-timestamp",
 ] as const;
@@ -51,39 +50,27 @@ const getRequiredDiscordSecurityHeaders = (request: Request) => {
     return null;
   }
 
-  const [authorization, signature, timestamp] = values as [string, string, string];
-  return { authorization, signature, timestamp };
+  const [signature, timestamp] = values as [string, string];
+  return { signature, timestamp };
 };
 
 const hasWellFormedDiscordSecurityHeaders = (headers: {
-  authorization: string;
   signature: string;
   timestamp: string;
 }) => {
-  const separatorIndex = headers.authorization.indexOf(" ");
-  return (
-    separatorIndex > 0 &&
-    headers.authorization.slice(0, separatorIndex).toLowerCase() === "bearer" &&
-    headers.authorization.slice(separatorIndex + 1).length > 0 &&
-    DISCORD_SIGNATURE_PATTERN.test(headers.signature) &&
-    DISCORD_TIMESTAMP_PATTERN.test(headers.timestamp)
-  );
+  return DISCORD_SIGNATURE_PATTERN.test(headers.signature) && DISCORD_TIMESTAMP_PATTERN.test(headers.timestamp);
 };
 
-export const verifyAuthorizedDiscordRequest = async (
+export const verifyDiscordRequest = async (
   request: Request,
   publicKey: string,
-  expectedToken: string,
 ): Promise<DiscordInteraction | null> => {
   const headers = getRequiredDiscordSecurityHeaders(request);
   if (!headers || !hasWellFormedDiscordSecurityHeaders(headers)) {
     return null;
   }
 
-  if (
-    !bearerTokenMatches(headers.authorization, expectedToken) ||
-    !isFreshDiscordTimestamp(headers.timestamp)
-  ) {
+  if (!isFreshDiscordTimestamp(headers.timestamp)) {
     return null;
   }
 

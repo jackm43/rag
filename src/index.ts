@@ -2,7 +2,7 @@ import { handleAskCommand } from "./commands/ask";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
 import { DiscordGateway, getGatewayHealth, startGateway } from "./gateway";
-import { bearerTokenMatches, jsonResponse, verifyAuthorizedDiscordRequest } from "./http";
+import { bearerTokenMatches, jsonResponse, verifyDiscordRequest } from "./http";
 import { errorMessage, logger } from "./logger";
 import { extractBotMentionPrompt, handleGatewayMessageCreate, processAiQueueMessage } from "./mention";
 import {
@@ -63,11 +63,7 @@ const handleInteractionRequest = async (
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> => {
-  const interaction = await verifyAuthorizedDiscordRequest(
-    request,
-    env.DISCORD_PUBLIC_KEY,
-    env.DISCORD_BOT_TOKEN,
-  );
+  const interaction = await verifyDiscordRequest(request, env.DISCORD_PUBLIC_KEY);
   if (!interaction) {
     return new Response("Bad request signature", { status: 401 });
   }
