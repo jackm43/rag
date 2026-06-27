@@ -1,13 +1,14 @@
-import { DISCORD_API_BASE_URL, type DiscordChannel, type DiscordMessage, type Env } from "./types";
-import { isDiscordMessage, isRecord } from "./validation";
+import type { APIChannel, APIMessage } from "discord-api-types/payloads/v10";
+import type { RESTPatchAPIInteractionOriginalResponseJSONBody } from "discord-api-types/rest/v10";
 
-const DISCORD_CHANNEL_TYPE_PUBLIC_THREAD = 11;
-const DISCORD_CHANNEL_TYPE_PRIVATE_THREAD = 12;
-const DISCORD_CHANNEL_TYPE_ANNOUNCEMENT_THREAD = 10;
-const DISCORD_CHANNEL_TYPE_PUBLIC_THREAD_CREATE = 11;
-const DISCORD_THREAD_AUTO_ARCHIVE_ONE_DAY = 1440;
+import { DISCORD_API_BASE_URL, type Env } from "./types";
+import { isDiscordMessage } from "./validation";
 
 const channelRoute = (channelId: string) => `/channels/${channelId}` as const;
+const DISCORD_CHANNEL_ANNOUNCEMENT_THREAD = 10;
+const DISCORD_CHANNEL_PUBLIC_THREAD = 11;
+const DISCORD_CHANNEL_PRIVATE_THREAD = 12;
+const DISCORD_THREAD_AUTO_ARCHIVE_ONE_DAY = 1440;
 const threadsRoute = (channelId: string, messageId?: string) =>
   messageId
     ? `/channels/${channelId}/messages/${messageId}/threads` as const
@@ -18,6 +19,9 @@ const botHeaders = (env: Env) => ({
 });
 
 const auditLogReasonHeader = (reason: string) => encodeURIComponent(reason);
+
+const objectFrom = (value: unknown) =>
+  typeof value === "object" && value !== null ? value as Record<string, unknown> : null;
 
 const discordJsonRequest = async (
   env: Env,
@@ -39,31 +43,23 @@ const discordJsonRequest = async (
   return response.json().catch(() => null);
 };
 
-const isDiscordChannel = (value: unknown): value is DiscordChannel =>
-  isRecord(value) &&
-  typeof value.id === "string" &&
-  typeof value.type === "number" &&
-  (value.parent_id === undefined || value.parent_id === null || typeof value.parent_id === "string") &&
-  (value.name === undefined || typeof value.name === "string") &&
-  (value.thread_metadata === undefined || isRecord(value.thread_metadata));
-
-export const isThreadChannel = (channel: DiscordChannel) =>
-  channel.type === DISCORD_CHANNEL_TYPE_PUBLIC_THREAD ||
-  channel.type === DISCORD_CHANNEL_TYPE_PRIVATE_THREAD ||
-  channel.type === DISCORD_CHANNEL_TYPE_ANNOUNCEMENT_THREAD;
-
-export type InteractionMessageData = {
-  content: string;
-  allowed_mentions?: {
-    parse?: string[];
-    users?: string[];
-  };
-  attachments?: Array<{
-    id: string;
-    filename: string;
-    description?: string;
-  }>;
+const isDiscordChannel = (value: unknown): value is APIChannel => {
+  const channel = objectFrom(value);
+  return (
+    channel !== null &&
+    typeof channel.id === "string" &&
+    typeof channel.type === "number" &&
+    (channel.parent_id === undefined || channel.parent_id === null || typeof channel.parent_id === "string") &&
+    (channel.name === undefined || channel.name === null || typeof channel.name === "string")
+  );
 };
+
+export const isThreadChannel = (channel: APIChannel) =>
+  channel.type === DISCORD_CHANNEL_PUBLIC_THREAD ||
+  channel.type === DISCORD_CHANNEL_PRIVATE_THREAD ||
+  channel.type === DISCORD_CHANNEL_ANNOUNCEMENT_THREAD;
+
+export type InteractionMessageData = RESTPatchAPIInteractionOriginalResponseJSONBody;
 
 export type InteractionResponseFile = {
   name: string;
@@ -91,7 +87,7 @@ export const createThreadFromMessage = async (
   channelId: string,
   messageId: string,
   name: string,
-): Promise<DiscordChannel | null> => {
+): Promise<APIChannel | null> => {
   const payload = await discordJsonRequest(env, threadsRoute(channelId, messageId), {
     method: "POST",
     headers: {
@@ -110,7 +106,7 @@ export const createThreadWithoutMessage = async (
   env: Env,
   channelId: string,
   name: string,
-): Promise<DiscordChannel | null> => {
+): Promise<APIChannel | null> => {
   const payload = await discordJsonRequest(env, threadsRoute(channelId), {
     method: "POST",
     headers: {
@@ -119,14 +115,14 @@ export const createThreadWithoutMessage = async (
     },
     body: JSON.stringify({
       name,
-      type: DISCORD_CHANNEL_TYPE_PUBLIC_THREAD_CREATE,
+      type: DISCORD_CHANNEL_PUBLIC_THREAD,
       auto_archive_duration: DISCORD_THREAD_AUTO_ARCHIVE_ONE_DAY,
     }),
   });
   return isDiscordChannel(payload) ? payload : null;
 };
 
-export const fetchChannel = async (env: Env, channelId: string): Promise<DiscordChannel | null> => {
+export const fetchChannel = async (env: Env, channelId: string): Promise<APIChannel | null> => {
   const payload = await discordJsonRequest(env, channelRoute(channelId)).catch(() => null);
   return isDiscordChannel(payload) ? payload : null;
 };
@@ -135,7 +131,7 @@ export const fetchChannelMessages = async (
   env: Env,
   channelId: string,
   options: { before?: string; limit?: number } = {},
-): Promise<DiscordMessage[]> => {
+): Promise<APIMessage[]> => {
   const params = new URLSearchParams();
   if (options.before) {
     params.set("before", options.before);
@@ -157,7 +153,7 @@ export const fetchMessage = async (
   env: Env,
   channelId: string,
   messageId: string,
-): Promise<DiscordMessage | null> => {
+): Promise<APIMessage | null> => {
   const response = await fetch(
     `${DISCORD_API_BASE_URL}/channels/${channelId}/messages/${messageId}`,
     { headers: botHeaders(env) },
@@ -177,7 +173,8 @@ export const fetchUsername = async (env: Env, userId: string): Promise<string | 
     return null;
   }
   const user = await response.json().catch(() => null);
-  return isRecord(user) && typeof user.username === "string" ? user.username : null;
+  const payload = objectFrom(user);
+  return payload && typeof payload.username === "string" ? payload.username : null;
 };
 
 const BOT_ROLE_CACHE_TTL_MS = 5 * 60_000;
@@ -201,8 +198,8 @@ export const fetchBotRoleIds = async (
     return cached?.roleIds ?? [];
   }
 
-  const member = await response.json().catch(() => null);
-  const roleIds = isRecord(member) && Array.isArray(member.roles)
+  const member = objectFrom(await response.json().catch(() => null));
+  const roleIds = member && Array.isArray(member.roles)
     ? member.roles.filter((role): role is string => typeof role === "string")
     : [];
   botRoleCache.set(key, { roleIds, expiresAt: Date.now() + BOT_ROLE_CACHE_TTL_MS });

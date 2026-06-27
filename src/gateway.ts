@@ -1,9 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
+import type { GatewayHelloData, GatewayReadyDispatchData } from "discord-api-types/gateway/v10";
 
 import { errorMessage, logger } from "./logger";
 import { handleGatewayMessageCreate } from "./mention";
 import type { Env } from "./types";
-import { isDiscordMessage, isRecord } from "./validation";
+import { isDiscordMessage } from "./validation";
 
 type DiscordGatewayPayload = {
   op: number;
@@ -12,46 +13,54 @@ type DiscordGatewayPayload = {
   t?: string | null;
 };
 
-type DiscordGatewayHello = {
-  heartbeat_interval: number;
-};
-
-type DiscordGatewayReady = {
-  session_id: string;
-  resume_gateway_url?: string;
-  user?: {
-    id: string;
-  };
-};
-
 export type DiscordGatewayHealth = {
   connected: boolean;
   resumable: boolean;
 };
 
 const DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
-const GUILD_MESSAGES_INTENT = 1 << 9;
-const DIRECT_MESSAGES_INTENT = 1 << 12;
-const MESSAGE_CONTENT_INTENT = 1 << 15;
-const GATEWAY_INTENTS = GUILD_MESSAGES_INTENT | DIRECT_MESSAGES_INTENT | MESSAGE_CONTENT_INTENT;
+const DISCORD_GATEWAY_OPCODE_DISPATCH = 0;
+const DISCORD_GATEWAY_OPCODE_HEARTBEAT = 1;
+const DISCORD_GATEWAY_OPCODE_IDENTIFY = 2;
+const DISCORD_GATEWAY_OPCODE_RESUME = 6;
+const DISCORD_GATEWAY_OPCODE_RECONNECT = 7;
+const DISCORD_GATEWAY_OPCODE_INVALID_SESSION = 9;
+const DISCORD_GATEWAY_OPCODE_HELLO = 10;
+const DISCORD_GATEWAY_OPCODE_HEARTBEAT_ACK = 11;
+const DISCORD_GATEWAY_EVENT_READY = "READY";
+const DISCORD_GATEWAY_EVENT_MESSAGE_CREATE = "MESSAGE_CREATE";
+const GATEWAY_INTENTS = (1 << 9) | (1 << 12) | (1 << 15);
 const GATEWAY_ENABLED_KEY = "gatewayEnabled";
 const GATEWAY_WATCHDOG_INTERVAL_MS = 60_000;
 
-const isGatewayPayload = (value: unknown): value is DiscordGatewayPayload =>
-  isRecord(value) &&
-  typeof value.op === "number" &&
-  (value.s === undefined || value.s === null || typeof value.s === "number") &&
-  (value.t === undefined || value.t === null || typeof value.t === "string");
+const objectFrom = (value: unknown) =>
+  typeof value === "object" && value !== null ? value as Record<string, unknown> : null;
 
-const isGatewayHello = (value: unknown): value is DiscordGatewayHello =>
-  isRecord(value) && typeof value.heartbeat_interval === "number" && value.heartbeat_interval > 0;
+const isGatewayPayload = (value: unknown): value is DiscordGatewayPayload => {
+  const payload = objectFrom(value);
+  return (
+    payload !== null &&
+    typeof payload.op === "number" &&
+    (payload.s === undefined || payload.s === null || typeof payload.s === "number") &&
+    (payload.t === undefined || payload.t === null || typeof payload.t === "string")
+  );
+};
 
-const isGatewayReady = (value: unknown): value is DiscordGatewayReady =>
-  isRecord(value) &&
-  typeof value.session_id === "string" &&
-  (value.resume_gateway_url === undefined || typeof value.resume_gateway_url === "string") &&
-  (value.user === undefined ||
-    (isRecord(value.user) && typeof value.user.id === "string"));
+const isGatewayHello = (value: unknown): value is GatewayHelloData => {
+  const hello = objectFrom(value);
+  return hello !== null && typeof hello.heartbeat_interval === "number" && hello.heartbeat_interval > 0;
+};
+
+const isGatewayReady = (value: unknown): value is GatewayReadyDispatchData => {
+  const ready = objectFrom(value);
+  const user = objectFrom(ready?.user);
+  return (
+    ready !== null &&
+    typeof ready.session_id === "string" &&
+    (ready.resume_gateway_url === undefined || typeof ready.resume_gateway_url === "string") &&
+    (ready.user === undefined || (user !== null && typeof user.id === "string"))
+  );
+};
 
 const gatewayStub = (env: Env) => {
   const id = env.DISCORD_GATEWAY.idFromName("discord-gateway");
@@ -162,28 +171,28 @@ export class DiscordGateway extends DurableObject<Env> {
       this.lastSequence = payload.s;
     }
 
-    if (payload.op === 10 && isGatewayHello(payload.d)) {
+    if (payload.op === DISCORD_GATEWAY_OPCODE_HELLO && isGatewayHello(payload.d)) {
       this.startHeartbeat(payload.d);
       this.identifyOrResume();
       return;
     }
 
-    if (payload.op === 11) {
+    if (payload.op === DISCORD_GATEWAY_OPCODE_HEARTBEAT_ACK) {
       this.heartbeatAcknowledged = true;
       return;
     }
 
-    if (payload.op === 1) {
+    if (payload.op === DISCORD_GATEWAY_OPCODE_HEARTBEAT) {
       this.sendHeartbeat();
       return;
     }
 
-    if (payload.op === 7) {
+    if (payload.op === DISCORD_GATEWAY_OPCODE_RECONNECT) {
       this.reconnect();
       return;
     }
 
-    if (payload.op === 9) {
+    if (payload.op === DISCORD_GATEWAY_OPCODE_INVALID_SESSION) {
       if (payload.d !== true) {
         this.sessionId = null;
         this.resumeGatewayUrl = null;
@@ -193,11 +202,11 @@ export class DiscordGateway extends DurableObject<Env> {
       return;
     }
 
-    if (payload.op !== 0) {
+    if (payload.op !== DISCORD_GATEWAY_OPCODE_DISPATCH) {
       return;
     }
 
-    if (payload.t === "READY" && isGatewayReady(payload.d)) {
+    if (payload.t === DISCORD_GATEWAY_EVENT_READY && isGatewayReady(payload.d)) {
       const ready = payload.d;
       this.sessionId = ready.session_id;
       this.resumeGatewayUrl = ready.resume_gateway_url ?? this.resumeGatewayUrl;
@@ -206,7 +215,7 @@ export class DiscordGateway extends DurableObject<Env> {
       return;
     }
 
-    if (payload.t === "MESSAGE_CREATE" && isDiscordMessage(payload.d)) {
+    if (payload.t === DISCORD_GATEWAY_EVENT_MESSAGE_CREATE && isDiscordMessage(payload.d)) {
       try {
         await handleGatewayMessageCreate(payload.d, this.env, this.botUserId);
       } catch (error) {
@@ -218,7 +227,7 @@ export class DiscordGateway extends DurableObject<Env> {
   private identifyOrResume() {
     if (this.sessionId && this.resumeGatewayUrl) {
       this.send({
-        op: 6,
+        op: DISCORD_GATEWAY_OPCODE_RESUME,
         d: {
           token: this.env.DISCORD_BOT_TOKEN,
           session_id: this.sessionId,
@@ -229,7 +238,7 @@ export class DiscordGateway extends DurableObject<Env> {
     }
 
     this.send({
-      op: 2,
+      op: DISCORD_GATEWAY_OPCODE_IDENTIFY,
       d: {
         token: this.env.DISCORD_BOT_TOKEN,
         intents: GATEWAY_INTENTS,
@@ -242,7 +251,7 @@ export class DiscordGateway extends DurableObject<Env> {
     });
   }
 
-  private startHeartbeat(hello: DiscordGatewayHello) {
+  private startHeartbeat(hello: GatewayHelloData) {
     this.clearHeartbeat();
     this.heartbeatAcknowledged = true;
     this.sendHeartbeat();
@@ -257,7 +266,7 @@ export class DiscordGateway extends DurableObject<Env> {
 
   private sendHeartbeat() {
     this.heartbeatAcknowledged = false;
-    this.send({ op: 1, d: this.lastSequence });
+    this.send({ op: DISCORD_GATEWAY_OPCODE_HEARTBEAT, d: this.lastSequence });
   }
 
   private send(payload: unknown) {

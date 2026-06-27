@@ -1,3 +1,5 @@
+import type { APIChatInputApplicationCommandInteraction } from "discord-api-types/payloads/v10";
+
 import {
   runChatCompletion,
   runWebSearchCompletion,
@@ -20,25 +22,30 @@ import {
 import { jsonResponse } from "../http";
 import { errorMessage, logger } from "../logger";
 import { generateThreadTitle, recordAiThread } from "../mention";
-import {
-  CHANNEL_MESSAGE_WITH_SOURCE,
-  DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
-  type DiscordInteraction,
-  type Env,
-} from "../types";
+import type { Env } from "../types";
 
 const MAX_DISCORD_MESSAGE_LENGTH = 1900;
+const DISCORD_RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE = 4;
+const DISCORD_RESPONSE_DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE = 5;
 
 export { shouldUseAskWebSearch } from "../ask-mode";
 
-const askPrompt = (interaction: DiscordInteraction) => {
-  const value = interaction.data?.options?.find((option) => option.name === "prompt")?.value;
-  return typeof value === "string" ? value.trim() : "";
+const stringOptionValue = (
+  interaction: APIChatInputApplicationCommandInteraction,
+  name: string,
+) => {
+  const option = interaction.data?.options?.find((item) => item.name === name);
+  return option && "value" in option && typeof option.value === "string" ? option.value : "";
 };
 
-const getInvoker = (interaction: DiscordInteraction) => interaction.member?.user ?? interaction.user;
+const askPrompt = (interaction: APIChatInputApplicationCommandInteraction) => {
+  return stringOptionValue(interaction, "prompt").trim();
+};
 
-const getInvokerDisplayName = (interaction: DiscordInteraction) =>
+const getInvoker = (interaction: APIChatInputApplicationCommandInteraction) =>
+  interaction.member?.user ?? interaction.user;
+
+const getInvokerDisplayName = (interaction: APIChatInputApplicationCommandInteraction) =>
   interaction.member?.nick?.trim() ||
   interaction.member?.user?.global_name?.trim() ||
   interaction.user?.global_name?.trim() ||
@@ -54,7 +61,7 @@ const resolveThreadParentChannelId = async (env: Env, channelId: string) => {
   return channelId;
 };
 
-const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
+const runAskCommand = async (interaction: APIChatInputApplicationCommandInteraction, env: Env) => {
   const prompt = askPrompt(interaction);
   const parentChannelId = interaction.channel_id;
   if (!prompt) {
@@ -154,7 +161,7 @@ const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
 };
 
 export const handleAskCommand = (
-  interaction: DiscordInteraction,
+  interaction: APIChatInputApplicationCommandInteraction,
   env: Env,
   ctx: ExecutionContext,
 ) => {
@@ -164,14 +171,14 @@ export const handleAskCommand = (
 
   if (!prompt) {
     return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
+      type: DISCORD_RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE,
       data: { content: "A question is required.", allowed_mentions: { parse: [] } },
     });
   }
 
   if (!applicationId || !interactionToken) {
     return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
+      type: DISCORD_RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE,
       data: { content: "Could not defer /ask without interaction credentials.", allowed_mentions: { parse: [] } },
     });
   }
@@ -194,5 +201,5 @@ export const handleAskCommand = (
     })(),
   );
 
-  return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
+  return jsonResponse({ type: DISCORD_RESPONSE_DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
 };

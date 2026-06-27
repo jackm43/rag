@@ -1,7 +1,7 @@
 import nacl from "tweetnacl";
+import type { APIChatInputApplicationCommandInteraction, APIPingInteraction } from "discord-api-types/payloads/v10";
 
 import { timingSafeEqual } from "./timing-safe-equal";
-import type { DiscordInteraction } from "./types";
 import { isDiscordInteraction } from "./validation";
 
 const encoder = new TextEncoder();
@@ -64,7 +64,7 @@ const hasWellFormedDiscordSecurityHeaders = (headers: {
 export const verifyDiscordRequest = async (
   request: Request,
   publicKey: string,
-): Promise<DiscordInteraction | null> => {
+): Promise<APIPingInteraction | APIChatInputApplicationCommandInteraction | null> => {
   const headers = getRequiredDiscordSecurityHeaders(request);
   if (!headers || !hasWellFormedDiscordSecurityHeaders(headers)) {
     return null;

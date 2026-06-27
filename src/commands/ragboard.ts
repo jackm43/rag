@@ -1,5 +1,7 @@
-import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../types";
+import type { Env } from "../types";
 import { jsonResponse } from "../http";
+
+const DISCORD_RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE = 4;
 
 type RagboardRow = {
   ragged_user_id: string;
@@ -15,7 +17,7 @@ export const handleRagboardCommand = async (env: Env) => {
   const rows = result.results ?? [];
   if (rows.length === 0) {
     return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
+      type: DISCORD_RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE,
       data: { content: "No rags have been recorded yet." },
     });
   }
@@ -26,7 +28,7 @@ export const handleRagboardCommand = async (env: Env) => {
   });
 
   return jsonResponse({
-    type: CHANNEL_MESSAGE_WITH_SOURCE,
+    type: DISCORD_RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE,
     data: { content: `Ragboard\n${lines.join("\n")}` },
   });
 };

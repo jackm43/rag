@@ -1,6 +1,5 @@
 import type { BotConfig } from "./config";
 import type { Env } from "./types";
-import { isRecord } from "./validation";
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -16,64 +15,78 @@ const isBindingModel = (model: string) => isWorkersAiModel(model) || isGatewayWo
 const toBindingModel = (model: string) =>
   isGatewayWorkersAiModel(model) ? model.slice("workers-ai/".length) : model;
 
+const objectFrom = (value: unknown) =>
+  typeof value === "object" && value !== null ? value as Record<string, unknown> : null;
+
 const extractText = (result: unknown): string => {
   if (typeof result === "string") {
     return result;
   }
-  if (!isRecord(result)) {
+  const payload = objectFrom(result);
+  if (!payload) {
     return "";
   }
-  if (typeof result.response === "string") {
-    return result.response;
+  if (typeof payload.response === "string") {
+    return payload.response;
   }
-  const firstChoice = Array.isArray(result.choices) ? result.choices[0] : undefined;
-  if (!isRecord(firstChoice) || !isRecord(firstChoice.message)) {
+  const firstChoice = objectFrom(Array.isArray(payload.choices) ? payload.choices[0] : undefined);
+  const message = objectFrom(firstChoice?.message);
+  if (!message) {
     return "";
   }
-  return typeof firstChoice.message.content === "string" ? firstChoice.message.content : "";
+  return typeof message.content === "string" ? message.content : "";
 };
 
 const optionalUsageNumber = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 
-const usageFrom = (usage: unknown) =>
-  isRecord(usage)
+const usageFrom = (usage: unknown) => {
+  const payload = objectFrom(usage);
+  return payload
     ? {
-      promptTokens: optionalUsageNumber(usage.prompt_tokens ?? usage.input_tokens),
-      completionTokens: optionalUsageNumber(usage.completion_tokens ?? usage.output_tokens),
-      totalTokens: optionalUsageNumber(usage.total_tokens),
+      promptTokens: optionalUsageNumber(payload.prompt_tokens ?? payload.input_tokens),
+      completionTokens: optionalUsageNumber(payload.completion_tokens ?? payload.output_tokens),
+      totalTokens: optionalUsageNumber(payload.total_tokens),
     }
     : undefined;
+};
 
 const errorDetailFrom = (payload: unknown, fallback: string) => {
-  if (!isRecord(payload)) {
+  const body = objectFrom(payload);
+  if (!body) {
     return fallback;
   }
 
-  const error = payload.error;
+  const error = body.error;
   if (Array.isArray(error)) {
     return error
-      .map((item) => isRecord(item) && typeof item.message === "string" ? item.message : null)
+      .map((item) => {
+        const detail = objectFrom(item);
+        return detail && typeof detail.message === "string" ? detail.message : null;
+      })
       .filter((message): message is string => Boolean(message))
       .join("; ") || fallback;
   }
   if (typeof error === "string") {
     return error;
   }
-  if (isRecord(error) && typeof error.message === "string") {
-    return error.message;
+  const errorObject = objectFrom(error);
+  if (errorObject && typeof errorObject.message === "string") {
+    return errorObject.message;
   }
-  if (typeof payload.message === "string") {
-    return payload.message;
+  if (typeof body.message === "string") {
+    return body.message;
   }
-  if (typeof payload.description === "string") {
-    return payload.description;
+  if (typeof body.description === "string") {
+    return body.description;
   }
   return fallback;
 };
 
-const modelFrom = (payload: unknown, fallback: string) =>
-  isRecord(payload) && typeof payload.model === "string" ? payload.model : fallback;
+const modelFrom = (payload: unknown, fallback: string) => {
+  const body = objectFrom(payload);
+  return typeof body?.model === "string" ? body.model : fallback;
+};
 
 const gatewayChatCompletions = async (
   env: Env,
@@ -255,7 +268,7 @@ export const runChatCompletion = async (
   return {
     content: extractText(result),
     model: modelFrom(result, bindingModel),
-    usage: isRecord(result) ? usageFrom(result.usage) : undefined,
+    usage: usageFrom(objectFrom(result)?.usage),
   };
 };
 
@@ -267,22 +280,25 @@ export const runChatModel = async (
 ): Promise<string> => (await runChatCompletion(env, config, messages, options)).content;
 
 const extractResponsesText = (result: unknown): string => {
-  if (!isRecord(result)) {
+  const payload = objectFrom(result);
+  if (!payload) {
     return extractText(result);
   }
-  if (typeof result.output_text === "string") {
-    return result.output_text;
+  if (typeof payload.output_text === "string") {
+    return payload.output_text;
   }
 
   const parts: string[] = [];
-  const output = Array.isArray(result.output) ? result.output : [];
+  const output = Array.isArray(payload.output) ? payload.output : [];
   for (const item of output) {
-    if (!isRecord(item) || !Array.isArray(item.content)) {
+    const outputItem = objectFrom(item);
+    if (!outputItem || !Array.isArray(outputItem.content)) {
       continue;
     }
-    for (const content of item.content) {
-      if (isRecord(content) && typeof content.text === "string") {
-        parts.push(content.text);
+    for (const content of outputItem.content) {
+      const contentItem = objectFrom(content);
+      if (contentItem && typeof contentItem.text === "string") {
+        parts.push(contentItem.text);
       }
     }
   }
@@ -290,26 +306,30 @@ const extractResponsesText = (result: unknown): string => {
 };
 
 const extractResponsesSources = (result: unknown): WebSearchSource[] => {
-  if (!isRecord(result) || !Array.isArray(result.output)) {
+  const payload = objectFrom(result);
+  if (!payload || !Array.isArray(payload.output)) {
     return [];
   }
 
   const sources = new Map<string, WebSearchSource>();
-  for (const item of result.output) {
-    if (!isRecord(item) || !Array.isArray(item.content)) {
+  for (const item of payload.output) {
+    const outputItem = objectFrom(item);
+    if (!outputItem || !Array.isArray(outputItem.content)) {
       continue;
     }
-    for (const content of item.content) {
-      if (!isRecord(content) || !Array.isArray(content.annotations)) {
+    for (const content of outputItem.content) {
+      const contentItem = objectFrom(content);
+      if (!contentItem || !Array.isArray(contentItem.annotations)) {
         continue;
       }
-      for (const annotation of content.annotations) {
-        if (!isRecord(annotation) || typeof annotation.url !== "string") {
+      for (const annotation of contentItem.annotations) {
+        const citation = objectFrom(annotation);
+        if (!citation || typeof citation.url !== "string") {
           continue;
         }
-        sources.set(annotation.url, {
-          url: annotation.url,
-          title: typeof annotation.title === "string" ? annotation.title : undefined,
+        sources.set(citation.url, {
+          url: citation.url,
+          title: typeof citation.title === "string" ? citation.title : undefined,
         });
       }
     }
@@ -318,20 +338,25 @@ const extractResponsesSources = (result: unknown): WebSearchSource[] => {
 };
 
 const extractChatCompletionSources = (result: unknown): WebSearchSource[] => {
-  if (!isRecord(result) || !Array.isArray(result.choices)) {
+  const payload = objectFrom(result);
+  if (!payload || !Array.isArray(payload.choices)) {
     return [];
   }
 
   const sources = new Map<string, WebSearchSource>();
-  for (const choice of result.choices) {
-    if (!isRecord(choice) || !isRecord(choice.message) || !Array.isArray(choice.message.annotations)) {
+  for (const choice of payload.choices) {
+    const choiceItem = objectFrom(choice);
+    const message = objectFrom(choiceItem?.message);
+    if (!message || !Array.isArray(message.annotations)) {
       continue;
     }
-    for (const annotation of choice.message.annotations) {
-      if (!isRecord(annotation) || annotation.type !== "url_citation" || !isRecord(annotation.url_citation)) {
+    for (const annotation of message.annotations) {
+      const citation = objectFrom(annotation);
+      const urlCitation = objectFrom(citation?.url_citation);
+      if (!citation || citation.type !== "url_citation" || !urlCitation) {
         continue;
       }
-      const { url, title } = annotation.url_citation;
+      const { url, title } = urlCitation;
       if (typeof url === "string") {
         sources.set(url, {
           url,
@@ -343,10 +368,12 @@ const extractChatCompletionSources = (result: unknown): WebSearchSource[] => {
   return [...sources.values()];
 };
 
-const countWebSearchCalls = (result: unknown) =>
-  isRecord(result) && Array.isArray(result.output)
-    ? result.output.filter((item) => isRecord(item) && item.type === "web_search_call").length
+const countWebSearchCalls = (result: unknown) => {
+  const payload = objectFrom(result);
+  return payload && Array.isArray(payload.output)
+    ? payload.output.filter((item) => objectFrom(item)?.type === "web_search_call").length
     : 0;
+};
 
 export const runWebSearchCompletion = async (
   env: Env,
@@ -378,7 +405,7 @@ export const runWebSearchCompletion = async (
     content: extractResponsesText(result),
     model: modelFrom(result, options.model),
     sources: [...extractResponsesSources(result), ...extractChatCompletionSources(result)],
-    usage: isRecord(result) ? usageFrom(result.usage) : undefined,
+    usage: usageFrom(objectFrom(result)?.usage),
     webSearchCalls: countWebSearchCalls(result),
   };
 };

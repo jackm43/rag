@@ -1,3 +1,5 @@
+import type { APIChatInputApplicationCommandInteraction } from "discord-api-types/payloads/v10";
+
 import {
   editOriginalInteractionResponse,
   fetchUsername,
@@ -5,18 +7,16 @@ import {
 } from "../discord";
 import { jsonResponse } from "../http";
 import { errorMessage, logger } from "../logger";
-import {
-  CHANNEL_MESSAGE_WITH_SOURCE,
-  DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
-  type DiscordInteraction,
-  type Env,
-} from "../types";
+import type { Env } from "../types";
 
 type RagRow = {
   rag_count: number;
 };
 
-const getInvoker = (interaction: DiscordInteraction) => {
+const DISCORD_RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE = 4;
+const DISCORD_RESPONSE_DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE = 5;
+
+const getInvoker = (interaction: APIChatInputApplicationCommandInteraction) => {
   const user = interaction.member?.user ?? interaction.user;
   if (!user) {
     throw new Error("missing_invoker");
@@ -24,9 +24,20 @@ const getInvoker = (interaction: DiscordInteraction) => {
   return user;
 };
 
-const getTargetUsername = async (interaction: DiscordInteraction, env: Env, targetId: string) => {
-  const targetUser =
-    interaction.data?.resolved?.users?.[targetId] ?? interaction.resolved?.users?.[targetId];
+const optionValue = (
+  interaction: APIChatInputApplicationCommandInteraction,
+  name: string,
+) => {
+  const option = interaction.data?.options?.find((item) => item.name === name);
+  return option && "value" in option ? option.value : undefined;
+};
+
+const getTargetUsername = async (
+  interaction: APIChatInputApplicationCommandInteraction,
+  env: Env,
+  targetId: string,
+) => {
+  const targetUser = interaction.data?.resolved?.users?.[targetId];
   if (targetUser?.username) {
     return targetUser.username;
   }
@@ -34,11 +45,11 @@ const getTargetUsername = async (interaction: DiscordInteraction, env: Env, targ
 };
 
 const buildRagCommandResponseData = async (
-  interaction: DiscordInteraction,
+  interaction: APIChatInputApplicationCommandInteraction,
   env: Env,
 ): Promise<InteractionMessageData> => {
   const invoker = getInvoker(interaction);
-  const targetIdValue = interaction.data?.options?.find((opt) => opt.name === "user")?.value;
+  const targetIdValue = optionValue(interaction, "user");
   const targetId = targetIdValue ? String(targetIdValue) : "";
 
   if (!targetId) {
@@ -70,14 +81,17 @@ const buildRagCommandResponseData = async (
   };
 };
 
-export const handleRagCommand = async (interaction: DiscordInteraction, env: Env) =>
+export const handleRagCommand = async (
+  interaction: APIChatInputApplicationCommandInteraction,
+  env: Env,
+) =>
   jsonResponse({
-    type: CHANNEL_MESSAGE_WITH_SOURCE,
+    type: DISCORD_RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE,
     data: await buildRagCommandResponseData(interaction, env),
   });
 
 export const handleDeferredRagCommand = (
-  interaction: DiscordInteraction,
+  interaction: APIChatInputApplicationCommandInteraction,
   env: Env,
   ctx: ExecutionContext,
 ) => {
@@ -105,5 +119,5 @@ export const handleDeferredRagCommand = (
     })(),
   );
 
-  return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
+  return jsonResponse({ type: DISCORD_RESPONSE_DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
 };
