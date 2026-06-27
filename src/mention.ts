@@ -1,3 +1,6 @@
+import type { GatewayMessageCreateDispatchData } from "discord-api-types/gateway/v10";
+import type { APIMessage } from "discord-api-types/payloads/v10";
+
 import {
   runChatCompletion,
   runWebSearchCompletion,
@@ -19,14 +22,20 @@ import {
   postChannelMessage,
 } from "./discord";
 import { errorMessage, logger } from "./logger";
-import type { AiJob, AiThread, DiscordMessage, Env } from "./types";
+import type { AiJob, AiThread, Env } from "./types";
 import { isAiJob } from "./validation";
 
 const MAX_DISCORD_MESSAGE_LENGTH = 1900;
 const MAX_HISTORY_ENTRY_LENGTH = 600;
 const MAX_THREAD_TITLE_LENGTH = 80;
 
-export type ChannelPromptMessage = Pick<DiscordMessage, "content" | "mentions" | "mention_roles">;
+type DiscordMessage = APIMessage | GatewayMessageCreateDispatchData;
+
+export type ChannelPromptMessage = {
+  content?: string;
+  mentions?: Array<{ id: string }>;
+  mention_roles?: string[];
+};
 
 const mentionTokens = (content: string) => [...content.matchAll(/<@([!&]?)([^>\s]+)>/g)];
 
@@ -102,7 +111,7 @@ const formatReplyContext = (message: DiscordMessage) => {
 };
 
 const getMessageAuthorDisplayName = (message: DiscordMessage) =>
-  message.member?.nick?.trim() ||
+  ("member" in message ? message.member?.nick?.trim() : undefined) ||
   message.author?.global_name?.trim() ||
   message.author?.username?.trim() ||
   "user";
@@ -222,7 +231,8 @@ export const handleGatewayMessageCreate = async (
     message.message_reference?.channel_id ?? message.referenced_message?.channel_id;
   const requesterUsername = getMessageAuthorDisplayName(message);
 
-  const existingThread = message.guild_id ? await findAiThread(env, message.channel_id) : null;
+  const guildId = "guild_id" in message ? message.guild_id : undefined;
+  const existingThread = guildId ? await findAiThread(env, message.channel_id) : null;
   if (existingThread) {
     const prompt = stripMentionTokens(message.content ?? "");
     if (!prompt) {
@@ -244,8 +254,8 @@ export const handleGatewayMessageCreate = async (
   }
 
   let botRoleIds: string[] = [];
-  if (message.mention_roles?.length && message.guild_id) {
-    botRoleIds = await fetchBotRoleIds(env, message.guild_id, botUserId);
+  if (message.mention_roles?.length && guildId) {
+    botRoleIds = await fetchBotRoleIds(env, guildId, botUserId);
   }
 
   const prompt = resolveChannelPrompt(message, botUserId, env.DISCORD_APPLICATION_ID, botRoleIds);

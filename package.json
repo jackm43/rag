@@ -21,6 +21,7 @@
     "wrangler": "^4.13.2"
   },
   "dependencies": {
+    "discord-api-types": "^0.38.49",
     "discord.js": "^14.26.4",
     "tweetnacl": "^1.0.3"
   },

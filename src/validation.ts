@@ -1,8 +1,20 @@
-import type { AiJob, DiscordInteraction, DiscordMessage } from "./types";
+import type {
+  APIChatInputApplicationCommandInteraction,
+  APIMessage,
+  APIPingInteraction,
+  APIUser,
+} from "discord-api-types/payloads/v10";
+import type { GatewayMessageCreateDispatchData } from "discord-api-types/gateway/v10";
 
-export const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;
+import type { AiJob } from "./types";
 
+type DiscordMessage = APIMessage | GatewayMessageCreateDispatchData;
+
+const DISCORD_INTERACTION_PING = 1;
+const DISCORD_INTERACTION_APPLICATION_COMMAND = 2;
+
+const objectFrom = (value: unknown) =>
+  typeof value === "object" && value !== null ? value as Record<string, unknown> : null;
 const isString = (value: unknown): value is string => typeof value === "string";
 const isOptionalString = (value: unknown) => value === undefined || isString(value);
 const isOptionalNullableString = (value: unknown) =>
@@ -11,113 +23,155 @@ const isOptionalNullableString = (value: unknown) =>
 const hasOnlyStringValues = (value: unknown) =>
   value === undefined || (Array.isArray(value) && value.every(isString));
 
-const isDiscordUser = (value: unknown) => {
-  if (!isRecord(value)) {
+const isDiscordUser = (value: unknown): value is APIUser => {
+  const user = objectFrom(value);
+  if (!user) {
     return false;
   }
 
   return (
-    isString(value.id) &&
-    isString(value.username) &&
-    isOptionalNullableString(value.global_name) &&
-    (value.bot === undefined || typeof value.bot === "boolean")
+    isString(user.id) &&
+    isString(user.username) &&
+    isOptionalNullableString(user.global_name) &&
+    (user.bot === undefined || typeof user.bot === "boolean")
   );
 };
 
 const isDiscordMember = (value: unknown) => {
-  if (!isRecord(value)) {
+  const member = objectFrom(value);
+  if (!member) {
     return false;
   }
 
-  return isOptionalNullableString(value.nick) && (value.user === undefined || isDiscordUser(value.user));
+  return (
+    isOptionalNullableString(member.nick) &&
+    hasOnlyStringValues(member.roles) &&
+    (member.user === undefined || isDiscordUser(member.user))
+  );
 };
 
-const isResolvedUsers = (value: unknown) =>
-  value === undefined || (isRecord(value) && Object.values(value).every(isDiscordUser));
+const isResolvedUsers = (value: unknown) => {
+  const users = objectFrom(value);
+  return value === undefined || (users !== null && Object.values(users).every(isDiscordUser));
+};
 
-const isResolvedMembers = (value: unknown) =>
-  value === undefined || (isRecord(value) && Object.values(value).every(isDiscordMember));
+const isResolvedMembers = (value: unknown) => {
+  const members = objectFrom(value);
+  return value === undefined || (members !== null && Object.values(members).every(isDiscordMember));
+};
 
 const isInteractionResolved = (value: unknown) => {
   if (value === undefined) {
     return true;
   }
-  if (!isRecord(value)) {
+  const resolved = objectFrom(value);
+  if (!resolved) {
     return false;
   }
 
-  return isResolvedUsers(value.users) && isResolvedMembers(value.members);
+  return isResolvedUsers(resolved.users) && isResolvedMembers(resolved.members);
 };
 
-const isInteractionOption = (value: unknown) =>
-  isRecord(value) &&
-  isString(value.name) &&
-  (isString(value.value) || typeof value.value === "number" || typeof value.value === "boolean");
+const isInteractionOption = (value: unknown) => {
+  const option = objectFrom(value);
+  if (!option || !isString(option.name)) {
+    return false;
+  }
+
+  return (
+    isString(option.value) ||
+    typeof option.value === "number" ||
+    typeof option.value === "boolean" ||
+    (option.value === undefined &&
+      option.options !== undefined &&
+      Array.isArray(option.options) &&
+      option.options.every(isInteractionOption))
+  );
+};
 
 const isInteractionData = (value: unknown) => {
+  const data = objectFrom(value);
+  if (!data) {
+    return false;
+  }
+
+  return (
+    isString(data.name) &&
+    (data.options === undefined || (Array.isArray(data.options) && data.options.every(isInteractionOption))) &&
+    isInteractionResolved(data.resolved)
+  );
+};
+
+export const isDiscordInteraction = (
+  value: unknown,
+): value is APIPingInteraction | APIChatInputApplicationCommandInteraction => {
+  const interaction = objectFrom(value);
+  if (!interaction || typeof interaction.type !== "number") {
+    return false;
+  }
+
+  if (interaction.type === DISCORD_INTERACTION_PING) {
+    return true;
+  }
+
+  if (interaction.type !== DISCORD_INTERACTION_APPLICATION_COMMAND) {
+    return false;
+  }
+
+  return (
+    isOptionalString(interaction.application_id) &&
+    isOptionalString(interaction.channel_id) &&
+    isOptionalString(interaction.guild_id) &&
+    isOptionalString(interaction.token) &&
+    isInteractionData(interaction.data) &&
+    (interaction.user === undefined || isDiscordUser(interaction.user)) &&
+    (interaction.member === undefined || isDiscordMember(interaction.member))
+  );
+};
+
+const isDiscordMention = (value: unknown) => {
+  const mention = objectFrom(value);
+  return mention !== null && isString(mention.id) && isOptionalString(mention.username);
+};
+
+const isDiscordAttachment = (value: unknown) => {
+  const attachment = objectFrom(value);
+  return (
+    attachment !== null &&
+    isString(attachment.id) &&
+    isString(attachment.filename) &&
+    isOptionalString(attachment.content_type) &&
+    isOptionalString(attachment.url)
+  );
+};
+
+const isMessageReference = (value: unknown) => {
   if (value === undefined) {
     return true;
   }
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return (
-    isOptionalString(value.name) &&
-    (value.options === undefined || (Array.isArray(value.options) && value.options.every(isInteractionOption))) &&
-    isInteractionResolved(value.resolved)
-  );
+  const reference = objectFrom(value);
+  return reference !== null && isOptionalString(reference.channel_id) && isOptionalString(reference.message_id);
 };
-
-export const isDiscordInteraction = (value: unknown): value is DiscordInteraction => {
-  if (!isRecord(value) || typeof value.type !== "number") {
-    return false;
-  }
-
-  return (
-    isOptionalString(value.application_id) &&
-    isOptionalString(value.channel_id) &&
-    isOptionalString(value.guild_id) &&
-    isOptionalString(value.token) &&
-    isInteractionData(value.data) &&
-    (value.user === undefined || isDiscordUser(value.user)) &&
-    (value.member === undefined || isDiscordMember(value.member)) &&
-    isInteractionResolved(value.resolved)
-  );
-};
-
-const isDiscordMention = (value: unknown) =>
-  isRecord(value) && isString(value.id) && isOptionalString(value.username);
-
-const isDiscordAttachment = (value: unknown) =>
-  isRecord(value) &&
-  isString(value.id) &&
-  isString(value.filename) &&
-  isOptionalString(value.content_type) &&
-  isOptionalString(value.url);
-
-const isMessageReference = (value: unknown) =>
-  value === undefined ||
-  (isRecord(value) && isOptionalString(value.channel_id) && isOptionalString(value.message_id));
 
 const isDiscordMessageAtDepth = (value: unknown, depth: number): value is DiscordMessage => {
-  if (!isRecord(value) || !isString(value.id) || !isString(value.channel_id)) {
+  const message = objectFrom(value);
+  if (!message || !isString(message.id) || !isString(message.channel_id)) {
     return false;
   }
 
   return (
-    isOptionalString(value.guild_id) &&
-    isOptionalString(value.content) &&
-    (value.author === undefined || isDiscordUser(value.author)) &&
-    (value.member === undefined || isDiscordMember(value.member)) &&
-    (value.mentions === undefined || (Array.isArray(value.mentions) && value.mentions.every(isDiscordMention))) &&
-    hasOnlyStringValues(value.mention_roles) &&
-    (value.attachments === undefined ||
-      (Array.isArray(value.attachments) && value.attachments.every(isDiscordAttachment))) &&
-    isMessageReference(value.message_reference) &&
-    (value.referenced_message === undefined ||
-      value.referenced_message === null ||
-      (depth > 0 && isDiscordMessageAtDepth(value.referenced_message, depth - 1)))
+    isOptionalString(message.guild_id) &&
+    isOptionalString(message.content) &&
+    (message.author === undefined || isDiscordUser(message.author)) &&
+    (message.member === undefined || isDiscordMember(message.member)) &&
+    (message.mentions === undefined || (Array.isArray(message.mentions) && message.mentions.every(isDiscordMention))) &&
+    hasOnlyStringValues(message.mention_roles) &&
+    (message.attachments === undefined ||
+      (Array.isArray(message.attachments) && message.attachments.every(isDiscordAttachment))) &&
+    isMessageReference(message.message_reference) &&
+    (message.referenced_message === undefined ||
+      message.referenced_message === null ||
+      (depth > 0 && isDiscordMessageAtDepth(message.referenced_message, depth - 1)))
   );
 };
 
@@ -127,29 +181,30 @@ export const isDiscordMessage = (value: unknown): value is DiscordMessage =>
 const isOptionalJobString = (value: unknown) => value === undefined || isString(value);
 
 export const isAiJob = (value: unknown): value is AiJob => {
+  const job = objectFrom(value);
   if (
-    !isRecord(value) ||
-    (value.kind !== "thread_start" && value.kind !== "thread_reply" && value.kind !== "channel_reply")
+    !job ||
+    (job.kind !== "thread_start" && job.kind !== "thread_reply" && job.kind !== "channel_reply")
   ) {
     return false;
   }
 
   const common =
-    isString(value.channelId) &&
-    isString(value.prompt) &&
-    isOptionalJobString(value.botUserId) &&
-    isOptionalJobString(value.requesterUserId) &&
-    isOptionalJobString(value.requesterUsername) &&
-    isOptionalJobString(value.replyMessageId) &&
-    isOptionalJobString(value.replyChannelId);
+    isString(job.channelId) &&
+    isString(job.prompt) &&
+    isOptionalJobString(job.botUserId) &&
+    isOptionalJobString(job.requesterUserId) &&
+    isOptionalJobString(job.requesterUsername) &&
+    isOptionalJobString(job.replyMessageId) &&
+    isOptionalJobString(job.replyChannelId);
 
   if (!common) {
     return false;
   }
 
-  if (value.kind === "thread_start") {
-    return isString(value.messageId);
+  if (job.kind === "thread_start") {
+    return isString(job.messageId);
   }
 
-  return isOptionalJobString(value.messageId);
+  return isOptionalJobString(job.messageId);
 };

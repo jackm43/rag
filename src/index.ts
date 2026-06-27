@@ -6,15 +6,14 @@ import { DiscordGateway, getGatewayHealth, startGateway } from "./gateway";
 import { bearerTokenMatches, jsonResponse, verifyDiscordRequest } from "./http";
 import { errorMessage, logger } from "./logger";
 import { extractBotMentionPrompt, handleGatewayMessageCreate, processAiQueueMessage } from "./mention";
-import {
-  APPLICATION_COMMAND,
-  CHANNEL_MESSAGE_WITH_SOURCE,
-  PING,
-  type AiJob,
-  type Env,
-} from "./types";
+import type { AiJob, Env } from "./types";
 
 export { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
+
+const DISCORD_INTERACTION_PING = 1;
+const DISCORD_INTERACTION_APPLICATION_COMMAND = 2;
+const DISCORD_RESPONSE_PONG = 1;
+const DISCORD_RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE = 4;
 
 const DISCORD_INTERACTIONS_PATH = "/discord";
 const GATEWAY_START_PATH = "/gateway/start";
@@ -69,13 +68,13 @@ const handleInteractionRequest = async (
     return new Response("Bad request signature", { status: 401 });
   }
 
-  if (interaction.type === PING) {
-    return jsonResponse({ type: PING });
+  if (interaction.type === DISCORD_INTERACTION_PING) {
+    return jsonResponse({ type: DISCORD_RESPONSE_PONG });
   }
 
-  if (interaction.type !== APPLICATION_COMMAND) {
+  if (interaction.type !== DISCORD_INTERACTION_APPLICATION_COMMAND) {
     return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
+      type: DISCORD_RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE,
       data: { content: "Unsupported interaction." },
     });
   }
@@ -99,13 +98,13 @@ const handleInteractionRequest = async (
     }
 
     return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
+      type: DISCORD_RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE,
       data: { content: "Unknown command." },
     });
   } catch (error) {
     logger.error("interaction_failed", { error: errorMessage(error) });
     return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
+      type: DISCORD_RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE,
       data: { content: "Command failed. Try again." },
     });
   }

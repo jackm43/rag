@@ -1,19 +1,17 @@
+import type { APIChatInputApplicationCommandInteraction } from "discord-api-types/payloads/v10";
+
 import { editOriginalInteractionResponse } from "../discord";
 import bictureImageConfig from "../ai-config/bicture-image.json";
 import { jsonResponse } from "../http";
 import { errorMessage, logger } from "../logger";
-import {
-  CHANNEL_MESSAGE_WITH_SOURCE,
-  DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
-  type DiscordInteraction,
-  type Env,
-} from "../types";
-import { isRecord } from "../validation";
+import type { Env } from "../types";
 
 const BICTURE_FILENAME_PREFIX = "bicture";
 const DEFAULT_IMAGE_CONTENT_TYPE = "image/jpeg";
 const MAX_PROMPT_ECHO_LENGTH = 300;
 const DEFAULT_BICTURE_IMAGE_PROFILE = "standard";
+const DISCORD_RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE = 4;
+const DISCORD_RESPONSE_DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE = 5;
 
 type BictureImageProfile = {
   model: string;
@@ -32,9 +30,19 @@ if (!activeBictureProfile) {
   throw new Error("No valid /bicture image profile configured");
 }
 
-const bicturePrompt = (interaction: DiscordInteraction) => {
-  const value = interaction.data?.options?.find((option) => option.name === "prompt")?.value;
-  return typeof value === "string" ? value.trim() : "";
+const objectFrom = (value: unknown) =>
+  typeof value === "object" && value !== null ? value as Record<string, unknown> : null;
+
+const stringOptionValue = (
+  interaction: APIChatInputApplicationCommandInteraction,
+  name: string,
+) => {
+  const option = interaction.data?.options?.find((item) => item.name === name);
+  return option && "value" in option && typeof option.value === "string" ? option.value : "";
+};
+
+const bicturePrompt = (interaction: APIChatInputApplicationCommandInteraction) => {
+  return stringOptionValue(interaction, "prompt").trim();
 };
 
 const base64ToBytes = (value: string) => {
@@ -91,27 +99,32 @@ const extractImageString = (result: unknown) => {
   if (typeof result === "string" && result.length > 0) {
     return result;
   }
-  if (isRecord(result) && typeof result.image === "string" && result.image.length > 0) {
-    return result.image;
+
+  const payload = objectFrom(result);
+  if (!payload) {
+    return null;
   }
-  if (isRecord(result) && isRecord(result.result) && typeof result.result.image === "string" && result.result.image.length > 0) {
-    return result.result.image;
+
+  if (typeof payload.image === "string" && payload.image.length > 0) {
+    return payload.image;
   }
-  if (
-    isRecord(result) &&
-    isRecord(result.result) &&
-    isRecord(result.result.result) &&
-    typeof result.result.result.image === "string" &&
-    result.result.result.image.length > 0
-  ) {
-    return result.result.result.image;
+
+  const nestedPayload = objectFrom(payload.result);
+  if (nestedPayload && typeof nestedPayload.image === "string" && nestedPayload.image.length > 0) {
+    return nestedPayload.image;
   }
-  if (isRecord(result) && Array.isArray(result.data)) {
-    const firstImage = result.data[0];
-    if (isRecord(firstImage) && typeof firstImage.b64_json === "string" && firstImage.b64_json.length > 0) {
+
+  const doubleNestedPayload = objectFrom(nestedPayload?.result);
+  if (doubleNestedPayload && typeof doubleNestedPayload.image === "string" && doubleNestedPayload.image.length > 0) {
+    return doubleNestedPayload.image;
+  }
+
+  if (Array.isArray(payload.data)) {
+    const firstImage = objectFrom(payload.data[0]);
+    if (firstImage && typeof firstImage.b64_json === "string" && firstImage.b64_json.length > 0) {
       return firstImage.b64_json;
     }
-    if (isRecord(firstImage) && typeof firstImage.url === "string" && firstImage.url.length > 0) {
+    if (firstImage && typeof firstImage.url === "string" && firstImage.url.length > 0) {
       return firstImage.url;
     }
   }
@@ -175,7 +188,7 @@ const errorDetails = (error: unknown) => {
   };
 };
 
-const runBictureCommand = async (interaction: DiscordInteraction, env: Env) => {
+const runBictureCommand = async (interaction: APIChatInputApplicationCommandInteraction, env: Env) => {
   const prompt = bicturePrompt(interaction);
   if (!prompt) {
     return {
@@ -205,14 +218,14 @@ const runBictureCommand = async (interaction: DiscordInteraction, env: Env) => {
 };
 
 export const handleBictureCommand = (
-  interaction: DiscordInteraction,
+  interaction: APIChatInputApplicationCommandInteraction,
   env: Env,
   ctx: ExecutionContext,
 ) => {
   const prompt = bicturePrompt(interaction);
   if (!prompt) {
     return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
+      type: DISCORD_RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE,
       data: { content: "An image prompt is required.", allowed_mentions: { parse: [] } },
     });
   }
@@ -221,7 +234,7 @@ export const handleBictureCommand = (
   const interactionToken = interaction.token;
   if (!applicationId || !interactionToken) {
     return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
+      type: DISCORD_RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE,
       data: {
         content: "Could not defer /bicture without interaction credentials.",
         allowed_mentions: { parse: [] },
@@ -255,5 +268,5 @@ export const handleBictureCommand = (
     })(),
   );
 
-  return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
+  return jsonResponse({ type: DISCORD_RESPONSE_DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
 };
