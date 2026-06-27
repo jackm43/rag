@@ -6,7 +6,13 @@ import { isDiscordInteraction } from "./validation";
 
 const encoder = new TextEncoder();
 const DISCORD_SIGNATURE_MAX_SKEW_SECONDS = 5 * 60;
+const DISCORD_SIGNATURE_PATTERN = /^[0-9a-fA-F]{128}$/;
 const DISCORD_TIMESTAMP_PATTERN = /^\d+$/;
+const REQUIRED_DISCORD_SECURITY_HEADERS = [
+  "authorization",
+  "x-signature-ed25519",
+  "x-signature-timestamp",
+] as const;
 
 export const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -39,21 +45,49 @@ const isFreshDiscordTimestamp = (timestamp: string, nowMs = Date.now()) => {
   return Math.abs(nowMs - timestampMs) <= DISCORD_SIGNATURE_MAX_SKEW_SECONDS * 1000;
 };
 
-export const verifyDiscordRequest = async (
+const getRequiredDiscordSecurityHeaders = (request: Request) => {
+  const values = REQUIRED_DISCORD_SECURITY_HEADERS.map((header) => request.headers.get(header));
+  if (values.some((value) => value === null)) {
+    return null;
+  }
+
+  const [authorization, signature, timestamp] = values as [string, string, string];
+  return { authorization, signature, timestamp };
+};
+
+const hasWellFormedDiscordSecurityHeaders = (headers: {
+  authorization: string;
+  signature: string;
+  timestamp: string;
+}) => {
+  const separatorIndex = headers.authorization.indexOf(" ");
+  return (
+    separatorIndex > 0 &&
+    headers.authorization.slice(0, separatorIndex).toLowerCase() === "bearer" &&
+    headers.authorization.slice(separatorIndex + 1).length > 0 &&
+    DISCORD_SIGNATURE_PATTERN.test(headers.signature) &&
+    DISCORD_TIMESTAMP_PATTERN.test(headers.timestamp)
+  );
+};
+
+export const verifyAuthorizedDiscordRequest = async (
   request: Request,
   publicKey: string,
+  expectedToken: string,
 ): Promise<DiscordInteraction | null> => {
-  const signature = request.headers.get("x-signature-ed25519");
-  const timestamp = request.headers.get("x-signature-timestamp");
-  if (!signature || !timestamp) {
+  const headers = getRequiredDiscordSecurityHeaders(request);
+  if (!headers || !hasWellFormedDiscordSecurityHeaders(headers)) {
     return null;
   }
 
-  if (!isFreshDiscordTimestamp(timestamp)) {
+  if (
+    !bearerTokenMatches(headers.authorization, expectedToken) ||
+    !isFreshDiscordTimestamp(headers.timestamp)
+  ) {
     return null;
   }
 
-  const signatureBytes = hexToBytes(signature);
+  const signatureBytes = hexToBytes(headers.signature);
   const publicKeyBytes = hexToBytes(publicKey);
   if (!signatureBytes || signatureBytes.length !== 64 || !publicKeyBytes || publicKeyBytes.length !== 32) {
     return null;
@@ -63,7 +97,7 @@ export const verifyDiscordRequest = async (
   let isValid = false;
   try {
     isValid = nacl.sign.detached.verify(
-      encoder.encode(timestamp + rawBody),
+      encoder.encode(headers.timestamp + rawBody),
       signatureBytes,
       publicKeyBytes,
     );

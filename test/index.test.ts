@@ -19,6 +19,7 @@ const createSignedRequest = (
   secretKey: Uint8Array,
   path = "/discord",
   timestamp = String(Math.floor(Date.now() / 1000)),
+  authorization: string | null = "Bearer bot-token",
 ) => {
   const rawBody = JSON.stringify(payload);
   const message = encoder.encode(timestamp + rawBody);
@@ -29,6 +30,7 @@ const createSignedRequest = (
     method: "POST",
     headers: {
       "content-type": "application/json",
+      ...(authorization === null ? {} : { authorization }),
       "x-signature-ed25519": signatureHex,
       "x-signature-timestamp": timestamp,
     },
@@ -40,6 +42,7 @@ const createEnv = (publicKeyHex: string, overrides: Record<string, unknown> = {}
   ({
     DISCORD_PUBLIC_KEY: publicKeyHex,
     DISCORD_APPLICATION_ID: "application-id",
+    DISCORD_BOT_TOKEN: "bot-token",
     DB: {
       prepare: () => {
         throw new Error("DB should not be used in this test");
@@ -218,12 +221,56 @@ test("missing Discord signature headers return 401", async () => {
   const response = await worker.fetch(
     new Request("https://example.com/discord", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { authorization: "Bearer bot-token", "content-type": "application/json" },
       body: JSON.stringify({ type: 1 }),
     }),
     env,
     {} as never,
   );
+
+  assert.equal(response.status, 401);
+  assert.equal(await response.text(), "Bad request signature");
+});
+
+test("bare Discord interaction POST returns 401", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const request = new Request("https://example.com/discord", { method: "POST" });
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 401);
+  assert.equal(await response.text(), "Bad request signature");
+});
+
+test("missing Discord authorization header returns 401", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const request = createSignedRequest({ type: 1 }, keyPair.secretKey, "/discord", undefined, null);
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 401);
+  assert.equal(await response.text(), "Bad request signature");
+});
+
+test("malformed Discord authorization header returns 401", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const request = createSignedRequest({ type: 1 }, keyPair.secretKey, "/discord", undefined, "Bot bot-token");
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 401);
+  assert.equal(await response.text(), "Bad request signature");
+});
+
+test("wrong Discord authorization bearer token returns 401", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const request = createSignedRequest({ type: 1 }, keyPair.secretKey, "/discord", undefined, "Bearer wrong-token");
+
+  const response = await worker.fetch(request, env, {} as never);
 
   assert.equal(response.status, 401);
   assert.equal(await response.text(), "Bad request signature");
@@ -235,6 +282,7 @@ test("malformed signature header returns 401 without throwing", async () => {
   const request = new Request("https://example.com/discord", {
     method: "POST",
     headers: {
+      authorization: "Bearer bot-token",
       "x-signature-ed25519": "not-hex!",
       "x-signature-timestamp": "123",
     },
@@ -684,7 +732,7 @@ test("/rag interaction is deferred and edits the original response from waitUnti
     );
     assert.equal(discordCall.init?.method, "PATCH");
     assert.deepEqual(JSON.parse(String(discordCall.init?.body)), {
-      content: "<@2> has just ragged. Total: 7",
+      content: "<@2> just ragged. Total: 7",
       allowed_mentions: {
         parse: [],
         users: ["2"],

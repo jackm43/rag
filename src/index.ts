@@ -2,7 +2,7 @@ import { handleAskCommand } from "./commands/ask";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
 import { DiscordGateway, getGatewayHealth, startGateway } from "./gateway";
-import { bearerTokenMatches, jsonResponse, verifyDiscordRequest } from "./http";
+import { bearerTokenMatches, jsonResponse, verifyAuthorizedDiscordRequest } from "./http";
 import { errorMessage, logger } from "./logger";
 import { extractBotMentionPrompt, handleGatewayMessageCreate, processAiQueueMessage } from "./mention";
 import {
@@ -18,9 +18,6 @@ export { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
 const DISCORD_INTERACTIONS_PATH = "/discord";
 const GATEWAY_START_PATH = "/gateway/start";
 const GATEWAY_HEALTH_PATH = "/gateway/health";
-
-const hasRequiredHeaders = (request: Request, headers: string[]) =>
-  headers.every((header) => request.headers.has(header));
 
 const methodNotAllowed = (allowedMethod: string) =>
   new Response("Method not allowed", {
@@ -66,11 +63,11 @@ const handleInteractionRequest = async (
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> => {
-  if (!hasRequiredHeaders(request, ["x-signature-ed25519", "x-signature-timestamp"])) {
-    return new Response("Bad request signature", { status: 401 });
-  }
-
-  const interaction = await verifyDiscordRequest(request, env.DISCORD_PUBLIC_KEY);
+  const interaction = await verifyAuthorizedDiscordRequest(
+    request,
+    env.DISCORD_PUBLIC_KEY,
+    env.DISCORD_BOT_TOKEN,
+  );
   if (!interaction) {
     return new Response("Bad request signature", { status: 401 });
   }
