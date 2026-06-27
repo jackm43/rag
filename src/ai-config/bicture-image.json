@@ -1,0 +1,21 @@
+{
+  "activeProfile": "standard",
+  "profiles": {
+    "standard": {
+      "model": "xai/grok-imagine-image",
+      "gatewayId": "platy",
+      "responseFormat": "b64_json",
+      "aspectRatio": "auto",
+      "quality": "medium",
+      "resolution": "1k"
+    },
+    "quality": {
+      "model": "xai/grok-imagine-image-quality",
+      "gatewayId": "platy",
+      "responseFormat": "b64_json",
+      "aspectRatio": "auto",
+      "quality": "medium",
+      "resolution": "1k"
+    }
+  }
+}

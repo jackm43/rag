@@ -423,7 +423,7 @@ test("/bicture interaction is deferred and edits the original response with an i
   const waitUntilPromises: Promise<unknown>[] = [];
   const imageBytes = new Uint8Array([255, 216, 255, 217]);
   const imageBase64 = Buffer.from(imageBytes).toString("base64");
-  const aiRuns: Array<{ model: string; input: unknown }> = [];
+  const aiRuns: Array<{ model: string; input: unknown; options: unknown }> = [];
 
   globalThis.fetch = async (url, init) => {
     fetchCalls.push({ url: String(url), init });
@@ -433,9 +433,9 @@ test("/bicture interaction is deferred and edits the original response with an i
   try {
     const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
       AI: {
-        run: async (model: string, input: unknown) => {
-          aiRuns.push({ model, input });
-          return { image: imageBase64 };
+        run: async (model: string, input: unknown, options: unknown) => {
+          aiRuns.push({ model, input, options });
+          return { result: { image: `data:image/png;base64,${imageBase64}` } };
         },
       },
     });
@@ -465,8 +465,15 @@ test("/bicture interaction is deferred and edits the original response with an i
 
     assert.deepEqual(aiRuns, [
       {
-        model: "@cf/black-forest-labs/flux-1-schnell",
-        input: { prompt: "a tiny jpeg test image", steps: 4 },
+        model: "xai/grok-imagine-image",
+        input: {
+          prompt: "a tiny jpeg test image",
+          response_format: "b64_json",
+          aspect_ratio: "auto",
+          quality: "medium",
+          resolution: "1k",
+        },
+        options: { gateway: { id: "platy" } },
       },
     ]);
 
@@ -479,15 +486,15 @@ test("/bicture interaction is deferred and edits the original response with an i
 
     const form = editCall.init.body as FormData;
     assert.deepEqual(JSON.parse(String(form.get("payload_json"))), {
-      content: "Generated image for: a tiny jpeg test image",
+      content: "a tiny jpeg test image",
       allowed_mentions: { parse: [] },
-      attachments: [{ id: "0", filename: "bicture.jpg" }],
+      attachments: [{ id: "0", filename: "bicture.png" }],
     });
 
     const file = form.get("files[0]");
     assert.ok(file instanceof File);
-    assert.equal(file.name, "bicture.jpg");
-    assert.equal(file.type, "image/jpeg");
+    assert.equal(file.name, "bicture.png");
+    assert.equal(file.type, "image/png");
     assert.deepEqual(new Uint8Array(await file.arrayBuffer()), imageBytes);
   } finally {
     globalThis.fetch = originalFetch;
