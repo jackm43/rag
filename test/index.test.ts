@@ -416,6 +416,110 @@ test("/ask web search heuristic detects current research requests", () => {
   assert.equal(shouldUseAskWebSearch("What are the latest GPU prices?"), true);
 });
 
+test("/bicture interaction is deferred and edits the original response with an image attachment", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const waitUntilPromises: Promise<unknown>[] = [];
+  const imageBytes = new Uint8Array([255, 216, 255, 217]);
+  const imageBase64 = Buffer.from(imageBytes).toString("base64");
+  const aiRuns: Array<{ model: string; input: unknown }> = [];
+
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      AI: {
+        run: async (model: string, input: unknown) => {
+          aiRuns.push({ model, input });
+          return { image: imageBase64 };
+        },
+      },
+    });
+    const request = createSignedRequest(
+      {
+        application_id: "application-id",
+        token: "interaction-token",
+        type: 2,
+        data: {
+          name: "bicture",
+          options: [{ name: "prompt", value: "a tiny jpeg test image" }],
+        },
+        user: { id: "1", username: "alice" },
+      },
+      keyPair.secretKey,
+    );
+
+    const response = await worker.fetch(request, env, {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise);
+      },
+    } as never);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { type: 5 });
+    await Promise.all(waitUntilPromises);
+
+    assert.deepEqual(aiRuns, [
+      {
+        model: "@cf/black-forest-labs/flux-1-schnell",
+        input: { prompt: "a tiny jpeg test image", steps: 4 },
+      },
+    ]);
+
+    const editCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+    );
+    assert.ok(editCall);
+    assert.equal(editCall.init?.method, "PATCH");
+    assert.ok(editCall.init?.body instanceof FormData);
+
+    const form = editCall.init.body as FormData;
+    assert.deepEqual(JSON.parse(String(form.get("payload_json"))), {
+      content: "Generated image for: a tiny jpeg test image",
+      allowed_mentions: { parse: [] },
+      attachments: [{ id: "0", filename: "bicture.jpg" }],
+    });
+
+    const file = form.get("files[0]");
+    assert.ok(file instanceof File);
+    assert.equal(file.name, "bicture.jpg");
+    assert.equal(file.type, "image/jpeg");
+    assert.deepEqual(new Uint8Array(await file.arrayBuffer()), imageBytes);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("/bicture without a prompt returns an immediate validation message", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const request = createSignedRequest(
+    {
+      application_id: "application-id",
+      token: "interaction-token",
+      type: 2,
+      data: {
+        name: "bicture",
+        options: [{ name: "prompt", value: "   " }],
+      },
+      user: { id: "1", username: "alice" },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: { content: "An image prompt is required.", allowed_mentions: { parse: [] } },
+  });
+});
+
 test("/ask uses the web-search model for current research prompts", async () => {
   const keyPair = nacl.sign.keyPair();
   const originalFetch = globalThis.fetch;

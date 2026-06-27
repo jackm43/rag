@@ -1,4 +1,5 @@
 import { handleAskCommand } from "./commands/ask";
+import { handleBictureCommand } from "./commands/bicture";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
 import { DiscordGateway, getGatewayHealth, startGateway } from "./gateway";
@@ -91,6 +92,10 @@ const handleInteractionRequest = async (
 
     if (commandName === "ask") {
       return handleAskCommand(interaction, env, ctx);
+    }
+
+    if (commandName === "bicture") {
+      return handleBictureCommand(interaction, env, ctx);
     }
 
     return jsonResponse({

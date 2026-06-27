@@ -8,6 +8,7 @@ declare const process: {
 
 const applicationId = process.env.DISCORD_APPLICATION_ID;
 const botToken = process.env.DISCORD_BOT_TOKEN;
+const targetGuildId = "457689460096630794";
 
 if (!applicationId || !botToken) {
   throw new Error("DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN are required");
@@ -37,6 +38,17 @@ const commands = [
         .setMinLength(1)
         .setMaxLength(6000),
     ),
+  new SlashCommandBuilder()
+    .setName("bicture")
+    .setDescription("Generate an image with Cloudflare AI")
+    .addStringOption((option) =>
+      option
+        .setName("prompt")
+        .setDescription("Image prompt")
+        .setRequired(true)
+        .setMinLength(1)
+        .setMaxLength(2000),
+    ),
 ].map((command) => command.toJSON());
 
 const discordApiRequest = async (path: string, init: RequestInit = {}) => {
@@ -56,24 +68,14 @@ const discordApiRequest = async (path: string, init: RequestInit = {}) => {
   return response.json().catch(() => null);
 };
 
+// Keep commands guild-scoped. This bot is only intended for the target guild,
+// and global commands can appear as duplicates beside guild commands.
 await discordApiRequest(Routes.applicationCommands(applicationId), {
+  method: "PUT",
+  body: JSON.stringify([]),
+});
+
+await discordApiRequest(Routes.applicationGuildCommands(applicationId, targetGuildId), {
   method: "PUT",
   body: JSON.stringify(commands),
 });
-
-type DiscordGuild = {
-  id: string;
-};
-
-const guilds = await discordApiRequest("/users/@me/guilds");
-if (Array.isArray(guilds)) {
-  for (const guild of guilds) {
-    if (!guild || typeof (guild as DiscordGuild).id !== "string") {
-      continue;
-    }
-    await discordApiRequest(Routes.applicationGuildCommands(applicationId, guild.id), {
-      method: "PUT",
-      body: JSON.stringify([]),
-    });
-  }
-}
