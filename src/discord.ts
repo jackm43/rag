@@ -58,6 +58,17 @@ export type InteractionMessageData = {
     parse?: string[];
     users?: string[];
   };
+  attachments?: Array<{
+    id: string;
+    filename: string;
+    description?: string;
+  }>;
+};
+
+export type InteractionResponseFile = {
+  name: string;
+  contentType: string;
+  data: BlobPart;
 };
 
 export const postChannelMessage = async (env: Env, channelId: string, content: string) =>
@@ -202,13 +213,29 @@ export const editOriginalInteractionResponse = async (
   applicationId: string,
   interactionToken: string,
   data: InteractionMessageData,
+  files: InteractionResponseFile[] = [],
 ) => {
+  const body = files.length > 0
+    ? (() => {
+      const form = new FormData();
+      form.append("payload_json", JSON.stringify(data));
+      files.forEach((file, index) => {
+        form.append(
+          `files[${index}]`,
+          new Blob([file.data], { type: file.contentType }),
+          file.name,
+        );
+      });
+      return form;
+    })()
+    : JSON.stringify(data);
+
   await fetch(
     `${DISCORD_API_BASE_URL}/webhooks/${applicationId}/${interactionToken}/messages/@original`,
     {
       method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(data),
+      headers: files.length > 0 ? undefined : { "content-type": "application/json" },
+      body,
     },
   );
 };
