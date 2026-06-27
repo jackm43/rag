@@ -62,11 +62,8 @@ sequenceDiagram
     Worker->>Discord: Immediate JSON: deferred interaction response
     Worker->>DB: INSERT rag_events: target user, reporter, timestamp
     Worker->>DB: UPSERT rag_totals: increment target count
-    Worker->>DB: SELECT rag total, reporter count, recent roast text
-    Worker->>AI: Chat request: roast prompt, model, max_tokens, temperature
-    AI-->>Worker: Chat response: roast line + optional usage
-    Worker->>DB: INSERT OR IGNORE rag_roasts: generated line
-    Worker->>Discord: PATCH original response: mention, total, roast, allowed_mentions
+    Worker->>DB: SELECT rag total
+    Worker->>Discord: PATCH original response: mention, total, allowed_mentions
   else /ragboard
     Worker->>DB: SELECT top rag_totals: user, count, updated_at
     DB-->>Worker: Leaderboard rows
@@ -136,13 +133,10 @@ sequenceDiagram
 - Data path:
   - insert `rag_events` row
   - upsert/increment `rag_totals`
-  - read recent `rag_roasts`
-  - insert generated roast into `rag_roasts`
-- AI usage:
-  - one short roast line via the configured roast model
-  - fallback roast templates on timeout/error/duplicate
+  - read updated target total
+- AI usage: none
 - Response:
-  - target mention + updated rag total + roast line
+  - target mention + updated rag total
 
 ### `/ragboard`
 
@@ -189,7 +183,6 @@ AI config is checked into `src/ai-config`:
 
 - `discord-response.json` and `discord-response-system-prompt.md` control mention replies.
 - `ask-web-search.json` and `ask-web-search-system-prompt.md` control `/ask` research mode.
-- `rag-roast.json` and `rag-roast-system-prompt.md` control `/rag` roast generation.
 
 ## Local and Deploy Commands
 

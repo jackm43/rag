@@ -63,7 +63,6 @@ const createEnv = (publicKeyHex: string, overrides: Record<string, unknown> = {}
 
 // DB mock that supports prepare().run(), prepare().bind().run(), and first().
 const createDbMock = (options: {
-  roasts?: Array<{ roast_text: string }>;
   ragCount?: number;
   reportCount?: number;
   aiThread?: {
@@ -85,9 +84,6 @@ const createDbMock = (options: {
       sql,
       args,
       run: async () => {
-        if (sql.includes("rag_roasts")) {
-          return { results: options.roasts ?? [] };
-        }
         return { results: undefined };
       },
       first: async () => {
@@ -640,11 +636,6 @@ test("/rag interaction is deferred and edits the original response from waitUnti
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   globalThis.fetch = async (url, init) => {
     fetchCalls.push({ url: String(url), init });
-    if (String(url).includes("gateway.ai.cloudflare.com")) {
-      return Response.json({
-        choices: [{ message: { content: "Alice booked the scoreboard, and Bob keeps signing receipts." } }],
-      });
-    }
     return new Response("{}", { status: 200 });
   };
 
@@ -652,9 +643,7 @@ test("/rag interaction is deferred and edits the original response from waitUnti
 
   try {
     const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
-      CF_ACCOUNT_ID: "account-id",
-      CF_AIG_TOKEN: "gateway-token",
-      DB: createDbMock({ ragCount: 7, reportCount: 3 }),
+      DB: createDbMock({ ragCount: 7 }),
     });
     const request = createSignedRequest(
       {
@@ -695,12 +684,13 @@ test("/rag interaction is deferred and edits the original response from waitUnti
     );
     assert.equal(discordCall.init?.method, "PATCH");
     assert.deepEqual(JSON.parse(String(discordCall.init?.body)), {
-      content: "<@2> has just ragged. Total: 7\nAlice booked the scoreboard, and Bob keeps signing receipts.",
+      content: "<@2> has just ragged. Total: 7",
       allowed_mentions: {
         parse: [],
         users: ["2"],
       },
     });
+    assert.equal(fetchCalls.some((call) => call.url.includes("gateway.ai.cloudflare.com")), false);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -718,19 +708,12 @@ test("/rag interaction fetches target username when Discord does not include res
       assert.deepEqual(init?.headers, { authorization: "Bot bot-token" });
       return Response.json({ id: "2", username: "bob" });
     }
-    if (String(url).includes("gateway.ai.cloudflare.com")) {
-      return Response.json({
-        choices: [{ message: { content: "Alice rang the bell, and someone added another mark." } }],
-      });
-    }
     return new Response("{}", { status: 200 });
   };
 
   try {
     const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
       DISCORD_BOT_TOKEN: "bot-token",
-      CF_ACCOUNT_ID: "account-id",
-      CF_AIG_TOKEN: "gateway-token",
       DB: createDbMock({
         onBatch: (statements) => {
           batchStatements.push(...statements);
@@ -764,142 +747,6 @@ test("/rag interaction fetches target username when Discord does not include res
     assert.ok(fetchCalls.includes("https://discord.com/api/v10/users/2"));
     assert.deepEqual(batchStatements[0].args, ["2", "bob", "1", "alice"]);
     assert.deepEqual(batchStatements[1].args, ["2", "bob"]);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("/rag retries the roast generation when the model repeats a recent line", async () => {
-  const keyPair = nacl.sign.keyPair();
-  const originalFetch = globalThis.fetch;
-  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
-  const duplicateLine = "Bob did the exact same thing again today.";
-  const freshLine = "Bob set a brand new personal record for chaos.";
-  const aiResponses = [duplicateLine, freshLine];
-  let aiCalls = 0;
-  const waitUntilPromises: Promise<unknown>[] = [];
-  globalThis.fetch = async (url, init) => {
-    fetchCalls.push({ url: String(url), init });
-    if (String(url).includes("gateway.ai.cloudflare.com")) {
-      aiCalls += 1;
-      return Response.json({ choices: [{ message: { content: aiResponses.shift() ?? freshLine } }] });
-    }
-    return new Response("{}", { status: 200 });
-  };
-
-  try {
-    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
-      CF_ACCOUNT_ID: "account-id",
-      CF_AIG_TOKEN: "gateway-token",
-      DB: createDbMock({
-        ragCount: 4,
-        reportCount: 2,
-        roasts: [{ roast_text: duplicateLine }],
-      }),
-    });
-    const request = createSignedRequest(
-      {
-        application_id: "application-id",
-        token: "interaction-token",
-        type: 2,
-        data: {
-          name: "rag",
-          options: [{ name: "user", value: "2" }],
-          resolved: {
-            users: { "2": { id: "2", username: "bob", global_name: "Bob" } },
-          },
-        },
-        member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
-      },
-      keyPair.secretKey,
-    );
-
-    const response = await worker.fetch(request, env, {
-      waitUntil: (promise: Promise<unknown>) => {
-        waitUntilPromises.push(promise);
-      },
-    } as never);
-
-    assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { type: 5 });
-    await Promise.all(waitUntilPromises);
-
-    // The first generation duplicated a recent roast, so it must retry rather
-    // than fall back to a canned line.
-    assert.equal(aiCalls, 2);
-    const discordCall = fetchCalls.find(
-      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
-    );
-    assert.ok(discordCall);
-    const body = JSON.parse(String(discordCall.init?.body));
-    assert.equal(body.content, `<@2> has just ragged. Total: 4\n${freshLine}`);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("/rag uses the model's line over a canned fallback even when it repeats", async () => {
-  const keyPair = nacl.sign.keyPair();
-  const originalFetch = globalThis.fetch;
-  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
-  // Every attempt returns a line that already exists in recent roasts.
-  const repeatedLine = "Bob keeps speedrunning bad decisions while Alice keeps the receipts.";
-  let aiCalls = 0;
-  const waitUntilPromises: Promise<unknown>[] = [];
-  globalThis.fetch = async (url, init) => {
-    fetchCalls.push({ url: String(url), init });
-    if (String(url).includes("gateway.ai.cloudflare.com")) {
-      aiCalls += 1;
-      return Response.json({ choices: [{ message: { content: repeatedLine } }] });
-    }
-    return new Response("{}", { status: 200 });
-  };
-
-  try {
-    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
-      CF_ACCOUNT_ID: "account-id",
-      CF_AIG_TOKEN: "gateway-token",
-      DB: createDbMock({
-        ragCount: 9,
-        reportCount: 5,
-        roasts: [{ roast_text: repeatedLine }],
-      }),
-    });
-    const request = createSignedRequest(
-      {
-        application_id: "application-id",
-        token: "interaction-token",
-        type: 2,
-        data: {
-          name: "rag",
-          options: [{ name: "user", value: "2" }],
-          resolved: {
-            users: { "2": { id: "2", username: "bob", global_name: "Bob" } },
-          },
-        },
-        member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
-      },
-      keyPair.secretKey,
-    );
-
-    const response = await worker.fetch(request, env, {
-      waitUntil: (promise: Promise<unknown>) => {
-        waitUntilPromises.push(promise);
-      },
-    } as never);
-
-    assert.equal(response.status, 200);
-    await Promise.all(waitUntilPromises);
-
-    // It exhausts its attempts trying for something fresh, then still returns
-    // the model's line rather than a canned fallback.
-    assert.equal(aiCalls, 3);
-    const discordCall = fetchCalls.find(
-      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
-    );
-    assert.ok(discordCall);
-    const body = JSON.parse(String(discordCall.init?.body));
-    assert.equal(body.content, `<@2> has just ragged. Total: 9\n${repeatedLine}`);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1964,7 +1811,7 @@ test("queue handler excludes rag command bot output from thread history", async 
         {
           id: "m2",
           channel_id: "thread-id",
-          content: "<@2> has just ragged. Total: 32\nName One still farming reports.",
+          content: "<@2> has just ragged. Total: 32",
           author: { id: "bot-user-id", username: "ragbot", bot: true },
         },
         {

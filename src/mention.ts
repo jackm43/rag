@@ -270,7 +270,8 @@ const cleanHistoryContent = (content: string) =>
   stripMentionTokens(content).slice(0, MAX_HISTORY_ENTRY_LENGTH);
 
 const isRagCommandOutput = (content: string) =>
-  /\bhas just ragged\. Total: \d+\b/.test(content) || content.trimStart().startsWith("Ragboard\n");
+  /\bhas just ragged\.(?:\s+Total: \d+)?(?=\s|$)/.test(content) ||
+  content.trimStart().startsWith("Ragboard\n");
 
 type BuiltThreadConversation = {
   messages: ChatMessage[];

@@ -37,8 +37,6 @@ AI config lives in `src/ai-config`:
 - `discord-response-system-prompt.md`: mention response system prompt
 - `ask-web-search.json`: `/ask` web-search model, max output tokens, temperature, search turns, search context size, AI Gateway id used by the AI binding
 - `ask-web-search-system-prompt.md`: neutral `/ask` web research system prompt
-- `rag-roast.json`: `/rag` roast model, max tokens, temperature, AI Gateway id used by the AI binding
-- `rag-roast-system-prompt.md`: `/rag` roast system prompt
 
 ## Setup and Run Commands
 
