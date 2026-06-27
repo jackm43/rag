@@ -6,7 +6,7 @@
       "gatewayId": "platy",
       "responseFormat": "b64_json",
       "aspectRatio": "auto",
-      "quality": "medium",
+      "quality": "low",
       "resolution": "1k"
     },
     "quality": {
@@ -14,7 +14,7 @@
       "gatewayId": "platy",
       "responseFormat": "b64_json",
       "aspectRatio": "auto",
-      "quality": "medium",
+      "quality": "low",
       "resolution": "1k"
     }
   }

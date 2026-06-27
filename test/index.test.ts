@@ -470,7 +470,7 @@ test("/bicture interaction is deferred and edits the original response with an i
           prompt: "a tiny jpeg test image",
           response_format: "b64_json",
           aspect_ratio: "auto",
-          quality: "medium",
+          quality: "low",
           resolution: "1k",
         },
         options: { gateway: { id: "platy" } },
