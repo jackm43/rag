@@ -66,6 +66,7 @@ const createEnv = (publicKeyHex: string, overrides: Record<string, unknown> = {}
 const createDbMock = (options: {
   ragCount?: number;
   ragBan?: { expires_at: string } | null;
+  latestRagEventId?: number | null;
   reportCount?: number;
   aiThread?: {
     thread_id: string;
@@ -91,6 +92,11 @@ const createDbMock = (options: {
       first: async () => {
         if (sql.includes("FROM rag_command_bans")) {
           return options.ragBan ?? null;
+        }
+        if (sql.includes("FROM rag_events")) {
+          return options.latestRagEventId === undefined || options.latestRagEventId === null
+            ? null
+            : { id: options.latestRagEventId };
         }
         if (sql.includes("SELECT rag_count")) {
           return { rag_count: options.ragCount ?? 1 };
@@ -1039,6 +1045,121 @@ test("/raghammer records a temporary /rag ban for admin invokers", async () => {
   } finally {
     Date.now = originalNow;
   }
+});
+
+test("/undorag rejects non-admin invokers", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const request = createSignedRequest(
+    {
+      type: 2,
+      data: {
+        name: "undorag",
+        options: [{ name: "user", value: "2" }],
+      },
+      member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: {
+      content: "You are not allowed to use /undorag.",
+      allowed_mentions: { parse: [] },
+    },
+  });
+});
+
+test("/undorag removes the latest rag event and decrements the target total", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const batchStatements: Array<{ sql: string; args: unknown[] }> = [];
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    DB: createDbMock({
+      latestRagEventId: 123,
+      ragCount: 6,
+      onBatch: (statements) => {
+        batchStatements.push(...statements);
+      },
+    }),
+  });
+  const request = createSignedRequest(
+    {
+      type: 2,
+      data: {
+        name: "undorag",
+        options: [{ name: "user", value: "2" }],
+      },
+      member: {
+        nick: "Admin",
+        user: {
+          id: "116163000339136518",
+          username: "admin",
+          global_name: "Admin",
+        },
+      },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: {
+      content: "Undid the last rag for <@2>. Total: 6",
+      allowed_mentions: {
+        parse: [],
+        users: ["2"],
+      },
+    },
+  });
+  assert.equal(batchStatements.length, 2);
+  assert.deepEqual(batchStatements[0].args, [123]);
+  assert.deepEqual(batchStatements[1].args, ["2"]);
+});
+
+test("/undorag reports when the target has no rags to undo", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    DB: createDbMock({ latestRagEventId: null }),
+  });
+  const request = createSignedRequest(
+    {
+      type: 2,
+      data: {
+        name: "undorag",
+        options: [{ name: "user", value: "2" }],
+      },
+      member: {
+        nick: "Admin",
+        user: {
+          id: "102637456385392640",
+          username: "admin",
+          global_name: "Admin",
+        },
+      },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: {
+      content: "<@2> has no rags to undo.",
+      allowed_mentions: {
+        parse: [],
+        users: ["2"],
+      },
+    },
+  });
 });
 
 test("bot mention parser accepts prompts after the bot mention", () => {

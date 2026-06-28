@@ -45,6 +45,15 @@ const commands = [
         .setMaxLength(12),
     ),
   new SlashCommandBuilder()
+    .setName("undorag")
+    .setDescription("Undo the last rag recorded against a user")
+    .addUserOption((option) =>
+      option
+        .setName("user")
+        .setDescription("User whose last rag should be undone")
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
     .setName("ask")
     .setDescription("Start an AI conversation in a new thread")
     .addStringOption((option) =>
