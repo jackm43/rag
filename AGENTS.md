@@ -11,14 +11,18 @@ This project expects these environment variables:
 
 ## Current Runtime Shape
 
-- Cloudflare Worker entrypoint: `src/index.ts` (routing only)
+- Cloudflare Worker entrypoints:
+  - `src/index.ts` Discord routing, gateway controls, and AI response queue consumer
+  - `src/spend-worker.ts` AI spend aggregation queue consumer
 - Modules:
   - `src/http.ts` Discord signature verification, JSON responses, constant-time compare
   - `src/discord.ts` Discord REST helpers
   - `src/gateway.ts` `DiscordGateway` Durable Object (`DISCORD_GATEWAY` binding)
   - `src/mention.ts` mention handling, thread tracking, AI title generation, and AI queue consumer (thread conversation context)
   - `src/commands/ask.ts` `/ask` thread creation, normal AI response handling, and web-search research mode
+  - `src/commands/ragspend.ts` `/ragspend` personal AI spend lookup and `/ragspendboard` spend leaderboard
   - `src/ai.ts` model-agnostic chat calls through the Workers AI binding (`env.AI.run`) or AI Gateway REST. Workers AI `@cf/...` models use binding options (`gateway: { id }`), Unified Billing partner chat models use AI Gateway compat chat completions, and `/ask` research mode uses an OpenAI search model such as `openai/gpt-4o-search-preview` via AI Gateway.
+  - `src/spend.ts` raw spend event recording, AI Gateway log cost reconciliation, spend queue consumer helper, and dollar formatting
   - `src/config.ts` loads source-controlled AI config from `src/ai-config`
   - `src/logger.ts` structured logging
 - Discord interactions route: `POST /discord`
@@ -28,7 +32,9 @@ This project expects these environment variables:
 - AI model binding: `AI`
 - Queue bindings:
  - producer: `AI_JOBS` -> `ai-jobs`
+ - producer: `SPEND_JOBS` -> `ai-spend-jobs`
  - consumer: `ai-jobs` with dead-letter queue `ai-jobs-dlq`
+ - spend worker consumer: `ai-spend-jobs` with dead-letter queue `ai-spend-jobs-dlq`
 
 ## Runtime Configuration
 
@@ -37,6 +43,7 @@ AI config lives in `src/ai-config`:
 - `discord-response-system-prompt.md`: mention response system prompt
 - `ask-web-search.json`: `/ask` web-search model, max output tokens, temperature, search turns, search context size, AI Gateway id used by the AI binding
 - `ask-web-search-system-prompt.md`: neutral `/ask` web research system prompt
+- AI Gateway log cost is the source of truth for spend. AI requests include metadata for exact cost reconciliation.
 
 ## Setup and Run Commands
 
@@ -67,6 +74,8 @@ Create queues:
 ```bash
 op run --env-file=.env -- npx wrangler queues create ai-jobs
 op run --env-file=.env -- npx wrangler queues create ai-jobs-dlq
+op run --env-file=.env -- npx wrangler queues create ai-spend-jobs
+op run --env-file=.env -- npx wrangler queues create ai-spend-jobs-dlq
 ```
 
 Register slash commands:
@@ -79,6 +88,12 @@ Run local Worker dev server:
 
 ```bash
 op run --env-file=.env -- npm run dev
+```
+
+Run local Worker dev server with both worker configs:
+
+```bash
+op run --env-file=.env -- npm run dev:all
 ```
 
 Typecheck and test:

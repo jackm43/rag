@@ -2,6 +2,7 @@ import { handleAskCommand } from "./commands/ask";
 import { handleBictureCommand } from "./commands/bicture";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
+import { handleRagspendCommand, handleRagspendboardCommand } from "./commands/ragspend";
 import { handleRaghammerCommand } from "./commands/raghammer";
 import { handleRagunbanCommand } from "./commands/ragunban";
 import { handleUndoragCommand } from "./commands/undorag";
@@ -91,6 +92,14 @@ const handleInteractionRequest = async (
 
     if (commandName === "ragboard") {
       return handleRagboardCommand(env);
+    }
+
+    if (commandName === "ragspend") {
+      return handleRagspendCommand(interaction, env);
+    }
+
+    if (commandName === "ragspendboard") {
+      return handleRagspendboardCommand(env);
     }
 
     if (commandName === "raghammer") {

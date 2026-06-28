@@ -4,8 +4,11 @@
 interface __BaseEnv_Env {
 	DB: D1Database;
 	AI_JOBS: Queue;
+	SPEND_JOBS: Queue;
 	AI: Ai;
 	CF_ACCOUNT_ID: "314e7e015b5f4429c4e2da1e6ec93271";
+	CF_AIG_GATEWAY_ID: "platy";
+	CLOUDFLARE_API_TOKEN: string;
 	DISCORD_APPLICATION_ID: string;
 	DISCORD_PUBLIC_KEY: string;
 	DISCORD_BOT_TOKEN: string;

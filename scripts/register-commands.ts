@@ -28,6 +28,12 @@ const commands = [
     .setName("ragboard")
     .setDescription("Show the rag leaderboard"),
   new SlashCommandBuilder()
+    .setName("ragspend")
+    .setDescription("Show your AI ragbot spend"),
+  new SlashCommandBuilder()
+    .setName("ragspendboard")
+    .setDescription("Show the AI ragbot spend leaderboard"),
+  new SlashCommandBuilder()
     .setName("raghammer")
     .setDescription("Temporarily block a user from using /rag")
     .addUserOption((option) =>

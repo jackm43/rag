@@ -1,7 +1,9 @@
 import { editOriginalInteractionResponse } from "../discord";
 import bictureImageConfig from "../ai-config/bicture-image.json";
+import { buildAiGatewayMetadata } from "../ai-metadata";
 import { jsonResponse } from "../http";
 import { errorMessage, logger } from "../logger";
+import { createAiSpendSourceId, recordAiSpendEvent } from "../spend";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
   DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
@@ -145,7 +147,11 @@ const promptSummary = (prompt: string) =>
     ? `${prompt.slice(0, MAX_PROMPT_ECHO_LENGTH - 1)}...`
     : prompt;
 
-const runBictureImageGeneration = async (env: Env, prompt: string) => {
+const runBictureImageGeneration = async (
+  env: Env,
+  prompt: string,
+  metadata?: ReturnType<typeof buildAiGatewayMetadata>,
+) => {
   return env.AI.run(
     activeBictureProfile.model,
     {
@@ -155,7 +161,7 @@ const runBictureImageGeneration = async (env: Env, prompt: string) => {
       quality: activeBictureProfile.quality,
       resolution: activeBictureProfile.resolution,
     },
-    { gateway: { id: activeBictureProfile.gatewayId } } as never,
+    { gateway: { id: activeBictureProfile.gatewayId, metadata } } as never,
   );
 };
 
@@ -184,7 +190,33 @@ const runBictureCommand = async (interaction: DiscordInteraction, env: Env) => {
     };
   }
 
-  const result = await runBictureImageGeneration(env, prompt);
+  const requester = interaction.member?.user ?? interaction.user;
+  const requesterUsername =
+    interaction.member?.nick?.trim() ||
+    interaction.member?.user?.global_name?.trim() ||
+    interaction.user?.global_name?.trim() ||
+    interaction.member?.user?.username?.trim() ||
+    interaction.user?.username?.trim() ||
+    "user";
+  const spendSourceId = createAiSpendSourceId();
+  const result = await runBictureImageGeneration(
+    env,
+    prompt,
+    buildAiGatewayMetadata({
+      kind: "bicture",
+      requestId: spendSourceId,
+      requesterUserId: requester?.id,
+      channelId: interaction.channel_id,
+    }),
+  );
+  await recordAiSpendEvent(env, {
+    kind: "bicture",
+    requesterUserId: requester?.id,
+    requesterUsername,
+    model: activeBictureProfile.model,
+    unitCount: 1,
+    sourceId: spendSourceId,
+  });
   const imageFile = await imageFileFrom(result);
   const filename = filenameForContentType(imageFile.contentType);
 

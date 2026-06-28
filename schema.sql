@@ -62,3 +62,31 @@ CREATE TABLE IF NOT EXISTS rag_ai_threads (
 );
 
 CREATE INDEX IF NOT EXISTS idx_rag_ai_threads_parent ON rag_ai_threads(parent_channel_id);
+
+CREATE TABLE IF NOT EXISTS rag_ai_spend_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_id TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  requester_user_id TEXT,
+  requester_username TEXT,
+  model TEXT NOT NULL,
+  prompt_tokens INTEGER,
+  completion_tokens INTEGER,
+  total_tokens INTEGER,
+  unit_count INTEGER NOT NULL DEFAULT 0,
+  estimated_cost_micros INTEGER,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_ai_spend_events_user ON rag_ai_spend_events(requester_user_id);
+CREATE INDEX IF NOT EXISTS idx_rag_ai_spend_events_status ON rag_ai_spend_events(status);
+
+CREATE TABLE IF NOT EXISTS rag_ai_spend_totals (
+  requester_user_id TEXT PRIMARY KEY,
+  requester_username TEXT,
+  estimated_cost_micros INTEGER NOT NULL DEFAULT 0,
+  event_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

@@ -4,11 +4,11 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
 
 ## Tech Stack
 
-- Runtime: Cloudflare Workers (`src/index.ts`)
+- Runtime: Cloudflare Workers (`src/index.ts`, `src/spend-worker.ts`)
 - Language: TypeScript
 - Database: Cloudflare D1 (`DB`)
 - AI: Workers AI binding (`AI`) and AI Gateway REST; model and prompt config live in `src/ai-config` (`@cf/...` Workers AI models, Unified Billing partner chat models such as `grok/grok-4.3`, and web-search models such as `openai/gpt-4o-search-preview`)
-- Queue: Cloudflare Queues (`AI_JOBS`, `ai-jobs`, `ai-jobs-dlq`)
+- Queue: Cloudflare Queues (`AI_JOBS`, `ai-jobs`, `SPEND_JOBS`, `ai-spend-jobs`, dead-letter queues)
 - Stateful connection: Durable Objects (`DiscordGateway`)
 - Discord integration:
   - Interactions webhook
@@ -20,6 +20,8 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
 - Slash commands:
   - `/rag user:<discord-user>`
   - `/ragboard`
+  - `/ragspend`
+  - `/ragspendboard`
   - `/ask prompt:<question>`
 - HTTP endpoints:
   - `POST /discord` Discord interactions
@@ -68,6 +70,10 @@ sequenceDiagram
     Worker->>DB: SELECT top rag_totals: user, count, updated_at
     DB-->>Worker: Leaderboard rows
     Worker-->>Discord: JSON interaction response: leaderboard text
+  else /ragspend or /ragspendboard
+    Worker->>DB: SELECT precomputed rag_ai_spend_totals
+    DB-->>Worker: Personal spend or leaderboard rows
+    Worker-->>Discord: JSON interaction response: spend text
   else /ask
     Worker->>Discord: Immediate JSON: deferred interaction response
     Worker->>AI: Chat request: concise thread title
@@ -111,6 +117,8 @@ sequenceDiagram
   Consumer->>AI: Chat request: fresh user prompt
   AI-->>Consumer: Chat response: generated text + optional usage
   Consumer->>DB: INSERT rag_ai_interactions: prompt, response, model, status, token usage
+  Consumer->>Queue: Enqueue spend reconciliation job in ai-spend-jobs
+  Queue-->>Consumer: Spend worker reads AI Gateway logs and updates rag_ai_spend_totals from raw cost
   Consumer->>DiscordREST: POST channel message: sanitized content, allowed_mentions parse=[]
   DiscordREST-->>Consumer: Created message JSON or API error
   Consumer->>Queue: ack on success/terminal 4xx, retry on transient errors
@@ -146,6 +154,24 @@ sequenceDiagram
   - select top 10 from `rag_totals` ordered by `rag_count`
 - Response:
   - ranked leaderboard text or empty-state message
+
+### `/ragspend`
+
+- Entry: interaction command routed in `src/index.ts`
+- Handler: `src/commands/ragspend.ts`
+- Data path:
+  - reads the invoking user's precomputed total from `rag_ai_spend_totals`
+- Response:
+  - `<@user> has spent $x.xx`
+
+### `/ragspendboard`
+
+- Entry: interaction command routed in `src/index.ts`
+- Handler: `src/commands/ragspend.ts`
+- Data path:
+  - selects top 10 from `rag_ai_spend_totals` ordered by AI Gateway log cost
+- Response:
+  - ranked spend leaderboard text or empty-state message
 
 ### `/ask`
 
@@ -183,7 +209,12 @@ AI config is checked into `src/ai-config`:
 
 - `discord-response.json` and `discord-response-system-prompt.md` control mention replies.
 - `ask-web-search.json` and `ask-web-search-system-prompt.md` control `/ask` research mode.
+- AI spend uses raw AI Gateway log cost. Requests are tagged with metadata so the spend worker can reconcile the exact log entry.
 
 ## Local and Deploy Commands
 
 `./deploy.sh`
+
+`npm run dev:all` runs the Discord worker plus the spend worker locally.
+
+`npm run deploy` deploys both workers. Use `npm run deploy:main` or `npm run deploy:spend` to deploy one worker.

@@ -66,6 +66,10 @@
       {
         "binding": "AI_JOBS",
         "queue": "ai-jobs"
+      },
+      {
+        "binding": "SPEND_JOBS",
+        "queue": "ai-spend-jobs"
       }
     ],
     "consumers": [
