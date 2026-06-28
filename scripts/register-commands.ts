@@ -39,10 +39,19 @@ const commands = [
     .addStringOption((option) =>
       option
         .setName("timeframe")
-        .setDescription("Duration such as 5m, 1h, or 1d")
+        .setDescription("Examples: 5m, 1h, 1d. Use only m, h, or d.")
         .setRequired(true)
         .setMinLength(2)
         .setMaxLength(12),
+    ),
+  new SlashCommandBuilder()
+    .setName("ragunban")
+    .setDescription("Remove a user's current /rag ban")
+    .addUserOption((option) =>
+      option
+        .setName("user")
+        .setDescription("User to allow back onto /rag")
+        .setRequired(true),
     ),
   new SlashCommandBuilder()
     .setName("undorag")

@@ -1047,6 +1047,152 @@ test("/raghammer records a temporary /rag ban for admin invokers", async () => {
   }
 });
 
+test("/ragunban rejects non-admin invokers", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const request = createSignedRequest(
+    {
+      type: 2,
+      data: {
+        name: "ragunban",
+        options: [{ name: "user", value: "2" }],
+      },
+      member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: {
+      content: "You are not allowed to use /ragunban.",
+      allowed_mentions: { parse: [] },
+    },
+  });
+});
+
+test("/ragunban removes active rag bans for admin invokers", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalNow = Date.now;
+  Date.now = () => Date.parse("2026-06-28T00:00:00.000Z");
+  const preparedStatements: Array<{ sql: string; args: unknown[] }> = [];
+
+  try {
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      DB: {
+        batch: () => {
+          throw new Error("batch should not be used in this test");
+        },
+        prepare: (sql: string) => ({
+          bind: (...args: unknown[]) => ({
+            run: async () => {
+              preparedStatements.push({ sql, args });
+              return { meta: { changes: 2 } };
+            },
+            first: async () => null,
+            all: async () => ({ results: [], meta: {} }),
+          }),
+          run: async () => ({ meta: { changes: 0 } }),
+          first: async () => null,
+          all: async () => ({ results: [], meta: {} }),
+        }),
+      },
+    });
+    const request = createSignedRequest(
+      {
+        type: 2,
+        data: {
+          name: "ragunban",
+          options: [{ name: "user", value: "2" }],
+        },
+        member: {
+          nick: "Admin",
+          user: {
+            id: "114128631474683907",
+            username: "admin",
+            global_name: "Admin",
+          },
+        },
+      },
+      keyPair.secretKey,
+    );
+
+    const response = await worker.fetch(request, env, {} as never);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      type: 4,
+      data: {
+        content: "<@2> can use /rag again.",
+        allowed_mentions: {
+          parse: [],
+          users: ["2"],
+        },
+      },
+    });
+    assert.equal(preparedStatements.length, 1);
+    assert.deepEqual(preparedStatements[0].args, ["2", "2026-06-28T00:00:00.000Z"]);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("/ragunban reports when there is no active rag ban", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    DB: {
+      batch: () => {
+        throw new Error("batch should not be used in this test");
+      },
+      prepare: () => ({
+        bind: () => ({
+          run: async () => ({ meta: { changes: 0 } }),
+          first: async () => null,
+          all: async () => ({ results: [], meta: {} }),
+        }),
+        run: async () => ({ meta: { changes: 0 } }),
+        first: async () => null,
+        all: async () => ({ results: [], meta: {} }),
+      }),
+    },
+  });
+  const request = createSignedRequest(
+    {
+      type: 2,
+      data: {
+        name: "ragunban",
+        options: [{ name: "user", value: "2" }],
+      },
+      member: {
+        nick: "Admin",
+        user: {
+          id: "107426926909517824",
+          username: "admin",
+          global_name: "Admin",
+        },
+      },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: {
+      content: "<@2> does not have an active /rag ban.",
+      allowed_mentions: {
+        parse: [],
+        users: ["2"],
+      },
+    },
+  });
+});
+
 test("/undorag rejects non-admin invokers", async () => {
   const keyPair = nacl.sign.keyPair();
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));

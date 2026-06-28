@@ -3,6 +3,7 @@ import { handleBictureCommand } from "./commands/bicture";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
 import { handleRaghammerCommand } from "./commands/raghammer";
+import { handleRagunbanCommand } from "./commands/ragunban";
 import { handleUndoragCommand } from "./commands/undorag";
 import { DiscordGateway, getGatewayHealth, startGateway } from "./gateway";
 import { bearerTokenMatches, jsonResponse, verifyDiscordRequest } from "./http";
@@ -94,6 +95,10 @@ const handleInteractionRequest = async (
 
     if (commandName === "raghammer") {
       return handleRaghammerCommand(interaction, env);
+    }
+
+    if (commandName === "ragunban") {
+      return handleRagunbanCommand(interaction, env);
     }
 
     if (commandName === "undorag") {
