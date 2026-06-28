@@ -23,6 +23,8 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
   - `/ragspend`
   - `/ragspendboard`
   - `/ask prompt:<question>`
+  - `/bicture prompt:<image-prompt>`
+  - `/ragjam prompt:<music-prompt> lyrics:<optional-song-lyrics>`
 - HTTP endpoints:
   - `POST /discord` Discord interactions
   - `POST /gateway/start` start gateway connection (bot token auth)
@@ -56,7 +58,7 @@ sequenceDiagram
   participant DB as D1 DB
   participant AI as AI Gateway / Workers AI
 
-  User->>Discord: Slash command: /rag user, /ragboard, or /ask prompt
+  User->>Discord: Slash command: /rag user, /ragboard, /ask prompt, /bicture prompt, or /ragjam prompt optional lyrics
   Discord->>Worker: POST /discord with interaction JSON + Ed25519 headers
   Worker->>Worker: Verify signature and route interaction.data.name
 
@@ -84,6 +86,12 @@ sequenceDiagram
     AI-->>Worker: Chat response or cited research response
     Worker->>Discord: POST message inside created thread
     Worker->>Discord: PATCH original response with thread link
+  else /bicture or /ragjam
+    Worker->>Discord: Immediate JSON: deferred interaction response
+    Worker->>AI: Unified Billing model request via Workers AI binding with AI Gateway metadata
+    AI-->>Worker: Image data or audio URL
+    Worker->>DB: INSERT pending AI spend event for Gateway log reconciliation
+    Worker->>Discord: PATCH original response with generated media attachment or URL fallback
   end
 ```
 
@@ -186,6 +194,29 @@ sequenceDiagram
   - automatically uses neutral web-search research mode when the prompt asks for current information
   - edits the original interaction response with a thread link
 
+### `/bicture`
+
+- Entry: interaction command routed in `src/index.ts`
+- Handler: `src/commands/bicture.ts`
+- Behavior:
+  - defers the interaction
+  - sends the prompt to the configured Unified Billing image model through the Workers AI binding and AI Gateway
+  - records a pending AI spend event tagged with AI Gateway metadata
+  - edits the original interaction response with the generated image attachment
+
+### `/ragjam`
+
+- Entry: interaction command routed in `src/index.ts`
+- Handler: `src/commands/ragjam.ts`
+- Behavior:
+  - defers the interaction
+  - sends `prompt`, `is_instrumental: false`, optional `lyrics`, and `lyrics_optimizer` to `minimax/music-2.6`
+  - sets `lyrics_optimizer: true` when lyrics are omitted so the model auto-generates lyrics from the prompt
+  - uses the configured AI Gateway id on the Workers AI binding for Unified Billing and spend reconciliation metadata
+  - records a pending AI spend event tagged with AI Gateway metadata
+  - downloads the generated audio URL and edits the original interaction response with a Discord audio attachment
+  - falls back to the generated song URL if the audio cannot be attached
+
 ### Mention-based AI (not a slash command)
 
 - Entry:
@@ -209,6 +240,8 @@ AI config is checked into `src/ai-config`:
 
 - `discord-response.json` and `discord-response-system-prompt.md` control mention replies.
 - `ask-web-search.json` and `ask-web-search-system-prompt.md` control `/ask` research mode.
+- `bicture-image.json` controls `/bicture` image generation.
+- `ragjam-music.json` controls `/ragjam` music generation.
 - AI spend uses raw AI Gateway log cost. Requests are tagged with metadata so the spend worker can reconcile the exact log entry.
 
 ## Local and Deploy Commands
