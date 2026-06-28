@@ -5,10 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "dev:all": "wrangler dev -c wrangler.jsonc -c wrangler.spend.jsonc",
+    "deploy": "wrangler deploy && wrangler deploy -c wrangler.spend.jsonc",
+    "deploy:main": "wrangler deploy",
+    "deploy:spend": "wrangler deploy -c wrangler.spend.jsonc",
     "check": "tsc --noEmit",
     "test": "vitest run",
     "register:commands": "tsx scripts/register-commands.ts",
+    "backfill:spend": "tsx scripts/backfill-spend.ts",
     "d1:migrate:local": "wrangler d1 execute ragbot --local --file=./schema.sql",
     "d1:migrate:remote": "wrangler d1 execute ragbot --remote --file=./schema.sql"
   },

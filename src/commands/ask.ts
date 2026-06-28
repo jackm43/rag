@@ -3,6 +3,7 @@ import {
   runWebSearchCompletion,
   sanitizeAiText,
 } from "../ai";
+import { buildAiGatewayMetadata } from "../ai-metadata";
 import {
   appendSourceFallback,
   buildAskConversation,
@@ -20,6 +21,7 @@ import {
 import { jsonResponse } from "../http";
 import { errorMessage, logger } from "../logger";
 import { generateThreadTitle, recordAiThread } from "../mention";
+import { createAiSpendSourceId, recordAiSpendEvent } from "../spend";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
   DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
@@ -67,7 +69,11 @@ const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
   const config = await loadConfig(env);
   const requester = getInvoker(interaction);
   const requesterUsername = getInvokerDisplayName(interaction);
-  const title = await generateThreadTitle(env, config, prompt);
+  const title = await generateThreadTitle(env, config, prompt, {
+    kind: "ask_title",
+    requesterUserId: requester?.id,
+    requesterUsername,
+  });
   const targetChannelId = await resolveThreadParentChannelId(env, parentChannelId);
   const thread = await createThreadWithoutMessage(env, targetChannelId, title).catch((error) => {
     logger.warn("ask_thread_create_failed", {
@@ -91,8 +97,14 @@ const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
 
   const webSearch = shouldUseAskWebSearch(prompt);
   let responseText: string;
+  let spendModel = config.responseModel;
+  let promptTokens: number | null = null;
+  let completionTokens: number | null = null;
+  let totalTokens: number | null = null;
+  let spendSourceId: string | null = null;
   try {
     if (webSearch) {
+      spendSourceId = createAiSpendSourceId();
       const result = await runWebSearchCompletion(
         env,
         buildAskWebSearchInput(prompt, requesterUsername),
@@ -104,17 +116,50 @@ const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
           searchContextSize: config.askWebSearchContextSize,
           temperature: config.askWebSearchTemperature,
           gatewayId: config.askWebSearchGatewayId,
+          metadata: buildAiGatewayMetadata({
+            kind: "ask",
+            requestId: spendSourceId,
+            requesterUserId: requester?.id,
+            channelId: parentChannelId,
+          }),
         },
       );
       responseText = appendSourceFallback(result.content, result.sources);
+      spendModel = result.model;
+      promptTokens = result.usage?.promptTokens ?? null;
+      completionTokens = result.usage?.completionTokens ?? null;
+      totalTokens = result.usage?.totalTokens ?? null;
     } else {
+      spendSourceId = createAiSpendSourceId();
       const result = await runChatCompletion(
         env,
         config,
         buildAskConversation(config, [{ role: "user", content: `${requesterUsername}: ${prompt}` }]),
+        {
+          metadata: buildAiGatewayMetadata({
+            kind: "ask",
+            requestId: spendSourceId,
+            requesterUserId: requester?.id,
+            channelId: parentChannelId,
+          }),
+        },
       );
       responseText = result.content;
+      spendModel = result.model;
+      promptTokens = result.usage?.promptTokens ?? null;
+      completionTokens = result.usage?.completionTokens ?? null;
+      totalTokens = result.usage?.totalTokens ?? null;
     }
+    await recordAiSpendEvent(env, {
+      kind: "ask",
+      requesterUserId: requester?.id,
+      requesterUsername,
+      model: spendModel,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      sourceId: spendSourceId,
+    });
   } catch (error) {
     logger.error("ask_ai_response_failed", {
       error: errorMessage(error),

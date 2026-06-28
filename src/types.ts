@@ -61,6 +61,10 @@ export type AiChannelReplyJob = {
 
 export type AiJob = AiThreadStartJob | AiThreadReplyJob | AiChannelReplyJob;
 
+export type AiSpendJob = {
+  spendEventId: string;
+};
+
 export type AiThread = {
   threadId: string;
   parentChannelId?: string;
@@ -110,6 +114,9 @@ export type DiscordChannel = {
 
 export type Env = Cloudflare.Env & {
   AI_JOBS: Queue<AiJob>;
+  SPEND_JOBS?: Queue<AiSpendJob>;
+  CLOUDFLARE_API_TOKEN?: string;
+  CF_AIG_GATEWAY_ID?: string;
 };
 
 export const DISCORD_API_BASE_URL = "https://discord.com/api/v10";

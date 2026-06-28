@@ -11,6 +11,7 @@ import worker, {
 import { shouldUseAskWebSearch } from "../src/commands/ask.ts";
 import { fetchChannelMessages } from "../src/discord.ts";
 import { bearerTokenMatches, secretsMatch } from "../src/http.ts";
+import { processSpendQueueMessage } from "../src/spend.ts";
 
 const encoder = new TextEncoder();
 
@@ -473,19 +474,20 @@ test("/bicture interaction is deferred and edits the original response with an i
     assert.deepEqual(await response.json(), { type: 5 });
     await Promise.all(waitUntilPromises);
 
-    assert.deepEqual(aiRuns, [
-      {
-        model: "xai/grok-imagine-image",
-        input: {
-          prompt: "a tiny jpeg test image",
-          response_format: "b64_json",
-          aspect_ratio: "auto",
-          quality: "low",
-          resolution: "1k",
-        },
-        options: { gateway: { id: "platy" } },
-      },
-    ]);
+    assert.equal(aiRuns.length, 1);
+    assert.equal(aiRuns[0].model, "xai/grok-imagine-image");
+    assert.deepEqual(aiRuns[0].input, {
+      prompt: "a tiny jpeg test image",
+      response_format: "b64_json",
+      aspect_ratio: "auto",
+      quality: "low",
+      resolution: "1k",
+    });
+    const bictureOptions = aiRuns[0].options as { gateway: { id: string; metadata: Record<string, string> } };
+    assert.equal(bictureOptions.gateway.id, "platy");
+    assert.equal(bictureOptions.gateway.metadata.ragbot_kind, "bicture");
+    assert.equal(bictureOptions.gateway.metadata.discord_user_id, "1");
+    assert.match(bictureOptions.gateway.metadata.ragbot_request_id, /^aigreq:/);
 
     const editCall = fetchCalls.find(
       (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
@@ -648,6 +650,11 @@ test("/ask uses the web-search model for current research prompts", async () => 
       (webSearchCall.init?.headers as Record<string, string>)["cf-aig-authorization"],
       "Bearer gateway-token",
     );
+    const askMetadata = JSON.parse((webSearchCall.init?.headers as Record<string, string>)["cf-aig-metadata"]);
+    assert.equal(askMetadata.ragbot_kind, "ask");
+    assert.equal(askMetadata.discord_user_id, "1");
+    assert.equal(askMetadata.discord_channel_id, "channel-id");
+    assert.match(askMetadata.ragbot_request_id, /^aigreq:/);
     const webSearchBody = JSON.parse(String(webSearchCall.init?.body));
     assert.equal(webSearchBody.model, "openai/gpt-4o-search-preview");
     assert.match(webSearchBody.messages[0].content, /careful web research assistant/);
@@ -2675,6 +2682,10 @@ test("queue handler records partner AI Gateway usage", async () => {
     assert.deepEqual(gatewayBody.messages.slice(1), [{ role: "user", content: "user: Say hello" }]);
     assert.equal(gatewayBody.max_tokens, 1000);
     assert.equal(gatewayBody.temperature, 0.9);
+    const gatewayMetadata = JSON.parse((gatewayCall.init?.headers as Record<string, string>)["cf-aig-metadata"]);
+    assert.equal(gatewayMetadata.ragbot_kind, "thread_reply");
+    assert.equal(gatewayMetadata.discord_channel_id, "thread-id");
+    assert.match(gatewayMetadata.ragbot_request_id, /^aigreq:/);
 
     const postCall = fetchCalls.find(
       (call) => call.url === "https://discord.com/api/v10/channels/thread-id/messages",
@@ -2689,6 +2700,182 @@ test("queue handler records partner AI Gateway usage", async () => {
     assert.equal(insertedInteractions.length, 1);
     assert.ok(insertedInteractions[0].sql.includes("prompt_tokens"));
     assert.deepEqual(insertedInteractions[0].args.slice(-3), [10, 2, 12]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("/ragspend returns the invoker's precomputed spend", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    DB: {
+      prepare: (sql: string) => ({
+        bind: (...args: unknown[]) => ({
+          run: async () => ({ results: [] }),
+          first: async () => {
+            assert.match(sql, /FROM rag_ai_spend_totals/);
+            assert.deepEqual(args, ["user-id"]);
+            return {
+              requester_user_id: "user-id",
+              requester_username: "Alice",
+              estimated_cost_micros: 1234567,
+              event_count: 4,
+            };
+          },
+        }),
+        run: async () => ({ results: [] }),
+        first: async () => null,
+      }),
+    },
+  });
+
+  const response = await worker.fetch(
+    createSignedRequest(
+      {
+        type: 2,
+        data: { name: "ragspend" },
+        member: { nick: "Alice", user: { id: "user-id", username: "alice" } },
+      },
+      keyPair.secretKey,
+    ),
+    env,
+    {} as never,
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: {
+      content: "<@user-id> has spent $1.23",
+      allowed_mentions: { parse: [] },
+    },
+  });
+});
+
+test("/ragspendboard returns the precomputed spend leaderboard", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    DB: {
+      prepare: (sql: string) => ({
+        bind: () => {
+          throw new Error("bind should not be used");
+        },
+        run: async () => {
+          assert.match(sql, /FROM rag_ai_spend_totals/);
+          return {
+            results: [
+              {
+                requester_user_id: "2",
+                requester_username: "Bob",
+                estimated_cost_micros: 2500000,
+                event_count: 2,
+              },
+              {
+                requester_user_id: "1",
+                requester_username: "Alice",
+                estimated_cost_micros: 10000,
+                event_count: 1,
+              },
+            ],
+          };
+        },
+      }),
+    },
+  });
+
+  const response = await worker.fetch(
+    createSignedRequest({ type: 2, data: { name: "ragspendboard" } }, keyPair.secretKey),
+    env,
+    {} as never,
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: {
+      content: "Ragspendboard\n1. Bob - $2.50\n2. Alice - $0.01",
+      allowed_mentions: { parse: [] },
+    },
+  });
+});
+
+test("spend worker aggregates pending spend events", async () => {
+  const originalFetch = globalThis.fetch;
+  const updates: Array<{ sql: string; args: unknown[] }> = [];
+  globalThis.fetch = async (url, init) => {
+    assert.match(String(url), /ai-gateway\/gateways\/platy\/logs/);
+    assert.equal((init?.headers as Record<string, string>).authorization, "Bearer cf-token");
+    return Response.json({
+      result: [
+        {
+          metadata: JSON.stringify({ ragbot_request_id: "event-1" }),
+          cost: 0.033,
+        },
+      ],
+    });
+  };
+  try {
+    const env = createEnv("unused", {
+      CF_ACCOUNT_ID: "account-id",
+      CLOUDFLARE_API_TOKEN: "cf-token",
+      CF_AIG_GATEWAY_ID: "platy",
+      DB: {
+        batch: async (statements: Array<{ sql: string; args: unknown[] }>) => {
+          updates.push(...statements);
+        },
+        prepare: (sql: string) => {
+          const runner = (args: unknown[]) => ({
+            sql,
+            args,
+            first: async () => {
+              assert.match(sql, /FROM rag_ai_spend_events/);
+              assert.deepEqual(args, ["event-1"]);
+              return {
+                source_id: "event-1",
+                kind: "ask",
+                requester_user_id: "user-id",
+                requester_username: "Alice",
+                model: "grok/grok-4.3",
+                prompt_tokens: 1000,
+                completion_tokens: 2000,
+                total_tokens: 3000,
+                unit_count: 0,
+                estimated_cost_micros: null,
+                status: "pending",
+              };
+            },
+            run: async () => ({ results: [] }),
+          });
+          return {
+            ...runner([]),
+            bind: (...args: unknown[]) => runner(args),
+          };
+        },
+      },
+    });
+    let acked = false;
+
+    await processSpendQueueMessage(
+      {
+        body: { spendEventId: "event-1" },
+        attempts: 1,
+        ack: () => {
+          acked = true;
+        },
+        retry: () => {
+          throw new Error("message should not be retried");
+        },
+      } as never,
+      env,
+    );
+
+    assert.equal(acked, true);
+    assert.equal(updates.length, 2);
+    assert.match(updates[0].sql, /UPDATE rag_ai_spend_events/);
+    assert.deepEqual(updates[0].args, [33000, "event-1"]);
+    assert.match(updates[1].sql, /INSERT INTO rag_ai_spend_totals/);
+    assert.match(updates[1].sql, /SUM\(estimated_cost_micros\)/);
+    assert.deepEqual(updates[1].args, ["Alice", "user-id"]);
   } finally {
     globalThis.fetch = originalFetch;
   }

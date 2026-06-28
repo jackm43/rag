@@ -9,6 +9,8 @@ export type ChatMessage = {
 
 export type WebSearchContextSize = "low" | "medium" | "high";
 
+export type AiGatewayMetadata = Record<string, string | number | boolean>;
+
 const isWorkersAiModel = (model: string) => model.startsWith("@cf/");
 const isGatewayWorkersAiModel = (model: string) => model.startsWith("workers-ai/");
 const isBindingModel = (model: string) => isWorkersAiModel(model) || isGatewayWorkersAiModel(model);
@@ -82,6 +84,7 @@ const gatewayChatCompletions = async (
   messages: ChatMessage[],
   maxTokens: number,
   temperature: number,
+  metadata?: AiGatewayMetadata,
 ) => {
   if (!env.CF_ACCOUNT_ID || !env.CF_AIG_TOKEN) {
     throw new Error("CF_ACCOUNT_ID and CF_AIG_TOKEN are required for partner AI Gateway models");
@@ -94,6 +97,7 @@ const gatewayChatCompletions = async (
       headers: {
         "content-type": "application/json",
         "cf-aig-authorization": `Bearer ${env.CF_AIG_TOKEN}`,
+        ...(metadata ? { "cf-aig-metadata": JSON.stringify(metadata) } : {}),
       },
       body: JSON.stringify({
         model,
@@ -121,6 +125,7 @@ const gatewayWebSearchChatCompletions = async (
   instructions: string,
   maxTokens: number,
   searchContextSize: WebSearchContextSize,
+  metadata?: AiGatewayMetadata,
 ) => {
   if (!env.CF_ACCOUNT_ID || !env.CF_AIG_TOKEN) {
     throw new Error("CF_ACCOUNT_ID and CF_AIG_TOKEN are required for AI Gateway web-search models");
@@ -133,6 +138,7 @@ const gatewayWebSearchChatCompletions = async (
       headers: {
         "content-type": "application/json",
         "cf-aig-authorization": `Bearer ${env.CF_AIG_TOKEN}`,
+        ...(metadata ? { "cf-aig-metadata": JSON.stringify(metadata) } : {}),
       },
       body: JSON.stringify({
         model,
@@ -198,6 +204,7 @@ export type ChatOptions = {
   maxTokens?: number;
   temperature?: number;
   gatewayId?: string | null;
+  metadata?: AiGatewayMetadata;
 };
 
 export type ChatModelResult = {
@@ -223,6 +230,7 @@ export type WebSearchChatOptions = {
   maxTurns: number;
   searchContextSize: WebSearchContextSize;
   gatewayId?: string | null;
+  metadata?: AiGatewayMetadata;
 };
 
 export type WebSearchModelResult = ChatModelResult & {
@@ -246,11 +254,13 @@ export const runChatCompletion = async (
 
   const result =
     requestConfig.gatewayId && !isBindingModel(model)
-      ? await gatewayChatCompletions(env, requestConfig.gatewayId, model, messages, maxTokens, temperature)
+      ? await gatewayChatCompletions(env, requestConfig.gatewayId, model, messages, maxTokens, temperature, options.metadata)
       : await env.AI.run(
         bindingModel as never,
         input as never,
-        requestConfig.gatewayId ? ({ gateway: { id: requestConfig.gatewayId } } as never) : undefined,
+        requestConfig.gatewayId
+          ? ({ gateway: { id: requestConfig.gatewayId, metadata: options.metadata } } as never)
+          : undefined,
       );
   return {
     content: extractText(result),
@@ -371,6 +381,7 @@ export const runWebSearchCompletion = async (
       options.instructions,
       options.maxOutputTokens,
       options.searchContextSize,
+      options.metadata,
     )
     : await env.AI.run(options.model, request, undefined);
 

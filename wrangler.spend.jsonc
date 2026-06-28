@@ -1,0 +1,42 @@
+{
+  "name": "ragbot-spend-worker",
+  "main": "src/spend-worker.ts",
+  "compatibility_date": "2026-04-23",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "vars": {
+    "DISCORD_APPLICATION_ID": "1496842508251172895",
+    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
+    "CF_AIG_GATEWAY_ID": "platy"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ragbot",
+      "database_id": "5833b0bb-7806-483e-9015-32e209ce2fb0",
+      "preview_database_id": "5833b0bb-7806-483e-9015-32e209ce2fb0"
+    }
+  ],
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true
+    }
+  },
+  "queues": {
+    "consumers": [
+      {
+        "queue": "ai-spend-jobs",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "ai-spend-jobs-dlq"
+      }
+    ]
+  }
+}

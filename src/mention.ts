@@ -4,6 +4,7 @@ import {
   sanitizeAiText,
   type ChatMessage,
 } from "./ai";
+import { buildAiGatewayMetadata } from "./ai-metadata";
 import {
   appendSourceFallback,
   buildAskConversation,
@@ -19,6 +20,7 @@ import {
   postChannelMessage,
 } from "./discord";
 import { errorMessage, logger } from "./logger";
+import { createAiSpendSourceId, recordAiSpendEvent } from "./spend";
 import type { AiJob, AiThread, DiscordMessage, Env } from "./types";
 import { isAiJob } from "./validation";
 
@@ -185,9 +187,19 @@ export const sanitizeThreadTitle = (value: string) => {
 const fallbackThreadTitle = (prompt: string) =>
   sanitizeThreadTitle(prompt) ?? "Chat with Ragbot";
 
-export const generateThreadTitle = async (env: Env, config: BotConfig, prompt: string) => {
+export const generateThreadTitle = async (
+  env: Env,
+  config: BotConfig,
+  prompt: string,
+  spendAttribution?: {
+    kind: string;
+    requesterUserId?: string | null;
+    requesterUsername?: string | null;
+  },
+) => {
   const fallback = fallbackThreadTitle(prompt);
   try {
+    const spendSourceId = spendAttribution ? createAiSpendSourceId() : undefined;
     const result = await runChatCompletion(
       env,
       config,
@@ -199,8 +211,30 @@ export const generateThreadTitle = async (env: Env, config: BotConfig, prompt: s
         },
         { role: "user", content: prompt },
       ],
-      { maxTokens: 32, temperature: 0.2 },
+      {
+        maxTokens: 32,
+        temperature: 0.2,
+        metadata: spendAttribution
+          ? buildAiGatewayMetadata({
+            kind: spendAttribution.kind,
+            requestId: spendSourceId,
+            requesterUserId: spendAttribution.requesterUserId,
+          })
+          : undefined,
+      },
     );
+    if (spendAttribution) {
+      await recordAiSpendEvent(env, {
+        kind: spendAttribution.kind,
+        requesterUserId: spendAttribution.requesterUserId,
+        requesterUsername: spendAttribution.requesterUsername,
+        model: result.model,
+        promptTokens: result.usage?.promptTokens ?? null,
+        completionTokens: result.usage?.completionTokens ?? null,
+        totalTokens: result.usage?.totalTokens ?? null,
+        sourceId: spendSourceId,
+      });
+    }
     return sanitizeThreadTitle(result.content) ?? fallback;
   } catch (error) {
     logger.warn("thread_title_generation_failed", { error: errorMessage(error) });
@@ -471,6 +505,7 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
     const aiStartedAt = Date.now();
     if (job.kind === "thread_reply" && isAskThread(builtConversation.thread)) {
       if (shouldUseAskWebSearch(job.prompt)) {
+        const spendSourceId = createAiSpendSourceId();
         const result = await runWebSearchCompletion(
           env,
           buildAskWebSearchInput(
@@ -486,6 +521,13 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
             searchContextSize: config.askWebSearchContextSize,
             temperature: config.askWebSearchTemperature,
             gatewayId: config.askWebSearchGatewayId,
+            metadata: buildAiGatewayMetadata({
+              kind: job.kind,
+              requestId: spendSourceId,
+              requesterUserId: job.requesterUserId,
+              channelId: job.channelId,
+              messageId: job.messageId,
+            }),
           },
         );
         responseText = appendSourceFallback(result.content, result.sources);
@@ -493,25 +535,74 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
         promptTokens = result.usage?.promptTokens ?? null;
         completionTokens = result.usage?.completionTokens ?? null;
         totalTokens = result.usage?.totalTokens ?? null;
+        await recordAiSpendEvent(env, {
+          kind: job.kind,
+          requesterUserId: job.requesterUserId,
+          requesterUsername: job.requesterUsername,
+          model,
+          promptTokens,
+          completionTokens,
+          totalTokens,
+          sourceId: spendSourceId,
+        });
       } else {
+        const spendSourceId = createAiSpendSourceId();
         const result = await runChatCompletion(
           env,
           config,
           buildAskConversation(config, builtConversation.messages.filter((message) => message.role !== "system")),
+          {
+            metadata: buildAiGatewayMetadata({
+              kind: job.kind,
+              requestId: spendSourceId,
+              requesterUserId: job.requesterUserId,
+              channelId: job.channelId,
+              messageId: job.messageId,
+            }),
+          },
         );
         responseText = result.content;
         model = result.model;
         promptTokens = result.usage?.promptTokens ?? null;
         completionTokens = result.usage?.completionTokens ?? null;
         totalTokens = result.usage?.totalTokens ?? null;
+        await recordAiSpendEvent(env, {
+          kind: job.kind,
+          requesterUserId: job.requesterUserId,
+          requesterUsername: job.requesterUsername,
+          model,
+          promptTokens,
+          completionTokens,
+          totalTokens,
+          sourceId: spendSourceId,
+        });
       }
     } else {
-      const result = await runChatCompletion(env, config, builtConversation.messages);
+      const spendSourceId = createAiSpendSourceId();
+      const result = await runChatCompletion(env, config, builtConversation.messages, {
+        metadata: buildAiGatewayMetadata({
+          kind: job.kind,
+          requestId: spendSourceId,
+          requesterUserId: job.requesterUserId,
+          channelId: job.channelId,
+          messageId: job.messageId,
+        }),
+      });
       responseText = result.content;
       model = result.model;
       promptTokens = result.usage?.promptTokens ?? null;
       completionTokens = result.usage?.completionTokens ?? null;
       totalTokens = result.usage?.totalTokens ?? null;
+      await recordAiSpendEvent(env, {
+        kind: job.kind,
+        requesterUserId: job.requesterUserId,
+        requesterUsername: job.requesterUsername,
+        model,
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        sourceId: spendSourceId,
+      });
     }
     aiDurationMs = Date.now() - aiStartedAt;
 
@@ -521,7 +612,11 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
 
     let responseChannelId = job.channelId;
     if (job.kind === "thread_start") {
-      const title = await generateThreadTitle(env, config, job.prompt);
+      const title = await generateThreadTitle(env, config, job.prompt, {
+        kind: `${job.kind}_title`,
+        requesterUserId: job.requesterUserId,
+        requesterUsername: job.requesterUsername,
+      });
       const thread = await createThreadFromMessage(env, job.channelId, job.messageId, title);
       if (!thread) {
         await record("discord_thread_create_invalid", null);
