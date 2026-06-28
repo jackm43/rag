@@ -90,6 +90,25 @@ const commands = [
         .setMinLength(1)
         .setMaxLength(2000),
     ),
+  new SlashCommandBuilder()
+    .setName("ragjam")
+    .setDescription("Generate a song with Cloudflare AI")
+    .addStringOption((option) =>
+      option
+        .setName("prompt")
+        .setDescription("Music style, mood, and scenario")
+        .setRequired(true)
+        .setMinLength(1)
+        .setMaxLength(2000),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("lyrics")
+        .setDescription("Song lyrics; omit to auto-generate lyrics")
+        .setRequired(false)
+        .setMinLength(1)
+        .setMaxLength(3500),
+    ),
 ].map((command) => command.toJSON());
 
 const discordApiRequest = async (path: string, init: RequestInit = {}) => {

@@ -11,6 +11,7 @@ import {
   buildAskWebSearchInput,
   shouldUseAskWebSearch,
 } from "./ask-mode";
+import { processRagjamJob } from "./commands/ragjam";
 import { loadConfig, type BotConfig } from "./config";
 import {
   createThreadFromMessage,
@@ -21,7 +22,7 @@ import {
 } from "./discord";
 import { errorMessage, logger } from "./logger";
 import { createAiSpendSourceId, recordAiSpendEvent } from "./spend";
-import type { AiJob, AiThread, DiscordMessage, Env } from "./types";
+import type { AiChatJob, AiJob, AiThread, DiscordMessage, Env } from "./types";
 import { isAiJob } from "./validation";
 
 const MAX_DISCORD_MESSAGE_LENGTH = 1900;
@@ -109,7 +110,7 @@ const getMessageAuthorDisplayName = (message: DiscordMessage) =>
   message.author?.username?.trim() ||
   "user";
 
-const getConversationAuthorDisplayName = (message: DiscordMessage, job: AiJob) =>
+const getConversationAuthorDisplayName = (message: DiscordMessage, job: AiChatJob) =>
   message.author?.id && message.author.id === job.requesterUserId && job.requesterUsername
     ? job.requesterUsername
     : getMessageAuthorDisplayName(message);
@@ -317,7 +318,7 @@ const isAskThread = (thread: AiThread | null) => Boolean(thread && !thread.sourc
 const buildThreadConversationMessages = async (
   env: Env,
   config: BotConfig,
-  job: AiJob,
+  job: AiChatJob,
 ): Promise<BuiltThreadConversation> => {
   let thread: AiThread | null = null;
   const messages: ChatMessage[] = [];
@@ -381,7 +382,7 @@ const buildThreadConversationMessages = async (
 const buildNormalThreadConversation = async (
   env: Env,
   config: BotConfig,
-  job: AiJob,
+  job: AiChatJob,
 ): Promise<BuiltThreadConversation> => {
   const { messages, thread } = await buildThreadConversationMessages(env, config, job);
   return {
@@ -396,12 +397,12 @@ const buildNormalThreadConversation = async (
   };
 };
 
-const buildConversation = async (env: Env, config: BotConfig, job: AiJob): Promise<ChatMessage[]> =>
+const buildConversation = async (env: Env, config: BotConfig, job: AiChatJob): Promise<ChatMessage[]> =>
   (await buildNormalThreadConversation(env, config, job)).messages;
 
 const recordAiInteraction = async (
   env: Env,
-  job: AiJob,
+  job: AiChatJob,
   model: string,
   totalDurationMs: number,
   status: string,
@@ -468,6 +469,12 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
   const job = message.body;
   if (!isAiJob(job)) {
     logger.warn("ai_job_invalid");
+    message.ack();
+    return;
+  }
+
+  if (job.kind === "ragjam") {
+    await processRagjamJob(job, env);
     message.ack();
     return;
   }

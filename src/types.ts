@@ -59,7 +59,20 @@ export type AiChannelReplyJob = {
   replyChannelId?: string;
 };
 
-export type AiJob = AiThreadStartJob | AiThreadReplyJob | AiChannelReplyJob;
+export type RagjamJob = {
+  kind: "ragjam";
+  applicationId: string;
+  interactionToken: string;
+  channelId?: string;
+  requesterUserId?: string;
+  requesterUsername?: string;
+  prompt: string;
+  lyrics?: string;
+};
+
+export type AiChatJob = AiThreadStartJob | AiThreadReplyJob | AiChannelReplyJob;
+
+export type AiJob = AiChatJob | RagjamJob;
 
 export type AiSpendJob = {
   spendEventId: string;

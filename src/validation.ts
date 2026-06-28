@@ -129,9 +129,26 @@ const isOptionalJobString = (value: unknown) => value === undefined || isString(
 export const isAiJob = (value: unknown): value is AiJob => {
   if (
     !isRecord(value) ||
-    (value.kind !== "thread_start" && value.kind !== "thread_reply" && value.kind !== "channel_reply")
+    (
+      value.kind !== "thread_start" &&
+      value.kind !== "thread_reply" &&
+      value.kind !== "channel_reply" &&
+      value.kind !== "ragjam"
+    )
   ) {
     return false;
+  }
+
+  if (value.kind === "ragjam") {
+    return (
+      isString(value.applicationId) &&
+      isString(value.interactionToken) &&
+      isString(value.prompt) &&
+      isOptionalJobString(value.channelId) &&
+      isOptionalJobString(value.requesterUserId) &&
+      isOptionalJobString(value.requesterUsername) &&
+      isOptionalJobString(value.lyrics)
+    );
   }
 
   const common =

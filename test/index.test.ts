@@ -539,6 +539,294 @@ test("/bicture without a prompt returns an immediate validation message", async 
   });
 });
 
+test("/ragjam interaction is deferred and enqueues music generation", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const enqueuedJobs: unknown[] = [];
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    AI_JOBS: {
+      send: async (job: unknown) => {
+        enqueuedJobs.push(job);
+      },
+    },
+  });
+  const request = createSignedRequest(
+    {
+      application_id: "application-id",
+      channel_id: "channel-id",
+      token: "interaction-token",
+      type: 2,
+      data: {
+        name: "ragjam",
+        options: [
+          { name: "prompt", value: "A warm acoustic folk ballad with fingerpicked guitar and gentle vocals" },
+          { name: "lyrics", value: "Walking down a dusty road\nWith the sunset painting gold" },
+        ],
+      },
+      user: { id: "1", username: "alice" },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { type: 5 });
+  assert.deepEqual(enqueuedJobs, [
+    {
+      kind: "ragjam",
+      applicationId: "application-id",
+      interactionToken: "interaction-token",
+      channelId: "channel-id",
+      requesterUserId: "1",
+      requesterUsername: "alice",
+      prompt: "A warm acoustic folk ballad with fingerpicked guitar and gentle vocals",
+      lyrics: "Walking down a dusty road\nWith the sunset painting gold",
+    },
+  ]);
+});
+
+test("queue handler edits /ragjam response with an audio attachment", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const audioBytes = new Uint8Array([73, 68, 51, 4]);
+  const aiRuns: Array<{ model: string; input: unknown; options: unknown }> = [];
+  let acked = false;
+
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url) === "https://example.com/generated-song.mp3") {
+      return new Response(audioBytes, {
+        status: 200,
+        headers: {
+          "content-type": "audio/mpeg",
+          "content-length": String(audioBytes.byteLength),
+        },
+      });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv("unused", {
+      AI: {
+        run: async (model: string, input: unknown, options: unknown) => {
+          aiRuns.push({ model, input, options });
+          return { result: { audio: "https://example.com/generated-song.mp3" } };
+        },
+      },
+    });
+    await worker.queue({
+      messages: [
+        {
+          body: {
+            kind: "ragjam",
+            applicationId: "application-id",
+            interactionToken: "interaction-token",
+            channelId: "channel-id",
+            requesterUserId: "1",
+            requesterUsername: "alice",
+            prompt: "A warm acoustic folk ballad with fingerpicked guitar and gentle vocals",
+            lyrics: "Walking down a dusty road\nWith the sunset painting gold",
+          },
+          ack: () => {
+            acked = true;
+          },
+        },
+      ],
+    } as never, env);
+
+    assert.equal(aiRuns.length, 1);
+    assert.equal(aiRuns[0].model, "minimax/music-2.6");
+    assert.deepEqual(aiRuns[0].input, {
+      prompt: "A warm acoustic folk ballad with fingerpicked guitar and gentle vocals",
+      is_instrumental: false,
+      lyrics: "Walking down a dusty road\nWith the sunset painting gold",
+      lyrics_optimizer: false,
+    });
+    const ragjamOptions = aiRuns[0].options as { gateway: { id: string; metadata: Record<string, string> } };
+    assert.equal(ragjamOptions.gateway.id, "platy");
+    assert.equal(ragjamOptions.gateway.metadata.ragbot_kind, "ragjam");
+    assert.equal(ragjamOptions.gateway.metadata.discord_user_id, "1");
+    assert.equal(ragjamOptions.gateway.metadata.discord_channel_id, "channel-id");
+    assert.match(ragjamOptions.gateway.metadata.ragbot_request_id, /^aigreq:/);
+
+    const editCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+    );
+    assert.ok(editCall);
+    assert.equal(editCall.init?.method, "PATCH");
+    assert.ok(editCall.init?.body instanceof FormData);
+
+    const form = editCall.init.body as FormData;
+    assert.deepEqual(JSON.parse(String(form.get("payload_json"))), {
+      content: "Prompt: A warm acoustic folk ballad with fingerpicked guitar and gentle vocals",
+      allowed_mentions: { parse: [] },
+      attachments: [{ id: "0", filename: "ragjam.mp3" }],
+    });
+
+    const file = form.get("files[0]");
+    assert.ok(file instanceof File);
+    assert.equal(file.name, "ragjam.mp3");
+    assert.equal(file.type, "audio/mpeg");
+    assert.deepEqual(new Uint8Array(await file.arrayBuffer()), audioBytes);
+    assert.equal(acked, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("queue handler preserves long /ragjam prompt text up to the Discord message limit", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const audioBytes = new Uint8Array([73, 68, 51, 4]);
+  const longPrompt = `A warm acoustic folk ballad ${"with fingerpicked guitar ".repeat(30)}`.slice(0, 900);
+
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url) === "https://example.com/generated-song.mp3") {
+      return new Response(audioBytes, {
+        status: 200,
+        headers: {
+          "content-type": "audio/mpeg",
+          "content-length": String(audioBytes.byteLength),
+        },
+      });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv("unused", {
+      AI: {
+        run: async () => ({ result: { audio: "https://example.com/generated-song.mp3" } }),
+      },
+    });
+    await worker.queue({
+      messages: [
+        {
+          body: {
+            kind: "ragjam",
+            applicationId: "application-id",
+            interactionToken: "interaction-token",
+            prompt: longPrompt,
+          },
+          ack: () => undefined,
+        },
+      ],
+    } as never, env);
+
+    const editCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+    );
+    assert.ok(editCall);
+    assert.ok(editCall.init?.body instanceof FormData);
+
+    const form = editCall.init.body as FormData;
+    assert.deepEqual(JSON.parse(String(form.get("payload_json"))).content, `Prompt: ${longPrompt}`);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("/ragjam without lyrics enqueues auto-generated lyrics job", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const enqueuedJobs: unknown[] = [];
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    AI_JOBS: {
+      send: async (job: unknown) => {
+        enqueuedJobs.push(job);
+      },
+    },
+  });
+  const request = createSignedRequest(
+    {
+      application_id: "application-id",
+      channel_id: "channel-id",
+      token: "interaction-token",
+      type: 2,
+      data: {
+        name: "ragjam",
+        options: [{ name: "prompt", value: "A warm acoustic folk ballad" }],
+      },
+      user: { id: "1", username: "alice" },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { type: 5 });
+  assert.deepEqual(enqueuedJobs, [
+    {
+      kind: "ragjam",
+      applicationId: "application-id",
+      interactionToken: "interaction-token",
+      channelId: "channel-id",
+      requesterUserId: "1",
+      requesterUsername: "alice",
+      prompt: "A warm acoustic folk ballad",
+    },
+  ]);
+});
+
+test("queue handler lets /ragjam auto-generate lyrics when omitted", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const audioBytes = new Uint8Array([73, 68, 51, 4]);
+  const aiRuns: Array<{ model: string; input: unknown; options: unknown }> = [];
+
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url) === "https://example.com/generated-song.mp3") {
+      return new Response(audioBytes, {
+        status: 200,
+        headers: {
+          "content-type": "audio/mpeg",
+          "content-length": String(audioBytes.byteLength),
+        },
+      });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv("unused", {
+      AI: {
+        run: async (model: string, input: unknown, options: unknown) => {
+          aiRuns.push({ model, input, options });
+          return { result: { audio: "https://example.com/generated-song.mp3" } };
+        },
+      },
+    });
+    await worker.queue({
+      messages: [
+        {
+          body: {
+            kind: "ragjam",
+            applicationId: "application-id",
+            interactionToken: "interaction-token",
+            channelId: "channel-id",
+            requesterUserId: "1",
+            requesterUsername: "alice",
+            prompt: "A warm acoustic folk ballad",
+          },
+          ack: () => undefined,
+        },
+      ],
+    } as never, env);
+
+    assert.equal(aiRuns.length, 1);
+    assert.deepEqual(aiRuns[0].input, {
+      prompt: "A warm acoustic folk ballad",
+      is_instrumental: false,
+      lyrics_optimizer: true,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("/ask uses the web-search model for current research prompts", async () => {
   const keyPair = nacl.sign.keyPair();
   const originalFetch = globalThis.fetch;
