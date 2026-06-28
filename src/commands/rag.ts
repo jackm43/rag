@@ -1,8 +1,4 @@
-import {
-  editOriginalInteractionResponse,
-  fetchUsername,
-  type InteractionMessageData,
-} from "../discord";
+import { editOriginalInteractionResponse, type InteractionMessageData } from "../discord";
 import { jsonResponse } from "../http";
 import { errorMessage, logger } from "../logger";
 import {
@@ -11,26 +7,29 @@ import {
   type DiscordInteraction,
   type Env,
 } from "../types";
+import { getInvoker, getOptionValue, getTargetUsername } from "./rag-utils";
 
 type RagRow = {
   rag_count: number;
 };
 
-const getInvoker = (interaction: DiscordInteraction) => {
-  const user = interaction.member?.user ?? interaction.user;
-  if (!user) {
-    throw new Error("missing_invoker");
-  }
-  return user;
+type RagBanRow = {
+  expires_at: string;
 };
 
-const getTargetUsername = async (interaction: DiscordInteraction, env: Env, targetId: string) => {
-  const targetUser =
-    interaction.data?.resolved?.users?.[targetId] ?? interaction.resolved?.users?.[targetId];
-  if (targetUser?.username) {
-    return targetUser.username;
+const activeRagBanForUser = async (env: Env, userId: string, now: Date) =>
+  env.DB.prepare(
+    "SELECT expires_at FROM rag_command_bans WHERE banned_user_id = ? AND expires_at > ? ORDER BY expires_at DESC LIMIT 1",
+  )
+    .bind(userId, now.toISOString())
+    .first<RagBanRow>();
+
+const formatBanExpiry = (expiresAt: string) => {
+  const timestamp = Date.parse(expiresAt);
+  if (Number.isNaN(timestamp)) {
+    return expiresAt;
   }
-  return fetchUsername(env, targetId);
+  return `<t:${Math.floor(timestamp / 1000)}:R>`;
 };
 
 const buildRagCommandResponseData = async (
@@ -38,11 +37,19 @@ const buildRagCommandResponseData = async (
   env: Env,
 ): Promise<InteractionMessageData> => {
   const invoker = getInvoker(interaction);
-  const targetIdValue = interaction.data?.options?.find((opt) => opt.name === "user")?.value;
+  const targetIdValue = getOptionValue(interaction, "user");
   const targetId = targetIdValue ? String(targetIdValue) : "";
 
   if (!targetId) {
     return { content: "A user mention is required." };
+  }
+
+  const activeBan = await activeRagBanForUser(env, invoker.id, new Date());
+  if (activeBan) {
+    return {
+      content: `You cannot use /rag until ${formatBanExpiry(activeBan.expires_at)}.`,
+      allowed_mentions: { parse: [] },
+    };
   }
 
   const targetUsername = await getTargetUsername(interaction, env, targetId);

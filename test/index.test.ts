@@ -65,6 +65,8 @@ const createEnv = (publicKeyHex: string, overrides: Record<string, unknown> = {}
 // DB mock that supports prepare().run(), prepare().bind().run(), and first().
 const createDbMock = (options: {
   ragCount?: number;
+  ragBan?: { expires_at: string } | null;
+  latestRagEventId?: number | null;
   reportCount?: number;
   aiThread?: {
     thread_id: string;
@@ -88,6 +90,14 @@ const createDbMock = (options: {
         return { results: undefined };
       },
       first: async () => {
+        if (sql.includes("FROM rag_command_bans")) {
+          return options.ragBan ?? null;
+        }
+        if (sql.includes("FROM rag_events")) {
+          return options.latestRagEventId === undefined || options.latestRagEventId === null
+            ? null
+            : { id: options.latestRagEventId };
+        }
         if (sql.includes("SELECT rag_count")) {
           return { rag_count: options.ragCount ?? 1 };
         }
@@ -873,6 +883,429 @@ test("/rag interaction fetches target username when Discord does not include res
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("/rag is blocked while the invoker has an active raghammer ban", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const waitUntilPromises: Promise<unknown>[] = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      DB: createDbMock({ ragBan: { expires_at: "2099-01-01T00:00:00.000Z" } }),
+    });
+    const request = createSignedRequest(
+      {
+        application_id: "application-id",
+        token: "interaction-token",
+        type: 2,
+        data: {
+          name: "rag",
+          options: [{ name: "user", value: "2" }],
+          resolved: {
+            users: { "2": { id: "2", username: "bob", global_name: "Bob" } },
+          },
+        },
+        member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
+      },
+      keyPair.secretKey,
+    );
+
+    const response = await worker.fetch(request, env, {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise);
+      },
+    } as never);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { type: 5 });
+    await Promise.all(waitUntilPromises);
+
+    const editCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+    );
+    assert.ok(editCall);
+    assert.deepEqual(JSON.parse(String(editCall.init?.body)), {
+      content: "You cannot use /rag until <t:4070908800:R>.",
+      allowed_mentions: { parse: [] },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("/raghammer rejects non-admin invokers", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const request = createSignedRequest(
+    {
+      type: 2,
+      data: {
+        name: "raghammer",
+        options: [
+          { name: "user", value: "2" },
+          { name: "timeframe", value: "5m" },
+        ],
+      },
+      member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: {
+      content: "You are not allowed to use /raghammer.",
+      allowed_mentions: { parse: [] },
+    },
+  });
+});
+
+test("/raghammer records a temporary /rag ban for admin invokers", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalNow = Date.now;
+  Date.now = () => Date.parse("2026-06-28T00:00:00.000Z");
+  const preparedStatements: Array<{ sql: string; args: unknown[] }> = [];
+
+  try {
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      DB: {
+        batch: () => {
+          throw new Error("batch should not be used in this test");
+        },
+        prepare: (sql: string) => ({
+          bind: (...args: unknown[]) => ({
+            run: async () => {
+              preparedStatements.push({ sql, args });
+              return { results: undefined };
+            },
+            first: async () => null,
+            all: async () => ({ results: [], meta: {} }),
+          }),
+          run: async () => ({ results: undefined }),
+          first: async () => null,
+          all: async () => ({ results: [], meta: {} }),
+        }),
+      },
+    });
+    const request = createSignedRequest(
+      {
+        type: 2,
+        data: {
+          name: "raghammer",
+          options: [
+            { name: "user", value: "2" },
+            { name: "timeframe", value: "1h" },
+          ],
+          resolved: {
+            users: { "2": { id: "2", username: "bob", global_name: "Bob" } },
+          },
+        },
+        member: {
+          nick: "Admin",
+          user: {
+            id: "107426926909517824",
+            username: "admin",
+            global_name: "Admin",
+          },
+        },
+      },
+      keyPair.secretKey,
+    );
+
+    const response = await worker.fetch(request, env, {} as never);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      type: 4,
+      data: {
+        content: "<@2> cannot use /rag for 1h.",
+        allowed_mentions: {
+          parse: [],
+          users: ["2"],
+        },
+      },
+    });
+    assert.equal(preparedStatements.length, 1);
+    assert.deepEqual(preparedStatements[0].args, [
+      "2",
+      "bob",
+      "107426926909517824",
+      "admin",
+      "2026-06-28T01:00:00.000Z",
+    ]);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("/ragunban rejects non-admin invokers", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const request = createSignedRequest(
+    {
+      type: 2,
+      data: {
+        name: "ragunban",
+        options: [{ name: "user", value: "2" }],
+      },
+      member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: {
+      content: "You are not allowed to use /ragunban.",
+      allowed_mentions: { parse: [] },
+    },
+  });
+});
+
+test("/ragunban removes active rag bans for admin invokers", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalNow = Date.now;
+  Date.now = () => Date.parse("2026-06-28T00:00:00.000Z");
+  const preparedStatements: Array<{ sql: string; args: unknown[] }> = [];
+
+  try {
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      DB: {
+        batch: () => {
+          throw new Error("batch should not be used in this test");
+        },
+        prepare: (sql: string) => ({
+          bind: (...args: unknown[]) => ({
+            run: async () => {
+              preparedStatements.push({ sql, args });
+              return { meta: { changes: 2 } };
+            },
+            first: async () => null,
+            all: async () => ({ results: [], meta: {} }),
+          }),
+          run: async () => ({ meta: { changes: 0 } }),
+          first: async () => null,
+          all: async () => ({ results: [], meta: {} }),
+        }),
+      },
+    });
+    const request = createSignedRequest(
+      {
+        type: 2,
+        data: {
+          name: "ragunban",
+          options: [{ name: "user", value: "2" }],
+        },
+        member: {
+          nick: "Admin",
+          user: {
+            id: "114128631474683907",
+            username: "admin",
+            global_name: "Admin",
+          },
+        },
+      },
+      keyPair.secretKey,
+    );
+
+    const response = await worker.fetch(request, env, {} as never);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      type: 4,
+      data: {
+        content: "<@2> can use /rag again.",
+        allowed_mentions: {
+          parse: [],
+          users: ["2"],
+        },
+      },
+    });
+    assert.equal(preparedStatements.length, 1);
+    assert.deepEqual(preparedStatements[0].args, ["2", "2026-06-28T00:00:00.000Z"]);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("/ragunban reports when there is no active rag ban", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    DB: {
+      batch: () => {
+        throw new Error("batch should not be used in this test");
+      },
+      prepare: () => ({
+        bind: () => ({
+          run: async () => ({ meta: { changes: 0 } }),
+          first: async () => null,
+          all: async () => ({ results: [], meta: {} }),
+        }),
+        run: async () => ({ meta: { changes: 0 } }),
+        first: async () => null,
+        all: async () => ({ results: [], meta: {} }),
+      }),
+    },
+  });
+  const request = createSignedRequest(
+    {
+      type: 2,
+      data: {
+        name: "ragunban",
+        options: [{ name: "user", value: "2" }],
+      },
+      member: {
+        nick: "Admin",
+        user: {
+          id: "107426926909517824",
+          username: "admin",
+          global_name: "Admin",
+        },
+      },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: {
+      content: "<@2> does not have an active /rag ban.",
+      allowed_mentions: {
+        parse: [],
+        users: ["2"],
+      },
+    },
+  });
+});
+
+test("/undorag rejects non-admin invokers", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+  const request = createSignedRequest(
+    {
+      type: 2,
+      data: {
+        name: "undorag",
+        options: [{ name: "user", value: "2" }],
+      },
+      member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: {
+      content: "You are not allowed to use /undorag.",
+      allowed_mentions: { parse: [] },
+    },
+  });
+});
+
+test("/undorag removes the latest rag event and decrements the target total", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const batchStatements: Array<{ sql: string; args: unknown[] }> = [];
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    DB: createDbMock({
+      latestRagEventId: 123,
+      ragCount: 6,
+      onBatch: (statements) => {
+        batchStatements.push(...statements);
+      },
+    }),
+  });
+  const request = createSignedRequest(
+    {
+      type: 2,
+      data: {
+        name: "undorag",
+        options: [{ name: "user", value: "2" }],
+      },
+      member: {
+        nick: "Admin",
+        user: {
+          id: "116163000339136518",
+          username: "admin",
+          global_name: "Admin",
+        },
+      },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: {
+      content: "Undid the last rag for <@2>. Total: 6",
+      allowed_mentions: {
+        parse: [],
+        users: ["2"],
+      },
+    },
+  });
+  assert.equal(batchStatements.length, 2);
+  assert.deepEqual(batchStatements[0].args, [123]);
+  assert.deepEqual(batchStatements[1].args, ["2"]);
+});
+
+test("/undorag reports when the target has no rags to undo", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    DB: createDbMock({ latestRagEventId: null }),
+  });
+  const request = createSignedRequest(
+    {
+      type: 2,
+      data: {
+        name: "undorag",
+        options: [{ name: "user", value: "2" }],
+      },
+      member: {
+        nick: "Admin",
+        user: {
+          id: "102637456385392640",
+          username: "admin",
+          global_name: "Admin",
+        },
+      },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: {
+      content: "<@2> has no rags to undo.",
+      allowed_mentions: {
+        parse: [],
+        users: ["2"],
+      },
+    },
+  });
 });
 
 test("bot mention parser accepts prompts after the bot mention", () => {
