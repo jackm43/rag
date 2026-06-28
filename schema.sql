@@ -9,6 +9,18 @@ CREATE TABLE IF NOT EXISTS rag_events (
 
 CREATE INDEX IF NOT EXISTS idx_rag_events_reporter ON rag_events(reported_by_user_id);
 
+CREATE TABLE IF NOT EXISTS rag_command_bans (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  banned_user_id TEXT NOT NULL,
+  banned_username TEXT,
+  banned_by_user_id TEXT NOT NULL,
+  banned_by_username TEXT,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_command_bans_user_expires ON rag_command_bans(banned_user_id, expires_at);
+
 CREATE TABLE IF NOT EXISTS rag_totals (
   ragged_user_id TEXT PRIMARY KEY,
   ragged_username TEXT,

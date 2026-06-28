@@ -2,6 +2,7 @@ import { handleAskCommand } from "./commands/ask";
 import { handleBictureCommand } from "./commands/bicture";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
+import { handleRaghammerCommand } from "./commands/raghammer";
 import { DiscordGateway, getGatewayHealth, startGateway } from "./gateway";
 import { bearerTokenMatches, jsonResponse, verifyDiscordRequest } from "./http";
 import { errorMessage, logger } from "./logger";
@@ -88,6 +89,10 @@ const handleInteractionRequest = async (
 
     if (commandName === "ragboard") {
       return handleRagboardCommand(env);
+    }
+
+    if (commandName === "raghammer") {
+      return handleRaghammerCommand(interaction, env);
     }
 
     if (commandName === "ask") {

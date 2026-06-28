@@ -28,6 +28,23 @@ const commands = [
     .setName("ragboard")
     .setDescription("Show the rag leaderboard"),
   new SlashCommandBuilder()
+    .setName("raghammer")
+    .setDescription("Temporarily block a user from using /rag")
+    .addUserOption((option) =>
+      option
+        .setName("user")
+        .setDescription("User to block from /rag")
+        .setRequired(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("timeframe")
+        .setDescription("Duration such as 5m, 1h, or 1d")
+        .setRequired(true)
+        .setMinLength(2)
+        .setMaxLength(12),
+    ),
+  new SlashCommandBuilder()
     .setName("ask")
     .setDescription("Start an AI conversation in a new thread")
     .addStringOption((option) =>
