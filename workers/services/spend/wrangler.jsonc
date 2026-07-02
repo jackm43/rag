@@ -2,6 +2,15 @@
   "name": "ragbot-spend-worker",
   "main": "src/index.ts",
   "compatibility_date": "2026-04-23",
+  "rules": [
+    {
+      "type": "Text",
+      "globs": [
+        "**/*.cedar"
+      ],
+      "fallthrough": true
+    }
+  ],
   "compatibility_flags": [
     "nodejs_compat"
   ],

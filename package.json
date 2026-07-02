@@ -29,6 +29,7 @@
     "wrangler": "^4.13.2"
   },
   "dependencies": {
+    "@cedar-policy/cedar-wasm": "^4.11.2",
     "capnp-es": "^0.0.14",
     "tweetnacl": "^1.0.3"
   },
