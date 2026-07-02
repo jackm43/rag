@@ -1,9 +1,9 @@
 import { assert, test } from "vitest";
 
-import responderWorker from "../workers/services/responder/src/index.ts";
-import { deliverInteractionEdit, finalizeAiReplyText } from "../packages/domain/responder.ts";
-import { encodeReplyJobEnvelope } from "../packages/contracts/index.ts";
-import { createEnv } from "./helpers.ts";
+import responderWorker from "../../workers/services/responder/src/index.ts";
+import { deliverInteractionEdit, finalizeAiReplyText } from "../../packages/domain/responder.ts";
+import { encodeReplyJobEnvelope } from "../../packages/contracts/index.ts";
+import { createEnv } from "../helpers.ts";
 
 const CHANNEL_ID = "200000000000000001";
 const APPLICATION_ID = "500000000000000001";

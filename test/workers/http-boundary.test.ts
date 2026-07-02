@@ -1,9 +1,9 @@
 import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
-import worker from "../workers/public/gateway/src/index.ts";
-import { bearerTokenMatches, secretsMatch } from "../packages/domain/http.ts";
-import { createEnv, createSignedRequest } from "./helpers.ts";
+import worker from "../../workers/public/gateway/src/index.ts";
+import { bearerTokenMatches, secretsMatch } from "../../packages/domain/http.ts";
+import { createEnv, createSignedRequest } from "../helpers.ts";
 
 test("secretsMatch compares bearer tokens without string equality", () => {
   assert.equal(secretsMatch("Bearer bot-token", "Bearer bot-token"), true);
