@@ -16,6 +16,7 @@ import { sendChannelReply } from "./outbox";
 import { finalizeAiReplyText } from "./responder";
 import { recordAiThread } from "./threads";
 import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "../ai/tracked-ai";
+import { peerDeliveryAuthorize } from "../authz/peer";
 import { peerReceive } from "../boundaries/peer/queue";
 import { decodeAiJobEnvelope } from "../contracts";
 import {
@@ -265,7 +266,7 @@ const jobProcessors: AiJobProcessors = {
 
 export const processAiQueueMessage = async (message: Message<unknown>, env: Env) => {
   const startedAt = Date.now();
-  const decoded = peerReceive(message.body, decodeAiJobEnvelope, "gateway");
+  const decoded = peerReceive(message.body, decodeAiJobEnvelope, "gateway", peerDeliveryAuthorize("brain"));
   if (!decoded) {
     message.ack();
     return;

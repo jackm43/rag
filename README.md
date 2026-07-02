@@ -278,13 +278,23 @@ When set, the gate fails closed — unparseable entries are dropped, so a miscon
 
 ## Trust Boundaries
 
-Every hop into, between, and out of the workers crosses a named boundary in `packages/boundaries`, carrying a uniform context — {identity, trustZone, policy, request context} — and logging denials in one shape (`{identity, trustZone, outcome: "denied", reason}`). A future policy engine (Cedar) evaluates at exactly these choke points.
+Every hop into, between, and out of the workers crosses a named boundary in `packages/boundaries`, carrying a uniform context — {identity, trustZone, policy, request context} — and logging denials in one shape (`{identity, trustZone, outcome: "denied", reason}`). The Cedar policy engine (see [Authorization](#authorization-cedar)) evaluates at exactly these choke points.
 
 | Boundary | Module | Trust zones | Shape |
 | --- | --- | --- | --- |
 | Inbound | `packages/boundaries/inbound` | `ingress-discord`, `ingress-operator` | Guards (`{identity, trustZone, verify}`) that yield a typed principal (`discord` + verified interaction, `operator`) or a typed denial (reason + HTTP response) |
-| Peer | `packages/boundaries/peer` | `peer-queue`, `peer-binding` | `peerSend`/`peerReceive` around contracts-encoded queue envelopes, plus the brain→responder binding RPC hop; receives re-validate the envelope and expose the `authorize` seam (default allow) where service manifests + Cedar checks attach next |
+| Peer | `packages/boundaries/peer` | `peer-queue`, `peer-binding` | `peerSend`/`peerReceive` around contracts-encoded queue envelopes, plus the brain→responder binding RPC hop; receives re-validate the envelope and run the `authorize` seam, which every consumer plugs Cedar into via `peerDeliveryAuthorize` (service manifests refine this per envelope kind next) |
 | Outbound | `packages/boundaries/outbound` | `egress-discord`, `egress-ai-gateway`, `egress-cloudflare-api`, `egress-media` | Per-identity boundary clients enforcing credential injection, host allowlists, https-only, timeouts, and response-size caps; failure logs redact paths for identities whose paths embed credentials (`logPath: false` for `discord-webhook` and `media-download`) |
+
+## Authorization (Cedar)
+
+All allow/deny decisions are centralised in `packages/authz` and evaluated by [Cedar](https://www.cedarpolicy.com/) (`@cedar-policy/cedar-wasm`, compiled at deploy time via wrangler's CompiledWasm rule and instantiated once per isolate):
+
+- **Policies** live in `packages/authz/policies/*.cedar` (`commands.cedar` for the slash-command surface incl. the admin gate and raghammer-ban forbid, `operator.cedar` for the `/gateway/*` control plane, `peer.cedar` for legitimate worker-to-worker hops). Each policy carries an `@id` annotation that denial diagnostics surface as the reason.
+- **To add an admin**, add the Discord user id to `RAG_ADMIN_USER_IDS` in `packages/authz/entities.ts` — membership of the `Group::"rag-admins"` entity is data, not policy.
+- **`authorize()` runs** at three choke points: the command registry pre-flight (`packages/domain/commands/registry.ts`, plus `/rag`'s in-window ban decision in `rag.ts`) with the D1-fetched ban state passed as `context.banned`; the gateway control routes after the operator bearer-token guard (`workers/public/gateway/src/index.ts`); and every peer receive via `peerDeliveryAuthorize` (`packages/authz/peer.ts`). Everything is deny-by-default — an action nobody permitted is refused.
+
+The guild allowlist deliberately stays at ingress (`packages/domain/guilds.ts`), not in Cedar, for now.
 
 ## Workers, Trust Zones, and Secrets
 

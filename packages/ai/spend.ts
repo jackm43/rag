@@ -1,6 +1,7 @@
 import { decodeAiSpendJobEnvelope, encodeAiSpendJobEnvelope } from "../contracts";
 import { errorMessage, logger } from "../logger";
 import { boundaryClients } from "../boundaries/outbound/clients";
+import { peerDeliveryAuthorize } from "../authz/peer";
 import { peerReceive, peerSend } from "../boundaries/peer/queue";
 import type { Env } from "../contracts/types";
 import { isRecord } from "../contracts/validation";
@@ -150,7 +151,7 @@ const findGatewayLogCostMicros = async (env: Env, sourceId: string) => {
 };
 
 export const processSpendQueueMessage = async (message: Message<unknown>, env: Env) => {
-  const job = peerReceive(message.body, decodeAiSpendJobEnvelope, "brain");
+  const job = peerReceive(message.body, decodeAiSpendJobEnvelope, "brain", peerDeliveryAuthorize("spend"));
   if (!job) {
     message.ack();
     return;

@@ -11,8 +11,9 @@ import type { CommandSpec } from "./registry";
 const USER_REQUIRED = { name: "user", message: "A user mention is required." };
 
 // The whole command surface, declaratively. The shared pre-flight chain in
-// registry.ts handles option validation, interaction credentials, admin
-// gating, and AI usage limits; specs only describe what is left.
+// registry.ts handles option validation, interaction credentials, Cedar
+// authorization (which knows the admin-only commands), and AI usage limits;
+// specs only describe what is left.
 export const commandSpecs: CommandSpec[] = [
   {
     name: "rag",
@@ -41,21 +42,18 @@ export const commandSpecs: CommandSpec[] = [
   {
     name: "raghammer",
     kind: "inline",
-    adminOnly: true,
     requiredOptions: [USER_REQUIRED, { name: "timeframe", message: TIMEFRAME_FORMAT_MESSAGE }],
     run: runRaghammerCommand,
   },
   {
     name: "ragunban",
     kind: "inline",
-    adminOnly: true,
     requiredOptions: [USER_REQUIRED],
     run: runRagunbanCommand,
   },
   {
     name: "undorag",
     kind: "inline",
-    adminOnly: true,
     requiredOptions: [USER_REQUIRED],
     run: runUndoragCommand,
   },

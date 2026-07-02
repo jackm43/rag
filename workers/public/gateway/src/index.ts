@@ -1,3 +1,4 @@
+import { authorize } from "../../../../packages/authz/authorize";
 import { discordInteractionGuard } from "../../../../packages/boundaries/inbound/discord-interaction";
 import { operatorControlGuard } from "../../../../packages/boundaries/inbound/operator-control";
 import { routeInteraction } from "../../../../packages/domain/commands/router";
@@ -23,6 +24,17 @@ const methodNotAllowed = (allowedMethod: string) =>
 
 const notFound = () => new Response("Not found", { status: 404 });
 
+// The bearer-token guard authenticates the operator; Cedar decides what the
+// operator principal may do with the gateway control plane.
+const operatorForbidden = (action: string): Response | null =>
+  authorize({
+    principal: { type: "Operator", id: "control" },
+    action,
+    resource: { type: "Gateway", id: "control" },
+  }).allowed
+    ? null
+    : new Response("Forbidden", { status: 403 });
+
 const handleGatewayStartRequest = async (request: Request, env: Env): Promise<Response> => {
   if (request.method !== "POST") {
     return methodNotAllowed("POST");
@@ -33,7 +45,7 @@ const handleGatewayStartRequest = async (request: Request, env: Env): Promise<Re
     return operator.response;
   }
 
-  return Response.json(await startGateway(env));
+  return operatorForbidden("gateway.start") ?? Response.json(await startGateway(env));
 };
 
 const handleGatewayStopRequest = async (request: Request, env: Env): Promise<Response> => {
@@ -46,7 +58,7 @@ const handleGatewayStopRequest = async (request: Request, env: Env): Promise<Res
     return operator.response;
   }
 
-  return Response.json(await stopGateway(env));
+  return operatorForbidden("gateway.stop") ?? Response.json(await stopGateway(env));
 };
 
 const handleGatewayHealthRequest = async (request: Request, env: Env): Promise<Response> => {
@@ -59,7 +71,7 @@ const handleGatewayHealthRequest = async (request: Request, env: Env): Promise<R
     return operator.response;
   }
 
-  return Response.json(await getGatewayHealth(env));
+  return operatorForbidden("gateway.health") ?? Response.json(await getGatewayHealth(env));
 };
 
 export default {

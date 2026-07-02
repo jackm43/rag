@@ -1,5 +1,6 @@
 import { assert, test } from "vitest";
 
+import { RAG_ADMIN_USER_IDS } from "../../../packages/authz/entities.ts";
 import { routeInteraction } from "../../../packages/domain/commands/router.ts";
 import { executeCommand, type CommandSpec } from "../../../packages/domain/commands/registry.ts";
 import { APPLICATION_COMMAND, type Env } from "../../../packages/contracts/types.ts";
@@ -45,9 +46,8 @@ test("registry pre-flight rejects a missing required option before running the c
 
 test("registry pre-flight denies admin-only commands to non-admin invokers", async () => {
   const spec: CommandSpec = {
-    name: "spec-admin-test",
+    name: "raghammer",
     kind: "inline",
-    adminOnly: true,
     run: () => {
       throw new Error("run should not be reached");
     },
@@ -57,7 +57,7 @@ test("registry pre-flight denies admin-only commands to non-admin invokers", asy
     spec,
     {
       type: APPLICATION_COMMAND,
-      data: { name: "spec-admin-test" },
+      data: { name: "raghammer" },
       member: { user: { id: "999", username: "eve" } },
     },
     {} as Env,
@@ -67,7 +67,57 @@ test("registry pre-flight denies admin-only commands to non-admin invokers", asy
   assert.deepEqual(await response.json(), {
     type: 4,
     data: {
-      content: "You are not allowed to use /spec-admin-test.",
+      content: "You are not allowed to use /raghammer.",
+      allowed_mentions: { parse: [] },
+    },
+  });
+});
+
+test("registry pre-flight lets rag-admins through to admin-only commands", async () => {
+  const spec: CommandSpec = {
+    name: "raghammer",
+    kind: "inline",
+    run: () => new Response("ran"),
+  };
+
+  const response = await executeCommand(
+    spec,
+    {
+      type: APPLICATION_COMMAND,
+      data: { name: "raghammer" },
+      member: { user: { id: RAG_ADMIN_USER_IDS[0], username: "alice" } },
+    },
+    {} as Env,
+    executionCtx,
+  );
+
+  assert.equal(await response.text(), "ran");
+});
+
+test("registry pre-flight denies commands the policy set does not know", async () => {
+  const spec: CommandSpec = {
+    name: "spec-unknown-test",
+    kind: "inline",
+    run: () => {
+      throw new Error("run should not be reached");
+    },
+  };
+
+  const response = await executeCommand(
+    spec,
+    {
+      type: APPLICATION_COMMAND,
+      data: { name: "spec-unknown-test" },
+      member: { user: { id: "1", username: "alice" } },
+    },
+    {} as Env,
+    executionCtx,
+  );
+
+  assert.deepEqual(await response.json(), {
+    type: 4,
+    data: {
+      content: "You are not allowed to use /spec-unknown-test.",
       allowed_mentions: { parse: [] },
     },
   });

@@ -8,7 +8,7 @@ import {
   type DiscordInteraction,
   type Env,
 } from "../../contracts/types";
-import { isRagAdminUser } from "../admins";
+import { authorize } from "../../authz/authorize";
 import { activeAiBanForUser, aiBanMessage } from "../bans";
 import { jsonResponse } from "../http";
 import { checkAiUsageAllowed } from "../limits";
@@ -35,7 +35,6 @@ type CommandSpecBase = {
   name: string;
   requiredOptions?: RequiredOption[];
   limitKind?: string;
-  adminOnly?: boolean;
 };
 
 // The three command shapes:
@@ -71,9 +70,9 @@ const hasCredentials = (ctx: CommandContext): ctx is CredentialedCommandContext 
   Boolean(ctx.applicationId && ctx.interactionToken);
 
 // Shared pre-flight chain: option validation -> interaction credentials ->
-// admin check -> raghammer ban (AI commands) -> usage limits -> dispatch
-// (enqueue+defer, inline, or defer+run). Every command goes through the same
-// guards in the same order.
+// Cedar authorization (admin gate + raghammer ban) -> usage limits ->
+// dispatch (enqueue+defer, inline, or defer+run). Every command goes through
+// the same guards in the same order.
 export const executeCommand = async (
   spec: CommandSpec,
   interaction: DiscordInteraction,
@@ -95,18 +94,27 @@ export const executeCommand = async (
     return inlineMessage(`Could not defer /${spec.name} without interaction credentials.`);
   }
 
-  if (spec.adminOnly && !isRagAdminUser(ctx.invoker?.id)) {
+  // One policy decision per command: Cedar evaluates the admin gate and the
+  // raghammer ban together. The ban state itself still comes from D1, and
+  // only AI-limited commands pay for the lookup, exactly as before.
+  const activeBan =
+    spec.limitKind && ctx.invoker
+      ? await activeAiBanForUser(env, ctx.invoker.id, new Date())
+      : null;
+  const decision = authorize({
+    principal: { type: "User", id: ctx.invoker?.id ?? "unknown" },
+    action: `command.${spec.name}`,
+    resource: { type: "Guild", id: ctx.guildId ?? "unknown" },
+    context: { banned: activeBan !== null },
+  });
+  if (!decision.allowed) {
+    if (activeBan) {
+      return inlineMessage(aiBanMessage(activeBan.expires_at));
+    }
     return inlineMessage(`You are not allowed to use /${spec.name}.`);
   }
 
   if (spec.limitKind) {
-    if (ctx.invoker) {
-      const activeBan = await activeAiBanForUser(env, ctx.invoker.id, new Date());
-      if (activeBan) {
-        return inlineMessage(aiBanMessage(activeBan.expires_at));
-      }
-    }
-
     const usage = await checkAiUsageAllowed(env, ctx.invoker?.id, spec.limitKind);
     if (!usage.allowed) {
       return inlineMessage(usage.message);

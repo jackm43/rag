@@ -1,4 +1,5 @@
 import { sanitizeAiText } from "../ai/ai";
+import { peerDeliveryAuthorize } from "../authz/peer";
 import { receiveResponderInteractionEdit } from "../boundaries/peer/binding";
 import { peerReceive } from "../boundaries/peer/queue";
 import { decodeReplyJobEnvelope } from "../contracts";
@@ -57,7 +58,7 @@ export const deliverInteractionEdit = async (
   envelopeBytes: unknown,
   attachment: ResponderAttachment | null = null,
 ) => {
-  const job = receiveResponderInteractionEdit(envelopeBytes);
+  const job = receiveResponderInteractionEdit(envelopeBytes, peerDeliveryAuthorize("responder"));
   if (!job) {
     throw new Error("Invalid interaction edit envelope");
   }
@@ -78,7 +79,7 @@ export const deliverInteractionEdit = async (
 const isRetryableDiscordStatus = (status: number) => status === 429 || status >= 500;
 
 export const processOutboxMessage = async (message: Message<unknown>, env: Env) => {
-  const job = peerReceive(message.body, decodeReplyJobEnvelope, "brain");
+  const job = peerReceive(message.body, decodeReplyJobEnvelope, "brain", peerDeliveryAuthorize("responder"));
   if (!job) {
     message.ack();
     return;
