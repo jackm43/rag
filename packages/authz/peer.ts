@@ -12,3 +12,20 @@ export const peerDeliveryAuthorize =
       action: "peer.deliver",
       resource: { type: "Service", id: receiver },
     }).allowed;
+
+// Construction-time check for the sending side: may `sender` set up an
+// identity-context exchange into `target` across the {fromZone -> toZone}
+// transition? Evaluated once when a peer client is built, so an unauthorized
+// pair yields a fail-closed client rather than failing per message.
+export const peerExchangeAllowed = (
+  sender: string,
+  target: string,
+  fromZone: string,
+  toZone: string,
+): boolean =>
+  authorize({
+    principal: { type: "Peer", id: sender },
+    action: "peer.exchange",
+    resource: { type: "Service", id: target },
+    context: { fromZone, toZone },
+  }).allowed;

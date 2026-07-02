@@ -1,4 +1,5 @@
 import { logPeerDenial, wrapPeerMessage, type PeerTrustZone } from "./peer";
+import { peerExchangeAllowed } from "../../authz/peer";
 import {
   buildIdentityContext,
   mint,
@@ -33,10 +34,10 @@ export type OnBehalf = {
 export type PeerSenderConfig = {
   self: WorkerIdentity;
   target: WorkerIdentity;
-  // Lazily-resolved, memoised signing key: null when the worker has no signing
-  // secret provisioned (a same-zone/unauthorized construction, or missing
-  // material — fail closed).
-  signingKey: () => Promise<CryptoKey | null>;
+  // Lazily-resolved, memoised signing key loader, or null when the worker has
+  // no signing secret provisioned. A null loader on a trust-zone transition is
+  // missing exchange material, so construction fails closed.
+  signingKey: (() => Promise<CryptoKey | null>) | null;
 };
 
 export type PeerQueueSendOptions = { delaySeconds?: number };
@@ -66,7 +67,7 @@ const mintExchange = async (
   envelope: Uint8Array,
   onBehalf: OnBehalf,
 ): Promise<string | null> => {
-  const key = await config.signingKey();
+  const key = config.signingKey ? await config.signingKey() : null;
   if (!key) {
     return null;
   }
@@ -81,35 +82,73 @@ const mintExchange = async (
   return mint(key, context);
 };
 
-const denySend = (config: PeerSenderConfig, trustZone: PeerTrustZone): Error => {
-  logPeerDenial({ identity: config.self, trustZone }, "signing_key_unavailable");
-  return new Error(
-    `Peer send denied for ${config.self} -> ${config.target}: no signing key available`,
-  );
+const denySend = (config: PeerSenderConfig, trustZone: PeerTrustZone, reason: string): Error => {
+  logPeerDenial({ identity: config.self, trustZone }, reason);
+  return new Error(`Peer send denied for ${config.self} -> ${config.target}: ${reason}`);
 };
 
-export const createPeerQueueSender = (config: PeerSenderConfig): PeerQueueSender => ({
-  send: async (queue, envelope, onBehalf, options) => {
-    const token = await mintExchange(config, envelope, onBehalf);
-    if (token === null) {
-      throw denySend(config, "peer-queue");
-    }
-    await queue.send(
-      wrapPeerMessage(envelope, token),
-      options?.delaySeconds === undefined ? undefined : { delaySeconds: options.delaySeconds },
-    );
-  },
-});
+// Construction-time authorization: a peer client only sets up what it is
+// authorised to do. Cedar decides whether this worker may exchange into the
+// target zone; a trust-zone transition additionally requires signing-key
+// material to be supplied. An unauthorized pair or missing material yields a
+// fail-closed reason so the caller returns a deny-all client at BUILD time
+// rather than discovering the problem per message.
+const constructionDenial = (config: PeerSenderConfig): string | null => {
+  const fromZone = WORKER_ZONE[config.self];
+  const toZone = WORKER_ZONE[config.target];
+  if (!peerExchangeAllowed(config.self, config.target, fromZone, toZone)) {
+    return "exchange_not_authorized";
+  }
+  // A zone transition must carry an on-behalf-of exchange (signing key); a
+  // same-zone hop needs none.
+  if (fromZone !== toZone && config.signingKey === null) {
+    return "missing_exchange_material";
+  }
+  return null;
+};
 
-export const createPeerBindingSender = (config: PeerSenderConfig): PeerBindingSender => ({
-  send: async (env, envelope, attachment, onBehalf) => {
-    if (!env.RESPONDER) {
-      throw new Error("RESPONDER service binding is required to send media replies");
-    }
-    const token = await mintExchange(config, envelope, onBehalf);
-    if (token === null) {
-      throw denySend(config, "peer-binding");
-    }
-    await env.RESPONDER.deliverInteractionEdit(envelope, attachment, token);
-  },
-});
+export const createPeerQueueSender = (config: PeerSenderConfig): PeerQueueSender => {
+  const denial = constructionDenial(config);
+  if (denial) {
+    return {
+      send: async () => {
+        throw denySend(config, "peer-queue", denial);
+      },
+    };
+  }
+  return {
+    send: async (queue, envelope, onBehalf, options) => {
+      const token = await mintExchange(config, envelope, onBehalf);
+      if (token === null) {
+        throw denySend(config, "peer-queue", "signing_key_unavailable");
+      }
+      await queue.send(
+        wrapPeerMessage(envelope, token),
+        options?.delaySeconds === undefined ? undefined : { delaySeconds: options.delaySeconds },
+      );
+    },
+  };
+};
+
+export const createPeerBindingSender = (config: PeerSenderConfig): PeerBindingSender => {
+  const denial = constructionDenial(config);
+  if (denial) {
+    return {
+      send: async () => {
+        throw denySend(config, "peer-binding", denial);
+      },
+    };
+  }
+  return {
+    send: async (env, envelope, attachment, onBehalf) => {
+      if (!env.RESPONDER) {
+        throw new Error("RESPONDER service binding is required to send media replies");
+      }
+      const token = await mintExchange(config, envelope, onBehalf);
+      if (token === null) {
+        throw denySend(config, "peer-binding", "signing_key_unavailable");
+      }
+      await env.RESPONDER.deliverInteractionEdit(envelope, attachment, token);
+    },
+  };
+};

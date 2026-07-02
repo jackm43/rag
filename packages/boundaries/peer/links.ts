@@ -46,8 +46,14 @@ const memo = <T>(create: () => Promise<T>): (() => Promise<T>) => {
 };
 
 const buildLinks = (env: Env): PeerLinks => {
-  const gatewayKey = memo(() => loadSigningKey(env, "GATEWAY_SIGNING_KEY"));
-  const brainKey = memo(() => loadSigningKey(env, "BRAIN_SIGNING_KEY"));
+  // A missing secret is passed as a null loader so the sender construction
+  // fails closed (missing_exchange_material) instead of failing per send.
+  const gatewayKey = env.GATEWAY_SIGNING_KEY
+    ? memo(() => loadSigningKey(env, "GATEWAY_SIGNING_KEY"))
+    : null;
+  const brainKey = env.BRAIN_SIGNING_KEY
+    ? memo(() => loadSigningKey(env, "BRAIN_SIGNING_KEY"))
+    : null;
 
   return {
     gatewayToBrain: createPeerQueueSender({ self: "gateway", target: "brain", signingKey: gatewayKey }),

@@ -220,7 +220,8 @@ test("a queue send without a signing key fails closed", async () => {
     assert.equal(sent, false);
     const denial = warnings.lines.find((line) => line.message === "peer_denied");
     assert.ok(denial);
-    assert.equal(denial.reason, "signing_key_unavailable");
+    // No signing secret on a trust-zone transition: construction fails closed.
+    assert.equal(denial.reason, "missing_exchange_material");
   } finally {
     warnings.restore();
   }

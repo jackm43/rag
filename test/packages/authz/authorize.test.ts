@@ -83,6 +83,28 @@ test("peer delivery is allowed for the legitimate hops and denied for the rest",
   assert.isFalse(authorize(peerRequest("spend", "gateway")).allowed);
 });
 
+test("peer exchange is permitted only for the legitimate zone transitions", () => {
+  const exchangeRequest = (
+    sender: string,
+    receiver: string,
+    fromZone: string,
+    toZone: string,
+  ): AuthzRequest => ({
+    principal: { type: "Peer", id: sender },
+    action: "peer.exchange",
+    resource: { type: "Service", id: receiver },
+    context: { fromZone, toZone },
+  });
+
+  assert.isTrue(authorize(exchangeRequest("gateway", "brain", "edge", "brain")).allowed);
+  assert.isTrue(authorize(exchangeRequest("brain", "responder", "brain", "egress")).allowed);
+  assert.isTrue(authorize(exchangeRequest("brain", "spend", "brain", "spend")).allowed);
+
+  // Unauthorized pair, and a legitimate pair with mismatched zones.
+  assert.isFalse(authorize(exchangeRequest("responder", "brain", "egress", "brain")).allowed);
+  assert.isFalse(authorize(exchangeRequest("gateway", "brain", "edge", "spend")).allowed);
+});
+
 test("unknown actions are denied by default with no reason attached", () => {
   const decision = authorize(commandRequest(ADMIN_ID, "definitely-not-a-command"));
   assert.isFalse(decision.allowed);
