@@ -5,12 +5,13 @@ import {
   handleGatewayMessageCreate,
 } from "../../../../packages/domain/mention";
 import type { Env } from "../../../../packages/contracts/types";
-import { DiscordGateway, getGatewayHealth, startGateway } from "./gateway";
+import { DiscordGateway, getGatewayHealth, startGateway, stopGateway } from "./gateway";
 
 export { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
 
 const DISCORD_INTERACTIONS_PATH = "/discord";
 const GATEWAY_START_PATH = "/gateway/start";
+const GATEWAY_STOP_PATH = "/gateway/stop";
 const GATEWAY_HEALTH_PATH = "/gateway/health";
 
 const methodNotAllowed = (allowedMethod: string) =>
@@ -45,6 +46,18 @@ const handleGatewayStartRequest = async (request: Request, env: Env): Promise<Re
   return Response.json(await startGateway(env));
 };
 
+const handleGatewayStopRequest = async (request: Request, env: Env): Promise<Response> => {
+  if (request.method !== "POST") {
+    return methodNotAllowed("POST");
+  }
+
+  if (!isAuthorizedGatewayControlRequest(request, env)) {
+    return unauthorized();
+  }
+
+  return Response.json(await stopGateway(env));
+};
+
 const handleGatewayHealthRequest = async (request: Request, env: Env): Promise<Response> => {
   if (request.method !== "GET") {
     return methodNotAllowed("GET");
@@ -63,6 +76,10 @@ export default {
 
     if (url.pathname === GATEWAY_START_PATH) {
       return handleGatewayStartRequest(request, env);
+    }
+
+    if (url.pathname === GATEWAY_STOP_PATH) {
+      return handleGatewayStopRequest(request, env);
     }
 
     if (url.pathname === GATEWAY_HEALTH_PATH) {

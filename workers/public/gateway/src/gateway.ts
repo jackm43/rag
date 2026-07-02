@@ -60,6 +60,8 @@ const gatewayStub = (env: Env) => {
 
 export const startGateway = async (env: Env) => gatewayStub(env).start();
 
+export const stopGateway = async (env: Env) => gatewayStub(env).stop();
+
 export const getGatewayHealth = async (env: Env) => gatewayStub(env).health();
 
 export class DiscordGateway extends DurableObject<Env> {
@@ -95,6 +97,32 @@ export class DiscordGateway extends DurableObject<Env> {
   async start() {
     await this.enableGateway();
     this.connectGateway();
+    return { ok: true };
+  }
+
+  // Operator kill switch: clear the enabled flag, cancel the watchdog alarm,
+  // close the socket, and forget the resume state so a later start begins
+  // with a fresh IDENTIFY. The alarm handler also checks isGatewayEnabled,
+  // so even a racing alarm cannot resurrect a stopped gateway.
+  async stop() {
+    await this.ctx.storage.delete(GATEWAY_ENABLED_KEY);
+    await this.ctx.storage.deleteAlarm();
+
+    if (this.reconnectTimer !== undefined) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+    this.clearHeartbeat();
+
+    const webSocket = this.webSocket;
+    this.webSocket = null;
+    if (webSocket?.readyState === WebSocket.OPEN || webSocket?.readyState === WebSocket.CONNECTING) {
+      webSocket.close(1000, "stop");
+    }
+
+    this.sessionId = null;
+    this.resumeGatewayUrl = null;
+    this.lastSequence = null;
     return { ok: true };
   }
 
@@ -135,11 +163,20 @@ export class DiscordGateway extends DurableObject<Env> {
     webSocket.addEventListener("message", (event) => {
       void this.handleMessage(event);
     });
+    // Ignore events from sockets this object has already let go of (stop()
+    // and reconnect() null out this.webSocket first), so a deliberate close
+    // does not schedule a reconnect.
     webSocket.addEventListener("close", () => {
+      if (this.webSocket !== webSocket) {
+        return;
+      }
       this.clearHeartbeat();
       this.scheduleReconnect();
     });
     webSocket.addEventListener("error", () => {
+      if (this.webSocket !== webSocket) {
+        return;
+      }
       this.scheduleReconnect();
     });
   }
@@ -268,10 +305,11 @@ export class DiscordGateway extends DurableObject<Env> {
 
   private reconnect() {
     this.clearHeartbeat();
-    if (this.webSocket?.readyState === WebSocket.OPEN || this.webSocket?.readyState === WebSocket.CONNECTING) {
-      this.webSocket.close(4000, "reconnect");
-    }
+    const webSocket = this.webSocket;
     this.webSocket = null;
+    if (webSocket?.readyState === WebSocket.OPEN || webSocket?.readyState === WebSocket.CONNECTING) {
+      webSocket.close(4000, "reconnect");
+    }
     this.scheduleReconnect();
   }
 

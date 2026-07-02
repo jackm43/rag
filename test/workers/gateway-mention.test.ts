@@ -525,6 +525,57 @@ test("gateway durable object start RPC persists enabled state and schedules an a
   }
 });
 
+test("gateway durable object stop RPC disables the gateway and prevents reconnects", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  let socketsOpened = 0;
+  class FakeWebSocket extends EventTarget {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+    readyState = FakeWebSocket.CONNECTING;
+    constructor(readonly url: string) {
+      super();
+      socketsOpened += 1;
+    }
+    send() { }
+    close() {
+      this.readyState = FakeWebSocket.CLOSED;
+      this.dispatchEvent(new Event("close"));
+    }
+  }
+  globalThis.WebSocket = FakeWebSocket as never;
+
+  try {
+    const id = testEnv.DISCORD_GATEWAY.idFromName(`rpc-stop-test-${crypto.randomUUID()}`);
+    const gateway = testEnv.DISCORD_GATEWAY.get(id);
+
+    await gateway.start();
+    assert.equal(socketsOpened, 1);
+
+    const stopResponse = await gateway.stop();
+    assert.deepEqual(stopResponse, { ok: true });
+
+    await runInDurableObject(gateway, async (instance, state) => {
+      assert.equal(await state.storage.get("gatewayEnabled"), undefined);
+      assert.isNull(await state.storage.getAlarm(), "stop cancels the watchdog alarm");
+      // The alarm handler checks isGatewayEnabled, so even a racing alarm
+      // must not reconnect or reschedule after stop.
+      await (instance as { alarm: () => Promise<void> }).alarm();
+      assert.isNull(await state.storage.getAlarm());
+    });
+
+    assert.equal(socketsOpened, 1, "a stopped gateway must not reconnect");
+    assert.deepEqual(await gateway.health(), { connected: false, resumable: false });
+
+    // start stays idempotent and works again after a stop.
+    assert.deepEqual(await gateway.start(), { ok: true });
+    assert.equal(socketsOpened, 2);
+  } finally {
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
+
 test("queue handler posts channel reply jobs without creating a thread", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];

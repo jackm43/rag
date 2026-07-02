@@ -244,6 +244,63 @@ test("worker rejects /gateway/start without control token auth", async () => {
   assert.equal(startCalls, 1);
 });
 
+test("worker rejects /gateway/stop without control token auth", async () => {
+  let stopCalls = 0;
+  const env = createEnv("unused", {
+    DISCORD_BOT_TOKEN: "bot-token",
+    GATEWAY_CONTROL_TOKEN: "control-token",
+    DISCORD_GATEWAY: {
+      idFromName: () => "id",
+      get: () => ({
+        stop: async () => {
+          stopCalls += 1;
+          return { ok: true };
+        },
+      }),
+    },
+  });
+
+  const wrongMethod = await worker.fetch(
+    new Request("https://example.com/gateway/stop", { method: "GET" }),
+    env,
+    {} as never,
+  );
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get("allow"), "POST");
+  assert.equal(stopCalls, 0);
+
+  const unauthorized = await worker.fetch(
+    new Request("https://example.com/gateway/stop", { method: "POST" }),
+    env,
+    {} as never,
+  );
+  assert.equal(unauthorized.status, 401);
+  assert.equal(stopCalls, 0);
+
+  const botToken = await worker.fetch(
+    new Request("https://example.com/gateway/stop", {
+      method: "POST",
+      headers: { authorization: "Bearer bot-token" },
+    }),
+    env,
+    {} as never,
+  );
+  assert.equal(botToken.status, 401);
+  assert.equal(stopCalls, 0);
+
+  const authorized = await worker.fetch(
+    new Request("https://example.com/gateway/stop", {
+      method: "POST",
+      headers: { authorization: "Bearer control-token" },
+    }),
+    env,
+    {} as never,
+  );
+  assert.equal(authorized.status, 200);
+  assert.deepEqual(await authorized.json(), { ok: true });
+  assert.equal(stopCalls, 1);
+});
+
 test("worker rejects gateway control requests when the control token is not configured", async () => {
   let gatewayCalls = 0;
   const env = createEnv("unused", {

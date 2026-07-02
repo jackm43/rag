@@ -29,6 +29,7 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
 - HTTP endpoints:
   - `POST /discord` Discord interactions
   - `POST /gateway/start` start gateway connection (`GATEWAY_CONTROL_TOKEN` auth)
+  - `POST /gateway/stop` stop gateway connection (`GATEWAY_CONTROL_TOKEN` auth)
   - `GET /gateway/health` gateway status (`GATEWAY_CONTROL_TOKEN` auth)
 - All other public paths, including `/` and source-file-looking paths, return `404`.
 
@@ -40,16 +41,17 @@ flowchart LR
   Worker -->|200 JSON: interaction response| Discord
 
   Operator[Operator] -->|POST /gateway/start: Bearer GATEWAY_CONTROL_TOKEN| Worker
+  Operator -->|POST /gateway/stop: Bearer GATEWAY_CONTROL_TOKEN| Worker
   Operator -->|GET /gateway/health: Bearer GATEWAY_CONTROL_TOKEN| Worker
-  Worker -->|typed Durable Object RPC: start or health| GatewayDO[DiscordGateway Durable Object]
-  GatewayDO -->|JSON: start result or health state| Worker
+  Worker -->|typed Durable Object RPC: start, stop, or health| GatewayDO[DiscordGateway Durable Object]
+  GatewayDO -->|JSON: start/stop result or health state| Worker
   Worker -->|JSON response| Operator
 
   Unknown[Other public request] -->|any unconfigured path or method| Worker
   Worker -->|404 Not found, or 405 on configured paths with the wrong method| Unknown
 ```
 
-The gateway control endpoints authenticate with a dedicated `GATEWAY_CONTROL_TOKEN` secret, never the Discord bot token, and fail closed with `401` when the secret is not configured. Operators must create it before use: set it on the worker with `wrangler secret put GATEWAY_CONTROL_TOKEN` and add a matching `GATEWAY_CONTROL_TOKEN` field to the 1Password `ragbot` item referenced by `.env` so `deploy.sh` can send it.
+The gateway control endpoints authenticate with a dedicated `GATEWAY_CONTROL_TOKEN` secret, never the Discord bot token, and fail closed with `401` when the secret is not configured. `POST /gateway/start` is idempotent; `POST /gateway/stop` is the kill switch — it clears the enabled flag, cancels the watchdog alarm, closes the socket, and resets resume state, so a stopped gateway stays down (no reconnect on close events or alarms) until the next start. Operators must create it before use: set it on the worker with `wrangler secret put GATEWAY_CONTROL_TOKEN` and add a matching `GATEWAY_CONTROL_TOKEN` field to the 1Password `ragbot` item referenced by `.env` so `deploy.sh` can send it.
 
 ## Slash Command Flow
 
