@@ -4,9 +4,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   plugins: [
     cloudflareTest({
-      main: "./src/index.ts",
+      main: "./workers/public/gateway/src/index.ts",
       remoteBindings: false,
-      wrangler: { configPath: "./wrangler.jsonc" },
+      wrangler: { configPath: "./workers/public/gateway/wrangler.jsonc" },
     }),
   ],
 });

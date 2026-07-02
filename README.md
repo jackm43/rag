@@ -4,12 +4,12 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
 
 ## Tech Stack
 
-- Runtime: Cloudflare Workers (`src/index.ts`, `src/brain-worker.ts`, `src/responder-worker.ts`, `src/spend-worker.ts`)
+- Runtime: Cloudflare Workers (`workers/public/gateway/src/index.ts`, `workers/services/brain/src/index.ts`, `workers/services/responder/src/index.ts`, `workers/services/spend/src/index.ts`)
 - Language: TypeScript
 - Database: Cloudflare D1 (`DB`)
-- AI: Workers AI binding (`AI`) and AI Gateway REST; model and prompt config live in `src/ai-config` (`@cf/...` Workers AI models, Unified Billing partner chat models such as `grok/grok-4.3`, and web-search models such as `openai/gpt-4o-search-preview`)
+- AI: Workers AI binding (`AI`) and AI Gateway REST; model and prompt config live in `packages/ai/ai-config` (`@cf/...` Workers AI models, Unified Billing partner chat models such as `grok/grok-4.3`, and web-search models such as `openai/gpt-4o-search-preview`)
 - Queue: Cloudflare Queues (`AI_JOBS`, `ai-jobs`, `DISCORD_OUTBOX`, `discord-outbox`, `SPEND_JOBS`, `ai-spend-jobs`, dead-letter queues)
-- Queue contracts: Cap'n Proto event envelopes (`src/contracts`) via `capnp-es`; every queue message is encoded and value-validated at the producer and re-validated at the consumer (snowflake id shape, free-text length caps). The generated `src/contracts/envelope.ts` is committed; regenerate after schema changes with `npm run contracts:build`, which needs the native `capnp` compiler (`brew install capnp`)
+- Queue contracts: Cap'n Proto event envelopes (`packages/contracts`) via `capnp-es`; every queue message is encoded and value-validated at the producer and re-validated at the consumer (snowflake id shape, free-text length caps). The generated `packages/contracts/envelope.ts` is committed; regenerate after schema changes with `npm run contracts:build`, which needs the native `capnp` compiler (`brew install capnp`)
 - Stateful connection: Durable Objects (`DiscordGateway`)
 - Discord integration:
   - Interactions webhook
@@ -154,8 +154,8 @@ sequenceDiagram
 
 ### `/rag`
 
-- Entry: interaction command routed in `src/index.ts`
-- Handler: `src/commands/rag.ts`
+- Entry: interaction command routed in `workers/public/gateway/src/index.ts`
+- Handler: `packages/domain/commands/rag.ts`
 - Data path:
   - one D1 batch: insert `rag_events` row + upsert/increment `rag_totals ... RETURNING rag_count` (no follow-up SELECT)
 - AI usage: none
@@ -164,8 +164,8 @@ sequenceDiagram
 
 ### `/ragboard`
 
-- Entry: interaction command routed in `src/index.ts`
-- Handler: `src/commands/ragboard.ts`
+- Entry: interaction command routed in `workers/public/gateway/src/index.ts`
+- Handler: `packages/domain/commands/ragboard.ts`
 - Data path:
   - select top 10 from `rag_totals` ordered by `rag_count`
 - Response:
@@ -173,8 +173,8 @@ sequenceDiagram
 
 ### `/ragspend`
 
-- Entry: interaction command routed in `src/index.ts`
-- Handler: `src/commands/ragspend.ts`
+- Entry: interaction command routed in `workers/public/gateway/src/index.ts`
+- Handler: `packages/domain/commands/ragspend.ts`
 - Data path:
   - reads the invoking user's precomputed total from `rag_ai_spend_totals`
 - Response:
@@ -182,8 +182,8 @@ sequenceDiagram
 
 ### `/ragspendboard`
 
-- Entry: interaction command routed in `src/index.ts`
-- Handler: `src/commands/ragspend.ts`
+- Entry: interaction command routed in `workers/public/gateway/src/index.ts`
+- Handler: `packages/domain/commands/ragspend.ts`
 - Data path:
   - selects top 10 from `rag_ai_spend_totals` ordered by AI Gateway log cost
 - Response:
@@ -191,8 +191,8 @@ sequenceDiagram
 
 ### `/ask`
 
-- Entry: interaction command routed in `src/index.ts`
-- Handler: `src/commands/ask.ts` (thread creation + enqueue) and `src/consumer.ts` (AI answer)
+- Entry: interaction command routed in `workers/public/gateway/src/index.ts`
+- Handler: `packages/domain/commands/ask.ts` (thread creation + enqueue) and `packages/domain/consumer.ts` (AI answer)
 - Behavior:
   - defers the interaction
   - derives the thread title from the prompt (no model call)
@@ -204,8 +204,8 @@ sequenceDiagram
 
 ### `/bicture`
 
-- Entry: interaction command routed in `src/index.ts`
-- Handler: `src/commands/bicture.ts` (enqueue) and `src/consumer.ts` (image generation)
+- Entry: interaction command routed in `workers/public/gateway/src/index.ts`
+- Handler: `packages/domain/commands/bicture.ts` (enqueue) and `packages/domain/consumer.ts` (image generation)
 - Behavior:
   - defers the interaction
   - enqueues an encoded `bicture` job in `ai-jobs`; the brain worker sends the prompt to the configured Unified Billing image model through the Workers AI binding and AI Gateway
@@ -215,8 +215,8 @@ sequenceDiagram
 
 ### `/ragjam`
 
-- Entry: interaction command routed in `src/index.ts`
-- Handler: `src/commands/ragjam.ts`
+- Entry: interaction command routed in `workers/public/gateway/src/index.ts`
+- Handler: `packages/domain/commands/ragjam.ts`
 - Behavior:
   - defers the interaction
   - sends `prompt`, `is_instrumental: false`, optional `lyrics`, and `lyrics_optimizer` to `minimax/music-2.6`
@@ -231,7 +231,7 @@ sequenceDiagram
 - Entry:
   - authenticated `POST /gateway/start` starts Durable Object gateway client
   - gateway listens for Discord `MESSAGE_CREATE`
-- Handlers: `src/gateway.ts` (connection) and `src/mention.ts` (DO-side encode + brain-side resolution)
+- Handlers: `workers/public/gateway/src/gateway.ts` (connection) and `packages/domain/mention.ts` (DO-side encode + brain-side resolution)
 - Queue and worker:
   - the DO enqueues every non-bot message with a usable prompt as a `message.received` event (no D1 thread lookup, no REST role fetch in the DO)
   - the brain resolves events into `channel_reply`/`thread_reply` work in-process: thread lookup, bot-role fetch for role mentions, mention resolution, and usage limits
@@ -247,7 +247,7 @@ sequenceDiagram
 
 ## Configuration
 
-AI config is checked into `src/ai-config`:
+AI config is checked into `packages/ai/ai-config`:
 
 - `discord-response.json` and `discord-response-system-prompt.md` control mention replies.
 - `ask-web-search.json` and `ask-web-search-system-prompt.md` control `/ask` research mode.
@@ -257,7 +257,7 @@ AI config is checked into `src/ai-config`:
 
 ### AI usage limits
 
-Every AI ingress (`/ask`, `/bicture`, `/ragjam`, and gateway mentions/tracked-thread replies) runs a shared pre-flight guard (`src/limits.ts`) before any model call or enqueue:
+Every AI ingress (`/ask`, `/bicture`, `/ragjam`, and gateway mentions/tracked-thread replies) runs a shared pre-flight guard (`packages/domain/limits.ts`) before any model call or enqueue:
 
 - Hourly request rate per user, recorded in the `rag_ai_requests` D1 table. Configure with `AI_RATE_LIMIT_PER_HOUR` (default `20`).
 - Daily spend budget per user, summed from `rag_ai_spend_events` over the trailing 24 hours. Configure with `AI_DAILY_BUDGET_USD` (default `1.00`). Events still pending cost reconciliation count as zero, so the budget is best-effort.
@@ -268,12 +268,12 @@ The guard fails open on D1 errors, and the `/rag` command family is not rate lim
 
 | Worker | Config | Trust zone / role | Secrets |
 | --- | --- | --- | --- |
-| `ragbot-worker` | `wrangler.jsonc` | Public entrypoint (`/discord`, gateway control) + `DiscordGateway` Durable Object. The DO keeps only the WebSocket lifecycle + IDENTIFY (bot token, unavoidable), payload validation, and encode+enqueue of `message.received` events — it uses no D1 and no Discord REST | `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (DO IDENTIFY + interaction-path Discord REST), `GATEWAY_CONTROL_TOKEN` |
-| `ragbot-brain-worker` | `wrangler.brain.jsonc` | `ai-jobs` consumer: **read Discord + AI + D1**. Resolves raw `message.received` events (thread lookup, mention/role resolution, usage limits) in-process, reads thread history, replied-to messages, and bot roles over Discord REST, and creates `/ask`-style threads; every message/edit it produces leaves via the outbox queue or the responder RPC binding, never directly | `CF_AIG_TOKEN` (belongs to brain **only** — remove it from `ragbot-worker` with `wrangler secret delete CF_AIG_TOKEN`), `DISCORD_BOT_TOKEN` (honestly required: Discord *reads* need the bot token too, so the brain keeps it even though writes go through the responder) |
-| `ragbot-responder-worker` | `wrangler.responder.jsonc` | **Write Discord** — the single egress choke point. No public route. Consumes `discord-outbox` for text replies and exposes the `Responder` RPC entrypoint for media-bearing interaction edits. The only place `sanitizeAiText`, the message length cap, and `allowed_mentions: { parse: [] }` run on AI output before it reaches Discord | `DISCORD_BOT_TOKEN` |
-| `ragbot-spend-worker` | `wrangler.spend.jsonc` | `ai-spend-jobs` consumer: AI Gateway log reconciliation | `CLOUDFLARE_API_TOKEN` (scoped to AI Gateway read) |
+| `ragbot-worker` | `workers/public/gateway/wrangler.jsonc` | Public entrypoint (`/discord`, gateway control) + `DiscordGateway` Durable Object. The DO keeps only the WebSocket lifecycle + IDENTIFY (bot token, unavoidable), payload validation, and encode+enqueue of `message.received` events — it uses no D1 and no Discord REST | `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (DO IDENTIFY + interaction-path Discord REST), `GATEWAY_CONTROL_TOKEN` |
+| `ragbot-brain-worker` | `workers/services/brain/wrangler.jsonc` | `ai-jobs` consumer: **read Discord + AI + D1**. Resolves raw `message.received` events (thread lookup, mention/role resolution, usage limits) in-process, reads thread history, replied-to messages, and bot roles over Discord REST, and creates `/ask`-style threads; every message/edit it produces leaves via the outbox queue or the responder RPC binding, never directly | `CF_AIG_TOKEN` (belongs to brain **only** — remove it from `ragbot-worker` with `wrangler secret delete CF_AIG_TOKEN`), `DISCORD_BOT_TOKEN` (honestly required: Discord *reads* need the bot token too, so the brain keeps it even though writes go through the responder) |
+| `ragbot-responder-worker` | `workers/services/responder/wrangler.jsonc` | **Write Discord** — the single egress choke point. No public route. Consumes `discord-outbox` for text replies and exposes the `Responder` RPC entrypoint for media-bearing interaction edits. The only place `sanitizeAiText`, the message length cap, and `allowed_mentions: { parse: [] }` run on AI output before it reaches Discord | `DISCORD_BOT_TOKEN` |
+| `ragbot-spend-worker` | `workers/services/spend/wrangler.jsonc` | `ai-spend-jobs` consumer: AI Gateway log reconciliation | `CLOUDFLARE_API_TOKEN` (scoped to AI Gateway read) |
 
-Set a secret on a specific worker with `wrangler secret put NAME -c wrangler.brain.jsonc` (or the matching config file).
+Set a secret on a specific worker with `wrangler secret put NAME -c workers/services/brain/wrangler.jsonc` (or the matching config file).
 
 ### Discord egress design
 

@@ -11,8 +11,8 @@ import {
   MAX_FREE_TEXT_LENGTH,
   MAX_REPLY_CONTENT_LENGTH,
   MAX_USERNAME_LENGTH,
-} from "../src/contracts/index.ts";
-import { EventEnvelope } from "../src/contracts/envelope.ts";
+} from "../packages/contracts/index.ts";
+import { EventEnvelope } from "../packages/contracts/envelope.ts";
 
 const CHANNEL_ID = "200000000000000001";
 const MESSAGE_ID = "300000000000000001";

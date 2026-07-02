@@ -4,7 +4,7 @@ import {
   createBoundaryClient,
   PolicyViolationError,
   type BoundaryPolicy,
-} from "../src/net/boundary-client.ts";
+} from "../packages/net/boundary-client.ts";
 
 const discordPolicy: BoundaryPolicy = {
   identity: "discord-rest",

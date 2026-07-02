@@ -1,10 +1,10 @@
 import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
-import worker from "../src/index.ts";
-import { checkAiUsageAllowed } from "../src/limits.ts";
-import { resolveGatewayMessage } from "../src/mention.ts";
-import { decodeReplyJobEnvelope } from "../src/contracts/index.ts";
+import worker from "../workers/public/gateway/src/index.ts";
+import { checkAiUsageAllowed } from "../packages/domain/limits.ts";
+import { resolveGatewayMessage } from "../packages/domain/mention.ts";
+import { decodeReplyJobEnvelope } from "../packages/contracts/index.ts";
 import { createEnv, createSignedRequest } from "./helpers.ts";
 
 const BOT_USER_ID = "100000000000000001";

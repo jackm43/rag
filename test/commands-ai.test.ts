@@ -1,10 +1,10 @@
 import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
-import worker from "../src/index.ts";
-import brainWorker from "../src/brain-worker.ts";
-import { shouldUseAskWebSearch } from "../src/commands/ask.ts";
-import { decodeAiJobEnvelope, decodeReplyJobEnvelope, encodeAiJobEnvelope } from "../src/contracts/index.ts";
+import worker from "../workers/public/gateway/src/index.ts";
+import brainWorker from "../workers/services/brain/src/index.ts";
+import { shouldUseAskWebSearch } from "../packages/domain/commands/ask.ts";
+import { decodeAiJobEnvelope, decodeReplyJobEnvelope, encodeAiJobEnvelope } from "../packages/contracts/index.ts";
 import { createDbMock, createEnv, createSignedRequest } from "./helpers.ts";
 
 const RAGJAM_APPLICATION_ID = "500000000000000001";

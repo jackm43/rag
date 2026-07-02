@@ -1,9 +1,9 @@
 import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
-import worker from "../src/index.ts";
-import { encodeAiSpendJobEnvelope } from "../src/contracts/index.ts";
-import { processSpendQueueMessage } from "../src/spend.ts";
+import worker from "../workers/public/gateway/src/index.ts";
+import { encodeAiSpendJobEnvelope } from "../packages/contracts/index.ts";
+import { processSpendQueueMessage } from "../packages/ai/spend.ts";
 import { createDbMock, createEnv, createSignedRequest } from "./helpers.ts";
 
 test("/rag interaction is deferred and edits the original response from waitUntil", async () => {

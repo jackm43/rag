@@ -17,7 +17,8 @@
   },
   "include": [
     "worker-configuration.d.ts",
-    "src/**/*.ts",
+    "workers/**/*.ts",
+    "packages/**/*.ts",
     "scripts/**/*.ts",
     "vitest.config.ts"
   ]

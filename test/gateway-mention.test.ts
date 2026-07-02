@@ -5,12 +5,12 @@ import { runInDurableObject } from "cloudflare:test";
 import {
   extractBotMentionPrompt,
   handleGatewayMessageCreate,
-} from "../src/index.ts";
-import brainWorker from "../src/brain-worker.ts";
-import { resolveGatewayMessage } from "../src/mention.ts";
-import responderWorker from "../src/responder-worker.ts";
-import { decodeAiJobEnvelope, decodeReplyJobEnvelope, encodeAiJobEnvelope } from "../src/contracts/index.ts";
-import { fetchChannelMessages } from "../src/discord.ts";
+} from "../workers/public/gateway/src/index.ts";
+import brainWorker from "../workers/services/brain/src/index.ts";
+import { resolveGatewayMessage } from "../packages/domain/mention.ts";
+import responderWorker from "../workers/services/responder/src/index.ts";
+import { decodeAiJobEnvelope, decodeReplyJobEnvelope, encodeAiJobEnvelope } from "../packages/contracts/index.ts";
+import { fetchChannelMessages } from "../packages/discord/index.ts";
 import { createDbMock, createEnv } from "./helpers.ts";
 
 const BOT_USER_ID = "100000000000000001";

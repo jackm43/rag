@@ -21,17 +21,17 @@ Mention-driven AI behavior:
 ## Architecture
 
 Core components:
-- Worker entrypoint: `src/index.ts`
-- HTTP helpers and signature verification: `src/http.ts`
+- Worker entrypoint: `workers/public/gateway/src/index.ts`
+- HTTP helpers and signature verification: `packages/domain/http.ts`
 - Slash command handlers:
-  - `src/commands/rag.ts`
-  - `src/commands/ragboard.ts`
-  - `src/commands/ask.ts`
-- Mention queue producer/consumer logic: `src/mention.ts`
-- Gateway ingestion and connection lifecycle: `src/gateway.ts`
+  - `packages/domain/commands/rag.ts`
+  - `packages/domain/commands/ragboard.ts`
+  - `packages/domain/commands/ask.ts`
+- Mention queue producer/consumer logic: `packages/domain/mention.ts`
+- Gateway ingestion and connection lifecycle: `workers/public/gateway/src/gateway.ts`
 - Command registration script: `scripts/register-commands.ts`
 
-Cloudflare bindings from `wrangler.jsonc`:
+Cloudflare bindings from `workers/public/gateway/wrangler.jsonc`:
 - `DB` (D1)
 - `AI` (Workers AI)
 - `DISCORD_GATEWAY` (Durable Object)

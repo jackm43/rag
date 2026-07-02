@@ -12,19 +12,19 @@ This project expects these environment variables:
 ## Current Runtime Shape
 
 - Cloudflare Worker entrypoints:
-  - `src/index.ts` Discord routing, gateway controls, and AI response queue consumer
-  - `src/spend-worker.ts` AI spend aggregation queue consumer
+  - `workers/public/gateway/src/index.ts` Discord routing, gateway controls, and AI response queue consumer
+  - `workers/services/spend/src/index.ts` AI spend aggregation queue consumer
 - Modules:
-  - `src/http.ts` Discord signature verification, JSON responses, constant-time compare
-  - `src/discord.ts` Discord REST helpers
-  - `src/gateway.ts` `DiscordGateway` Durable Object (`DISCORD_GATEWAY` binding)
-  - `src/mention.ts` mention handling, thread tracking, AI title generation, and AI queue consumer (thread conversation context)
-  - `src/commands/ask.ts` `/ask` thread creation, normal AI response handling, and web-search research mode
-  - `src/commands/ragspend.ts` `/ragspend` personal AI spend lookup and `/ragspendboard` spend leaderboard
-  - `src/ai.ts` model-agnostic chat calls through the Workers AI binding (`env.AI.run`) or AI Gateway REST. Workers AI `@cf/...` models use binding options (`gateway: { id }`), Unified Billing partner chat models use AI Gateway compat chat completions, and `/ask` research mode uses an OpenAI search model such as `openai/gpt-4o-search-preview` via AI Gateway.
-  - `src/spend.ts` raw spend event recording, AI Gateway log cost reconciliation, spend queue consumer helper, and dollar formatting
-  - `src/config.ts` loads source-controlled AI config from `src/ai-config`
-  - `src/logger.ts` structured logging
+  - `packages/domain/http.ts` Discord signature verification, JSON responses, constant-time compare
+  - `packages/discord/index.ts` Discord REST helpers
+  - `workers/public/gateway/src/gateway.ts` `DiscordGateway` Durable Object (`DISCORD_GATEWAY` binding)
+  - `packages/domain/mention.ts` mention handling, thread tracking, AI title generation, and AI queue consumer (thread conversation context)
+  - `packages/domain/commands/ask.ts` `/ask` thread creation, normal AI response handling, and web-search research mode
+  - `packages/domain/commands/ragspend.ts` `/ragspend` personal AI spend lookup and `/ragspendboard` spend leaderboard
+  - `packages/ai/ai.ts` model-agnostic chat calls through the Workers AI binding (`env.AI.run`) or AI Gateway REST. Workers AI `@cf/...` models use binding options (`gateway: { id }`), Unified Billing partner chat models use AI Gateway compat chat completions, and `/ask` research mode uses an OpenAI search model such as `openai/gpt-4o-search-preview` via AI Gateway.
+  - `packages/ai/spend.ts` raw spend event recording, AI Gateway log cost reconciliation, spend queue consumer helper, and dollar formatting
+  - `packages/ai/config.ts` loads source-controlled AI config from `packages/ai/ai-config`
+  - `packages/logger/index.ts` structured logging
 - Discord interactions route: `POST /discord`
 - Gateway control routes: `POST /gateway/start`, `GET /gateway/health` (both require `Authorization: Bearer $DISCORD_BOT_TOKEN`)
 - Public routes are allowlisted. Any path not listed here returns `404`.
@@ -38,7 +38,7 @@ This project expects these environment variables:
 
 ## Runtime Configuration
 
-AI config lives in `src/ai-config`:
+AI config lives in `packages/ai/ai-config`:
 - `discord-response.json`: mention and `/ask` response model, max tokens, temperature, thread history limit, AI Gateway id used by the AI binding
 - `discord-response-system-prompt.md`: mention response system prompt
 - `ask-web-search.json`: `/ask` web-search model, max output tokens, temperature, search turns, search context size, AI Gateway id used by the AI binding
@@ -59,7 +59,7 @@ Create D1 database:
 op run --env-file=.env -- npx wrangler d1 create ragbot
 ```
 
-Copy generated IDs into `wrangler.jsonc`:
+Copy generated IDs into `workers/public/gateway/wrangler.jsonc`:
 - `database_id`
 - `preview_database_id`
 
