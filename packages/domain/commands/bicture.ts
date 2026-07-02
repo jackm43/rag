@@ -1,7 +1,7 @@
 import bictureImageConfig from "../../ai/ai-config/bicture-image.json";
 import { buildAiGatewayMetadata } from "../../ai/ai-metadata";
 import { errorDetails, errorMessage, logger } from "../../logger";
-import { boundaryClients } from "../../net/clients";
+import { boundaryClients } from "../../boundaries/outbound/clients";
 import { sendInteractionEdit, sendInteractionMediaEdit } from "../outbox";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../../ai/spend";
 import { type BictureJob, type Env } from "../../contracts/types";

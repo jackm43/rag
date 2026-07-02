@@ -1,4 +1,4 @@
-import { boundaryClients } from "../net/clients";
+import { boundaryClients } from "../boundaries/outbound/clients";
 import { logger } from "../logger";
 import { DISCORD_API_BASE_URL, type DiscordChannel, type DiscordMessage, type Env } from "../contracts/types";
 import { isDiscordMessage, isRecord } from "../contracts/validation";

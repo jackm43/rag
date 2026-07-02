@@ -1,6 +1,6 @@
 import { decodeAiSpendJobEnvelope, encodeAiSpendJobEnvelope } from "../contracts";
 import { errorMessage, logger } from "../logger";
-import { boundaryClients } from "../net/clients";
+import { boundaryClients } from "../boundaries/outbound/clients";
 import type { Env } from "../contracts/types";
 import { isRecord } from "../contracts/validation";
 

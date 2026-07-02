@@ -1,4 +1,4 @@
-import { errorMessage, logger } from "../logger";
+import { errorMessage, logger } from "../../logger";
 
 export type TrustZone =
   | "egress-discord"

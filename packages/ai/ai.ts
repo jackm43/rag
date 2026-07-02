@@ -1,5 +1,5 @@
 import type { BotConfig } from "./config";
-import { boundaryClients } from "../net/clients";
+import { boundaryClients } from "../boundaries/outbound/clients";
 import type { Env } from "../contracts/types";
 import { isRecord } from "../contracts/validation";
 

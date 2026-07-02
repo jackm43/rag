@@ -1,5 +1,6 @@
+import { discordInteractionGuard } from "../../../../packages/boundaries/inbound/discord-interaction";
+import { operatorControlGuard } from "../../../../packages/boundaries/inbound/operator-control";
 import { routeInteraction } from "../../../../packages/domain/commands/router";
-import { bearerTokenMatches, verifyDiscordRequest } from "../../../../packages/domain/http";
 import {
   extractBotMentionPrompt,
   handleGatewayMessageCreate,
@@ -20,27 +21,16 @@ const methodNotAllowed = (allowedMethod: string) =>
     headers: { Allow: allowedMethod },
   });
 
-const unauthorized = () => new Response("Unauthorized", { status: 401 });
-
 const notFound = () => new Response("Not found", { status: 404 });
-
-const isAuthorizedGatewayControlRequest = (request: Request, env: Env) => {
-  const controlToken = env.GATEWAY_CONTROL_TOKEN;
-  if (!controlToken) {
-    return false;
-  }
-
-  const authorization = request.headers.get("authorization");
-  return authorization !== null && bearerTokenMatches(authorization, controlToken);
-};
 
 const handleGatewayStartRequest = async (request: Request, env: Env): Promise<Response> => {
   if (request.method !== "POST") {
     return methodNotAllowed("POST");
   }
 
-  if (!isAuthorizedGatewayControlRequest(request, env)) {
-    return unauthorized();
+  const operator = await operatorControlGuard.verify(request, env);
+  if (!operator.ok) {
+    return operator.response;
   }
 
   return Response.json(await startGateway(env));
@@ -51,8 +41,9 @@ const handleGatewayStopRequest = async (request: Request, env: Env): Promise<Res
     return methodNotAllowed("POST");
   }
 
-  if (!isAuthorizedGatewayControlRequest(request, env)) {
-    return unauthorized();
+  const operator = await operatorControlGuard.verify(request, env);
+  if (!operator.ok) {
+    return operator.response;
   }
 
   return Response.json(await stopGateway(env));
@@ -63,8 +54,9 @@ const handleGatewayHealthRequest = async (request: Request, env: Env): Promise<R
     return methodNotAllowed("GET");
   }
 
-  if (!isAuthorizedGatewayControlRequest(request, env)) {
-    return unauthorized();
+  const operator = await operatorControlGuard.verify(request, env);
+  if (!operator.ok) {
+    return operator.response;
   }
 
   return Response.json(await getGatewayHealth(env));
@@ -98,11 +90,11 @@ export default {
       return methodNotAllowed("POST");
     }
 
-    const interaction = await verifyDiscordRequest(request, env.DISCORD_PUBLIC_KEY);
-    if (!interaction) {
-      return new Response("Bad request signature", { status: 401 });
+    const discord = await discordInteractionGuard.verify(request, env);
+    if (!discord.ok) {
+      return discord.response;
     }
 
-    return routeInteraction(interaction, env, ctx);
+    return routeInteraction(discord.grant.interaction, env, ctx);
   },
 };

@@ -1,4 +1,4 @@
-import type { Env } from "../contracts/types";
+import type { Env } from "../../contracts/types";
 import { createBoundaryClient, type BoundaryFetch } from "./boundary-client";
 
 const DISCORD_TIMEOUT_MS = 15_000;
