@@ -130,6 +130,7 @@ export type Env = Cloudflare.Env & {
   SPEND_JOBS?: Queue<AiSpendJob>;
   CLOUDFLARE_API_TOKEN?: string;
   CF_AIG_GATEWAY_ID?: string;
+  GATEWAY_CONTROL_TOKEN?: string;
 };
 
 export const DISCORD_API_BASE_URL = "https://discord.com/api/v10";

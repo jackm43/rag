@@ -1979,10 +1979,11 @@ test("queue handler acknowledges malformed AI jobs without side effects", async 
   assert.equal(acked, true);
 });
 
-test("worker rejects /gateway/start without bot token auth", async () => {
+test("worker rejects /gateway/start without control token auth", async () => {
   let startCalls = 0;
   const env = createEnv("unused", {
     DISCORD_BOT_TOKEN: "bot-token",
+    GATEWAY_CONTROL_TOKEN: "control-token",
     DISCORD_GATEWAY: {
       idFromName: () => "id",
       get: () => ({
@@ -2011,10 +2012,21 @@ test("worker rejects /gateway/start without bot token auth", async () => {
   assert.equal(unauthorized.status, 401);
   assert.equal(startCalls, 0);
 
-  const authorized = await worker.fetch(
+  const botToken = await worker.fetch(
     new Request("https://example.com/gateway/start", {
       method: "POST",
       headers: { authorization: "Bearer bot-token" },
+    }),
+    env,
+    {} as never,
+  );
+  assert.equal(botToken.status, 401);
+  assert.equal(startCalls, 0);
+
+  const authorized = await worker.fetch(
+    new Request("https://example.com/gateway/start", {
+      method: "POST",
+      headers: { authorization: "Bearer control-token" },
     }),
     env,
     {} as never,
@@ -2024,10 +2036,52 @@ test("worker rejects /gateway/start without bot token auth", async () => {
   assert.equal(startCalls, 1);
 });
 
-test("worker rejects /gateway/health without bot token auth", async () => {
+test("worker rejects gateway control requests when the control token is not configured", async () => {
+  let gatewayCalls = 0;
+  const env = createEnv("unused", {
+    DISCORD_BOT_TOKEN: "bot-token",
+    DISCORD_GATEWAY: {
+      idFromName: () => "id",
+      get: () => ({
+        start: async () => {
+          gatewayCalls += 1;
+          return { ok: true };
+        },
+        health: async () => {
+          gatewayCalls += 1;
+          return { connected: false, resumable: false };
+        },
+      }),
+    },
+  });
+
+  const start = await worker.fetch(
+    new Request("https://example.com/gateway/start", {
+      method: "POST",
+      headers: { authorization: "Bearer control-token" },
+    }),
+    env,
+    {} as never,
+  );
+  assert.equal(start.status, 401);
+
+  const health = await worker.fetch(
+    new Request("https://example.com/gateway/health", {
+      method: "GET",
+      headers: { authorization: "Bearer control-token" },
+    }),
+    env,
+    {} as never,
+  );
+  assert.equal(health.status, 401);
+  assert.equal(gatewayCalls, 0);
+});
+
+test("worker rejects /gateway/health without control token auth", async () => {
   let healthCalls = 0;
   const env = createEnv("unused", {
     DISCORD_BOT_TOKEN: "bot-token",
+    GATEWAY_CONTROL_TOKEN: "control-token",
     DISCORD_GATEWAY: {
       idFromName: () => "id",
       get: () => ({
@@ -2042,7 +2096,7 @@ test("worker rejects /gateway/health without bot token auth", async () => {
   const wrongMethod = await worker.fetch(
     new Request("https://example.com/gateway/health", {
       method: "POST",
-      headers: { authorization: "Bearer bot-token" },
+      headers: { authorization: "Bearer control-token" },
     }),
     env,
     {} as never,
@@ -2059,10 +2113,21 @@ test("worker rejects /gateway/health without bot token auth", async () => {
   assert.equal(unauthorized.status, 401);
   assert.equal(healthCalls, 0);
 
-  const authorized = await worker.fetch(
+  const botToken = await worker.fetch(
     new Request("https://example.com/gateway/health", {
       method: "GET",
       headers: { authorization: "Bearer bot-token" },
+    }),
+    env,
+    {} as never,
+  );
+  assert.equal(botToken.status, 401);
+  assert.equal(healthCalls, 0);
+
+  const authorized = await worker.fetch(
+    new Request("https://example.com/gateway/health", {
+      method: "GET",
+      headers: { authorization: "Bearer control-token" },
     }),
     env,
     {} as never,

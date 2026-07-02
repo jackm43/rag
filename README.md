@@ -27,8 +27,8 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
   - `/ragjam prompt:<music-prompt> lyrics:<optional-song-lyrics>`
 - HTTP endpoints:
   - `POST /discord` Discord interactions
-  - `POST /gateway/start` start gateway connection (bot token auth)
-  - `GET /gateway/health` gateway status (bot token auth)
+  - `POST /gateway/start` start gateway connection (`GATEWAY_CONTROL_TOKEN` auth)
+  - `GET /gateway/health` gateway status (`GATEWAY_CONTROL_TOKEN` auth)
 - All other public paths, including `/` and source-file-looking paths, return `404`.
 
 ## Public Route Boundary
@@ -38,8 +38,8 @@ flowchart LR
   Discord[Discord Interactions] -->|POST /discord: signed interaction JSON| Worker
   Worker -->|200 JSON: interaction response| Discord
 
-  Operator[Operator] -->|POST /gateway/start: Bearer DISCORD_BOT_TOKEN| Worker
-  Operator -->|GET /gateway/health: Bearer DISCORD_BOT_TOKEN| Worker
+  Operator[Operator] -->|POST /gateway/start: Bearer GATEWAY_CONTROL_TOKEN| Worker
+  Operator -->|GET /gateway/health: Bearer GATEWAY_CONTROL_TOKEN| Worker
   Worker -->|typed Durable Object RPC: start or health| GatewayDO[DiscordGateway Durable Object]
   GatewayDO -->|JSON: start result or health state| Worker
   Worker -->|JSON response| Operator
@@ -47,6 +47,8 @@ flowchart LR
   Unknown[Other public request] -->|any unconfigured path or method| Worker
   Worker -->|404 Not found, or 405 on configured paths with the wrong method| Unknown
 ```
+
+The gateway control endpoints authenticate with a dedicated `GATEWAY_CONTROL_TOKEN` secret, never the Discord bot token, and fail closed with `401` when the secret is not configured. Operators must create it before use: set it on the worker with `wrangler secret put GATEWAY_CONTROL_TOKEN` and add a matching `GATEWAY_CONTROL_TOKEN` field to the 1Password `ragbot` item referenced by `.env` so `deploy.sh` can send it.
 
 ## Slash Command Flow
 
@@ -110,7 +112,7 @@ sequenceDiagram
   participant AI as AI Gateway / Workers AI
   participant DB as D1 DB
 
-  Operator->>Worker: POST /gateway/start with Authorization: Bearer bot token
+  Operator->>Worker: POST /gateway/start with Authorization: Bearer GATEWAY_CONTROL_TOKEN
   Worker->>GatewayDO: start() Durable Object RPC
   GatewayDO->>GatewayDO: Store gatewayEnabled=true and set watchdog alarm
   GatewayDO->>DiscordGateway: WebSocket IDENTIFY/RESUME with bot token and intents

@@ -36,8 +36,13 @@ const unauthorized = () => new Response("Unauthorized", { status: 401 });
 const notFound = () => new Response("Not found", { status: 404 });
 
 const isAuthorizedGatewayControlRequest = (request: Request, env: Env) => {
+  const controlToken = env.GATEWAY_CONTROL_TOKEN;
+  if (!controlToken) {
+    return false;
+  }
+
   const authorization = request.headers.get("authorization");
-  return authorization !== null && bearerTokenMatches(authorization, env.DISCORD_BOT_TOKEN);
+  return authorization !== null && bearerTokenMatches(authorization, controlToken);
 };
 
 const handleGatewayStartRequest = async (request: Request, env: Env): Promise<Response> => {
