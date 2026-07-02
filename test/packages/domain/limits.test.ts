@@ -15,6 +15,9 @@ const MESSAGE_ID = "300000000000000001";
 const ALICE_ID = "400000000000000001";
 const BOB_ID = "400000000000000002";
 
+const BURST_DENIAL_MESSAGE = "Slow down a little — try again in a minute.";
+const BUDGET_DENIAL_MESSAGE = "The server's daily AI budget is spent. Try again tomorrow.";
+
 const createLimitsDbMock = (options: {
   requestCount?: number;
   spendMicros?: number;
@@ -28,9 +31,11 @@ const createLimitsDbMock = (options: {
     title: string;
   } | null;
   insertedRequests?: Array<{ sql: string; args: unknown[] }>;
+  preparedSql?: string[];
 } = {}) => ({
   batch: async () => {},
   prepare: (sql: string) => {
+    options.preparedSql?.push(sql);
     const runner = (args: unknown[]) => ({
       sql,
       args,
@@ -72,51 +77,57 @@ test("checkAiUsageAllowed records the request and allows usage under the limits"
   assert.deepEqual(insertedRequests[0].args, ["1", "ask"]);
 });
 
-test("checkAiUsageAllowed denies once the trailing-hour request count reaches the default limit", async () => {
+test("checkAiUsageAllowed denies once the trailing-minute burst count reaches the default limit", async () => {
   const insertedRequests: Array<{ sql: string; args: unknown[] }> = [];
-  const env = { DB: createLimitsDbMock({ requestCount: 20, insertedRequests }) } as never;
+  const preparedSql: string[] = [];
+  const env = { DB: createLimitsDbMock({ requestCount: 8, insertedRequests, preparedSql }) } as never;
 
   const decision = await checkAiUsageAllowed(env, "1", "ask");
 
   assert.deepEqual(decision, {
     allowed: false,
     reason: "rate_limited",
-    message: "You've hit the hourly AI limit. Try again later.",
+    message: BURST_DENIAL_MESSAGE,
   });
   assert.equal(insertedRequests.length, 0);
+  assert.isTrue(preparedSql.some((sql) => sql.includes("'-1 minute'")));
 });
 
-test("checkAiUsageAllowed denies once trailing 24h spend reaches the default daily budget", async () => {
+test("checkAiUsageAllowed denies once trailing 24h global spend reaches the default budget", async () => {
   const insertedRequests: Array<{ sql: string; args: unknown[] }> = [];
-  const env = { DB: createLimitsDbMock({ spendMicros: 1_000_000, insertedRequests }) } as never;
+  const preparedSql: string[] = [];
+  const env = { DB: createLimitsDbMock({ spendMicros: 10_000_000, insertedRequests, preparedSql }) } as never;
 
   const decision = await checkAiUsageAllowed(env, "1", "bicture");
 
   assert.deepEqual(decision, {
     allowed: false,
     reason: "budget_exceeded",
-    message: "You've spent your daily AI budget. Try again tomorrow.",
+    message: BUDGET_DENIAL_MESSAGE,
   });
   assert.equal(insertedRequests.length, 0);
+  const spendSql = preparedSql.find((sql) => sql.includes("SUM(estimated_cost_micros)"));
+  assert.isDefined(spendSql);
+  assert.isFalse(spendSql?.includes("requester_user_id"), "the global budget must not filter by user");
 });
 
 test("checkAiUsageAllowed honours env overrides and falls back on unparseable values", async () => {
-  const rateLimited = await checkAiUsageAllowed(
-    { DB: createLimitsDbMock({ requestCount: 5 }), AI_RATE_LIMIT_PER_HOUR: "5" } as never,
+  const burstLimited = await checkAiUsageAllowed(
+    { DB: createLimitsDbMock({ requestCount: 3 }), AI_BURST_LIMIT_PER_MINUTE: "3" } as never,
     "1",
     "ask",
   );
-  assert.equal(rateLimited.allowed, false);
+  assert.equal(burstLimited.allowed, false);
 
   const underBudget = await checkAiUsageAllowed(
-    { DB: createLimitsDbMock({ spendMicros: 2_400_000 }), AI_DAILY_BUDGET_USD: "2.50" } as never,
+    { DB: createLimitsDbMock({ spendMicros: 24_000_000 }), AI_GLOBAL_DAILY_BUDGET_USD: "25.00" } as never,
     "1",
     "ask",
   );
   assert.deepEqual(underBudget, { allowed: true });
 
   const fallbackLimit = await checkAiUsageAllowed(
-    { DB: createLimitsDbMock({ requestCount: 20 }), AI_RATE_LIMIT_PER_HOUR: "not-a-number" } as never,
+    { DB: createLimitsDbMock({ requestCount: 8 }), AI_BURST_LIMIT_PER_MINUTE: "not-a-number" } as never,
     "1",
     "ask",
   );
@@ -150,10 +161,10 @@ test("checkAiUsageAllowed allows requests without a user id and never touches D1
   assert.equal(prepareCalls, 0);
 });
 
-test("/ask replies immediately without deferring when the requester is rate limited", async () => {
+test("/ask replies immediately without deferring when the requester is burst limited", async () => {
   const keyPair = nacl.sign.keyPair();
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
-    DB: createLimitsDbMock({ requestCount: 20 }),
+    DB: createLimitsDbMock({ requestCount: 8 }),
   });
   const request = createSignedRequest(
     {
@@ -176,16 +187,16 @@ test("/ask replies immediately without deferring when the requester is rate limi
   assert.deepEqual(await response.json(), {
     type: 4,
     data: {
-      content: "You've hit the hourly AI limit. Try again later.",
+      content: BURST_DENIAL_MESSAGE,
       allowed_mentions: { parse: [] },
     },
   });
 });
 
-test("/bicture replies immediately without deferring when the daily budget is spent", async () => {
+test("/bicture replies immediately without deferring when the global daily budget is spent", async () => {
   const keyPair = nacl.sign.keyPair();
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
-    DB: createLimitsDbMock({ spendMicros: 1_000_000 }),
+    DB: createLimitsDbMock({ spendMicros: 10_000_000 }),
   });
   const request = createSignedRequest(
     {
@@ -207,17 +218,17 @@ test("/bicture replies immediately without deferring when the daily budget is sp
   assert.deepEqual(await response.json(), {
     type: 4,
     data: {
-      content: "You've spent your daily AI budget. Try again tomorrow.",
+      content: BUDGET_DENIAL_MESSAGE,
       allowed_mentions: { parse: [] },
     },
   });
 });
 
-test("/ragjam does not enqueue a job when the requester is rate limited", async () => {
+test("/ragjam does not enqueue a job when the requester is burst limited", async () => {
   const keyPair = nacl.sign.keyPair();
   const enqueuedJobs: unknown[] = [];
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
-    DB: createLimitsDbMock({ requestCount: 20 }),
+    DB: createLimitsDbMock({ requestCount: 8 }),
     AI_JOBS: {
       send: async (job: unknown) => {
         enqueuedJobs.push(job);
@@ -245,17 +256,17 @@ test("/ragjam does not enqueue a job when the requester is rate limited", async 
   assert.deepEqual(await response.json(), {
     type: 4,
     data: {
-      content: "You've hit the hourly AI limit. Try again later.",
+      content: BURST_DENIAL_MESSAGE,
       allowed_mentions: { parse: [] },
     },
   });
   assert.deepEqual(enqueuedJobs, []);
 });
 
-test("gateway mention resolution sends a rate limit notice through the outbox", async () => {
+test("gateway mention resolution sends a burst limit notice through the outbox", async () => {
   const outboxJobs: Uint8Array[] = [];
   const env = createEnv("unused", {
-    DB: createLimitsDbMock({ requestCount: 20 }),
+    DB: createLimitsDbMock({ requestCount: 8 }),
     DISCORD_OUTBOX: {
       send: async (body: Uint8Array) => {
         outboxJobs.push(body);
@@ -283,15 +294,15 @@ test("gateway mention resolution sends a rate limit notice through the outbox", 
   assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
     kind: "reply.channel_message",
     channelId: CHANNEL_ID,
-    content: "You've hit the hourly AI limit. Try again later.",
+    content: BURST_DENIAL_MESSAGE,
   });
 });
 
-test("tracked thread reply resolution sends a budget notice through the outbox", async () => {
+test("tracked thread reply resolution sends a global budget notice through the outbox", async () => {
   const outboxJobs: Uint8Array[] = [];
   const env = createEnv("unused", {
     DB: createLimitsDbMock({
-      spendMicros: 1_000_000,
+      spendMicros: 10_000_000,
       aiThread: {
         thread_id: THREAD_ID,
         parent_channel_id: CHANNEL_ID,
@@ -330,6 +341,6 @@ test("tracked thread reply resolution sends a budget notice through the outbox",
   assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
     kind: "reply.channel_message",
     channelId: THREAD_ID,
-    content: "You've spent your daily AI budget. Try again tomorrow.",
+    content: BUDGET_DENIAL_MESSAGE,
   });
 });

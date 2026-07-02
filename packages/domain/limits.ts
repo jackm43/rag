@@ -1,8 +1,8 @@
 import { errorMessage, logger } from "../logger";
 import type { Env } from "../contracts/types";
 
-const DEFAULT_AI_RATE_LIMIT_PER_HOUR = 20;
-const DEFAULT_AI_DAILY_BUDGET_USD = 1;
+const DEFAULT_AI_BURST_LIMIT_PER_MINUTE = 8;
+const DEFAULT_AI_GLOBAL_DAILY_BUDGET_USD = 10;
 const USD_MICROS = 1_000_000;
 
 export type AiUsageDecision =
@@ -25,10 +25,13 @@ const parsePositiveFloat = (value: string | undefined, fallback: number) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-// Pre-flight guard for every AI-invoking path. Spend events still pending
-// gateway-log reconciliation have a NULL estimated_cost_micros and count as
-// zero, so the budget is deliberately best-effort. On D1 errors the guard
-// fails open: availability wins over enforcement for this bot.
+// Pre-flight guard for every AI-invoking path, tuned for attacker abuse
+// rather than heavy legitimate use: a per-user burst limit catches floods
+// and scripted spam, and a global trailing-24h budget across all users is
+// the wallet backstop if any account is compromised. Spend events still
+// pending gateway-log reconciliation have a NULL estimated_cost_micros and
+// count as zero, so the budget is deliberately best-effort. On D1 errors
+// the guard fails open: availability wins over enforcement for this bot.
 export const checkAiUsageAllowed = async (
   env: Env,
   userId: string | undefined,
@@ -38,37 +41,39 @@ export const checkAiUsageAllowed = async (
     return { allowed: true };
   }
 
-  const rateLimitPerHour = parsePositiveInt(env.AI_RATE_LIMIT_PER_HOUR, DEFAULT_AI_RATE_LIMIT_PER_HOUR);
-  const dailyBudgetMicros = Math.round(
-    parsePositiveFloat(env.AI_DAILY_BUDGET_USD, DEFAULT_AI_DAILY_BUDGET_USD) * USD_MICROS,
+  const burstLimitPerMinute = parsePositiveInt(
+    env.AI_BURST_LIMIT_PER_MINUTE,
+    DEFAULT_AI_BURST_LIMIT_PER_MINUTE,
+  );
+  const globalDailyBudgetMicros = Math.round(
+    parsePositiveFloat(env.AI_GLOBAL_DAILY_BUDGET_USD, DEFAULT_AI_GLOBAL_DAILY_BUDGET_USD) *
+      USD_MICROS,
   );
 
   try {
     const requestRow = await env.DB.prepare(
-      "SELECT COUNT(*) AS request_count FROM rag_ai_requests WHERE requester_user_id = ? AND created_at >= datetime('now', '-1 hour')",
+      "SELECT COUNT(*) AS request_count FROM rag_ai_requests WHERE requester_user_id = ? AND created_at >= datetime('now', '-1 minute')",
     )
       .bind(userId)
       .first<{ request_count: number }>();
     const requestCount = typeof requestRow?.request_count === "number" ? requestRow.request_count : 0;
-    if (requestCount >= rateLimitPerHour) {
+    if (requestCount >= burstLimitPerMinute) {
       return {
         allowed: false,
         reason: "rate_limited",
-        message: "You've hit the hourly AI limit. Try again later.",
+        message: "Slow down a little — try again in a minute.",
       };
     }
 
     const spendRow = await env.DB.prepare(
-      "SELECT COALESCE(SUM(estimated_cost_micros), 0) AS spend_micros FROM rag_ai_spend_events WHERE requester_user_id = ? AND created_at >= datetime('now', '-24 hours')",
-    )
-      .bind(userId)
-      .first<{ spend_micros: number }>();
+      "SELECT COALESCE(SUM(estimated_cost_micros), 0) AS spend_micros FROM rag_ai_spend_events WHERE created_at >= datetime('now', '-24 hours')",
+    ).first<{ spend_micros: number }>();
     const spendMicros = typeof spendRow?.spend_micros === "number" ? spendRow.spend_micros : 0;
-    if (spendMicros >= dailyBudgetMicros) {
+    if (spendMicros >= globalDailyBudgetMicros) {
       return {
         allowed: false,
         reason: "budget_exceeded",
-        message: "You've spent your daily AI budget. Try again tomorrow.",
+        message: "The server's daily AI budget is spent. Try again tomorrow.",
       };
     }
 

@@ -199,8 +199,8 @@ export type Env = Cloudflare.Env & {
   CLOUDFLARE_API_TOKEN?: string;
   CF_AIG_GATEWAY_ID?: string;
   GATEWAY_CONTROL_TOKEN?: string;
-  AI_RATE_LIMIT_PER_HOUR?: string;
-  AI_DAILY_BUDGET_USD?: string;
+  AI_BURST_LIMIT_PER_MINUTE?: string;
+  AI_GLOBAL_DAILY_BUDGET_USD?: string;
 };
 
 export const DISCORD_API_BASE_URL = "https://discord.com/api/v10";

@@ -257,10 +257,10 @@ AI config is checked into `packages/ai/ai-config`:
 
 ### AI usage limits
 
-Every AI ingress (`/ask`, `/bicture`, `/ragjam`, and gateway mentions/tracked-thread replies) runs a shared pre-flight guard (`packages/domain/limits.ts`) before any model call or enqueue:
+Every AI ingress (`/ask`, `/bicture`, `/ragjam`, and gateway mentions/tracked-thread replies) runs a shared pre-flight guard (`packages/domain/limits.ts`) before any model call or enqueue. The limits target attacker abuse, not heavy legitimate use — this is one server owned by friends:
 
-- Hourly request rate per user, recorded in the `rag_ai_requests` D1 table. Configure with `AI_RATE_LIMIT_PER_HOUR` (default `20`).
-- Daily spend budget per user, summed from `rag_ai_spend_events` over the trailing 24 hours. Configure with `AI_DAILY_BUDGET_USD` (default `1.00`). Events still pending cost reconciliation count as zero, so the budget is best-effort.
+- Per-user burst limit, recorded in the `rag_ai_requests` D1 table over the trailing minute. Generous for humans, catches floods and scripted spam. Configure with `AI_BURST_LIMIT_PER_MINUTE` (default `8`).
+- Global daily budget across **all** users, summed from `rag_ai_spend_events` over the trailing 24 hours — the wallet backstop if any account is compromised. Configure with `AI_GLOBAL_DAILY_BUDGET_USD` (default `10.00`). Events still pending cost reconciliation count as zero, so the budget is best-effort.
 
 The guard fails open on D1 errors, and the `/rag` command family is not rate limited.
 
