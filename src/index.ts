@@ -16,6 +16,7 @@ import {
   CHANNEL_MESSAGE_WITH_SOURCE,
   PING,
   type AiJob,
+  type DiscordInteraction,
   type Env,
 } from "./types";
 
@@ -34,6 +35,25 @@ const methodNotAllowed = (allowedMethod: string) =>
 const unauthorized = () => new Response("Unauthorized", { status: 401 });
 
 const notFound = () => new Response("Not found", { status: 404 });
+
+type CommandHandler = (
+  interaction: DiscordInteraction,
+  env: Env,
+  ctx: ExecutionContext,
+) => Response | Promise<Response>;
+
+const commandHandlers: Record<string, CommandHandler> = {
+  rag: handleDeferredRagCommand,
+  ragboard: (_interaction, env) => handleRagboardCommand(env),
+  ragspend: (interaction, env) => handleRagspendCommand(interaction, env),
+  ragspendboard: (_interaction, env) => handleRagspendboardCommand(env),
+  raghammer: (interaction, env) => handleRaghammerCommand(interaction, env),
+  ragunban: (interaction, env) => handleRagunbanCommand(interaction, env),
+  undorag: (interaction, env) => handleUndoragCommand(interaction, env),
+  ask: handleAskCommand,
+  bicture: handleBictureCommand,
+  ragjam: (interaction, env) => handleRagjamCommand(interaction, env),
+};
 
 const isAuthorizedGatewayControlRequest = (request: Request, env: Env) => {
   const controlToken = env.GATEWAY_CONTROL_TOKEN;
@@ -92,44 +112,11 @@ const handleInteractionRequest = async (
 
   try {
     const commandName = interaction.data?.name;
-    if (commandName === "rag") {
-      return handleDeferredRagCommand(interaction, env, ctx);
-    }
-
-    if (commandName === "ragboard") {
-      return handleRagboardCommand(env);
-    }
-
-    if (commandName === "ragspend") {
-      return handleRagspendCommand(interaction, env);
-    }
-
-    if (commandName === "ragspendboard") {
-      return handleRagspendboardCommand(env);
-    }
-
-    if (commandName === "raghammer") {
-      return handleRaghammerCommand(interaction, env);
-    }
-
-    if (commandName === "ragunban") {
-      return handleRagunbanCommand(interaction, env);
-    }
-
-    if (commandName === "undorag") {
-      return handleUndoragCommand(interaction, env);
-    }
-
-    if (commandName === "ask") {
-      return handleAskCommand(interaction, env, ctx);
-    }
-
-    if (commandName === "bicture") {
-      return handleBictureCommand(interaction, env, ctx);
-    }
-
-    if (commandName === "ragjam") {
-      return handleRagjamCommand(interaction, env);
+    const handler = commandName && Object.hasOwn(commandHandlers, commandName)
+      ? commandHandlers[commandName]
+      : undefined;
+    if (handler) {
+      return handler(interaction, env, ctx);
     }
 
     return jsonResponse({
