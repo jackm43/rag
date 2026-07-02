@@ -319,3 +319,5 @@ wrangler queues create ai-spend-jobs-dlq
 wrangler queues create discord-outbox
 wrangler queues create discord-outbox-dlq
 ```
+
+Every dead-letter queue has a consumer (`packages/domain/dlq.ts`): `ai-jobs-dlq` in the brain worker, `ai-spend-jobs-dlq` in the spend worker, and `discord-outbox-dlq` in the responder. Each logs a `dead_letter_message` error with the queue name, message id, attempt count, and decoded envelope kind (ids and kinds only, never free-text content), then acks so dead letters surface in logs instead of accumulating.

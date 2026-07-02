@@ -37,6 +37,12 @@
         "max_batch_timeout": 5,
         "max_retries": 3,
         "dead_letter_queue": "ai-spend-jobs-dlq"
+      },
+      {
+        "queue": "ai-spend-jobs-dlq",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 1
       }
     ]
   }
