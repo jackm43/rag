@@ -33,7 +33,8 @@
       "binding": "DB",
       "database_name": "ragbot",
       "database_id": "5833b0bb-7806-483e-9015-32e209ce2fb0",
-      "preview_database_id": "5833b0bb-7806-483e-9015-32e209ce2fb0"
+      "preview_database_id": "5833b0bb-7806-483e-9015-32e209ce2fb0",
+      "migrations_dir": "../../../migrations"
     }
   ],
   "observability": {

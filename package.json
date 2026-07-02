@@ -16,8 +16,8 @@
     "contracts:build": "capnp-es packages/contracts/envelope.capnp -ots",
     "register:commands": "tsx scripts/register-commands.ts",
     "backfill:spend": "tsx scripts/backfill-spend.ts",
-    "d1:migrate:local": "wrangler d1 execute ragbot -c workers/public/gateway/wrangler.jsonc --local --file=./schema.sql",
-    "d1:migrate:remote": "wrangler d1 execute ragbot -c workers/public/gateway/wrangler.jsonc --remote --file=./schema.sql"
+    "d1:migrate:local": "wrangler d1 migrations apply ragbot -c workers/public/gateway/wrangler.jsonc --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply ragbot -c workers/public/gateway/wrangler.jsonc --remote"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.18",

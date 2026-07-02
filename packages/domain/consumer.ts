@@ -61,6 +61,11 @@ const recordAiInteraction = async (
       )
       .run();
   } catch (error) {
+    // Fallback for a production rag_ai_interactions table that predates the
+    // token-usage columns. SQLite has no "ADD COLUMN IF NOT EXISTS" and the
+    // prod table's shape is not knowable from the repo, so no migration adds
+    // the columns (see migrations/0001_initial.sql). Delete this once prod
+    // is verified to have them.
     try {
       await env.DB.prepare(
         "INSERT INTO rag_ai_interactions (kind, channel_id, message_id, requester_user_id, requester_username, prompt, response_text, model, ai_duration_ms, total_duration_ms, status, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

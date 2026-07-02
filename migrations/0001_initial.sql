@@ -1,6 +1,18 @@
--- REFERENCE ONLY. The schema source of truth is migrations/ (applied with
--- `wrangler d1 migrations apply` via `npm run d1:migrate:*`). Change the
--- schema by adding a new migrations/NNNN_*.sql file, then mirror it here.
+-- 0001: full current schema. Every statement is IF NOT EXISTS, so applying
+-- this migration to the existing production database (created by the old
+-- `wrangler d1 execute --file=./schema.sql` flow) is a no-op and safe.
+--
+-- Known caveat: a production rag_ai_interactions table created before the
+-- token-usage columns (prompt_tokens, completion_tokens, total_tokens) were
+-- added keeps its old shape — IF NOT EXISTS does not alter existing tables,
+-- and SQLite has no "ADD COLUMN IF NOT EXISTS", so a blind ALTER TABLE
+-- migration could fail against a table that already has the columns and
+-- strand deploys. Whether prod predates the columns is not knowable from the
+-- repo, so no 0002 ALTER is shipped; recordAiInteraction in
+-- packages/domain/consumer.ts keeps its dual-INSERT fallback instead.
+-- If you verify prod's shape (PRAGMA table_info(rag_ai_interactions)) and
+-- the columns are missing, add them once by hand or as a new migration, then
+-- the fallback in consumer.ts can be deleted.
 
 CREATE TABLE IF NOT EXISTS rag_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
