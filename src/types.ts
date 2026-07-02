@@ -82,9 +82,19 @@ export type RagjamJob = {
   lyrics?: string;
 };
 
+export type BictureJob = {
+  kind: "bicture";
+  applicationId: string;
+  interactionToken: string;
+  channelId?: string;
+  requesterUserId?: string;
+  requesterUsername?: string;
+  prompt: string;
+};
+
 export type AiChatJob = AiThreadStartJob | AiThreadReplyJob | AiChannelReplyJob;
 
-export type AiJob = AiChatJob | AiAskJob | RagjamJob;
+export type AiJob = AiChatJob | AiAskJob | RagjamJob | BictureJob;
 
 export type AiSpendJob = {
   spendEventId: string;

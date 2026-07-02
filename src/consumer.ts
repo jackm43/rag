@@ -5,6 +5,7 @@ import {
   buildAskWebSearchInput,
   shouldUseAskWebSearch,
 } from "./ask-mode";
+import { processBictureJob } from "./commands/bicture";
 import { processRagjamJob } from "./commands/ragjam";
 import { loadConfig } from "./config";
 import { buildNormalThreadConversation, fallbackThreadTitle, isAskThread } from "./conversation";
@@ -90,6 +91,12 @@ export const processAiQueueMessage = async (message: Message<unknown>, env: Env)
 
   if (job.kind === "ragjam") {
     await processRagjamJob(job, env);
+    message.ack();
+    return;
+  }
+
+  if (job.kind === "bicture") {
+    await processBictureJob(job, env);
     message.ack();
     return;
   }

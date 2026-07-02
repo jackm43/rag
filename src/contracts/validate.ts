@@ -37,10 +37,22 @@ export const validateAiJob = (value: unknown): value is AiJob => {
       value.kind !== "thread_reply" &&
       value.kind !== "channel_reply" &&
       value.kind !== "ask" &&
-      value.kind !== "ragjam"
+      value.kind !== "ragjam" &&
+      value.kind !== "bicture"
     )
   ) {
     return false;
+  }
+
+  if (value.kind === "bicture") {
+    return (
+      isSnowflake(value.applicationId) &&
+      isInteractionToken(value.interactionToken) &&
+      isFreeText(value.prompt) &&
+      isOptionalSnowflake(value.channelId) &&
+      isOptionalSnowflake(value.requesterUserId) &&
+      isOptionalUsername(value.requesterUsername)
+    );
   }
 
   if (value.kind === "ragjam") {

@@ -1,17 +1,20 @@
 import bictureImageConfig from "../ai-config/bicture-image.json";
 import { buildAiGatewayMetadata } from "../ai-metadata";
+import { encodeAiJobEnvelope } from "../contracts";
+import { editOriginalInteractionResponse } from "../discord";
 import { jsonResponse } from "../http";
 import { checkAiUsageAllowed } from "../limits";
-import { errorDetails } from "../logger";
+import { errorDetails, errorMessage, logger } from "../logger";
 import { boundaryClients } from "../net/clients";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../spend";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
+  DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+  type BictureJob,
   type DiscordInteraction,
   type Env,
 } from "../types";
 import { isRecord } from "../validation";
-import { handleDeferredInteraction } from "./deferred";
 import { getInvokerDisplayName } from "./rag-utils";
 
 const BICTURE_FILENAME_PREFIX = "bicture";
@@ -168,32 +171,22 @@ const runBictureImageGeneration = async (
   );
 };
 
-const runBictureCommand = async (interaction: DiscordInteraction, env: Env) => {
-  const prompt = bicturePrompt(interaction);
-  if (!prompt) {
-    return {
-      data: { content: "An image prompt is required.", allowed_mentions: { parse: [] } },
-      files: [],
-    };
-  }
-
-  const requester = interaction.member?.user ?? interaction.user;
-  const requesterUsername = getInvokerDisplayName(interaction);
+const buildBictureResponse = async (job: BictureJob, env: Env) => {
   const spendSourceId = createAiSpendSourceId();
   const result = await runBictureImageGeneration(
     env,
-    prompt,
+    job.prompt,
     buildAiGatewayMetadata({
       kind: "bicture",
       requestId: spendSourceId,
-      requesterUserId: requester?.id,
-      channelId: interaction.channel_id,
+      requesterUserId: job.requesterUserId,
+      channelId: job.channelId,
     }),
   );
   await recordAiSpendEvent(env, {
     kind: "bicture",
-    requesterUserId: requester?.id,
-    requesterUsername,
+    requesterUserId: job.requesterUserId,
+    requesterUsername: job.requesterUsername,
     model: activeBictureProfile.model,
     unitCount: 1,
     sourceId: spendSourceId,
@@ -203,7 +196,7 @@ const runBictureCommand = async (interaction: DiscordInteraction, env: Env) => {
 
   return {
     data: {
-      content: promptSummary(prompt),
+      content: promptSummary(job.prompt),
       allowed_mentions: { parse: [] },
       attachments: [{ id: "0", filename }],
     },
@@ -217,10 +210,28 @@ const runBictureCommand = async (interaction: DiscordInteraction, env: Env) => {
   };
 };
 
+export const processBictureJob = async (job: BictureJob, env: Env) => {
+  try {
+    const response = await buildBictureResponse(job, env);
+    await editOriginalInteractionResponse(env, job.applicationId, job.interactionToken, response.data, response.files);
+  } catch (error) {
+    logger.error("bicture_command_failed", {
+      error: errorMessage(error),
+      details: errorDetails(error),
+      model: activeBictureProfile.model,
+      imageProfile: bictureImageConfig.activeProfile,
+      promptLength: job.prompt.length,
+    });
+    await editOriginalInteractionResponse(env, job.applicationId, job.interactionToken, {
+      content: "Could not generate that image. Try a different prompt.",
+      allowed_mentions: { parse: [] },
+    }).catch(() => undefined);
+  }
+};
+
 export const handleBictureCommand = async (
   interaction: DiscordInteraction,
   env: Env,
-  ctx: ExecutionContext,
 ) => {
   const prompt = bicturePrompt(interaction);
   if (!prompt) {
@@ -230,7 +241,20 @@ export const handleBictureCommand = async (
     });
   }
 
-  const usage = await checkAiUsageAllowed(env, (interaction.member?.user ?? interaction.user)?.id, "bicture");
+  const applicationId = interaction.application_id;
+  const interactionToken = interaction.token;
+  if (!applicationId || !interactionToken) {
+    return jsonResponse({
+      type: CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "Could not defer /bicture without interaction credentials.",
+        allowed_mentions: { parse: [] },
+      },
+    });
+  }
+
+  const requester = interaction.member?.user ?? interaction.user;
+  const usage = await checkAiUsageAllowed(env, requester?.id, "bicture");
   if (!usage.allowed) {
     return jsonResponse({
       type: CHANNEL_MESSAGE_WITH_SOURCE,
@@ -238,23 +262,20 @@ export const handleBictureCommand = async (
     });
   }
 
-  return handleDeferredInteraction(interaction, env, ctx, {
-    run: () => runBictureCommand(interaction, env),
-    failureMessage: "Could not generate that image. Try a different prompt.",
-    logEvent: "bicture_command_failed",
-    logContext: (error) => ({
-      details: errorDetails(error),
-      model: activeBictureProfile.model,
-      imageProfile: bictureImageConfig.activeProfile,
-      promptLength: prompt.length,
-    }),
-    onMissingCredentials: () =>
-      jsonResponse({
-        type: CHANNEL_MESSAGE_WITH_SOURCE,
-        data: {
-          content: "Could not defer /bicture without interaction credentials.",
-          allowed_mentions: { parse: [] },
-        },
-      }),
-  });
+  await env.AI_JOBS.send(
+    encodeAiJobEnvelope(
+      {
+        kind: "bicture",
+        applicationId,
+        interactionToken,
+        channelId: interaction.channel_id,
+        requesterUserId: requester?.id,
+        requesterUsername: getInvokerDisplayName(interaction),
+        prompt,
+      },
+      { source: "interactions", guildId: interaction.guild_id },
+    ),
+  );
+
+  return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
 };

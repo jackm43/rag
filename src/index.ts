@@ -51,7 +51,7 @@ const commandHandlers: Record<string, CommandHandler> = {
   ragunban: (interaction, env) => handleRagunbanCommand(interaction, env),
   undorag: (interaction, env) => handleUndoragCommand(interaction, env),
   ask: handleAskCommand,
-  bicture: handleBictureCommand,
+  bicture: (interaction, env) => handleBictureCommand(interaction, env),
   ragjam: (interaction, env) => handleRagjamCommand(interaction, env),
 };
 

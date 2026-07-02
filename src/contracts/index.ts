@@ -1,5 +1,5 @@
 import * as capnp from "capnp-es";
-import type { AiAskJob, AiChatJob, AiJob, AiSpendJob, RagjamJob } from "../types";
+import type { AiAskJob, AiChatJob, AiJob, AiSpendJob, BictureJob, RagjamJob } from "../types";
 import {
   ChatPayload,
   EventEnvelope,
@@ -104,6 +104,14 @@ export const encodeAiJobEnvelope = (job: AiJob, options: EnvelopeOptions): Uint8
     if (job.lyrics !== undefined) {
       payload.lyrics = job.lyrics;
     }
+  } else if (job.kind === "bicture") {
+    const payload = envelope.payload._initBicture();
+    payload.applicationId = job.applicationId;
+    payload.interactionToken = job.interactionToken;
+    if (job.channelId !== undefined) {
+      payload.channelId = job.channelId;
+    }
+    payload.prompt = job.prompt;
   } else {
     const payload = initChatPayload(envelope, job.kind);
     payload.channelId = job.channelId;
@@ -219,6 +227,19 @@ const aiJobFrom = (envelope: EventEnvelope): unknown => {
         requesterUsername: optionalText(envelope.actor.username),
         prompt: payload.prompt,
         lyrics: optionalText(payload.lyrics),
+      });
+      return job;
+    }
+    case EventEnvelope_Payload_Which.BICTURE: {
+      const payload = envelope.payload.bicture;
+      const job: BictureJob = compact({
+        kind: "bicture",
+        applicationId: payload.applicationId,
+        interactionToken: payload.interactionToken,
+        channelId: optionalText(payload.channelId),
+        requesterUserId: optionalText(envelope.actor.userId),
+        requesterUsername: optionalText(envelope.actor.username),
+        prompt: payload.prompt,
       });
       return job;
     }

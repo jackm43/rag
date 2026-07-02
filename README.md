@@ -89,6 +89,8 @@ sequenceDiagram
     Worker->>Discord: POST answer inside created thread
   else /bicture or /ragjam
     Worker->>Discord: Immediate JSON: deferred interaction response
+    Worker->>Worker: Enqueue encoded bicture or ragjam job in ai-jobs
+    Note over Worker,AI: queue consumer generates the media asynchronously
     Worker->>AI: Unified Billing model request via Workers AI binding with AI Gateway metadata
     AI-->>Worker: Image data or audio URL
     Worker->>DB: INSERT pending AI spend event for Gateway log reconciliation
@@ -196,12 +198,13 @@ sequenceDiagram
 ### `/bicture`
 
 - Entry: interaction command routed in `src/index.ts`
-- Handler: `src/commands/bicture.ts`
+- Handler: `src/commands/bicture.ts` (enqueue) and `src/consumer.ts` (image generation)
 - Behavior:
   - defers the interaction
-  - sends the prompt to the configured Unified Billing image model through the Workers AI binding and AI Gateway
+  - enqueues an encoded `bicture` job in `ai-jobs`; the queue consumer sends the prompt to the configured Unified Billing image model through the Workers AI binding and AI Gateway
   - records a pending AI spend event tagged with AI Gateway metadata
   - edits the original interaction response with the generated image attachment
+  - with this in place every AI/spend path is queue-driven; the interaction fetch path does no AI work
 
 ### `/ragjam`
 

@@ -9,6 +9,9 @@ import { createDbMock, createEnv, createSignedRequest } from "./helpers.ts";
 const RAGJAM_APPLICATION_ID = "500000000000000001";
 const RAGJAM_CHANNEL_ID = "500000000000000002";
 const RAGJAM_USER_ID = "500000000000000003";
+const BICTURE_APPLICATION_ID = "700000000000000001";
+const BICTURE_CHANNEL_ID = "700000000000000002";
+const BICTURE_USER_ID = "700000000000000003";
 const ASK_CHANNEL_ID = "600000000000000001";
 const ASK_THREAD_ID = "600000000000000002";
 const ASK_USER_ID = "600000000000000003";
@@ -185,14 +188,55 @@ test("/ask web search heuristic detects current research requests", () => {
   assert.equal(shouldUseAskWebSearch("What are the latest GPU prices?"), true);
 });
 
-test("/bicture interaction is deferred and edits the original response with an image attachment", async () => {
+test("/bicture interaction is deferred and enqueues image generation", async () => {
   const keyPair = nacl.sign.keyPair();
+  const enqueuedJobs: unknown[] = [];
+  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    AI_JOBS: {
+      send: async (job: unknown) => {
+        enqueuedJobs.push(job);
+      },
+    },
+  });
+  const request = createSignedRequest(
+    {
+      application_id: BICTURE_APPLICATION_ID,
+      channel_id: BICTURE_CHANNEL_ID,
+      token: "interaction-token",
+      type: 2,
+      data: {
+        name: "bicture",
+        options: [{ name: "prompt", value: "a tiny jpeg test image" }],
+      },
+      user: { id: BICTURE_USER_ID, username: "alice" },
+    },
+    keyPair.secretKey,
+  );
+
+  const response = await worker.fetch(request, env, {} as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { type: 5 });
+  assert.equal(enqueuedJobs.length, 1);
+  assert.ok(enqueuedJobs[0] instanceof Uint8Array);
+  assert.deepEqual(decodeAiJobEnvelope(enqueuedJobs[0]), {
+    kind: "bicture",
+    applicationId: BICTURE_APPLICATION_ID,
+    interactionToken: "interaction-token",
+    channelId: BICTURE_CHANNEL_ID,
+    requesterUserId: BICTURE_USER_ID,
+    requesterUsername: "alice",
+    prompt: "a tiny jpeg test image",
+  });
+});
+
+test("queue handler edits /bicture response with an image attachment", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
-  const waitUntilPromises: Promise<unknown>[] = [];
   const imageBytes = new Uint8Array([255, 216, 255, 217]);
   const imageBase64 = Buffer.from(imageBytes).toString("base64");
   const aiRuns: Array<{ model: string; input: unknown; options: unknown }> = [];
+  let acked = false;
 
   globalThis.fetch = async (url, init) => {
     fetchCalls.push({ url: String(url), init });
@@ -200,7 +244,7 @@ test("/bicture interaction is deferred and edits the original response with an i
   };
 
   try {
-    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    const env = createEnv("unused", {
       AI: {
         run: async (model: string, input: unknown, options: unknown) => {
           aiRuns.push({ model, input, options });
@@ -208,29 +252,27 @@ test("/bicture interaction is deferred and edits the original response with an i
         },
       },
     });
-    const request = createSignedRequest(
-      {
-        application_id: "application-id",
-        token: "interaction-token",
-        type: 2,
-        data: {
-          name: "bicture",
-          options: [{ name: "prompt", value: "a tiny jpeg test image" }],
+    await worker.queue({
+      messages: [
+        {
+          body: encodeAiJobEnvelope(
+            {
+              kind: "bicture",
+              applicationId: BICTURE_APPLICATION_ID,
+              interactionToken: "interaction-token",
+              channelId: BICTURE_CHANNEL_ID,
+              requesterUserId: BICTURE_USER_ID,
+              requesterUsername: "alice",
+              prompt: "a tiny jpeg test image",
+            },
+            { source: "interactions" },
+          ),
+          ack: () => {
+            acked = true;
+          },
         },
-        user: { id: "1", username: "alice" },
-      },
-      keyPair.secretKey,
-    );
-
-    const response = await worker.fetch(request, env, {
-      waitUntil: (promise: Promise<unknown>) => {
-        waitUntilPromises.push(promise);
-      },
-    } as never);
-
-    assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { type: 5 });
-    await Promise.all(waitUntilPromises);
+      ],
+    } as never, env);
 
     assert.equal(aiRuns.length, 1);
     assert.equal(aiRuns[0].model, "xai/grok-imagine-image");
@@ -244,11 +286,12 @@ test("/bicture interaction is deferred and edits the original response with an i
     const bictureOptions = aiRuns[0].options as { gateway: { id: string; metadata: Record<string, string> } };
     assert.equal(bictureOptions.gateway.id, "platy");
     assert.equal(bictureOptions.gateway.metadata.ragbot_kind, "bicture");
-    assert.equal(bictureOptions.gateway.metadata.discord_user_id, "1");
+    assert.equal(bictureOptions.gateway.metadata.discord_user_id, BICTURE_USER_ID);
+    assert.equal(bictureOptions.gateway.metadata.discord_channel_id, BICTURE_CHANNEL_ID);
     assert.match(bictureOptions.gateway.metadata.ragbot_request_id, /^aigreq:/);
 
     const editCall = fetchCalls.find(
-      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+      (call) => call.url === `https://discord.com/api/v10/webhooks/${BICTURE_APPLICATION_ID}/interaction-token/messages/@original`,
     );
     assert.ok(editCall);
     assert.equal(editCall.init?.method, "PATCH");
@@ -266,6 +309,7 @@ test("/bicture interaction is deferred and edits the original response with an i
     assert.equal(file.name, "bicture.png");
     assert.equal(file.type, "image/png");
     assert.deepEqual(new Uint8Array(await file.arrayBuffer()), imageBytes);
+    assert.equal(acked, true);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -297,11 +341,9 @@ test("/bicture without a prompt returns an immediate validation message", async 
   });
 });
 
-test("/bicture downloads url-returned images with a timeout signal and attaches them", async () => {
-  const keyPair = nacl.sign.keyPair();
+test("queue handler downloads url-returned /bicture images with a timeout signal and attaches them", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
-  const waitUntilPromises: Promise<unknown>[] = [];
   const imageBytes = new Uint8Array([255, 216, 255, 217]);
 
   globalThis.fetch = async (url, init) => {
@@ -319,41 +361,36 @@ test("/bicture downloads url-returned images with a timeout signal and attaches 
   };
 
   try {
-    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    const env = createEnv("unused", {
       AI: {
         run: async () => ({ result: { image: "https://example.com/generated-image.png" } }),
       },
     });
-    const request = createSignedRequest(
-      {
-        application_id: "application-id",
-        token: "interaction-token",
-        type: 2,
-        data: {
-          name: "bicture",
-          options: [{ name: "prompt", value: "a tiny png test image" }],
+    await worker.queue({
+      messages: [
+        {
+          body: encodeAiJobEnvelope(
+            {
+              kind: "bicture",
+              applicationId: BICTURE_APPLICATION_ID,
+              interactionToken: "interaction-token",
+              requesterUserId: BICTURE_USER_ID,
+              requesterUsername: "alice",
+              prompt: "a tiny png test image",
+            },
+            { source: "interactions" },
+          ),
+          ack: () => undefined,
         },
-        user: { id: "1", username: "alice" },
-      },
-      keyPair.secretKey,
-    );
-
-    const response = await worker.fetch(request, env, {
-      waitUntil: (promise: Promise<unknown>) => {
-        waitUntilPromises.push(promise);
-      },
-    } as never);
-
-    assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { type: 5 });
-    await Promise.all(waitUntilPromises);
+      ],
+    } as never, env);
 
     const downloadCall = fetchCalls.find((call) => call.url === "https://example.com/generated-image.png");
     assert.ok(downloadCall);
     assert.ok(downloadCall.init?.signal instanceof AbortSignal);
 
     const editCall = fetchCalls.find(
-      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+      (call) => call.url === `https://discord.com/api/v10/webhooks/${BICTURE_APPLICATION_ID}/interaction-token/messages/@original`,
     );
     assert.ok(editCall);
     assert.ok(editCall.init?.body instanceof FormData);
@@ -368,12 +405,11 @@ test("/bicture downloads url-returned images with a timeout signal and attaches 
   }
 });
 
-test("/bicture replies with a failure message when the generated image download exceeds the size cap", async () => {
-  const keyPair = nacl.sign.keyPair();
+test("queue handler edits /bicture response with a failure message when the image download exceeds the size cap", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
-  const waitUntilPromises: Promise<unknown>[] = [];
   let servedOversizedContentLength = false;
+  let acked = false;
 
   globalThis.fetch = async (url, init) => {
     fetchCalls.push({ url: String(url), init });
@@ -391,45 +427,43 @@ test("/bicture replies with a failure message when the generated image download 
   };
 
   try {
-    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+    const env = createEnv("unused", {
       AI: {
         run: async () => ({ result: { image: "https://example.com/generated-image.png" } }),
       },
     });
-    const request = createSignedRequest(
-      {
-        application_id: "application-id",
-        token: "interaction-token",
-        type: 2,
-        data: {
-          name: "bicture",
-          options: [{ name: "prompt", value: "an oversized image" }],
+    await worker.queue({
+      messages: [
+        {
+          body: encodeAiJobEnvelope(
+            {
+              kind: "bicture",
+              applicationId: BICTURE_APPLICATION_ID,
+              interactionToken: "interaction-token",
+              requesterUserId: BICTURE_USER_ID,
+              requesterUsername: "alice",
+              prompt: "an oversized image",
+            },
+            { source: "interactions" },
+          ),
+          ack: () => {
+            acked = true;
+          },
         },
-        user: { id: "1", username: "alice" },
-      },
-      keyPair.secretKey,
-    );
-
-    const response = await worker.fetch(request, env, {
-      waitUntil: (promise: Promise<unknown>) => {
-        waitUntilPromises.push(promise);
-      },
-    } as never);
-
-    assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { type: 5 });
-    await Promise.all(waitUntilPromises);
+      ],
+    } as never, env);
 
     assert.equal(servedOversizedContentLength, true);
 
     const editCall = fetchCalls.find(
-      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+      (call) => call.url === `https://discord.com/api/v10/webhooks/${BICTURE_APPLICATION_ID}/interaction-token/messages/@original`,
     );
     assert.ok(editCall);
     assert.deepEqual(JSON.parse(String(editCall.init?.body)), {
       content: "Could not generate that image. Try a different prompt.",
       allowed_mentions: { parse: [] },
     });
+    assert.equal(acked, true);
   } finally {
     globalThis.fetch = originalFetch;
   }

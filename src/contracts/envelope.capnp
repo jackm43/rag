@@ -22,6 +22,13 @@ struct RagjamPayload {
   lyrics @4 :Text;
 }
 
+struct BicturePayload {
+  applicationId @0 :Text;
+  interactionToken @1 :Text;
+  channelId @2 :Text;
+  prompt @3 :Text;
+}
+
 struct SpendPayload {
   spendEventId @0 :Text;
 }
@@ -44,5 +51,6 @@ struct EventEnvelope {
     ragjam @11 :RagjamPayload;
     spend @12 :SpendPayload;
     ask @13 :ChatPayload;
+    bicture @14 :BicturePayload;
   }
 }

@@ -87,6 +87,38 @@ export class RagjamPayload extends $.Struct {
   }
   toString(): string { return "RagjamPayload_" + super.toString(); }
 }
+export class BicturePayload extends $.Struct {
+  static readonly _capnp = {
+    displayName: "BicturePayload",
+    id: "cdea29560f4b3187",
+    size: new $.ObjectSize(0, 4),
+  };
+  get applicationId(): string {
+    return $.utils.getText(0, this);
+  }
+  set applicationId(value: string) {
+    $.utils.setText(0, value, this);
+  }
+  get interactionToken(): string {
+    return $.utils.getText(1, this);
+  }
+  set interactionToken(value: string) {
+    $.utils.setText(1, value, this);
+  }
+  get channelId(): string {
+    return $.utils.getText(2, this);
+  }
+  set channelId(value: string) {
+    $.utils.setText(2, value, this);
+  }
+  get prompt(): string {
+    return $.utils.getText(3, this);
+  }
+  set prompt(value: string) {
+    $.utils.setText(3, value, this);
+  }
+  toString(): string { return "BicturePayload_" + super.toString(); }
+}
 export class SpendPayload extends $.Struct {
   static readonly _capnp = {
     displayName: "SpendPayload",
@@ -127,7 +159,8 @@ export const EventEnvelope_Payload_Which = {
   CHANNEL_REPLY: 2,
   RAGJAM: 3,
   SPEND: 4,
-  ASK: 5
+  ASK: 5,
+  BICTURE: 6
 } as const;
 export type EventEnvelope_Payload_Which = (typeof EventEnvelope_Payload_Which)[keyof typeof EventEnvelope_Payload_Which];
 export class EventEnvelope_Payload extends $.Struct {
@@ -137,6 +170,7 @@ export class EventEnvelope_Payload extends $.Struct {
   static readonly RAGJAM = EventEnvelope_Payload_Which.RAGJAM;
   static readonly SPEND = EventEnvelope_Payload_Which.SPEND;
   static readonly ASK = EventEnvelope_Payload_Which.ASK;
+  static readonly BICTURE = EventEnvelope_Payload_Which.BICTURE;
   static readonly _capnp = {
     displayName: "payload",
     id: "a636c8f1ec42d04d",
@@ -290,6 +324,31 @@ export class EventEnvelope_Payload extends $.Struct {
   }
   set ask(value: ChatPayload) {
     $.utils.setUint16(2, 5, this);
+    $.utils.copyFrom(value, $.utils.getPointer(7, this));
+  }
+  _adoptBicture(value: $.Orphan<BicturePayload>): void {
+    $.utils.setUint16(2, 6, this);
+    $.utils.adopt(value, $.utils.getPointer(7, this));
+  }
+  _disownBicture(): $.Orphan<BicturePayload> {
+    return $.utils.disown(this.bicture);
+  }
+  get bicture(): BicturePayload {
+    $.utils.testWhich("bicture", $.utils.getUint16(2, this), 6, this);
+    return $.utils.getStruct(7, BicturePayload, this);
+  }
+  _hasBicture(): boolean {
+    return !$.utils.isNull($.utils.getPointer(7, this));
+  }
+  _initBicture(): BicturePayload {
+    $.utils.setUint16(2, 6, this);
+    return $.utils.initStructAt(7, BicturePayload, this);
+  }
+  get _isBicture(): boolean {
+    return $.utils.getUint16(2, this) === 6;
+  }
+  set bicture(value: BicturePayload) {
+    $.utils.setUint16(2, 6, this);
     $.utils.copyFrom(value, $.utils.getPointer(7, this));
   }
   toString(): string { return "EventEnvelope_Payload_" + super.toString(); }
