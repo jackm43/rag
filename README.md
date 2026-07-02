@@ -9,6 +9,7 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
 - Database: Cloudflare D1 (`DB`)
 - AI: Workers AI binding (`AI`) and AI Gateway REST; model and prompt config live in `src/ai-config` (`@cf/...` Workers AI models, Unified Billing partner chat models such as `grok/grok-4.3`, and web-search models such as `openai/gpt-4o-search-preview`)
 - Queue: Cloudflare Queues (`AI_JOBS`, `ai-jobs`, `SPEND_JOBS`, `ai-spend-jobs`, dead-letter queues)
+- Queue contracts: Cap'n Proto event envelopes (`src/contracts`) via `capnp-es`; every queue message is encoded and value-validated at the producer and re-validated at the consumer (snowflake id shape, free-text length caps). The generated `src/contracts/envelope.ts` is committed; regenerate after schema changes with `npm run contracts:build`, which needs the native `capnp` compiler (`brew install capnp`)
 - Stateful connection: Durable Objects (`DiscordGateway`)
 - Discord integration:
   - Interactions webhook

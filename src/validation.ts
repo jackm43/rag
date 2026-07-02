@@ -1,4 +1,4 @@
-import type { AiJob, DiscordInteraction, DiscordMessage } from "./types";
+import type { DiscordInteraction, DiscordMessage } from "./types";
 
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -123,50 +123,3 @@ const isDiscordMessageAtDepth = (value: unknown, depth: number): value is Discor
 
 export const isDiscordMessage = (value: unknown): value is DiscordMessage =>
   isDiscordMessageAtDepth(value, 1);
-
-const isOptionalJobString = (value: unknown) => value === undefined || isString(value);
-
-export const isAiJob = (value: unknown): value is AiJob => {
-  if (
-    !isRecord(value) ||
-    (
-      value.kind !== "thread_start" &&
-      value.kind !== "thread_reply" &&
-      value.kind !== "channel_reply" &&
-      value.kind !== "ragjam"
-    )
-  ) {
-    return false;
-  }
-
-  if (value.kind === "ragjam") {
-    return (
-      isString(value.applicationId) &&
-      isString(value.interactionToken) &&
-      isString(value.prompt) &&
-      isOptionalJobString(value.channelId) &&
-      isOptionalJobString(value.requesterUserId) &&
-      isOptionalJobString(value.requesterUsername) &&
-      isOptionalJobString(value.lyrics)
-    );
-  }
-
-  const common =
-    isString(value.channelId) &&
-    isString(value.prompt) &&
-    isOptionalJobString(value.botUserId) &&
-    isOptionalJobString(value.requesterUserId) &&
-    isOptionalJobString(value.requesterUsername) &&
-    isOptionalJobString(value.replyMessageId) &&
-    isOptionalJobString(value.replyChannelId);
-
-  if (!common) {
-    return false;
-  }
-
-  if (value.kind === "thread_start") {
-    return isString(value.messageId);
-  }
-
-  return isOptionalJobString(value.messageId);
-};

@@ -3,7 +3,12 @@ import nacl from "tweetnacl";
 
 import worker from "../src/index.ts";
 import { shouldUseAskWebSearch } from "../src/commands/ask.ts";
+import { decodeAiJobEnvelope, encodeAiJobEnvelope } from "../src/contracts/index.ts";
 import { createDbMock, createEnv, createSignedRequest } from "./helpers.ts";
+
+const RAGJAM_APPLICATION_ID = "500000000000000001";
+const RAGJAM_CHANNEL_ID = "500000000000000002";
+const RAGJAM_USER_ID = "500000000000000003";
 
 test("/ask interaction is deferred, creates a titled thread, and posts the answer", async () => {
   const keyPair = nacl.sign.keyPair();
@@ -393,8 +398,8 @@ test("/ragjam interaction is deferred and enqueues music generation", async () =
   });
   const request = createSignedRequest(
     {
-      application_id: "application-id",
-      channel_id: "channel-id",
+      application_id: RAGJAM_APPLICATION_ID,
+      channel_id: RAGJAM_CHANNEL_ID,
       token: "interaction-token",
       type: 2,
       data: {
@@ -404,7 +409,7 @@ test("/ragjam interaction is deferred and enqueues music generation", async () =
           { name: "lyrics", value: "Walking down a dusty road\nWith the sunset painting gold" },
         ],
       },
-      user: { id: "1", username: "alice" },
+      user: { id: RAGJAM_USER_ID, username: "alice" },
     },
     keyPair.secretKey,
   );
@@ -413,18 +418,18 @@ test("/ragjam interaction is deferred and enqueues music generation", async () =
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { type: 5 });
-  assert.deepEqual(enqueuedJobs, [
-    {
-      kind: "ragjam",
-      applicationId: "application-id",
-      interactionToken: "interaction-token",
-      channelId: "channel-id",
-      requesterUserId: "1",
-      requesterUsername: "alice",
-      prompt: "A warm acoustic folk ballad with fingerpicked guitar and gentle vocals",
-      lyrics: "Walking down a dusty road\nWith the sunset painting gold",
-    },
-  ]);
+  assert.equal(enqueuedJobs.length, 1);
+  assert.ok(enqueuedJobs[0] instanceof Uint8Array);
+  assert.deepEqual(decodeAiJobEnvelope(enqueuedJobs[0]), {
+    kind: "ragjam",
+    applicationId: RAGJAM_APPLICATION_ID,
+    interactionToken: "interaction-token",
+    channelId: RAGJAM_CHANNEL_ID,
+    requesterUserId: RAGJAM_USER_ID,
+    requesterUsername: "alice",
+    prompt: "A warm acoustic folk ballad with fingerpicked guitar and gentle vocals",
+    lyrics: "Walking down a dusty road\nWith the sunset painting gold",
+  });
 });
 
 test("queue handler edits /ragjam response with an audio attachment", async () => {
@@ -460,16 +465,19 @@ test("queue handler edits /ragjam response with an audio attachment", async () =
     await worker.queue({
       messages: [
         {
-          body: {
-            kind: "ragjam",
-            applicationId: "application-id",
-            interactionToken: "interaction-token",
-            channelId: "channel-id",
-            requesterUserId: "1",
-            requesterUsername: "alice",
-            prompt: "A warm acoustic folk ballad with fingerpicked guitar and gentle vocals",
-            lyrics: "Walking down a dusty road\nWith the sunset painting gold",
-          },
+          body: encodeAiJobEnvelope(
+            {
+              kind: "ragjam",
+              applicationId: RAGJAM_APPLICATION_ID,
+              interactionToken: "interaction-token",
+              channelId: RAGJAM_CHANNEL_ID,
+              requesterUserId: RAGJAM_USER_ID,
+              requesterUsername: "alice",
+              prompt: "A warm acoustic folk ballad with fingerpicked guitar and gentle vocals",
+              lyrics: "Walking down a dusty road\nWith the sunset painting gold",
+            },
+            { source: "interactions" },
+          ),
           ack: () => {
             acked = true;
           },
@@ -488,8 +496,8 @@ test("queue handler edits /ragjam response with an audio attachment", async () =
     const ragjamOptions = aiRuns[0].options as { gateway: { id: string; metadata: Record<string, string> } };
     assert.equal(ragjamOptions.gateway.id, "platy");
     assert.equal(ragjamOptions.gateway.metadata.ragbot_kind, "ragjam");
-    assert.equal(ragjamOptions.gateway.metadata.discord_user_id, "1");
-    assert.equal(ragjamOptions.gateway.metadata.discord_channel_id, "channel-id");
+    assert.equal(ragjamOptions.gateway.metadata.discord_user_id, RAGJAM_USER_ID);
+    assert.equal(ragjamOptions.gateway.metadata.discord_channel_id, RAGJAM_CHANNEL_ID);
     assert.match(ragjamOptions.gateway.metadata.ragbot_request_id, /^aigreq:/);
 
     const downloadCall = fetchCalls.find((call) => call.url === "https://example.com/generated-song.mp3");
@@ -497,7 +505,7 @@ test("queue handler edits /ragjam response with an audio attachment", async () =
     assert.ok(downloadCall.init?.signal instanceof AbortSignal);
 
     const editCall = fetchCalls.find(
-      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+      (call) => call.url === `https://discord.com/api/v10/webhooks/${RAGJAM_APPLICATION_ID}/interaction-token/messages/@original`,
     );
     assert.ok(editCall);
     assert.equal(editCall.init?.method, "PATCH");
@@ -550,19 +558,22 @@ test("queue handler preserves long /ragjam prompt text up to the Discord message
     await worker.queue({
       messages: [
         {
-          body: {
-            kind: "ragjam",
-            applicationId: "application-id",
-            interactionToken: "interaction-token",
-            prompt: longPrompt,
-          },
+          body: encodeAiJobEnvelope(
+            {
+              kind: "ragjam",
+              applicationId: RAGJAM_APPLICATION_ID,
+              interactionToken: "interaction-token",
+              prompt: longPrompt,
+            },
+            { source: "interactions" },
+          ),
           ack: () => undefined,
         },
       ],
     } as never, env);
 
     const editCall = fetchCalls.find(
-      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+      (call) => call.url === `https://discord.com/api/v10/webhooks/${RAGJAM_APPLICATION_ID}/interaction-token/messages/@original`,
     );
     assert.ok(editCall);
     assert.ok(editCall.init?.body instanceof FormData);
@@ -586,15 +597,15 @@ test("/ragjam without lyrics enqueues auto-generated lyrics job", async () => {
   });
   const request = createSignedRequest(
     {
-      application_id: "application-id",
-      channel_id: "channel-id",
+      application_id: RAGJAM_APPLICATION_ID,
+      channel_id: RAGJAM_CHANNEL_ID,
       token: "interaction-token",
       type: 2,
       data: {
         name: "ragjam",
         options: [{ name: "prompt", value: "A warm acoustic folk ballad" }],
       },
-      user: { id: "1", username: "alice" },
+      user: { id: RAGJAM_USER_ID, username: "alice" },
     },
     keyPair.secretKey,
   );
@@ -603,17 +614,16 @@ test("/ragjam without lyrics enqueues auto-generated lyrics job", async () => {
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { type: 5 });
-  assert.deepEqual(enqueuedJobs, [
-    {
-      kind: "ragjam",
-      applicationId: "application-id",
-      interactionToken: "interaction-token",
-      channelId: "channel-id",
-      requesterUserId: "1",
-      requesterUsername: "alice",
-      prompt: "A warm acoustic folk ballad",
-    },
-  ]);
+  assert.equal(enqueuedJobs.length, 1);
+  assert.deepEqual(decodeAiJobEnvelope(enqueuedJobs[0]), {
+    kind: "ragjam",
+    applicationId: RAGJAM_APPLICATION_ID,
+    interactionToken: "interaction-token",
+    channelId: RAGJAM_CHANNEL_ID,
+    requesterUserId: RAGJAM_USER_ID,
+    requesterUsername: "alice",
+    prompt: "A warm acoustic folk ballad",
+  });
 });
 
 test("queue handler lets /ragjam auto-generate lyrics when omitted", async () => {
@@ -648,15 +658,18 @@ test("queue handler lets /ragjam auto-generate lyrics when omitted", async () =>
     await worker.queue({
       messages: [
         {
-          body: {
-            kind: "ragjam",
-            applicationId: "application-id",
-            interactionToken: "interaction-token",
-            channelId: "channel-id",
-            requesterUserId: "1",
-            requesterUsername: "alice",
-            prompt: "A warm acoustic folk ballad",
-          },
+          body: encodeAiJobEnvelope(
+            {
+              kind: "ragjam",
+              applicationId: RAGJAM_APPLICATION_ID,
+              interactionToken: "interaction-token",
+              channelId: RAGJAM_CHANNEL_ID,
+              requesterUserId: RAGJAM_USER_ID,
+              requesterUsername: "alice",
+              prompt: "A warm acoustic folk ballad",
+            },
+            { source: "interactions" },
+          ),
           ack: () => undefined,
         },
       ],

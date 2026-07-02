@@ -1,3 +1,4 @@
+import { encodeAiJobEnvelope } from "./contracts";
 import { fetchBotRoleIds, postChannelMessage } from "./discord";
 import { checkAiUsageAllowed } from "./limits";
 import { errorMessage, logger } from "./logger";
@@ -92,17 +93,22 @@ export const handleGatewayMessageCreate = async (
       return;
     }
 
-    await env.AI_JOBS.send({
-      kind: "thread_reply",
-      channelId: message.channel_id,
-      messageId: message.id,
-      botUserId,
-      requesterUserId: message.author?.id,
-      requesterUsername,
-      prompt,
-      replyMessageId,
-      replyChannelId,
-    });
+    await env.AI_JOBS.send(
+      encodeAiJobEnvelope(
+        {
+          kind: "thread_reply",
+          channelId: message.channel_id,
+          messageId: message.id,
+          botUserId,
+          requesterUserId: message.author?.id,
+          requesterUsername,
+          prompt,
+          replyMessageId,
+          replyChannelId,
+        },
+        { source: "gateway", guildId: message.guild_id },
+      ),
+    );
     return;
   }
 
@@ -124,15 +130,20 @@ export const handleGatewayMessageCreate = async (
     return;
   }
 
-  await env.AI_JOBS.send({
-    kind: "channel_reply",
-    channelId: message.channel_id,
-    messageId: message.id,
-    botUserId,
-    requesterUserId: message.author?.id,
-    requesterUsername,
-    prompt,
-    replyMessageId,
-    replyChannelId,
-  });
+  await env.AI_JOBS.send(
+    encodeAiJobEnvelope(
+      {
+        kind: "channel_reply",
+        channelId: message.channel_id,
+        messageId: message.id,
+        botUserId,
+        requesterUserId: message.author?.id,
+        requesterUsername,
+        prompt,
+        replyMessageId,
+        replyChannelId,
+      },
+      { source: "gateway", guildId: message.guild_id },
+    ),
+  );
 };

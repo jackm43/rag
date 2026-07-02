@@ -1,5 +1,6 @@
 import ragjamMusicConfig from "../ai-config/ragjam-music.json";
 import { buildAiGatewayMetadata } from "../ai-metadata";
+import { encodeAiJobEnvelope } from "../contracts";
 import { editOriginalInteractionResponse, type InteractionResponseFile } from "../discord";
 import { jsonResponse } from "../http";
 import { checkAiUsageAllowed } from "../limits";
@@ -234,16 +235,21 @@ export const handleRagjamCommand = async (
     });
   }
 
-  await env.AI_JOBS.send({
-    kind: "ragjam",
-    applicationId,
-    interactionToken,
-    channelId: interaction.channel_id,
-    requesterUserId: requester?.id,
-    requesterUsername: getInvokerDisplayName(interaction),
-    prompt,
-    ...(lyrics ? { lyrics } : {}),
-  });
+  await env.AI_JOBS.send(
+    encodeAiJobEnvelope(
+      {
+        kind: "ragjam",
+        applicationId,
+        interactionToken,
+        channelId: interaction.channel_id,
+        requesterUserId: requester?.id,
+        requesterUsername: getInvokerDisplayName(interaction),
+        prompt,
+        ...(lyrics ? { lyrics } : {}),
+      },
+      { source: "interactions", guildId: interaction.guild_id },
+    ),
+  );
 
   return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
 };

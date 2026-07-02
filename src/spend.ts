@@ -1,5 +1,6 @@
+import { decodeAiSpendJobEnvelope, encodeAiSpendJobEnvelope } from "./contracts";
 import { errorMessage, logger } from "./logger";
-import type { AiSpendJob, Env } from "./types";
+import type { Env } from "./types";
 import { isRecord } from "./validation";
 
 const USD_MICROS = 1_000_000;
@@ -67,7 +68,10 @@ export const recordAiSpendEvent = async (env: Env, input: SpendEventInput) => {
       )
       .run();
 
-    await env.SPEND_JOBS?.send({ spendEventId: sourceId }, { delaySeconds: 120 });
+    await env.SPEND_JOBS?.send(
+      encodeAiSpendJobEnvelope({ spendEventId: sourceId }, { source: "worker" }),
+      { delaySeconds: 120 },
+    );
   } catch (error) {
     logger.warn("ai_spend_event_record_failed", { error: errorMessage(error), kind: input.kind, model: input.model });
   }
@@ -141,12 +145,9 @@ const findGatewayLogCostMicros = async (env: Env, sourceId: string) => {
   return null;
 };
 
-const isAiSpendJob = (value: unknown): value is AiSpendJob =>
-  isRecord(value) && typeof value.spendEventId === "string" && value.spendEventId.length > 0;
-
-export const processSpendQueueMessage = async (message: Message<AiSpendJob>, env: Env) => {
-  const job = message.body;
-  if (!isAiSpendJob(job)) {
+export const processSpendQueueMessage = async (message: Message<unknown>, env: Env) => {
+  const job = decodeAiSpendJobEnvelope(message.body);
+  if (!job) {
     logger.warn("ai_spend_job_invalid");
     message.ack();
     return;

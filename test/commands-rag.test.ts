@@ -2,6 +2,7 @@ import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
 import worker from "../src/index.ts";
+import { encodeAiSpendJobEnvelope } from "../src/contracts/index.ts";
 import { processSpendQueueMessage } from "../src/spend.ts";
 import { createDbMock, createEnv, createSignedRequest } from "./helpers.ts";
 
@@ -702,7 +703,7 @@ test("spend worker aggregates pending spend events", async () => {
 
     await processSpendQueueMessage(
       {
-        body: { spendEventId: "event-1" },
+        body: encodeAiSpendJobEnvelope({ spendEventId: "event-1" }, { source: "worker" }),
         attempts: 1,
         ack: () => {
           acked = true;

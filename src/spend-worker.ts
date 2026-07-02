@@ -1,8 +1,8 @@
 import { processSpendQueueMessage } from "./spend";
-import type { AiSpendJob, Env } from "./types";
+import type { Env } from "./types";
 
 export default {
-  async queue(batch: MessageBatch<AiSpendJob>, env: Env): Promise<void> {
+  async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
     for (const message of batch.messages) {
       await processSpendQueueMessage(message, env);
     }

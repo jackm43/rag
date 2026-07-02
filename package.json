@@ -11,6 +11,7 @@
     "deploy:spend": "wrangler deploy -c wrangler.spend.jsonc",
     "check": "tsc --noEmit",
     "test": "vitest run",
+    "contracts:build": "capnp-es src/contracts/envelope.capnp -ots",
     "register:commands": "tsx scripts/register-commands.ts",
     "backfill:spend": "tsx scripts/backfill-spend.ts",
     "d1:migrate:local": "wrangler d1 execute ragbot --local --file=./schema.sql",
@@ -26,6 +27,7 @@
     "wrangler": "^4.13.2"
   },
   "dependencies": {
+    "capnp-es": "^0.0.14",
     "tweetnacl": "^1.0.3"
   },
   "overrides": {

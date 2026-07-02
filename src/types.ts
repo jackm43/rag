@@ -126,8 +126,8 @@ export type DiscordChannel = {
 };
 
 export type Env = Cloudflare.Env & {
-  AI_JOBS: Queue<AiJob>;
-  SPEND_JOBS?: Queue<AiSpendJob>;
+  AI_JOBS: Queue<Uint8Array>;
+  SPEND_JOBS?: Queue<Uint8Array>;
   CLOUDFLARE_API_TOKEN?: string;
   CF_AIG_GATEWAY_ID?: string;
   GATEWAY_CONTROL_TOKEN?: string;

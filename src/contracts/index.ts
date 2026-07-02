@@ -1,0 +1,250 @@
+import * as capnp from "capnp-es";
+import type { AiChatJob, AiJob, AiSpendJob, RagjamJob } from "../types";
+import {
+  ChatPayload,
+  EventEnvelope,
+  EventEnvelope_Payload_Which,
+} from "./envelope";
+import { isOptionalSnowflake, validateAiJob, validateAiSpendJob } from "./validate";
+
+export {
+  MAX_FREE_TEXT_LENGTH,
+  MAX_INTERACTION_TOKEN_LENGTH,
+  MAX_SPEND_EVENT_ID_LENGTH,
+  MAX_USERNAME_LENGTH,
+  SNOWFLAKE_PATTERN,
+  validateAiJob,
+  validateAiSpendJob,
+} from "./validate";
+
+export const ENVELOPE_VERSION = 1;
+
+export type EventSource = "interactions" | "gateway" | "worker";
+
+export type EnvelopeOptions = {
+  source: EventSource;
+  guildId?: string;
+};
+
+const SPEND_EVENT_TYPE = "spend";
+
+const CHAT_PAYLOAD_WHICH: Record<AiChatJob["kind"], EventEnvelope_Payload_Which> = {
+  thread_start: EventEnvelope_Payload_Which.THREAD_START,
+  thread_reply: EventEnvelope_Payload_Which.THREAD_REPLY,
+  channel_reply: EventEnvelope_Payload_Which.CHANNEL_REPLY,
+};
+
+const optionalText = (value: string) => (value.length > 0 ? value : undefined);
+
+const compact = <T extends Record<string, unknown>>(value: T): T =>
+  Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined)) as T;
+
+const initEnvelope = (
+  message: capnp.Message,
+  type: string,
+  options: EnvelopeOptions,
+  actor: { userId?: string; username?: string } = {},
+) => {
+  if (!isOptionalSnowflake(options.guildId)) {
+    throw new Error("Invalid guild id for event envelope");
+  }
+  const envelope = message.initRoot(EventEnvelope);
+  envelope.v = ENVELOPE_VERSION;
+  envelope.type = type;
+  envelope.id = crypto.randomUUID();
+  envelope.occurredAt = new Date().toISOString();
+  envelope.source = options.source;
+  if (options.guildId !== undefined) {
+    envelope.guildId = options.guildId;
+  }
+  if (actor.userId !== undefined) {
+    envelope.actor.userId = actor.userId;
+  }
+  if (actor.username !== undefined) {
+    envelope.actor.username = actor.username;
+  }
+  return envelope;
+};
+
+const initChatPayload = (envelope: EventEnvelope, kind: AiChatJob["kind"]): ChatPayload => {
+  switch (CHAT_PAYLOAD_WHICH[kind]) {
+    case EventEnvelope_Payload_Which.THREAD_START:
+      return envelope.payload._initThreadStart();
+    case EventEnvelope_Payload_Which.THREAD_REPLY:
+      return envelope.payload._initThreadReply();
+    default:
+      return envelope.payload._initChannelReply();
+  }
+};
+
+export const encodeAiJobEnvelope = (job: AiJob, options: EnvelopeOptions): Uint8Array => {
+  if (!validateAiJob(job)) {
+    throw new Error("Invalid AI job for event envelope");
+  }
+
+  const message = new capnp.Message();
+  const envelope = initEnvelope(message, job.kind, options, {
+    userId: job.requesterUserId,
+    username: job.requesterUsername,
+  });
+
+  if (job.kind === "ragjam") {
+    const payload = envelope.payload._initRagjam();
+    payload.applicationId = job.applicationId;
+    payload.interactionToken = job.interactionToken;
+    if (job.channelId !== undefined) {
+      payload.channelId = job.channelId;
+    }
+    payload.prompt = job.prompt;
+    if (job.lyrics !== undefined) {
+      payload.lyrics = job.lyrics;
+    }
+  } else {
+    const payload = initChatPayload(envelope, job.kind);
+    payload.channelId = job.channelId;
+    if (job.messageId !== undefined) {
+      payload.messageId = job.messageId;
+    }
+    if (job.botUserId !== undefined) {
+      payload.botUserId = job.botUserId;
+    }
+    payload.prompt = job.prompt;
+    if (job.replyMessageId !== undefined) {
+      payload.replyMessageId = job.replyMessageId;
+    }
+    if (job.replyChannelId !== undefined) {
+      payload.replyChannelId = job.replyChannelId;
+    }
+  }
+
+  return new Uint8Array(message.toArrayBuffer());
+};
+
+export const encodeAiSpendJobEnvelope = (job: AiSpendJob, options: EnvelopeOptions): Uint8Array => {
+  if (!validateAiSpendJob(job)) {
+    throw new Error("Invalid AI spend job for event envelope");
+  }
+
+  const message = new capnp.Message();
+  const envelope = initEnvelope(message, SPEND_EVENT_TYPE, options);
+  envelope.payload._initSpend().spendEventId = job.spendEventId;
+  return new Uint8Array(message.toArrayBuffer());
+};
+
+const MAX_ENVELOPE_BYTES = 128 * 1024;
+const MAX_ENVELOPE_SEGMENTS = 16;
+
+// capnp-es sizes its segment list from the frame header before checking it
+// against the actual buffer, so hostile bytes can demand huge allocations.
+// Validate the unpacked framing ourselves before parsing.
+const isSaneFramedMessage = (bytes: Uint8Array) => {
+  if (bytes.byteLength < 8 || bytes.byteLength > MAX_ENVELOPE_BYTES || bytes.byteLength % 4 !== 0) {
+    return false;
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const segmentCount = view.getUint32(0, true) + 1;
+  if (segmentCount > MAX_ENVELOPE_SEGMENTS) {
+    return false;
+  }
+  let byteOffset = 4 + segmentCount * 4;
+  byteOffset += byteOffset % 8;
+  if (byteOffset > bytes.byteLength) {
+    return false;
+  }
+  for (let i = 0; i < segmentCount; i += 1) {
+    byteOffset += view.getUint32(4 + i * 4, true) * 8;
+    if (byteOffset > bytes.byteLength) {
+      return false;
+    }
+  }
+  return byteOffset === bytes.byteLength;
+};
+
+const readEnvelope = (value: unknown): EventEnvelope | null => {
+  const bytes = value instanceof Uint8Array
+    ? value
+    : value instanceof ArrayBuffer
+      ? new Uint8Array(value)
+      : null;
+  if (!bytes || !isSaneFramedMessage(bytes)) {
+    return null;
+  }
+  try {
+    const envelope = new capnp.Message(bytes, false).getRoot(EventEnvelope);
+    if (envelope.v !== ENVELOPE_VERSION || !isOptionalSnowflake(optionalText(envelope.guildId))) {
+      return null;
+    }
+    return envelope;
+  } catch {
+    return null;
+  }
+};
+
+const chatJobFrom = (envelope: EventEnvelope, kind: AiChatJob["kind"], payload: ChatPayload) =>
+  compact({
+    kind,
+    channelId: payload.channelId,
+    messageId: optionalText(payload.messageId),
+    botUserId: optionalText(payload.botUserId),
+    requesterUserId: optionalText(envelope.actor.userId),
+    requesterUsername: optionalText(envelope.actor.username),
+    prompt: payload.prompt,
+    replyMessageId: optionalText(payload.replyMessageId),
+    replyChannelId: optionalText(payload.replyChannelId),
+  });
+
+const aiJobFrom = (envelope: EventEnvelope): unknown => {
+  switch (envelope.payload.which()) {
+    case EventEnvelope_Payload_Which.THREAD_START:
+      return chatJobFrom(envelope, "thread_start", envelope.payload.threadStart);
+    case EventEnvelope_Payload_Which.THREAD_REPLY:
+      return chatJobFrom(envelope, "thread_reply", envelope.payload.threadReply);
+    case EventEnvelope_Payload_Which.CHANNEL_REPLY:
+      return chatJobFrom(envelope, "channel_reply", envelope.payload.channelReply);
+    case EventEnvelope_Payload_Which.RAGJAM: {
+      const payload = envelope.payload.ragjam;
+      const job: RagjamJob = compact({
+        kind: "ragjam",
+        applicationId: payload.applicationId,
+        interactionToken: payload.interactionToken,
+        channelId: optionalText(payload.channelId),
+        requesterUserId: optionalText(envelope.actor.userId),
+        requesterUsername: optionalText(envelope.actor.username),
+        prompt: payload.prompt,
+        lyrics: optionalText(payload.lyrics),
+      });
+      return job;
+    }
+    default:
+      return null;
+  }
+};
+
+export const decodeAiJobEnvelope = (bytes: unknown): AiJob | null => {
+  const envelope = readEnvelope(bytes);
+  if (!envelope) {
+    return null;
+  }
+  try {
+    const job = aiJobFrom(envelope);
+    return validateAiJob(job) && envelope.type === job.kind ? job : null;
+  } catch {
+    return null;
+  }
+};
+
+export const decodeAiSpendJobEnvelope = (bytes: unknown): AiSpendJob | null => {
+  const envelope = readEnvelope(bytes);
+  if (!envelope) {
+    return null;
+  }
+  try {
+    if (envelope.payload.which() !== EventEnvelope_Payload_Which.SPEND) {
+      return null;
+    }
+    const job: AiSpendJob = { spendEventId: envelope.payload.spend.spendEventId };
+    return validateAiSpendJob(job) && envelope.type === SPEND_EVENT_TYPE ? job : null;
+  } catch {
+    return null;
+  }
+};

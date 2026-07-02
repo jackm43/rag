@@ -12,8 +12,8 @@ import { createThreadFromMessage, postChannelMessage } from "./discord";
 import { errorMessage, logger } from "./logger";
 import { recordAiThread } from "./threads";
 import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "./tracked-ai";
-import { MAX_DISCORD_MESSAGE_LENGTH, type AiChatJob, type AiJob, type Env } from "./types";
-import { isAiJob } from "./validation";
+import { decodeAiJobEnvelope } from "./contracts";
+import { MAX_DISCORD_MESSAGE_LENGTH, type AiChatJob, type Env } from "./types";
 
 const recordAiInteraction = async (
   env: Env,
@@ -79,10 +79,10 @@ const recordAiInteraction = async (
   }
 };
 
-export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) => {
+export const processAiQueueMessage = async (message: Message<unknown>, env: Env) => {
   const startedAt = Date.now();
-  const job = message.body;
-  if (!isAiJob(job)) {
+  const job = decodeAiJobEnvelope(message.body);
+  if (!job) {
     logger.warn("ai_job_invalid");
     message.ack();
     return;

@@ -16,7 +16,6 @@ import {
   APPLICATION_COMMAND,
   CHANNEL_MESSAGE_WITH_SOURCE,
   PING,
-  type AiJob,
   type DiscordInteraction,
   type Env,
 } from "./types";
@@ -159,7 +158,7 @@ export default {
 
     return handleInteractionRequest(request, env, ctx);
   },
-  async queue(batch: MessageBatch<AiJob>, env: Env): Promise<void> {
+  async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
     for (const message of batch.messages) {
       await processAiQueueMessage(message, env);
     }
