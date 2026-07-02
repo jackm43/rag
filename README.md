@@ -67,9 +67,7 @@ sequenceDiagram
 
   alt /rag
     Worker->>Discord: Immediate JSON: deferred interaction response
-    Worker->>DB: INSERT rag_events: target user, reporter, timestamp
-    Worker->>DB: UPSERT rag_totals: increment target count
-    Worker->>DB: SELECT rag total
+    Worker->>DB: Batch: INSERT rag_events + UPSERT rag_totals RETURNING rag_count
     Worker->>Discord: PATCH original response: mention, total, allowed_mentions
   else /ragboard
     Worker->>DB: SELECT top rag_totals: user, count, updated_at
@@ -150,9 +148,7 @@ sequenceDiagram
 - Entry: interaction command routed in `src/index.ts`
 - Handler: `src/commands/rag.ts`
 - Data path:
-  - insert `rag_events` row
-  - upsert/increment `rag_totals`
-  - read updated target total
+  - one D1 batch: insert `rag_events` row + upsert/increment `rag_totals ... RETURNING rag_count` (no follow-up SELECT)
 - AI usage: none
 - Response:
   - target mention + updated rag total

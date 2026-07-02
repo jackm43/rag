@@ -52,17 +52,13 @@ export const handleUndoragCommand = async (interaction: DiscordInteraction, env:
     });
   }
 
-  await env.DB.batch([
+  const results = await env.DB.batch<RagRow>([
     env.DB.prepare("DELETE FROM rag_events WHERE id = ?").bind(latestEvent.id),
     env.DB.prepare(
-      "UPDATE rag_totals SET rag_count = max(rag_count - 1, 0), updated_at = CURRENT_TIMESTAMP WHERE ragged_user_id = ?",
+      "UPDATE rag_totals SET rag_count = max(rag_count - 1, 0), updated_at = CURRENT_TIMESTAMP WHERE ragged_user_id = ? RETURNING rag_count",
     ).bind(targetId),
   ]);
-
-  const total = await env.DB.prepare("SELECT rag_count FROM rag_totals WHERE ragged_user_id = ?")
-    .bind(targetId)
-    .first<RagRow>();
-  const ragCount = total?.rag_count ?? 0;
+  const ragCount = results[1]?.results?.[0]?.rag_count ?? 0;
 
   return jsonResponse({
     type: CHANNEL_MESSAGE_WITH_SOURCE,

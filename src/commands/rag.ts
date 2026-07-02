@@ -53,19 +53,15 @@ const buildRagCommandResponseData = async (
 
   const targetUsername = await getTargetUsername(interaction, env, targetId);
 
-  await env.DB.batch([
+  const results = await env.DB.batch<RagRow>([
     env.DB.prepare(
       "INSERT INTO rag_events (ragged_user_id, ragged_username, reported_by_user_id, reported_by_username) VALUES (?, ?, ?, ?)",
     ).bind(targetId, targetUsername, invoker.id, invoker.username),
     env.DB.prepare(
-      "INSERT INTO rag_totals (ragged_user_id, ragged_username, rag_count, updated_at) VALUES (?, ?, 1, CURRENT_TIMESTAMP) ON CONFLICT(ragged_user_id) DO UPDATE SET rag_count = rag_count + 1, ragged_username = excluded.ragged_username, updated_at = CURRENT_TIMESTAMP",
+      "INSERT INTO rag_totals (ragged_user_id, ragged_username, rag_count, updated_at) VALUES (?, ?, 1, CURRENT_TIMESTAMP) ON CONFLICT(ragged_user_id) DO UPDATE SET rag_count = rag_count + 1, ragged_username = excluded.ragged_username, updated_at = CURRENT_TIMESTAMP RETURNING rag_count",
     ).bind(targetId, targetUsername),
   ]);
-
-  const total = await env.DB.prepare("SELECT rag_count FROM rag_totals WHERE ragged_user_id = ?")
-    .bind(targetId)
-    .first<RagRow>();
-  const ragCount = total?.rag_count ?? 1;
+  const ragCount = results[1]?.results?.[0]?.rag_count ?? 1;
 
   return {
     content: `<@${targetId}> just ragged. Total: ${ragCount}`,

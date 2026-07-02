@@ -69,6 +69,11 @@ export const createDbMock = (options: {
 } = {}) => ({
   batch: async (statements: Array<{ sql: string; args: unknown[] }>) => {
     options.onBatch?.(statements);
+    return statements.map((statement) =>
+      statement.sql.includes("RETURNING rag_count")
+        ? { results: [{ rag_count: options.ragCount ?? 1 }] }
+        : { results: [] },
+    );
   },
   prepare: (sql: string) => {
     const runner = (args: unknown[]) => ({
