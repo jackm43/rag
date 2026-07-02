@@ -33,6 +33,17 @@ struct SpendPayload {
   spendEventId @0 :Text;
 }
 
+struct MessageReceivedPayload {
+  messageId @0 :Text;
+  channelId @1 :Text;
+  botUserId @2 :Text;
+  content @3 :Text;
+  mentionUserIds @4 :List(Text);
+  mentionRoleIds @5 :List(Text);
+  replyMessageId @6 :Text;
+  replyChannelId @7 :Text;
+}
+
 struct ChannelMessagePayload {
   channelId @0 :Text;
   content @1 :Text;
@@ -65,5 +76,6 @@ struct EventEnvelope {
     bicture @14 :BicturePayload;
     replyChannelMessage @15 :ChannelMessagePayload;
     replyInteractionEdit @16 :InteractionEditPayload;
+    messageReceived @17 :MessageReceivedPayload;
   }
 }

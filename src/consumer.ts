@@ -11,6 +11,7 @@ import { loadConfig } from "./config";
 import { buildNormalThreadConversation, fallbackThreadTitle, isAskThread } from "./conversation";
 import { createThreadFromMessage } from "./discord";
 import { errorMessage, logger } from "./logger";
+import { resolveGatewayMessage } from "./mention";
 import { sendChannelReply } from "./outbox";
 import { finalizeAiReplyText } from "./responder-worker";
 import { recordAiThread } from "./threads";
@@ -84,23 +85,42 @@ const recordAiInteraction = async (
 
 export const processAiQueueMessage = async (message: Message<unknown>, env: Env) => {
   const startedAt = Date.now();
-  const job = decodeAiJobEnvelope(message.body);
-  if (!job) {
+  const decoded = decodeAiJobEnvelope(message.body);
+  if (!decoded) {
     logger.warn("ai_job_invalid");
     message.ack();
     return;
   }
 
-  if (job.kind === "ragjam") {
-    await processRagjamJob(job, env);
+  if (decoded.kind === "ragjam") {
+    await processRagjamJob(decoded, env);
     message.ack();
     return;
   }
 
-  if (job.kind === "bicture") {
-    await processBictureJob(job, env);
+  if (decoded.kind === "bicture") {
+    await processBictureJob(decoded, env);
     message.ack();
     return;
+  }
+
+  // Raw gateway messages resolve (thread lookup, mention/role resolution,
+  // limits) into a chat job processed in-process — no re-enqueue.
+  let job: AiChatJob | AiAskJob;
+  if (decoded.kind === "message.received") {
+    let resolved: AiChatJob | null = null;
+    try {
+      resolved = await resolveGatewayMessage(decoded, env);
+    } catch (error) {
+      logger.error("gateway_message_resolve_failed", { error: errorMessage(error) });
+    }
+    if (!resolved) {
+      message.ack();
+      return;
+    }
+    job = resolved;
+  } else {
+    job = decoded;
   }
 
   let model = "unknown";

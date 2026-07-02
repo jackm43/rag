@@ -1,5 +1,14 @@
 import * as capnp from "capnp-es";
-import type { AiAskJob, AiChatJob, AiJob, AiSpendJob, BictureJob, RagjamJob, ReplyJob } from "../types";
+import type {
+  AiAskJob,
+  AiChatJob,
+  AiJob,
+  AiSpendJob,
+  BictureJob,
+  MessageReceivedJob,
+  RagjamJob,
+  ReplyJob,
+} from "../types";
 import {
   ChatPayload,
   EventEnvelope,
@@ -8,8 +17,10 @@ import {
 import { isOptionalSnowflake, validateAiJob, validateAiSpendJob, validateReplyJob } from "./validate";
 
 export {
+  isSnowflake,
   MAX_FREE_TEXT_LENGTH,
   MAX_INTERACTION_TOKEN_LENGTH,
+  MAX_MENTION_IDS,
   MAX_REPLY_CONTENT_LENGTH,
   MAX_SPEND_EVENT_ID_LENGTH,
   MAX_USERNAME_LENGTH,
@@ -40,6 +51,9 @@ const CHAT_PAYLOAD_WHICH: Record<ChatLikeKind, EventEnvelope_Payload_Which> = {
 };
 
 const optionalText = (value: string) => (value.length > 0 ? value : undefined);
+
+const textListToArray = (list: capnp.List<string>): string[] =>
+  Array.from({ length: list.length }, (_, index) => list.get(index));
 
 const compact = <T extends Record<string, unknown>>(value: T): T =>
   Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined)) as T;
@@ -90,10 +104,18 @@ export const encodeAiJobEnvelope = (job: AiJob, options: EnvelopeOptions): Uint8
   }
 
   const message = new capnp.Message();
-  const envelope = initEnvelope(message, job.kind, options, {
-    userId: job.requesterUserId,
-    username: job.requesterUsername,
-  });
+  // message.received events carry the guild id and author on the job itself.
+  const envelope = job.kind === "message.received"
+    ? initEnvelope(
+      message,
+      job.kind,
+      { ...options, guildId: job.guildId },
+      { userId: job.authorId, username: job.authorUsername },
+    )
+    : initEnvelope(message, job.kind, options, {
+      userId: job.requesterUserId,
+      username: job.requesterUsername,
+    });
 
   if (job.kind === "ragjam") {
     const payload = envelope.payload._initRagjam();
@@ -114,6 +136,22 @@ export const encodeAiJobEnvelope = (job: AiJob, options: EnvelopeOptions): Uint8
       payload.channelId = job.channelId;
     }
     payload.prompt = job.prompt;
+  } else if (job.kind === "message.received") {
+    const payload = envelope.payload._initMessageReceived();
+    payload.messageId = job.messageId;
+    payload.channelId = job.channelId;
+    payload.botUserId = job.botUserId;
+    payload.content = job.content;
+    const userIds = payload._initMentionUserIds(job.mentionUserIds.length);
+    job.mentionUserIds.forEach((id, index) => userIds.set(index, id));
+    const roleIds = payload._initMentionRoleIds(job.mentionRoleIds.length);
+    job.mentionRoleIds.forEach((id, index) => roleIds.set(index, id));
+    if (job.replyMessageId !== undefined) {
+      payload.replyMessageId = job.replyMessageId;
+    }
+    if (job.replyChannelId !== undefined) {
+      payload.replyChannelId = job.replyChannelId;
+    }
   } else {
     const payload = initChatPayload(envelope, job.kind);
     payload.channelId = job.channelId;
@@ -262,6 +300,24 @@ const aiJobFrom = (envelope: EventEnvelope): unknown => {
         requesterUserId: optionalText(envelope.actor.userId),
         requesterUsername: optionalText(envelope.actor.username),
         prompt: payload.prompt,
+      });
+      return job;
+    }
+    case EventEnvelope_Payload_Which.MESSAGE_RECEIVED: {
+      const payload = envelope.payload.messageReceived;
+      const job: MessageReceivedJob = compact({
+        kind: "message.received",
+        messageId: payload.messageId,
+        channelId: payload.channelId,
+        guildId: optionalText(envelope.guildId),
+        botUserId: payload.botUserId,
+        authorId: optionalText(envelope.actor.userId),
+        authorUsername: optionalText(envelope.actor.username),
+        content: payload.content,
+        mentionUserIds: textListToArray(payload.mentionUserIds),
+        mentionRoleIds: textListToArray(payload.mentionRoleIds),
+        replyMessageId: optionalText(payload.replyMessageId),
+        replyChannelId: optionalText(payload.replyChannelId),
       });
       return job;
     }

@@ -12,6 +12,8 @@ export const MAX_SPEND_EVENT_ID_LENGTH = 128;
 // Discord length policy. Queue messages are capped at 128 KiB, so keep this
 // far below that even at four bytes per character.
 export const MAX_REPLY_CONTENT_LENGTH = 16_000;
+// Discord messages carry at most ~100 user/role mentions.
+export const MAX_MENTION_IDS = 100;
 
 const isString = (value: unknown): value is string => typeof value === "string";
 
@@ -33,6 +35,14 @@ const isOptionalUsername = (value: unknown) => value === undefined || isUsername
 const isInteractionToken = (value: unknown): value is string =>
   isString(value) && value.length > 0 && value.length <= MAX_INTERACTION_TOKEN_LENGTH;
 
+// Gateway message content may be empty (e.g. attachment-only messages); the
+// brain drops anything that resolves to an empty prompt.
+const isCappedText = (value: unknown): value is string =>
+  isString(value) && value.length <= MAX_FREE_TEXT_LENGTH;
+
+const isSnowflakeList = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.length <= MAX_MENTION_IDS && value.every(isSnowflake);
+
 export const validateAiJob = (value: unknown): value is AiJob => {
   if (
     !isRecord(value) ||
@@ -42,10 +52,27 @@ export const validateAiJob = (value: unknown): value is AiJob => {
       value.kind !== "channel_reply" &&
       value.kind !== "ask" &&
       value.kind !== "ragjam" &&
-      value.kind !== "bicture"
+      value.kind !== "bicture" &&
+      value.kind !== "message.received"
     )
   ) {
     return false;
+  }
+
+  if (value.kind === "message.received") {
+    return (
+      isSnowflake(value.messageId) &&
+      isSnowflake(value.channelId) &&
+      isSnowflake(value.botUserId) &&
+      isOptionalSnowflake(value.guildId) &&
+      isOptionalSnowflake(value.authorId) &&
+      isOptionalUsername(value.authorUsername) &&
+      isCappedText(value.content) &&
+      isSnowflakeList(value.mentionUserIds) &&
+      isSnowflakeList(value.mentionRoleIds) &&
+      isOptionalSnowflake(value.replyMessageId) &&
+      isOptionalSnowflake(value.replyChannelId)
+    );
   }
 
   if (value.kind === "bicture") {

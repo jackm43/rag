@@ -123,8 +123,11 @@ sequenceDiagram
 
   User->>DiscordGateway: Parent channel message mentioning bot
   DiscordGateway-->>GatewayDO: MESSAGE_CREATE payload: author, channel_id, content, mentions
-  GatewayDO->>Queue: Enqueue channel_reply AiJob: channel, source message, requester, prompt, reply ids
-  Queue-->>Consumer: Deliver AiJob batch
+  GatewayDO->>Queue: Enqueue encoded message.received event: ids, capped content, author, mentions, reply ids (no D1, no REST)
+  Queue-->>Consumer: Deliver event batch
+  Consumer->>DB: SELECT rag_ai_threads by channel id (thread tracking lives brain-side)
+  Consumer->>DiscordREST: Optional GET bot role ids when roles are mentioned
+  Consumer->>DB: Rate limit + budget pre-flight; denial notices go out via the outbox
   Consumer->>DiscordREST: Optional GET explicit replied-to message
   DiscordREST-->>Consumer: Replied-to message JSON: author, content, attachments
   Consumer->>AI: Chat request: fresh user prompt
@@ -140,8 +143,8 @@ sequenceDiagram
 
   User->>DiscordGateway: Later message inside tracked thread, no @ required
   DiscordGateway-->>GatewayDO: MESSAGE_CREATE payload for thread channel
-  GatewayDO->>DB: SELECT rag_ai_threads by thread id
-  GatewayDO->>Queue: Enqueue thread_reply AiJob
+  GatewayDO->>Queue: Enqueue message.received event (the DO cannot know it is a tracked thread)
+  Consumer->>DB: SELECT rag_ai_threads by thread id, resolves a thread_reply in-process
   Consumer->>DiscordREST: GET thread messages before messageId, limit historyLimit
   Consumer->>AI: Chat request: stored initial prompt + thread history + current message
   Consumer->>Outbox: Enqueue reply.channel_message; responder posts into the thread
@@ -228,13 +231,14 @@ sequenceDiagram
 - Entry:
   - authenticated `POST /gateway/start` starts Durable Object gateway client
   - gateway listens for Discord `MESSAGE_CREATE`
-- Handlers: `src/gateway.ts` (connection) and `src/mention.ts` (logic)
+- Handlers: `src/gateway.ts` (connection) and `src/mention.ts` (DO-side encode + brain-side resolution)
 - Queue and worker:
-  - parent-channel mentions enqueue a `channel_reply` job in `AI_JOBS`
-  - channel reply jobs answer in the same Discord channel and do not create or record a thread
-  - `/ask` creates a Discord thread, records it in `rag_ai_threads`, and enqueues an `ask` job; the queue consumer posts the answer inside that thread
+  - the DO enqueues every non-bot message with a usable prompt as a `message.received` event (no D1 thread lookup, no REST role fetch in the DO)
+  - the brain resolves events into `channel_reply`/`thread_reply` work in-process: thread lookup, bot-role fetch for role mentions, mention resolution, and usage limits
+  - channel replies answer in the same Discord channel and do not create or record a thread
+  - `/ask` creates a Discord thread, records it in `rag_ai_threads`, and enqueues an `ask` job; the brain posts the answer inside that thread via the outbox
   - thread titles everywhere are derived from the user prompt (`sanitizeThreadTitle`), so no model call is spent on titles
-  - later messages in a tracked thread enqueue `thread_reply` jobs automatically without requiring an @ mention
+  - later messages in a tracked thread resolve to `thread_reply` work automatically without requiring an @ mention
   - reply jobs build context from the stored initial prompt plus recent messages in that thread only
   - generated replies cross `discord-outbox` as raw model text; the responder sanitizes mentions/IDs on egress
 - Delivery (always via the responder worker):
@@ -264,8 +268,8 @@ The guard fails open on D1 errors, and the `/rag` command family is not rate lim
 
 | Worker | Config | Trust zone / role | Secrets |
 | --- | --- | --- | --- |
-| `ragbot-worker` | `wrangler.jsonc` | Public entrypoint (`/discord`, gateway control) + `DiscordGateway` Durable Object | `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (DO IDENTIFY + Discord REST), `GATEWAY_CONTROL_TOKEN` |
-| `ragbot-brain-worker` | `wrangler.brain.jsonc` | `ai-jobs` consumer: **read Discord + AI + D1**. Reads thread history, replied-to messages, and bot roles over Discord REST, and creates `/ask`-style threads; every message/edit it produces leaves via the outbox queue or the responder RPC binding, never directly | `CF_AIG_TOKEN` (belongs to brain **only** — remove it from `ragbot-worker` with `wrangler secret delete CF_AIG_TOKEN`), `DISCORD_BOT_TOKEN` (honestly required: Discord *reads* need the bot token too, so the brain keeps it even though writes go through the responder) |
+| `ragbot-worker` | `wrangler.jsonc` | Public entrypoint (`/discord`, gateway control) + `DiscordGateway` Durable Object. The DO keeps only the WebSocket lifecycle + IDENTIFY (bot token, unavoidable), payload validation, and encode+enqueue of `message.received` events — it uses no D1 and no Discord REST | `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (DO IDENTIFY + interaction-path Discord REST), `GATEWAY_CONTROL_TOKEN` |
+| `ragbot-brain-worker` | `wrangler.brain.jsonc` | `ai-jobs` consumer: **read Discord + AI + D1**. Resolves raw `message.received` events (thread lookup, mention/role resolution, usage limits) in-process, reads thread history, replied-to messages, and bot roles over Discord REST, and creates `/ask`-style threads; every message/edit it produces leaves via the outbox queue or the responder RPC binding, never directly | `CF_AIG_TOKEN` (belongs to brain **only** — remove it from `ragbot-worker` with `wrangler secret delete CF_AIG_TOKEN`), `DISCORD_BOT_TOKEN` (honestly required: Discord *reads* need the bot token too, so the brain keeps it even though writes go through the responder) |
 | `ragbot-responder-worker` | `wrangler.responder.jsonc` | **Write Discord** — the single egress choke point. No public route. Consumes `discord-outbox` for text replies and exposes the `Responder` RPC entrypoint for media-bearing interaction edits. The only place `sanitizeAiText`, the message length cap, and `allowed_mentions: { parse: [] }` run on AI output before it reaches Discord | `DISCORD_BOT_TOKEN` |
 | `ragbot-spend-worker` | `wrangler.spend.jsonc` | `ai-spend-jobs` consumer: AI Gateway log reconciliation | `CLOUDFLARE_API_TOKEN` (scoped to AI Gateway read) |
 
@@ -278,6 +282,12 @@ Set a secret on a specific worker with `wrangler secret put NAME -c wrangler.bra
 - The brain sends **raw model text** over the outbox; the responder applies the final output policy (sanitize, truncate to `MAX_DISCORD_MESSAGE_LENGTH`, `allowed_mentions: { parse: [] }`). `rag_ai_interactions.response_text` still records the **sanitized** text (the brain computes the same pure policy function for the record), and `status = 'ok'` now means "handed to the outbox" — delivery failures show up in responder logs and its DLQ, not in that column.
 - Interaction-edit text (prompt echoes, failure notices) is not model output: the responder caps it at the Discord 2000-char hard limit and locks down `allowed_mentions`, but does not run `sanitizeAiText` speaker-line stripping over it.
 - **Deliberate boundary:** the main worker's deferred `/rag`-family and `/ask` responses still PATCH the interaction webhook directly. Interaction tokens are scoped and short-lived, the main worker owns the interaction, and no bot token is involved (webhook edits are token-authenticated), so this stays outside the responder.
+
+### Gateway ingress design
+
+The `DiscordGateway` Durable Object treats `MESSAGE_CREATE` as a second untrusted ingress: it validates the payload shape, encodes a `message.received` envelope (ids, length-capped content, author, mentions, mention roles, reply metadata), and enqueues it — nothing else. Because thread tracking lives in D1 and the DO deliberately has no D1 or REST access, it cannot know locally whether a non-mention message belongs to a tracked thread, so every non-bot message with a non-empty stripped prompt is enqueued and the brain filters. That trades queue volume for isolation, which is fine for a single small guild. The brain then does the thread lookup, bot-role fetch, mention resolution, and rate/budget checks, and processes the resolved reply in the same invocation (no re-enqueue); denial notices leave via the outbox.
+
+**Deliberate deviation from RECOMMENDATIONS.md section 1:** the DO stays hosted in the main worker rather than moving to a dedicated listener worker — moving a Durable Object class between scripts requires a risky transfer migration. Documented here as a possible future step instead.
 
 ## Local and Deploy Commands
 

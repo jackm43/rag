@@ -82,6 +82,24 @@ export type RagjamJob = {
   lyrics?: string;
 };
 
+// A raw-but-validated gateway MESSAGE_CREATE, encoded by the Durable Object
+// with no D1 or Discord REST access. The brain worker resolves it into a
+// thread_reply/channel_reply (or drops it) in-process.
+export type MessageReceivedJob = {
+  kind: "message.received";
+  messageId: string;
+  channelId: string;
+  guildId?: string;
+  botUserId: string;
+  authorId?: string;
+  authorUsername?: string;
+  content: string;
+  mentionUserIds: string[];
+  mentionRoleIds: string[];
+  replyMessageId?: string;
+  replyChannelId?: string;
+};
+
 export type BictureJob = {
   kind: "bicture";
   applicationId: string;
@@ -94,7 +112,7 @@ export type BictureJob = {
 
 export type AiChatJob = AiThreadStartJob | AiThreadReplyJob | AiChannelReplyJob;
 
-export type AiJob = AiChatJob | AiAskJob | RagjamJob | BictureJob;
+export type AiJob = AiChatJob | AiAskJob | RagjamJob | BictureJob | MessageReceivedJob;
 
 export type AiSpendJob = {
   spendEventId: string;

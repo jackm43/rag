@@ -1,9 +1,19 @@
 import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
-import worker, { handleGatewayMessageCreate } from "../src/index.ts";
+import worker from "../src/index.ts";
 import { checkAiUsageAllowed } from "../src/limits.ts";
+import { resolveGatewayMessage } from "../src/mention.ts";
+import { decodeReplyJobEnvelope } from "../src/contracts/index.ts";
 import { createEnv, createSignedRequest } from "./helpers.ts";
+
+const BOT_USER_ID = "100000000000000001";
+const GUILD_ID = "100000000000000002";
+const CHANNEL_ID = "200000000000000001";
+const THREAD_ID = "200000000000000002";
+const MESSAGE_ID = "300000000000000001";
+const ALICE_ID = "400000000000000001";
+const BOB_ID = "400000000000000002";
 
 const createLimitsDbMock = (options: {
   requestCount?: number;
@@ -242,102 +252,84 @@ test("/ragjam does not enqueue a job when the requester is rate limited", async 
   assert.deepEqual(enqueuedJobs, []);
 });
 
-test("gateway mention posts a rate limit notice instead of enqueueing", async () => {
-  const originalFetch = globalThis.fetch;
-  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
-  const queuedJobs: unknown[] = [];
-  globalThis.fetch = async (url, init) => {
-    fetchCalls.push({ url: String(url), init });
-    return new Response("{}", { status: 200 });
-  };
-
-  try {
-    const env = createEnv("unused", {
-      DB: createLimitsDbMock({ requestCount: 20 }),
-      AI_JOBS: {
-        send: async (job: unknown) => {
-          queuedJobs.push(job);
-        },
+test("gateway mention resolution sends a rate limit notice through the outbox", async () => {
+  const outboxJobs: Uint8Array[] = [];
+  const env = createEnv("unused", {
+    DB: createLimitsDbMock({ requestCount: 20 }),
+    DISCORD_OUTBOX: {
+      send: async (body: Uint8Array) => {
+        outboxJobs.push(body);
       },
-    });
+    },
+  });
 
-    await handleGatewayMessageCreate(
-      {
-        id: "message-id",
-        channel_id: "channel-id",
-        content: "<@bot-user-id> Explain queues",
-        author: { id: "1", username: "alice" },
-      },
-      env,
-      "bot-user-id",
-    );
+  const job = await resolveGatewayMessage(
+    {
+      kind: "message.received",
+      messageId: MESSAGE_ID,
+      channelId: CHANNEL_ID,
+      botUserId: BOT_USER_ID,
+      authorId: ALICE_ID,
+      authorUsername: "alice",
+      content: `<@${BOT_USER_ID}> Explain queues`,
+      mentionUserIds: [BOT_USER_ID],
+      mentionRoleIds: [],
+    },
+    env,
+  );
 
-    assert.deepEqual(queuedJobs, []);
-    const noticeCall = fetchCalls.find(
-      (call) => call.url === "https://discord.com/api/v10/channels/channel-id/messages",
-    );
-    assert.ok(noticeCall);
-    assert.deepEqual(JSON.parse(String(noticeCall.init?.body)), {
-      content: "You've hit the hourly AI limit. Try again later.",
-      allowed_mentions: { parse: [] },
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  assert.equal(job, null);
+  assert.equal(outboxJobs.length, 1);
+  assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+    kind: "reply.channel_message",
+    channelId: CHANNEL_ID,
+    content: "You've hit the hourly AI limit. Try again later.",
+  });
 });
 
-test("tracked thread reply posts a budget notice instead of enqueueing", async () => {
-  const originalFetch = globalThis.fetch;
-  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
-  const queuedJobs: unknown[] = [];
-  globalThis.fetch = async (url, init) => {
-    fetchCalls.push({ url: String(url), init });
-    return new Response("{}", { status: 200 });
-  };
-
-  try {
-    const env = createEnv("unused", {
-      DB: createLimitsDbMock({
-        spendMicros: 1_000_000,
-        aiThread: {
-          thread_id: "thread-id",
-          parent_channel_id: "channel-id",
-          source_message_id: "source-message-id",
-          requester_user_id: "1",
-          requester_username: "alice",
-          initial_prompt: "Explain queues",
-          title: "Queue chat",
-        },
-      }),
-      AI_JOBS: {
-        send: async (job: unknown) => {
-          queuedJobs.push(job);
-        },
+test("tracked thread reply resolution sends a budget notice through the outbox", async () => {
+  const outboxJobs: Uint8Array[] = [];
+  const env = createEnv("unused", {
+    DB: createLimitsDbMock({
+      spendMicros: 1_000_000,
+      aiThread: {
+        thread_id: THREAD_ID,
+        parent_channel_id: CHANNEL_ID,
+        source_message_id: MESSAGE_ID,
+        requester_user_id: ALICE_ID,
+        requester_username: "alice",
+        initial_prompt: "Explain queues",
+        title: "Queue chat",
       },
-    });
-
-    await handleGatewayMessageCreate(
-      {
-        id: "message-id",
-        guild_id: "guild-id",
-        channel_id: "thread-id",
-        content: "what about dead letter queues?",
-        author: { id: "2", username: "bob" },
+    }),
+    DISCORD_OUTBOX: {
+      send: async (body: Uint8Array) => {
+        outboxJobs.push(body);
       },
-      env,
-      "bot-user-id",
-    );
+    },
+  });
 
-    assert.deepEqual(queuedJobs, []);
-    const noticeCall = fetchCalls.find(
-      (call) => call.url === "https://discord.com/api/v10/channels/thread-id/messages",
-    );
-    assert.ok(noticeCall);
-    assert.deepEqual(JSON.parse(String(noticeCall.init?.body)), {
-      content: "You've spent your daily AI budget. Try again tomorrow.",
-      allowed_mentions: { parse: [] },
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const job = await resolveGatewayMessage(
+    {
+      kind: "message.received",
+      messageId: MESSAGE_ID,
+      channelId: THREAD_ID,
+      guildId: GUILD_ID,
+      botUserId: BOT_USER_ID,
+      authorId: BOB_ID,
+      authorUsername: "bob",
+      content: "what about dead letter queues?",
+      mentionUserIds: [],
+      mentionRoleIds: [],
+    },
+    env,
+  );
+
+  assert.equal(job, null);
+  assert.equal(outboxJobs.length, 1);
+  assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+    kind: "reply.channel_message",
+    channelId: THREAD_ID,
+    content: "You've spent your daily AI budget. Try again tomorrow.",
+  });
 });

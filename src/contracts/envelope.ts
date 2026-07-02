@@ -133,6 +133,86 @@ export class SpendPayload extends $.Struct {
   }
   toString(): string { return "SpendPayload_" + super.toString(); }
 }
+export class MessageReceivedPayload extends $.Struct {
+  static readonly _capnp = {
+    displayName: "MessageReceivedPayload",
+    id: "f88d58ca3ff252a3",
+    size: new $.ObjectSize(0, 8),
+  };
+  get messageId(): string {
+    return $.utils.getText(0, this);
+  }
+  set messageId(value: string) {
+    $.utils.setText(0, value, this);
+  }
+  get channelId(): string {
+    return $.utils.getText(1, this);
+  }
+  set channelId(value: string) {
+    $.utils.setText(1, value, this);
+  }
+  get botUserId(): string {
+    return $.utils.getText(2, this);
+  }
+  set botUserId(value: string) {
+    $.utils.setText(2, value, this);
+  }
+  get content(): string {
+    return $.utils.getText(3, this);
+  }
+  set content(value: string) {
+    $.utils.setText(3, value, this);
+  }
+  _adoptMentionUserIds(value: $.Orphan<$.List<string>>): void {
+    $.utils.adopt(value, $.utils.getPointer(4, this));
+  }
+  _disownMentionUserIds(): $.Orphan<$.List<string>> {
+    return $.utils.disown(this.mentionUserIds);
+  }
+  get mentionUserIds(): $.List<string> {
+    return $.utils.getList(4, $.TextList, this);
+  }
+  _hasMentionUserIds(): boolean {
+    return !$.utils.isNull($.utils.getPointer(4, this));
+  }
+  _initMentionUserIds(length: number): $.List<string> {
+    return $.utils.initList(4, $.TextList, length, this);
+  }
+  set mentionUserIds(value: $.List<string>) {
+    $.utils.copyFrom(value, $.utils.getPointer(4, this));
+  }
+  _adoptMentionRoleIds(value: $.Orphan<$.List<string>>): void {
+    $.utils.adopt(value, $.utils.getPointer(5, this));
+  }
+  _disownMentionRoleIds(): $.Orphan<$.List<string>> {
+    return $.utils.disown(this.mentionRoleIds);
+  }
+  get mentionRoleIds(): $.List<string> {
+    return $.utils.getList(5, $.TextList, this);
+  }
+  _hasMentionRoleIds(): boolean {
+    return !$.utils.isNull($.utils.getPointer(5, this));
+  }
+  _initMentionRoleIds(length: number): $.List<string> {
+    return $.utils.initList(5, $.TextList, length, this);
+  }
+  set mentionRoleIds(value: $.List<string>) {
+    $.utils.copyFrom(value, $.utils.getPointer(5, this));
+  }
+  get replyMessageId(): string {
+    return $.utils.getText(6, this);
+  }
+  set replyMessageId(value: string) {
+    $.utils.setText(6, value, this);
+  }
+  get replyChannelId(): string {
+    return $.utils.getText(7, this);
+  }
+  set replyChannelId(value: string) {
+    $.utils.setText(7, value, this);
+  }
+  toString(): string { return "MessageReceivedPayload_" + super.toString(); }
+}
 export class ChannelMessagePayload extends $.Struct {
   static readonly _capnp = {
     displayName: "ChannelMessagePayload",
@@ -208,7 +288,8 @@ export const EventEnvelope_Payload_Which = {
   ASK: 5,
   BICTURE: 6,
   REPLY_CHANNEL_MESSAGE: 7,
-  REPLY_INTERACTION_EDIT: 8
+  REPLY_INTERACTION_EDIT: 8,
+  MESSAGE_RECEIVED: 9
 } as const;
 export type EventEnvelope_Payload_Which = (typeof EventEnvelope_Payload_Which)[keyof typeof EventEnvelope_Payload_Which];
 export class EventEnvelope_Payload extends $.Struct {
@@ -221,6 +302,7 @@ export class EventEnvelope_Payload extends $.Struct {
   static readonly BICTURE = EventEnvelope_Payload_Which.BICTURE;
   static readonly REPLY_CHANNEL_MESSAGE = EventEnvelope_Payload_Which.REPLY_CHANNEL_MESSAGE;
   static readonly REPLY_INTERACTION_EDIT = EventEnvelope_Payload_Which.REPLY_INTERACTION_EDIT;
+  static readonly MESSAGE_RECEIVED = EventEnvelope_Payload_Which.MESSAGE_RECEIVED;
   static readonly _capnp = {
     displayName: "payload",
     id: "a636c8f1ec42d04d",
@@ -449,6 +531,31 @@ export class EventEnvelope_Payload extends $.Struct {
   }
   set replyInteractionEdit(value: InteractionEditPayload) {
     $.utils.setUint16(2, 8, this);
+    $.utils.copyFrom(value, $.utils.getPointer(7, this));
+  }
+  _adoptMessageReceived(value: $.Orphan<MessageReceivedPayload>): void {
+    $.utils.setUint16(2, 9, this);
+    $.utils.adopt(value, $.utils.getPointer(7, this));
+  }
+  _disownMessageReceived(): $.Orphan<MessageReceivedPayload> {
+    return $.utils.disown(this.messageReceived);
+  }
+  get messageReceived(): MessageReceivedPayload {
+    $.utils.testWhich("messageReceived", $.utils.getUint16(2, this), 9, this);
+    return $.utils.getStruct(7, MessageReceivedPayload, this);
+  }
+  _hasMessageReceived(): boolean {
+    return !$.utils.isNull($.utils.getPointer(7, this));
+  }
+  _initMessageReceived(): MessageReceivedPayload {
+    $.utils.setUint16(2, 9, this);
+    return $.utils.initStructAt(7, MessageReceivedPayload, this);
+  }
+  get _isMessageReceived(): boolean {
+    return $.utils.getUint16(2, this) === 9;
+  }
+  set messageReceived(value: MessageReceivedPayload) {
+    $.utils.setUint16(2, 9, this);
     $.utils.copyFrom(value, $.utils.getPointer(7, this));
   }
   toString(): string { return "EventEnvelope_Payload_" + super.toString(); }

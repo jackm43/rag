@@ -7,6 +7,7 @@ import {
   handleGatewayMessageCreate,
 } from "../src/index.ts";
 import brainWorker from "../src/brain-worker.ts";
+import { resolveGatewayMessage } from "../src/mention.ts";
 import responderWorker from "../src/responder-worker.ts";
 import { decodeAiJobEnvelope, decodeReplyJobEnvelope, encodeAiJobEnvelope } from "../src/contracts/index.ts";
 import { fetchChannelMessages } from "../src/discord.ts";
@@ -23,6 +24,7 @@ const REFERENCED_MESSAGE_ID = "300000000000000003";
 const SOURCE_MESSAGE_ID = "300000000000000004";
 const ALICE_ID = "400000000000000001";
 const BOB_ID = "400000000000000002";
+const BOT_ROLE_ID = "800000000000000001";
 
 test("bot mention parser accepts prompts after the bot mention", () => {
   assert.equal(extractBotMentionPrompt("<@bot-user-id> Explain queues", "bot-user-id"), "Explain queues");
@@ -38,85 +40,15 @@ test("bot mention parser accepts prompts after the bot mention", () => {
   assert.equal(extractBotMentionPrompt("<@bot-user-id>   ", "bot-user-id"), null);
 });
 
-test("gateway message create enqueues a channel reply AI job", async () => {
-  const queuedJobs: unknown[] = [];
-  const env = createEnv("unused", {
-    AI_JOBS: {
-      send: async (job: unknown) => {
-        queuedJobs.push(job);
-      },
-    },
-  });
-
-  await handleGatewayMessageCreate(
-    {
-      id: MESSAGE_ID,
-      channel_id: CHANNEL_ID,
-      content: `<@${BOT_USER_ID}> Explain queues`,
-      author: { id: ALICE_ID, username: "alice" },
-      member: { nick: "Tarkaus" },
-    },
-    env,
-    BOT_USER_ID,
-  );
-
-  assert.equal(queuedJobs.length, 1);
-  assert.ok(queuedJobs[0] instanceof Uint8Array);
-  assert.deepEqual(decodeAiJobEnvelope(queuedJobs[0]), {
-    kind: "channel_reply",
-    channelId: CHANNEL_ID,
-    messageId: MESSAGE_ID,
-    botUserId: BOT_USER_ID,
-    requesterUserId: ALICE_ID,
-    requesterUsername: "Tarkaus",
-    prompt: "Explain queues",
-  });
-});
-
-test("gateway message create enqueues jobs when the bot is mentioned at the end", async () => {
-  const queuedJobs: unknown[] = [];
-  const env = createEnv("unused", {
-    AI_JOBS: {
-      send: async (job: unknown) => {
-        queuedJobs.push(job);
-      },
-    },
-  });
-
-  await handleGatewayMessageCreate(
-    {
-      id: MESSAGE_ID,
-      channel_id: CHANNEL_ID,
-      content: `hey <@${BOT_USER_ID}>`,
-      mentions: [{ id: BOT_USER_ID }],
-      author: { id: ALICE_ID, username: "alice", global_name: "Alice Display" },
-    },
-    env,
-    BOT_USER_ID,
-  );
-
-  assert.equal(queuedJobs.length, 1);
-  assert.deepEqual(decodeAiJobEnvelope(queuedJobs[0]), {
-    kind: "channel_reply",
-    channelId: CHANNEL_ID,
-    messageId: MESSAGE_ID,
-    botUserId: BOT_USER_ID,
-    requesterUserId: ALICE_ID,
-    requesterUsername: "Alice Display",
-    prompt: "hey",
-  });
-});
-
-test("gateway message create enqueues jobs when the bot's role is mentioned", async () => {
+test("gateway message create encodes a validated message.received event with no lookups", async () => {
   const originalFetch = globalThis.fetch;
-  const queuedJobs: unknown[] = [];
   const fetchCalls: string[] = [];
   globalThis.fetch = async (url) => {
     fetchCalls.push(String(url));
-    return Response.json({ roles: ["bot-role-id"] });
+    return Response.json({});
   };
+  const queuedJobs: unknown[] = [];
   const env = createEnv("unused", {
-    DISCORD_BOT_TOKEN: "bot-token",
     AI_JOBS: {
       send: async (job: unknown) => {
         queuedJobs.push(job);
@@ -130,33 +62,38 @@ test("gateway message create enqueues jobs when the bot's role is mentioned", as
         id: MESSAGE_ID,
         guild_id: GUILD_ID,
         channel_id: CHANNEL_ID,
-        content: "<@&bot-role-id> whats up",
-        mention_roles: ["bot-role-id"],
+        content: `<@${BOT_USER_ID}> Explain queues`,
+        mentions: [{ id: BOT_USER_ID }],
+        mention_roles: [BOT_ROLE_ID],
         author: { id: ALICE_ID, username: "alice" },
+        member: { nick: "Tarkaus" },
       },
       env,
       BOT_USER_ID,
     );
 
-    assert.deepEqual(fetchCalls, [
-      `https://discord.com/api/v10/guilds/${GUILD_ID}/members/${BOT_USER_ID}`,
-    ]);
+    // No D1 (createEnv's DB throws) and no Discord REST from the DO path.
+    assert.deepEqual(fetchCalls, []);
     assert.equal(queuedJobs.length, 1);
+    assert.ok(queuedJobs[0] instanceof Uint8Array);
     assert.deepEqual(decodeAiJobEnvelope(queuedJobs[0]), {
-      kind: "channel_reply",
-      channelId: CHANNEL_ID,
+      kind: "message.received",
       messageId: MESSAGE_ID,
+      channelId: CHANNEL_ID,
+      guildId: GUILD_ID,
       botUserId: BOT_USER_ID,
-      requesterUserId: ALICE_ID,
-      requesterUsername: "alice",
-      prompt: "whats up",
+      authorId: ALICE_ID,
+      authorUsername: "Tarkaus",
+      content: `<@${BOT_USER_ID}> Explain queues`,
+      mentionUserIds: [BOT_USER_ID],
+      mentionRoleIds: [BOT_ROLE_ID],
     });
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("gateway message create enqueues only replied-to message metadata", async () => {
+test("gateway message create carries only replied-to message metadata", async () => {
   const queuedJobs: unknown[] = [];
   const env = createEnv("unused", {
     AI_JOBS: {
@@ -174,7 +111,7 @@ test("gateway message create enqueues only replied-to message metadata", async (
       author: { id: ALICE_ID, username: "alice" },
       referenced_message: {
         id: REFERENCED_MESSAGE_ID,
-        channel_id: CHANNEL_ID,
+        channel_id: REFERENCED_CHANNEL_ID,
         content: "Workers queues deliver AI jobs asynchronously.",
         author: { id: BOB_ID, username: "bob" },
       },
@@ -185,71 +122,21 @@ test("gateway message create enqueues only replied-to message metadata", async (
 
   assert.equal(queuedJobs.length, 1);
   assert.deepEqual(decodeAiJobEnvelope(queuedJobs[0]), {
-    kind: "channel_reply",
-    channelId: CHANNEL_ID,
+    kind: "message.received",
     messageId: MESSAGE_ID,
+    channelId: CHANNEL_ID,
     botUserId: BOT_USER_ID,
-    requesterUserId: ALICE_ID,
-    requesterUsername: "alice",
-    prompt: "Summarize this",
+    authorId: ALICE_ID,
+    authorUsername: "alice",
+    content: `<@${BOT_USER_ID}> Summarize this`,
+    mentionUserIds: [],
+    mentionRoleIds: [],
     replyMessageId: REFERENCED_MESSAGE_ID,
-    replyChannelId: CHANNEL_ID,
+    replyChannelId: REFERENCED_CHANNEL_ID,
   });
 });
 
-test("gateway message create does not fetch referenced message content", async () => {
-  const originalFetch = globalThis.fetch;
-  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
-  const queuedJobs: unknown[] = [];
-  globalThis.fetch = async (url, init) => {
-    fetchCalls.push({ url: String(url), init });
-    return Response.json({});
-  };
-
-  try {
-    const env = createEnv("unused", {
-      DISCORD_BOT_TOKEN: "bot-token",
-      AI_JOBS: {
-        send: async (job: unknown) => {
-          queuedJobs.push(job);
-        },
-      },
-    });
-
-    await handleGatewayMessageCreate(
-      {
-        id: MESSAGE_ID,
-        channel_id: CHANNEL_ID,
-        content: `<@${BOT_USER_ID}> what does this say`,
-        author: { id: ALICE_ID, username: "alice" },
-        message_reference: {
-          channel_id: REFERENCED_CHANNEL_ID,
-          message_id: REFERENCED_MESSAGE_ID,
-        },
-      },
-      env,
-      BOT_USER_ID,
-    );
-
-    assert.deepEqual(fetchCalls, []);
-    assert.equal(queuedJobs.length, 1);
-    assert.deepEqual(decodeAiJobEnvelope(queuedJobs[0]), {
-      kind: "channel_reply",
-      channelId: CHANNEL_ID,
-      messageId: MESSAGE_ID,
-      botUserId: BOT_USER_ID,
-      requesterUserId: ALICE_ID,
-      requesterUsername: "alice",
-      prompt: "what does this say",
-      replyMessageId: REFERENCED_MESSAGE_ID,
-      replyChannelId: REFERENCED_CHANNEL_ID,
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("gateway message create ignores bots and empty mention prompts", async () => {
+test("gateway message create skips bots and empty prompts but enqueues everything else", async () => {
   const queuedJobs: unknown[] = [];
   const env = createEnv("unused", {
     AI_JOBS: {
@@ -261,40 +148,148 @@ test("gateway message create ignores bots and empty mention prompts", async () =
 
   await handleGatewayMessageCreate(
     {
-      id: "bot-message-id",
-      channel_id: "channel-id",
-      content: "<@bot-user-id> Explain queues",
-      author: { id: "2", username: "bot", bot: true },
+      id: MESSAGE_ID,
+      channel_id: CHANNEL_ID,
+      content: `<@${BOT_USER_ID}> Explain queues`,
+      author: { id: BOB_ID, username: "bot", bot: true },
     },
     env,
-    "bot-user-id",
+    BOT_USER_ID,
   );
   await handleGatewayMessageCreate(
     {
-      id: "empty-message-id",
-      channel_id: "channel-id",
-      content: "<@bot-user-id>   ",
-      author: { id: "1", username: "alice" },
+      id: MESSAGE_ID,
+      channel_id: CHANNEL_ID,
+      content: `<@${BOT_USER_ID}>   `,
+      author: { id: ALICE_ID, username: "alice" },
     },
     env,
-    "bot-user-id",
+    BOT_USER_ID,
   );
-  await handleGatewayMessageCreate(
-    {
-      id: "legacy-prefix-message-id",
-      channel_id: "channel-id",
-      content: "!ai Explain queues",
-      author: { id: "1", username: "alice" },
-    },
-    env,
-    "bot-user-id",
-  );
-
   assert.deepEqual(queuedJobs, []);
+
+  // Thread relevance needs D1, which the DO cannot see, so non-mention
+  // messages are still enqueued and filtered by the brain.
+  await handleGatewayMessageCreate(
+    {
+      id: MESSAGE_ID,
+      channel_id: CHANNEL_ID,
+      content: "!ai Explain queues",
+      author: { id: ALICE_ID, username: "alice" },
+    },
+    env,
+    BOT_USER_ID,
+  );
+  assert.equal(queuedJobs.length, 1);
+  assert.equal(decodeAiJobEnvelope(queuedJobs[0])?.kind, "message.received");
 });
 
-test("gateway message create enqueues tracked thread replies without requiring a mention", async () => {
-  const queuedJobs: unknown[] = [];
+test("resolveGatewayMessage resolves channel mentions into channel replies", async () => {
+  const env = createEnv("unused", { DB: createDbMock({}) });
+
+  const job = await resolveGatewayMessage(
+    {
+      kind: "message.received",
+      messageId: MESSAGE_ID,
+      channelId: CHANNEL_ID,
+      botUserId: BOT_USER_ID,
+      authorId: ALICE_ID,
+      authorUsername: "Alice Display",
+      content: `hey <@${BOT_USER_ID}>`,
+      mentionUserIds: [BOT_USER_ID],
+      mentionRoleIds: [],
+    },
+    env,
+  );
+
+  assert.deepEqual(job, {
+    kind: "channel_reply",
+    channelId: CHANNEL_ID,
+    messageId: MESSAGE_ID,
+    botUserId: BOT_USER_ID,
+    requesterUserId: ALICE_ID,
+    requesterUsername: "Alice Display",
+    prompt: "hey",
+    replyMessageId: undefined,
+    replyChannelId: undefined,
+  });
+});
+
+test("resolveGatewayMessage fetches bot roles for role mentions", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: string[] = [];
+  globalThis.fetch = async (url) => {
+    fetchCalls.push(String(url));
+    return Response.json({ roles: [BOT_ROLE_ID] });
+  };
+
+  try {
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      DB: createDbMock({}),
+    });
+
+    const job = await resolveGatewayMessage(
+      {
+        kind: "message.received",
+        messageId: MESSAGE_ID,
+        channelId: CHANNEL_ID,
+        guildId: GUILD_ID,
+        botUserId: BOT_USER_ID,
+        authorId: ALICE_ID,
+        authorUsername: "alice",
+        content: `<@&${BOT_ROLE_ID}> whats up`,
+        mentionUserIds: [],
+        mentionRoleIds: [BOT_ROLE_ID],
+      },
+      env,
+    );
+
+    assert.deepEqual(fetchCalls, [
+      `https://discord.com/api/v10/guilds/${GUILD_ID}/members/${BOT_USER_ID}`,
+    ]);
+    assert.equal(job?.kind, "channel_reply");
+    assert.equal(job?.prompt, "whats up");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("resolveGatewayMessage drops messages that mention nothing and track no thread", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: string[] = [];
+  globalThis.fetch = async (url) => {
+    fetchCalls.push(String(url));
+    return Response.json({});
+  };
+
+  try {
+    const env = createEnv("unused", { DB: createDbMock({}) });
+
+    const job = await resolveGatewayMessage(
+      {
+        kind: "message.received",
+        messageId: MESSAGE_ID,
+        channelId: CHANNEL_ID,
+        guildId: GUILD_ID,
+        botUserId: BOT_USER_ID,
+        authorId: ALICE_ID,
+        authorUsername: "alice",
+        content: "!ai Explain queues",
+        mentionUserIds: [],
+        mentionRoleIds: [],
+      },
+      env,
+    );
+
+    assert.equal(job, null);
+    assert.deepEqual(fetchCalls, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("resolveGatewayMessage resolves tracked thread replies without requiring a mention", async () => {
   const env = createEnv("unused", {
     DB: createDbMock({
       aiThread: {
@@ -307,27 +302,25 @@ test("gateway message create enqueues tracked thread replies without requiring a
         title: "Queue chat",
       },
     }),
-    AI_JOBS: {
-      send: async (job: unknown) => {
-        queuedJobs.push(job);
-      },
-    },
   });
 
-  await handleGatewayMessageCreate(
+  const job = await resolveGatewayMessage(
     {
-      id: MESSAGE_ID,
-      guild_id: GUILD_ID,
-      channel_id: THREAD_ID,
+      kind: "message.received",
+      messageId: MESSAGE_ID,
+      channelId: THREAD_ID,
+      guildId: GUILD_ID,
+      botUserId: BOT_USER_ID,
+      authorId: BOB_ID,
+      authorUsername: "Bob Display",
       content: "what about dead letter queues?",
-      author: { id: BOB_ID, username: "bob", global_name: "Bob Display" },
+      mentionUserIds: [],
+      mentionRoleIds: [],
     },
     env,
-    BOT_USER_ID,
   );
 
-  assert.equal(queuedJobs.length, 1);
-  assert.deepEqual(decodeAiJobEnvelope(queuedJobs[0]), {
+  assert.deepEqual(job, {
     kind: "thread_reply",
     channelId: THREAD_ID,
     messageId: MESSAGE_ID,
@@ -335,7 +328,113 @@ test("gateway message create enqueues tracked thread replies without requiring a
     requesterUserId: BOB_ID,
     requesterUsername: "Bob Display",
     prompt: "what about dead letter queues?",
+    replyMessageId: undefined,
+    replyChannelId: undefined,
   });
+});
+
+test("queue handler processes message.received mentions in-process without re-enqueueing", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).includes("gateway.ai.cloudflare.com")) {
+      return Response.json({ response: "Short answer." });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const outboxJobs: Uint8Array[] = [];
+    const env = createEnv("unused", {
+      DISCORD_BOT_TOKEN: "bot-token",
+      CF_ACCOUNT_ID: "account-id",
+      CF_AIG_TOKEN: "gateway-token",
+      DB: createDbMock({}),
+      DISCORD_OUTBOX: {
+        send: async (body: Uint8Array) => {
+          outboxJobs.push(body);
+        },
+      },
+    });
+    let acked = false;
+
+    await brainWorker.queue({
+      messages: [
+        {
+          body: encodeAiJobEnvelope(
+            {
+              kind: "message.received",
+              messageId: MESSAGE_ID,
+              channelId: CHANNEL_ID,
+              botUserId: BOT_USER_ID,
+              authorId: ALICE_ID,
+              authorUsername: "alice",
+              content: `<@${BOT_USER_ID}> Explain queues`,
+              mentionUserIds: [BOT_USER_ID],
+              mentionRoleIds: [],
+            },
+            { source: "gateway" },
+          ),
+          ack: () => {
+            acked = true;
+          },
+          retry: () => {
+            throw new Error("message should not be retried");
+          },
+        },
+      ],
+    } as never, env);
+
+    const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
+    assert.ok(gatewayCall);
+    const input = JSON.parse(String(gatewayCall.init?.body)) as { messages: Array<{ role: string; content: string }> };
+    assert.deepEqual(input.messages.slice(1), [{ role: "user", content: "alice: Explain queues" }]);
+
+    assert.equal(outboxJobs.length, 1);
+    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+      kind: "reply.channel_message",
+      channelId: CHANNEL_ID,
+      content: "Short answer.",
+    });
+    assert.equal(acked, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("queue handler acknowledges irrelevant message.received events without side effects", async () => {
+  const env = createEnv("unused", { DB: createDbMock({}) });
+  let acked = false;
+
+  await brainWorker.queue({
+    messages: [
+      {
+        body: encodeAiJobEnvelope(
+          {
+            kind: "message.received",
+            messageId: MESSAGE_ID,
+            channelId: CHANNEL_ID,
+            botUserId: BOT_USER_ID,
+            authorId: ALICE_ID,
+            authorUsername: "alice",
+            content: "just chatting with friends",
+            mentionUserIds: [],
+            mentionRoleIds: [],
+          },
+          { source: "gateway" },
+        ),
+        ack: () => {
+          acked = true;
+        },
+        retry: () => {
+          throw new Error("message should not be retried");
+        },
+      },
+    ],
+  } as never, env);
+
+  assert.equal(acked, true);
 });
 
 test("fetchChannelMessages drops malformed Discord messages", async () => {

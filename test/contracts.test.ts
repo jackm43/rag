@@ -91,6 +91,53 @@ test("bicture jobs round-trip through the event envelope", () => {
   assert.deepEqual(decodeAiJobEnvelope(encodeAiJobEnvelope(job, { source: "interactions" })), job);
 });
 
+test("message.received jobs round-trip through the event envelope", () => {
+  const job = {
+    kind: "message.received" as const,
+    messageId: MESSAGE_ID,
+    channelId: CHANNEL_ID,
+    guildId: GUILD_ID,
+    botUserId: BOT_USER_ID,
+    authorId: USER_ID,
+    authorUsername: "alice",
+    content: `<@${BOT_USER_ID}> Explain queues`,
+    mentionUserIds: [BOT_USER_ID],
+    mentionRoleIds: [USER_ID],
+    replyMessageId: MESSAGE_ID,
+    replyChannelId: CHANNEL_ID,
+  };
+
+  assert.deepEqual(decodeAiJobEnvelope(encodeAiJobEnvelope(job, { source: "gateway" })), job);
+
+  const minimal = {
+    kind: "message.received" as const,
+    messageId: MESSAGE_ID,
+    channelId: CHANNEL_ID,
+    botUserId: BOT_USER_ID,
+    content: "",
+    mentionUserIds: [],
+    mentionRoleIds: [],
+  };
+  assert.deepEqual(decodeAiJobEnvelope(encodeAiJobEnvelope(minimal, { source: "gateway" })), minimal);
+});
+
+test("message.received encode rejects malformed mention ids", () => {
+  assert.throws(() =>
+    encodeAiJobEnvelope(
+      {
+        kind: "message.received",
+        messageId: MESSAGE_ID,
+        channelId: CHANNEL_ID,
+        botUserId: BOT_USER_ID,
+        content: "hey",
+        mentionUserIds: ["../users/@me"],
+        mentionRoleIds: [],
+      },
+      { source: "gateway" },
+    ),
+  );
+});
+
 test("reply jobs round-trip through the event envelope", () => {
   const channelReply = {
     kind: "reply.channel_message" as const,
