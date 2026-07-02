@@ -219,6 +219,10 @@ export type Env = Cloudflare.Env & {
   // public keys from the committed keyring, not these.
   GATEWAY_SIGNING_KEY?: string;
   BRAIN_SIGNING_KEY?: string;
+  // Workers KV holding the AI prompt/config files, bound on the brain worker
+  // only (the sole runtime AI consumer). loadConfig reads it with a bundled
+  // fallback, so it is optional — a fresh namespace or KV outage still works.
+  AI_CONFIG?: KVNamespace;
 };
 
 export const DISCORD_API_BASE_URL = "https://discord.com/api/v10";

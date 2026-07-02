@@ -138,7 +138,7 @@ const processChatJob = async (job: AiChatJob | AiAskJob, env: Env, startedAt: nu
     );
 
   try {
-    const config = await loadConfig();
+    const config = await loadConfig(env);
     model = config.responseModel;
     const attribution = {
       kind: job.kind,

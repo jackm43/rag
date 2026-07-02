@@ -31,6 +31,18 @@
       "migrations_dir": "../../../migrations"
     }
   ],
+  // AI prompt/config store. Only the brain runs AI, so only it binds this.
+  // loadConfig reads keys (file basenames) with a bundled fallback, so a fresh
+  // or empty namespace still works. Operator bootstrap (one time):
+  //   wrangler kv namespace create AI_CONFIG
+  // then paste the printed id below, and `npm run config:push` (also run by
+  // deploy.sh after deploy) uploads the ai-config files.
+  "kv_namespaces": [
+    {
+      "binding": "AI_CONFIG",
+      "id": "REPLACE_WITH_AI_CONFIG_KV_NAMESPACE_ID"
+    }
+  ],
   "ai": {
     "binding": "AI"
   },

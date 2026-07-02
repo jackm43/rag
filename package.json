@@ -15,6 +15,7 @@
     "test": "vitest run",
     "contracts:build": "capnp-es packages/contracts/envelope.capnp -ots",
     "register:commands": "tsx scripts/register-commands.ts",
+    "config:push": "tsx scripts/push-config.ts",
     "backfill:spend": "tsx scripts/backfill-spend.ts",
     "d1:migrate:local": "wrangler d1 migrations apply ragbot -c workers/public/gateway/wrangler.jsonc --local",
     "d1:migrate:remote": "wrangler d1 migrations apply ragbot -c workers/public/gateway/wrangler.jsonc --remote"

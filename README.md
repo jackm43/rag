@@ -257,6 +257,17 @@ AI config is checked into `packages/ai/ai-config`:
 - `ragjam-music.json` controls `/ragjam` music generation.
 - AI spend uses raw AI Gateway log cost. Requests are tagged with metadata so the spend worker can reconcile the exact log entry.
 
+#### AI config in KV (`AI_CONFIG`)
+
+The brain worker — the only worker that runs AI — binds a Workers KV namespace `AI_CONFIG` (`workers/services/brain/wrangler.jsonc`). `loadConfig` (`packages/ai/config.ts`) reads each prompt/config from KV first, keyed by the file's **basename** (`discord-response.json`, `ask-web-search.json`, `discord-response-system-prompt.md`, `ask-web-search-system-prompt.md`), and **falls back to the copy bundled into the worker** (the `import`ed file) on a miss, a null value, a KV error, or when the binding is absent. The bundled files stay checked into `packages/ai/ai-config` as both the fallback and the source of truth that `config:push` uploads, so a fresh/empty namespace or a KV outage never bricks the bot.
+
+`loadConfig` memoizes the resolved config **per isolate, forever** — the KV read happens once per isolate. KV values can change between deploys, but a deploy or an isolate recycle is what re-resolves them, which is fine for this bot. To publish a prompt change:
+
+- **Without a redeploy:** edit the file in `packages/ai/ai-config`, run `npm run config:push`; new isolates pick up the new value (existing warm isolates keep the old one until they recycle).
+- **Or redeploy** the brain worker, which both re-bundles the fallback and starts fresh isolates.
+
+`npm run config:push` (`scripts/push-config.ts`) uploads every file in `packages/ai/ai-config` to `AI_CONFIG` via `wrangler kv key put <basename> --path <file> --binding AI_CONFIG`. `deploy.sh` runs it automatically after `npm run deploy`.
+
 ### AI usage limits
 
 Every AI ingress (`/ask`, `/bicture`, `/ragjam`, and gateway mentions/tracked-thread replies) runs a shared pre-flight guard (`packages/domain/limits.ts`) before any model call or enqueue. The limits target attacker abuse, not heavy legitimate use — this is one server owned by friends:
@@ -370,5 +381,15 @@ wrangler queues create ai-spend-jobs-dlq
 wrangler queues create discord-outbox
 wrangler queues create discord-outbox-dlq
 ```
+
+The brain worker's AI config KV namespace must exist and its id filled into `workers/services/brain/wrangler.jsonc` (the committed `id` is a placeholder):
+
+```sh
+wrangler kv namespace create AI_CONFIG
+# paste the printed id into workers/services/brain/wrangler.jsonc, then:
+npm run config:push
+```
+
+`config:push` is idempotent and also runs from `deploy.sh` after every deploy, so the namespace stays in sync with the checked-in files.
 
 Every dead-letter queue has a consumer (`packages/domain/dlq.ts`): `ai-jobs-dlq` in the brain worker, `ai-spend-jobs-dlq` in the spend worker, and `discord-outbox-dlq` in the responder. Each logs a `dead_letter_message` error with the queue name, message id, attempt count, and decoded envelope kind (ids and kinds only, never free-text content), then acks so dead letters surface in logs instead of accumulating.
