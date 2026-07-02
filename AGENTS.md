@@ -59,9 +59,10 @@ Create D1 database:
 op run --env-file=.env -- npx wrangler d1 create ragbot
 ```
 
-Copy generated IDs into `workers/public/gateway/wrangler.jsonc`:
+Copy the generated id into `workers/public/gateway/wrangler.jsonc`:
 - `database_id`
-- `preview_database_id`
+
+Do not point `preview_database_id` at the production database; create a separate preview DB if preview deployments are ever used.
 
 Apply D1 schema locally:
 
