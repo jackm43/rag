@@ -1,12 +1,11 @@
-import { editOriginalInteractionResponse, type InteractionMessageData } from "../discord";
+import type { InteractionMessageData } from "../discord";
 import { jsonResponse } from "../http";
-import { errorMessage, logger } from "../logger";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
-  DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
   type DiscordInteraction,
   type Env,
 } from "../types";
+import { handleDeferredInteraction } from "./deferred";
 import { getInvoker, getOptionValue, getTargetUsername } from "./rag-utils";
 
 type RagRow = {
@@ -87,30 +86,10 @@ export const handleDeferredRagCommand = (
   interaction: DiscordInteraction,
   env: Env,
   ctx: ExecutionContext,
-) => {
-  const applicationId = interaction.application_id;
-  const interactionToken = interaction.token;
-  if (!applicationId || !interactionToken) {
-    return handleRagCommand(interaction, env);
-  }
-
-  ctx.waitUntil(
-    (async () => {
-      try {
-        await editOriginalInteractionResponse(
-          applicationId,
-          interactionToken,
-          await buildRagCommandResponseData(interaction, env),
-        );
-      } catch (error) {
-        logger.error("rag_command_failed", { error: errorMessage(error) });
-        await editOriginalInteractionResponse(applicationId, interactionToken, {
-          content: "Command failed. Try again.",
-          allowed_mentions: { parse: [] },
-        }).catch(() => undefined);
-      }
-    })(),
-  );
-
-  return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
-};
+) =>
+  handleDeferredInteraction(interaction, ctx, {
+    run: () => buildRagCommandResponseData(interaction, env),
+    failureMessage: "Command failed. Try again.",
+    logEvent: "rag_command_failed",
+    onMissingCredentials: () => handleRagCommand(interaction, env),
+  });

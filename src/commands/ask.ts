@@ -13,7 +13,6 @@ import {
 import { loadConfig } from "../config";
 import {
   createThreadWithoutMessage,
-  editOriginalInteractionResponse,
   fetchChannel,
   isThreadChannel,
   postChannelMessage,
@@ -25,11 +24,11 @@ import { generateThreadTitle, recordAiThread } from "../mention";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../spend";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
-  DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
   MAX_DISCORD_MESSAGE_LENGTH,
   type DiscordInteraction,
   type Env,
 } from "../types";
+import { handleDeferredInteraction } from "./deferred";
 import { getInvokerDisplayName } from "./rag-utils";
 
 export { shouldUseAskWebSearch } from "../ask-mode";
@@ -196,21 +195,12 @@ export const handleAskCommand = async (
   env: Env,
   ctx: ExecutionContext,
 ) => {
-  const applicationId = interaction.application_id;
-  const interactionToken = interaction.token;
   const prompt = askPrompt(interaction);
 
   if (!prompt) {
     return jsonResponse({
       type: CHANNEL_MESSAGE_WITH_SOURCE,
       data: { content: "A question is required.", allowed_mentions: { parse: [] } },
-    });
-  }
-
-  if (!applicationId || !interactionToken) {
-    return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: "Could not defer /ask without interaction credentials.", allowed_mentions: { parse: [] } },
     });
   }
 
@@ -222,23 +212,14 @@ export const handleAskCommand = async (
     });
   }
 
-  ctx.waitUntil(
-    (async () => {
-      try {
-        await editOriginalInteractionResponse(
-          applicationId,
-          interactionToken,
-          await runAskCommand(interaction, env),
-        );
-      } catch (error) {
-        logger.error("ask_command_failed", { error: errorMessage(error) });
-        await editOriginalInteractionResponse(applicationId, interactionToken, {
-          content: "Could not start that AI thread. Try again.",
-          allowed_mentions: { parse: [] },
-        }).catch(() => undefined);
-      }
-    })(),
-  );
-
-  return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
+  return handleDeferredInteraction(interaction, ctx, {
+    run: () => runAskCommand(interaction, env),
+    failureMessage: "Could not start that AI thread. Try again.",
+    logEvent: "ask_command_failed",
+    onMissingCredentials: () =>
+      jsonResponse({
+        type: CHANNEL_MESSAGE_WITH_SOURCE,
+        data: { content: "Could not defer /ask without interaction credentials.", allowed_mentions: { parse: [] } },
+      }),
+  });
 };

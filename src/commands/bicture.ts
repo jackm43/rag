@@ -1,17 +1,16 @@
-import { editOriginalInteractionResponse } from "../discord";
 import bictureImageConfig from "../ai-config/bicture-image.json";
 import { buildAiGatewayMetadata } from "../ai-metadata";
 import { jsonResponse } from "../http";
 import { checkAiUsageAllowed } from "../limits";
-import { errorDetails, errorMessage, logger } from "../logger";
+import { errorDetails } from "../logger";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../spend";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
-  DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
   type DiscordInteraction,
   type Env,
 } from "../types";
 import { isRecord } from "../validation";
+import { handleDeferredInteraction } from "./deferred";
 import { getInvokerDisplayName } from "./rag-utils";
 
 const BICTURE_FILENAME_PREFIX = "bicture";
@@ -242,18 +241,6 @@ export const handleBictureCommand = async (
     });
   }
 
-  const applicationId = interaction.application_id;
-  const interactionToken = interaction.token;
-  if (!applicationId || !interactionToken) {
-    return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
-      data: {
-        content: "Could not defer /bicture without interaction credentials.",
-        allowed_mentions: { parse: [] },
-      },
-    });
-  }
-
   const usage = await checkAiUsageAllowed(env, (interaction.member?.user ?? interaction.user)?.id, "bicture");
   if (!usage.allowed) {
     return jsonResponse({
@@ -262,31 +249,23 @@ export const handleBictureCommand = async (
     });
   }
 
-  ctx.waitUntil(
-    (async () => {
-      try {
-        const response = await runBictureCommand(interaction, env);
-        await editOriginalInteractionResponse(
-          applicationId,
-          interactionToken,
-          response.data,
-          response.files,
-        );
-      } catch (error) {
-        logger.error("bicture_command_failed", {
-          error: errorMessage(error),
-          details: errorDetails(error),
-          model: activeBictureProfile.model,
-          imageProfile: bictureImageConfig.activeProfile,
-          promptLength: prompt.length,
-        });
-        await editOriginalInteractionResponse(applicationId, interactionToken, {
-          content: "Could not generate that image. Try a different prompt.",
+  return handleDeferredInteraction(interaction, ctx, {
+    run: () => runBictureCommand(interaction, env),
+    failureMessage: "Could not generate that image. Try a different prompt.",
+    logEvent: "bicture_command_failed",
+    logContext: (error) => ({
+      details: errorDetails(error),
+      model: activeBictureProfile.model,
+      imageProfile: bictureImageConfig.activeProfile,
+      promptLength: prompt.length,
+    }),
+    onMissingCredentials: () =>
+      jsonResponse({
+        type: CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: "Could not defer /bicture without interaction credentials.",
           allowed_mentions: { parse: [] },
-        }).catch(() => undefined);
-      }
-    })(),
-  );
-
-  return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
+        },
+      }),
+  });
 };
