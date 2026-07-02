@@ -35,6 +35,9 @@ const buildClients = (env: Env): BoundaryClients => {
       trustZone: "egress-discord",
       allowedHosts: ["discord.com"],
       defaultTimeoutMs: DISCORD_TIMEOUT_MS,
+      // Webhook paths embed the interaction token (webhooks/{app}/{token}/...),
+      // which authenticates edits — never log them.
+      logPath: false,
     }));
   const aiGateway = lazy(() => {
     if (!env.CF_AIG_TOKEN) {
@@ -60,6 +63,9 @@ const buildClients = (env: Env): BoundaryClients => {
       defaultTimeoutMs: CLOUDFLARE_API_TIMEOUT_MS,
     });
   });
+  // Path logging audit: discord-rest paths carry channel/message/guild ids,
+  // ai-gateway and cloudflare-api paths carry account/gateway ids — safe to
+  // log. discord-webhook and media-download are host-only (logPath: false).
   const mediaDownload = lazy(() =>
     createBoundaryClient({
       identity: "media-download",
@@ -67,6 +73,8 @@ const buildClients = (env: Env): BoundaryClients => {
       allowedHosts: "*",
       defaultTimeoutMs: MEDIA_TIMEOUT_MS,
       maxResponseBytes: MEDIA_MAX_RESPONSE_BYTES,
+      // Model-chosen hosts: keep failure logs host-only.
+      logPath: false,
     }));
 
   return {

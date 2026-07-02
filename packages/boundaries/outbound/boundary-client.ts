@@ -18,6 +18,10 @@ export type BoundaryPolicy = {
   allowedHosts: string[] | "*";
   defaultTimeoutMs: number;
   maxResponseBytes?: number;
+  // Default true. Set false for identities whose request paths can embed
+  // credentials (Discord webhook paths carry the interaction token) or reach
+  // arbitrary hosts (media); their logs stay host-only.
+  logPath?: boolean;
 };
 
 export type RequestOutcome = "ok" | "denied" | "http_error" | "timeout" | "network_error";
@@ -66,7 +70,7 @@ const requestContext = (
   host: url?.hostname ?? "invalid",
   outcome,
   ...(status === undefined ? {} : { status }),
-  ...(url && policy.trustZone !== "egress-media" ? { path: url.pathname } : {}),
+  ...(url && policy.logPath !== false ? { path: url.pathname } : {}),
 });
 
 const deny = (

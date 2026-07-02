@@ -276,6 +276,16 @@ The guard fails open on D1 errors, and the `/rag` command family is not rate lim
 
 When set, the gate fails closed — unparseable entries are dropped, so a misconfigured value denies everything. When unset, the gate allows all guilds but logs `allowed_guild_ids_unset` once per isolate, so existing deploys keep working until the var is configured. Set it in the gateway and brain wrangler configs (documented placeholders are in each `vars` block).
 
+## Trust Boundaries
+
+Every hop into, between, and out of the workers crosses a named boundary in `packages/boundaries`, carrying a uniform context — {identity, trustZone, policy, request context} — and logging denials in one shape (`{identity, trustZone, outcome: "denied", reason}`). A future policy engine (Cedar) evaluates at exactly these choke points.
+
+| Boundary | Module | Trust zones | Shape |
+| --- | --- | --- | --- |
+| Inbound | `packages/boundaries/inbound` | `ingress-discord`, `ingress-operator` | Guards (`{identity, trustZone, verify}`) that yield a typed principal (`discord` + verified interaction, `operator`) or a typed denial (reason + HTTP response) |
+| Peer | `packages/boundaries/peer` | `peer-queue`, `peer-binding` | `peerSend`/`peerReceive` around contracts-encoded queue envelopes, plus the brain→responder binding RPC hop; receives re-validate the envelope and expose the `authorize` seam (default allow) where service manifests + Cedar checks attach next |
+| Outbound | `packages/boundaries/outbound` | `egress-discord`, `egress-ai-gateway`, `egress-cloudflare-api`, `egress-media` | Per-identity boundary clients enforcing credential injection, host allowlists, https-only, timeouts, and response-size caps; failure logs redact paths for identities whose paths embed credentials (`logPath: false` for `discord-webhook` and `media-download`) |
+
 ## Workers, Trust Zones, and Secrets
 
 | Worker | Config | Trust zone / role | Secrets |

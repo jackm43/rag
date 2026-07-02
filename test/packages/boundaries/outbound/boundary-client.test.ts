@@ -5,6 +5,7 @@ import {
   PolicyViolationError,
   type BoundaryPolicy,
 } from "../../../../packages/boundaries/outbound/boundary-client.ts";
+import { boundaryClients } from "../../../../packages/boundaries/outbound/clients.ts";
 
 const discordPolicy: BoundaryPolicy = {
   identity: "discord-rest",
@@ -20,6 +21,7 @@ const mediaPolicy: BoundaryPolicy = {
   allowedHosts: "*",
   defaultTimeoutMs: 30_000,
   maxResponseBytes: 16,
+  logPath: false,
 };
 
 const captureWarnings = () => {
@@ -210,6 +212,30 @@ test("boundary client logs http errors with the request context and returns the 
     assert.equal(failure.host, "discord.com");
     assert.equal(failure.path, "/api/v10/channels/1");
     assert.equal(JSON.stringify(failure).includes("limit=5"), false);
+  } finally {
+    mocked.restore();
+    warnings.restore();
+  }
+});
+
+test("discord-webhook egress failure logs carry no interaction token path segment", async () => {
+  const warnings = captureWarnings();
+  const mocked = captureFetch(() => new Response("nope", { status: 500 }));
+  try {
+    const env = { DISCORD_BOT_TOKEN: "bot-token" } as never;
+    const response = await boundaryClients(env).discordWebhook(
+      "https://discord.com/api/v10/webhooks/500000000000000001/secret-interaction-token/messages/@original",
+      { method: "PATCH" },
+    );
+
+    assert.equal(response.status, 500);
+    const failure = warnings.lines.find((line) => line.message === "egress_request_failed");
+    assert.ok(failure);
+    assert.equal(failure.identity, "discord-webhook");
+    assert.equal(failure.outcome, "http_error");
+    assert.equal(failure.host, "discord.com");
+    assert.equal(failure.path, undefined);
+    assert.equal(JSON.stringify(failure).includes("secret-interaction-token"), false);
   } finally {
     mocked.restore();
     warnings.restore();
