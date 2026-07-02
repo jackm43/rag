@@ -6,6 +6,7 @@ import {
   shouldUseAskWebSearch,
 } from "../ask-mode";
 import { loadConfig } from "../config";
+import { generateThreadTitle } from "../conversation";
 import {
   createThreadWithoutMessage,
   fetchChannel,
@@ -15,7 +16,7 @@ import {
 import { jsonResponse } from "../http";
 import { checkAiUsageAllowed } from "../limits";
 import { errorMessage, logger } from "../logger";
-import { generateThreadTitle, recordAiThread } from "../mention";
+import { recordAiThread } from "../threads";
 import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "../tracked-ai";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,

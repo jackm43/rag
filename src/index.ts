@@ -1,5 +1,6 @@
 import { handleAskCommand } from "./commands/ask";
 import { handleBictureCommand } from "./commands/bicture";
+import { processAiQueueMessage } from "./consumer";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
 import { handleRagjamCommand } from "./commands/ragjam";
@@ -10,7 +11,7 @@ import { handleUndoragCommand } from "./commands/undorag";
 import { DiscordGateway, getGatewayHealth, startGateway } from "./gateway";
 import { bearerTokenMatches, jsonResponse, verifyDiscordRequest } from "./http";
 import { errorMessage, logger } from "./logger";
-import { extractBotMentionPrompt, handleGatewayMessageCreate, processAiQueueMessage } from "./mention";
+import { extractBotMentionPrompt, handleGatewayMessageCreate } from "./mention";
 import {
   APPLICATION_COMMAND,
   CHANNEL_MESSAGE_WITH_SOURCE,
