@@ -81,14 +81,14 @@ sequenceDiagram
     Worker-->>Discord: JSON interaction response: spend text
   else /ask
     Worker->>Discord: Immediate JSON: deferred interaction response
-    Worker->>AI: Chat request: concise thread title
-    AI-->>Worker: Thread title
-    Worker->>Discord: POST channel thread: title, public thread, 1 day archive
+    Worker->>Discord: POST channel thread: prompt-derived title (no model call), public thread, 1 day archive
     Worker->>DB: UPSERT rag_ai_threads: thread id, prompt, requester, title
-    Worker->>AI: Chat request or web-search Responses request: fresh user prompt
+    Worker->>Worker: Enqueue encoded ask job in ai-jobs
+    Worker->>Discord: PATCH original response with thread link immediately
+    Note over Worker,AI: queue consumer answers asynchronously
+    Worker->>AI: Chat request or web-search request: fresh user prompt
     AI-->>Worker: Chat response or cited research response
-    Worker->>Discord: POST message inside created thread
-    Worker->>Discord: PATCH original response with thread link
+    Worker->>Discord: POST answer inside created thread
   else /bicture or /ragjam
     Worker->>Discord: Immediate JSON: deferred interaction response
     Worker->>AI: Unified Billing model request via Workers AI binding with AI Gateway metadata
@@ -187,15 +187,15 @@ sequenceDiagram
 ### `/ask`
 
 - Entry: interaction command routed in `src/index.ts`
-- Handler: `src/commands/ask.ts`
+- Handler: `src/commands/ask.ts` (thread creation + enqueue) and `src/consumer.ts` (AI answer)
 - Behavior:
   - defers the interaction
-  - generates a concise AI thread title
+  - derives the thread title from the prompt (no model call)
   - creates a public Discord thread in the current channel
   - stores the thread in `rag_ai_threads`
-  - posts the sanitized AI response inside the thread
+  - edits the original interaction response with the thread link immediately
+  - enqueues an `ask` job in `ai-jobs`; the queue consumer runs the model and posts the sanitized answer inside the thread (a failure notice is posted there if the model call fails)
   - automatically uses neutral web-search research mode when the prompt asks for current information
-  - edits the original interaction response with a thread link
 
 ### `/bicture`
 
@@ -229,7 +229,8 @@ sequenceDiagram
 - Queue and worker:
   - parent-channel mentions enqueue a `channel_reply` job in `AI_JOBS`
   - channel reply jobs answer in the same Discord channel and do not create or record a thread
-  - `/ask` creates a Discord thread, records it in `rag_ai_threads`, and posts the answer inside that thread
+  - `/ask` creates a Discord thread, records it in `rag_ai_threads`, and enqueues an `ask` job; the queue consumer posts the answer inside that thread
+  - thread titles everywhere are derived from the user prompt (`sanitizeThreadTitle`), so no model call is spent on titles
   - later messages in a tracked thread enqueue `thread_reply` jobs automatically without requiring an @ mention
   - reply jobs build context from the stored initial prompt plus recent messages in that thread only
   - generated replies are sanitized for mentions/IDs

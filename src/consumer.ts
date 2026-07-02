@@ -1,4 +1,4 @@
-import { sanitizeAiText, type ChatModelResult } from "./ai";
+import { sanitizeAiText, type ChatMessage, type ChatModelResult } from "./ai";
 import {
   appendSourceFallback,
   buildAskConversation,
@@ -7,17 +7,17 @@ import {
 } from "./ask-mode";
 import { processRagjamJob } from "./commands/ragjam";
 import { loadConfig } from "./config";
-import { buildNormalThreadConversation, generateThreadTitle, isAskThread } from "./conversation";
+import { buildNormalThreadConversation, fallbackThreadTitle, isAskThread } from "./conversation";
 import { createThreadFromMessage, postChannelMessage } from "./discord";
 import { errorMessage, logger } from "./logger";
 import { recordAiThread } from "./threads";
 import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "./tracked-ai";
 import { decodeAiJobEnvelope } from "./contracts";
-import { MAX_DISCORD_MESSAGE_LENGTH, type AiChatJob, type Env } from "./types";
+import { MAX_DISCORD_MESSAGE_LENGTH, type AiAskJob, type AiChatJob, type Env } from "./types";
 
 const recordAiInteraction = async (
   env: Env,
-  job: AiChatJob,
+  job: AiChatJob | AiAskJob,
   model: string,
   totalDurationMs: number,
   status: string,
@@ -118,7 +118,6 @@ export const processAiQueueMessage = async (message: Message<unknown>, env: Env)
   try {
     const config = await loadConfig();
     model = config.responseModel;
-    const builtConversation = await buildNormalThreadConversation(env, config, job);
     const attribution = {
       kind: job.kind,
       requesterUserId: job.requesterUserId,
@@ -127,18 +126,29 @@ export const processAiQueueMessage = async (message: Message<unknown>, env: Env)
       messageId: job.messageId,
     };
 
+    let messages: ChatMessage[];
+    let askMode: boolean;
+    if (job.kind === "ask") {
+      messages = [{ role: "user", content: `${job.requesterUsername ?? "user"}: ${job.prompt}` }];
+      askMode = true;
+    } else {
+      const builtConversation = await buildNormalThreadConversation(env, config, job);
+      messages = builtConversation.messages;
+      askMode = job.kind === "thread_reply" && isAskThread(builtConversation.thread);
+    }
+
     let responseText: string;
     let result: ChatModelResult;
 
     const aiStartedAt = Date.now();
-    if (job.kind === "thread_reply" && isAskThread(builtConversation.thread)) {
+    if (askMode) {
       if (shouldUseAskWebSearch(job.prompt)) {
         const webSearchResult = await runTrackedWebSearchCompletion(
           env,
           buildAskWebSearchInput(
             job.prompt,
             job.requesterUsername ?? "user",
-            builtConversation.messages.filter((message) => message.role !== "system"),
+            job.kind === "ask" ? [] : messages.filter((message) => message.role !== "system"),
           ),
           {
             model: config.askWebSearchModel,
@@ -157,13 +167,13 @@ export const processAiQueueMessage = async (message: Message<unknown>, env: Env)
         result = await runTrackedChatCompletion(
           env,
           config,
-          buildAskConversation(config, builtConversation.messages.filter((message) => message.role !== "system")),
+          buildAskConversation(config, messages.filter((message) => message.role !== "system")),
           attribution,
         );
         responseText = result.content;
       }
     } else {
-      result = await runTrackedChatCompletion(env, config, builtConversation.messages, attribution);
+      result = await runTrackedChatCompletion(env, config, messages, attribution);
       responseText = result.content;
     }
     model = result.model;
@@ -178,11 +188,7 @@ export const processAiQueueMessage = async (message: Message<unknown>, env: Env)
 
     let responseChannelId = job.channelId;
     if (job.kind === "thread_start") {
-      const title = await generateThreadTitle(env, config, job.prompt, {
-        kind: `${job.kind}_title`,
-        requesterUserId: job.requesterUserId,
-        requesterUsername: job.requesterUsername,
-      });
+      const title = fallbackThreadTitle(job.prompt);
       const thread = await createThreadFromMessage(env, job.channelId, job.messageId, title);
       if (!thread) {
         await record("discord_thread_create_invalid", null);
@@ -211,6 +217,13 @@ export const processAiQueueMessage = async (message: Message<unknown>, env: Env)
   } catch (error) {
     logger.error("ai_job_failed", { error: errorMessage(error) });
     await record("error", errorMessage(error));
+    if (job.kind === "ask") {
+      await postChannelMessage(
+        env,
+        job.channelId,
+        "I started this thread, but the AI response failed. Try again in a moment.",
+      ).catch(() => undefined);
+    }
   }
   message.ack();
 };

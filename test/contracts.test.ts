@@ -47,6 +47,18 @@ test("AI chat jobs round-trip without optional fields", () => {
   assert.deepEqual(decodeAiJobEnvelope(encodeAiJobEnvelope(job, { source: "gateway" })), job);
 });
 
+test("ask jobs round-trip through the event envelope", () => {
+  const job = {
+    kind: "ask" as const,
+    channelId: CHANNEL_ID,
+    requesterUserId: USER_ID,
+    requesterUsername: "alice",
+    prompt: "How do queue retries work?",
+  };
+
+  assert.deepEqual(decodeAiJobEnvelope(encodeAiJobEnvelope(job, { source: "interactions" })), job);
+});
+
 test("ragjam jobs round-trip through the event envelope", () => {
   const job = {
     kind: "ragjam" as const,

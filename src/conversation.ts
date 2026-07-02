@@ -1,10 +1,9 @@
-import { runChatCompletion, sanitizeAiText, type ChatMessage } from "./ai";
+import { sanitizeAiText, type ChatMessage } from "./ai";
 import type { BotConfig } from "./config";
 import { fetchChannelMessages, fetchMessage } from "./discord";
 import { errorMessage, logger } from "./logger";
 import { getMessageAuthorDisplayName, stripMentionTokens } from "./mention";
 import { findAiThread } from "./threads";
-import { runTrackedChatCompletion } from "./tracked-ai";
 import type { AiChatJob, AiThread, DiscordMessage, Env } from "./types";
 
 const MAX_HISTORY_ENTRY_LENGTH = 600;
@@ -56,44 +55,8 @@ export const sanitizeThreadTitle = (value: string) => {
   return title ? trimToTitleLength(title) : null;
 };
 
-const fallbackThreadTitle = (prompt: string) =>
+export const fallbackThreadTitle = (prompt: string) =>
   sanitizeThreadTitle(prompt) ?? "Chat with Ragbot";
-
-export const generateThreadTitle = async (
-  env: Env,
-  config: BotConfig,
-  prompt: string,
-  spendAttribution?: {
-    kind: string;
-    requesterUserId?: string | null;
-    requesterUsername?: string | null;
-  },
-) => {
-  const fallback = fallbackThreadTitle(prompt);
-  try {
-    const messages: ChatMessage[] = [
-      {
-        role: "system",
-        content:
-          "Create a concise Discord thread title for this user question. Plain text only, no quotes, no mentions, no IDs, 8 words or fewer.",
-      },
-      { role: "user", content: prompt },
-    ];
-    const options = { maxTokens: 32, temperature: 0.2 };
-    const result = spendAttribution
-      ? await runTrackedChatCompletion(env, config, messages, {
-        ...options,
-        kind: spendAttribution.kind,
-        requesterUserId: spendAttribution.requesterUserId,
-        requesterUsername: spendAttribution.requesterUsername,
-      })
-      : await runChatCompletion(env, config, messages, options);
-    return sanitizeThreadTitle(result.content) ?? fallback;
-  } catch (error) {
-    logger.warn("thread_title_generation_failed", { error: errorMessage(error) });
-    return fallback;
-  }
-};
 
 const cleanHistoryContent = (content: string) =>
   stripMentionTokens(content).slice(0, MAX_HISTORY_ENTRY_LENGTH);

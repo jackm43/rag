@@ -1,26 +1,12 @@
-import { sanitizeAiText } from "../ai";
-import {
-  appendSourceFallback,
-  buildAskConversation,
-  buildAskWebSearchInput,
-  shouldUseAskWebSearch,
-} from "../ask-mode";
-import { loadConfig } from "../config";
-import { generateThreadTitle } from "../conversation";
-import {
-  createThreadWithoutMessage,
-  fetchChannel,
-  isThreadChannel,
-  postChannelMessage,
-} from "../discord";
+import { encodeAiJobEnvelope } from "../contracts";
+import { fallbackThreadTitle } from "../conversation";
+import { createThreadWithoutMessage, fetchChannel, isThreadChannel } from "../discord";
 import { jsonResponse } from "../http";
 import { checkAiUsageAllowed } from "../limits";
 import { errorMessage, logger } from "../logger";
 import { recordAiThread } from "../threads";
-import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "../tracked-ai";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
-  MAX_DISCORD_MESSAGE_LENGTH,
   type DiscordInteraction,
   type Env,
 } from "../types";
@@ -54,14 +40,9 @@ const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
     return { content: "Run /ask in a server channel so I can create a thread.", allowed_mentions: { parse: [] } };
   }
 
-  const config = await loadConfig();
   const requester = getInvoker(interaction);
   const requesterUsername = getInvokerDisplayName(interaction);
-  const title = await generateThreadTitle(env, config, prompt, {
-    kind: "ask_title",
-    requesterUserId: requester?.id,
-    requesterUsername,
-  });
+  const title = fallbackThreadTitle(prompt);
   const targetChannelId = await resolveThreadParentChannelId(env, parentChannelId);
   const thread = await createThreadWithoutMessage(env, targetChannelId, title).catch((error) => {
     logger.warn("ask_thread_create_failed", {
@@ -83,71 +64,18 @@ const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
     title,
   });
 
-  const webSearch = shouldUseAskWebSearch(prompt);
-  const attribution = {
-    kind: "ask",
-    requesterUserId: requester?.id,
-    requesterUsername,
-    channelId: parentChannelId,
-  };
-  let responseText: string;
-  try {
-    if (webSearch) {
-      const result = await runTrackedWebSearchCompletion(
-        env,
-        buildAskWebSearchInput(prompt, requesterUsername),
-        {
-          model: config.askWebSearchModel,
-          instructions: config.askWebSearchSystemPrompt,
-          maxOutputTokens: config.askWebSearchMaxOutputTokens,
-          maxTurns: config.askWebSearchMaxTurns,
-          searchContextSize: config.askWebSearchContextSize,
-          temperature: config.askWebSearchTemperature,
-          gatewayId: config.askWebSearchGatewayId,
-          ...attribution,
-        },
-      );
-      responseText = appendSourceFallback(result.content, result.sources);
-    } else {
-      const result = await runTrackedChatCompletion(
-        env,
-        config,
-        buildAskConversation(config, [{ role: "user", content: `${requesterUsername}: ${prompt}` }]),
-        attribution,
-      );
-      responseText = result.content;
-    }
-  } catch (error) {
-    logger.error("ask_ai_response_failed", {
-      error: errorMessage(error),
-      threadId: thread.id,
-      webSearch,
-    });
-    await postChannelMessage(
-      env,
-      thread.id,
-      "I started this thread, but the AI response failed. Try again in a moment.",
-    ).catch(() => undefined);
-    return {
-      content: `Started <#${thread.id}>, but the AI response failed.`,
-      allowed_mentions: { parse: [] },
-    };
-  }
-
-  const text = sanitizeAiText(responseText);
-  const content =
-    text.length > 0 ? text.slice(0, MAX_DISCORD_MESSAGE_LENGTH) : "I could not generate a response.";
-  const response = await postChannelMessage(env, thread.id, content);
-  if (!response.ok) {
-    logger.warn("ask_thread_post_failed", {
-      status: response.status,
-      error: await response.text().catch(() => null),
-    });
-    return {
-      content: `I created <#${thread.id}> but could not post the answer there.`,
-      allowed_mentions: { parse: [] },
-    };
-  }
+  await env.AI_JOBS.send(
+    encodeAiJobEnvelope(
+      {
+        kind: "ask",
+        channelId: thread.id,
+        requesterUserId: requester?.id,
+        requesterUsername,
+        prompt,
+      },
+      { source: "interactions", guildId: interaction.guild_id },
+    ),
+  );
 
   return {
     content: `Started <#${thread.id}>`,

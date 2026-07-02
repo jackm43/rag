@@ -496,14 +496,13 @@ test("queue handler treats a thread-start job as fresh, creates a thread, and po
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   const insertedThreads: Array<{ sql: string; args: unknown[] }> = [];
-  const aiResponses = ["Short answer.", "Queue retries"];
   globalThis.fetch = async (url, init) => {
     fetchCalls.push({ url: String(url), init });
     if (String(url).includes("gateway.ai.cloudflare.com")) {
-      return Response.json({ response: aiResponses.shift() ?? "Queue retries" });
+      return Response.json({ response: "Short answer." });
     }
     if (String(url) === `https://discord.com/api/v10/channels/${CHANNEL_ID}/messages/${TRIGGER_ID}/threads`) {
-      return Response.json({ id: THREAD_ID, type: 11, parent_id: CHANNEL_ID, name: "Queue retries" });
+      return Response.json({ id: THREAD_ID, type: 11, parent_id: CHANNEL_ID, name: "and what about retries" });
     }
     return new Response("{}", { status: 200 });
   };
@@ -560,22 +559,19 @@ test("queue handler treats a thread-start job as fresh, creates a thread, and po
     assert.equal(historyCall, undefined);
 
     const gatewayCalls = fetchCalls.filter((call) => call.url.includes("gateway.ai.cloudflare.com"));
-    assert.equal(gatewayCalls.length, 2);
+    assert.equal(gatewayCalls.length, 1);
     const input = JSON.parse(String(gatewayCalls[0].init?.body)) as { messages: Array<{ role: string; content: string }> };
     assert.match(input.messages[0].content, /Use only the provided thread conversation context/);
     assert.deepEqual(input.messages.slice(1), [
       { role: "user", content: "metro goonin: and what about retries" },
     ]);
 
-    const titleInput = JSON.parse(String(gatewayCalls[1].init?.body)) as { messages: Array<{ role: string; content: string }> };
-    assert.match(titleInput.messages[0].content, /thread title/);
-
     const threadCall = fetchCalls.find(
       (call) => call.url === `https://discord.com/api/v10/channels/${CHANNEL_ID}/messages/${TRIGGER_ID}/threads`,
     );
     assert.ok(threadCall);
     assert.deepEqual(JSON.parse(String(threadCall.init?.body)), {
-      name: "Queue retries",
+      name: "and what about retries",
       auto_archive_duration: 1440,
     });
 
@@ -596,7 +592,7 @@ test("queue handler treats a thread-start job as fresh, creates a thread, and po
       ALICE_ID,
       "metro goonin",
       "and what about retries",
-      "Queue retries",
+      "and what about retries",
     ]);
     assert.deepEqual(ackedMessages, [message.body]);
   } finally {

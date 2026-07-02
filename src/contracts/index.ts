@@ -1,5 +1,5 @@
 import * as capnp from "capnp-es";
-import type { AiChatJob, AiJob, AiSpendJob, RagjamJob } from "../types";
+import type { AiAskJob, AiChatJob, AiJob, AiSpendJob, RagjamJob } from "../types";
 import {
   ChatPayload,
   EventEnvelope,
@@ -28,10 +28,13 @@ export type EnvelopeOptions = {
 
 const SPEND_EVENT_TYPE = "spend";
 
-const CHAT_PAYLOAD_WHICH: Record<AiChatJob["kind"], EventEnvelope_Payload_Which> = {
+type ChatLikeKind = AiChatJob["kind"] | AiAskJob["kind"];
+
+const CHAT_PAYLOAD_WHICH: Record<ChatLikeKind, EventEnvelope_Payload_Which> = {
   thread_start: EventEnvelope_Payload_Which.THREAD_START,
   thread_reply: EventEnvelope_Payload_Which.THREAD_REPLY,
   channel_reply: EventEnvelope_Payload_Which.CHANNEL_REPLY,
+  ask: EventEnvelope_Payload_Which.ASK,
 };
 
 const optionalText = (value: string) => (value.length > 0 ? value : undefined);
@@ -66,12 +69,14 @@ const initEnvelope = (
   return envelope;
 };
 
-const initChatPayload = (envelope: EventEnvelope, kind: AiChatJob["kind"]): ChatPayload => {
+const initChatPayload = (envelope: EventEnvelope, kind: ChatLikeKind): ChatPayload => {
   switch (CHAT_PAYLOAD_WHICH[kind]) {
     case EventEnvelope_Payload_Which.THREAD_START:
       return envelope.payload._initThreadStart();
     case EventEnvelope_Payload_Which.THREAD_REPLY:
       return envelope.payload._initThreadReply();
+    case EventEnvelope_Payload_Which.ASK:
+      return envelope.payload._initAsk();
     default:
       return envelope.payload._initChannelReply();
   }
@@ -180,7 +185,7 @@ const readEnvelope = (value: unknown): EventEnvelope | null => {
   }
 };
 
-const chatJobFrom = (envelope: EventEnvelope, kind: AiChatJob["kind"], payload: ChatPayload) =>
+const chatJobFrom = (envelope: EventEnvelope, kind: ChatLikeKind, payload: ChatPayload) =>
   compact({
     kind,
     channelId: payload.channelId,
@@ -201,6 +206,8 @@ const aiJobFrom = (envelope: EventEnvelope): unknown => {
       return chatJobFrom(envelope, "thread_reply", envelope.payload.threadReply);
     case EventEnvelope_Payload_Which.CHANNEL_REPLY:
       return chatJobFrom(envelope, "channel_reply", envelope.payload.channelReply);
+    case EventEnvelope_Payload_Which.ASK:
+      return chatJobFrom(envelope, "ask", envelope.payload.ask);
     case EventEnvelope_Payload_Which.RAGJAM: {
       const payload = envelope.payload.ragjam;
       const job: RagjamJob = compact({

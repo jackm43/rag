@@ -36,6 +36,7 @@ export const validateAiJob = (value: unknown): value is AiJob => {
       value.kind !== "thread_start" &&
       value.kind !== "thread_reply" &&
       value.kind !== "channel_reply" &&
+      value.kind !== "ask" &&
       value.kind !== "ragjam"
     )
   ) {

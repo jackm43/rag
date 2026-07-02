@@ -126,7 +126,8 @@ export const EventEnvelope_Payload_Which = {
   THREAD_REPLY: 1,
   CHANNEL_REPLY: 2,
   RAGJAM: 3,
-  SPEND: 4
+  SPEND: 4,
+  ASK: 5
 } as const;
 export type EventEnvelope_Payload_Which = (typeof EventEnvelope_Payload_Which)[keyof typeof EventEnvelope_Payload_Which];
 export class EventEnvelope_Payload extends $.Struct {
@@ -135,6 +136,7 @@ export class EventEnvelope_Payload extends $.Struct {
   static readonly CHANNEL_REPLY = EventEnvelope_Payload_Which.CHANNEL_REPLY;
   static readonly RAGJAM = EventEnvelope_Payload_Which.RAGJAM;
   static readonly SPEND = EventEnvelope_Payload_Which.SPEND;
+  static readonly ASK = EventEnvelope_Payload_Which.ASK;
   static readonly _capnp = {
     displayName: "payload",
     id: "a636c8f1ec42d04d",
@@ -263,6 +265,31 @@ export class EventEnvelope_Payload extends $.Struct {
   }
   set spend(value: SpendPayload) {
     $.utils.setUint16(2, 4, this);
+    $.utils.copyFrom(value, $.utils.getPointer(7, this));
+  }
+  _adoptAsk(value: $.Orphan<ChatPayload>): void {
+    $.utils.setUint16(2, 5, this);
+    $.utils.adopt(value, $.utils.getPointer(7, this));
+  }
+  _disownAsk(): $.Orphan<ChatPayload> {
+    return $.utils.disown(this.ask);
+  }
+  get ask(): ChatPayload {
+    $.utils.testWhich("ask", $.utils.getUint16(2, this), 5, this);
+    return $.utils.getStruct(7, ChatPayload, this);
+  }
+  _hasAsk(): boolean {
+    return !$.utils.isNull($.utils.getPointer(7, this));
+  }
+  _initAsk(): ChatPayload {
+    $.utils.setUint16(2, 5, this);
+    return $.utils.initStructAt(7, ChatPayload, this);
+  }
+  get _isAsk(): boolean {
+    return $.utils.getUint16(2, this) === 5;
+  }
+  set ask(value: ChatPayload) {
+    $.utils.setUint16(2, 5, this);
     $.utils.copyFrom(value, $.utils.getPointer(7, this));
   }
   toString(): string { return "EventEnvelope_Payload_" + super.toString(); }

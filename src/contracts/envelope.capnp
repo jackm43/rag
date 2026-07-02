@@ -43,5 +43,6 @@ struct EventEnvelope {
     channelReply @10 :ChatPayload;
     ragjam @11 :RagjamPayload;
     spend @12 :SpendPayload;
+    ask @13 :ChatPayload;
   }
 }
