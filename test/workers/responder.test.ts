@@ -1,7 +1,12 @@
 import { assert, test } from "vitest";
 
 import responderWorker from "../../workers/services/responder/src/index.ts";
-import { deliverInteractionEdit, finalizeAiReplyText } from "../../packages/domain/responder.ts";
+import {
+  deliverInteractionEdit,
+  finalizeAiReplyText,
+  suppressUrlEmbeds,
+} from "../../packages/domain/responder.ts";
+import { appendSourceFallback } from "../../packages/ai/ask-mode.ts";
 import { encodeReplyJobEnvelope } from "../../packages/contracts/index.ts";
 import { createEnv } from "../helpers.ts";
 
@@ -15,6 +20,55 @@ test("finalizeAiReplyText sanitizes mentions, truncates, and falls back on empty
   );
   assert.equal(finalizeAiReplyText("<@123456789012345678>"), "I could not generate a response.");
   assert.equal(finalizeAiReplyText("a".repeat(3000)).length, 1900);
+});
+
+test("suppressUrlEmbeds wraps bare URLs in angle brackets so Discord renders no preview", () => {
+  assert.equal(
+    suppressUrlEmbeds("Check https://evil.example.com/login for details"),
+    "Check <https://evil.example.com/login> for details",
+  );
+  assert.equal(
+    suppressUrlEmbeds("See https://example.com/a and http://example.com/b"),
+    "See <https://example.com/a> and <http://example.com/b>",
+  );
+  assert.equal(suppressUrlEmbeds("no links here"), "no links here");
+});
+
+test("suppressUrlEmbeds keeps trailing punctuation outside the brackets", () => {
+  assert.equal(suppressUrlEmbeds("Read https://example.com/docs."), "Read <https://example.com/docs>.");
+  assert.equal(suppressUrlEmbeds("Really https://example.com/a?q=1!?"), "Really <https://example.com/a?q=1>!?");
+});
+
+test("suppressUrlEmbeds does not double-wrap already-wrapped URLs", () => {
+  assert.equal(suppressUrlEmbeds("Already <https://example.com/ok> wrapped"), "Already <https://example.com/ok> wrapped");
+});
+
+test("suppressUrlEmbeds leaves URLs inside code spans and fenced blocks alone", () => {
+  assert.equal(
+    suppressUrlEmbeds("Run `curl https://example.com/api` locally"),
+    "Run `curl https://example.com/api` locally",
+  );
+  assert.equal(
+    suppressUrlEmbeds("```\nfetch(\"https://example.com/api\")\n```\nMore at https://example.com/docs"),
+    "```\nfetch(\"https://example.com/api\")\n```\nMore at <https://example.com/docs>",
+  );
+});
+
+test("finalizeAiReplyText suppresses embeds for URLs in model output", () => {
+  assert.equal(
+    finalizeAiReplyText("Reset your password here\nhttps://evil.example.com/reset now"),
+    "Reset your password here\n<https://evil.example.com/reset> now",
+  );
+});
+
+test("appendSourceFallback wraps web-search source URLs so they stay clickable without embeds", () => {
+  assert.equal(
+    appendSourceFallback("Latest figures say 42.", [
+      { url: "https://example.com/a", title: "A" },
+      { url: "https://example.com/b", title: "B" },
+    ]),
+    "Latest figures say 42.\n\nSources: <https://example.com/a> <https://example.com/b>",
+  );
 });
 
 test("responder posts sanitized channel messages with allowed_mentions locked down", async () => {

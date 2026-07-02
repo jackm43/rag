@@ -58,6 +58,8 @@ export const appendSourceFallback = (content: string, sources: WebSearchSource[]
   if (sourceUrlPattern.test(content) || sources.length === 0) {
     return content;
   }
-  const urls = sources.slice(0, 3).map((source) => source.url).join(" ");
+  // <angle brackets> keep the links clickable but suppress Discord embeds,
+  // matching the responder's egress policy for URLs in model output.
+  const urls = sources.slice(0, 3).map((source) => `<${source.url}>`).join(" ");
   return `${content}\n\nSources: ${urls}`;
 };

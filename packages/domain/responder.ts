@@ -11,12 +11,37 @@ import {
 const DISCORD_MESSAGE_HARD_LIMIT = 2000;
 const EMPTY_REPLY_FALLBACK = "I could not generate a response.";
 
+// Model output can carry attacker-chosen links (prompt injection through
+// other users' messages), and a rendered embed gives a phishing link the
+// bot's authority. Wrapping URLs in <angle brackets> keeps them clickable
+// but stops Discord from rendering embeds/previews. Code spans are left
+// alone, and already-wrapped URLs are not double-wrapped.
+const CODE_SEGMENT_PATTERN = /(```[\s\S]*?```|`[^`\n]*`)/g;
+const URL_PATTERN = /<?https?:\/\/[^\s<>]+>?/g;
+const TRAILING_PUNCTUATION_PATTERN = /[.,!?;:]+$/;
+
+const wrapBareUrls = (segment: string) =>
+  segment.replace(URL_PATTERN, (match) => {
+    if (match.startsWith("<")) {
+      return match;
+    }
+    const trailingPunctuation = TRAILING_PUNCTUATION_PATTERN.exec(match)?.[0] ?? "";
+    const url = trailingPunctuation ? match.slice(0, -trailingPunctuation.length) : match;
+    return `<${url}>${trailingPunctuation}`;
+  });
+
+export const suppressUrlEmbeds = (text: string) =>
+  text
+    .split(CODE_SEGMENT_PATTERN)
+    .map((segment, index) => (index % 2 === 1 ? segment : wrapBareUrls(segment)))
+    .join("");
+
 // Final output policy for AI-generated channel replies. The responder is the
 // single Discord egress choke point: brain workers ship raw model text and
-// this is the only place mention/ID sanitisation and the message length cap
-// are applied before anything reaches Discord.
+// this is the only place mention/ID sanitisation, URL embed suppression, and
+// the message length cap are applied before anything reaches Discord.
 export const finalizeAiReplyText = (value: string) => {
-  const text = sanitizeAiText(value);
+  const text = suppressUrlEmbeds(sanitizeAiText(value));
   return text.length > 0 ? text.slice(0, MAX_DISCORD_MESSAGE_LENGTH) : EMPTY_REPLY_FALLBACK;
 };
 

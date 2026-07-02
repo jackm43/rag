@@ -938,7 +938,7 @@ test("/ask uses the web-search model for current research prompts", async () => 
       kind: "reply.channel_message",
       channelId: ASK_THREAD_ID,
       content:
-        "Based on current reviews, compare RTX 5090, RTX 5080, RX 9990 XTX, and RX 9980 XT by price, power, and workload.\n\nSources: https://example.com/gpu-roundup",
+        "Based on current reviews, compare RTX 5090, RTX 5080, RX 9990 XTX, and RX 9980 XT by price, power, and workload.\n\nSources: <https://example.com/gpu-roundup>",
     });
   } finally {
     globalThis.fetch = originalFetch;

@@ -1048,7 +1048,7 @@ test("queue handler uses web search for current follow-ups in /ask threads", asy
       kind: "reply.channel_message",
       channelId: THREAD_ID,
       content:
-        "The current pick is ExampleDB based on recent pricing.\n\nSources: https://example.com/current-db-pricing",
+        "The current pick is ExampleDB based on recent pricing.\n\nSources: <https://example.com/current-db-pricing>",
     });
   } finally {
     globalThis.fetch = originalFetch;
