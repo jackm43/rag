@@ -83,6 +83,15 @@ CREATE TABLE IF NOT EXISTS rag_ai_spend_events (
 CREATE INDEX IF NOT EXISTS idx_rag_ai_spend_events_user ON rag_ai_spend_events(requester_user_id);
 CREATE INDEX IF NOT EXISTS idx_rag_ai_spend_events_status ON rag_ai_spend_events(status);
 
+CREATE TABLE IF NOT EXISTS rag_ai_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  requester_user_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_ai_requests_user_created ON rag_ai_requests(requester_user_id, created_at);
+
 CREATE TABLE IF NOT EXISTS rag_ai_spend_totals (
   requester_user_id TEXT PRIMARY KEY,
   requester_username TEXT,

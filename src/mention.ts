@@ -20,6 +20,7 @@ import {
   fetchMessage,
   postChannelMessage,
 } from "./discord";
+import { checkAiUsageAllowed } from "./limits";
 import { errorMessage, logger } from "./logger";
 import { createAiSpendSourceId, recordAiSpendEvent } from "./spend";
 import type { AiChatJob, AiJob, AiThread, DiscordMessage, Env } from "./types";
@@ -264,6 +265,14 @@ export const handleGatewayMessageCreate = async (
       return;
     }
 
+    const usage = await checkAiUsageAllowed(env, message.author?.id, "thread_reply");
+    if (!usage.allowed) {
+      await postChannelMessage(env, message.channel_id, usage.message).catch((error) => {
+        logger.warn("ai_usage_denial_notice_failed", { error: errorMessage(error) });
+      });
+      return;
+    }
+
     await env.AI_JOBS.send({
       kind: "thread_reply",
       channelId: message.channel_id,
@@ -285,6 +294,14 @@ export const handleGatewayMessageCreate = async (
 
   const prompt = resolveChannelPrompt(message, botUserId, env.DISCORD_APPLICATION_ID, botRoleIds);
   if (!prompt) {
+    return;
+  }
+
+  const usage = await checkAiUsageAllowed(env, message.author?.id, "channel_reply");
+  if (!usage.allowed) {
+    await postChannelMessage(env, message.channel_id, usage.message).catch((error) => {
+      logger.warn("ai_usage_denial_notice_failed", { error: errorMessage(error) });
+    });
     return;
   }
 

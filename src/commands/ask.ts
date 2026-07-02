@@ -19,6 +19,7 @@ import {
   postChannelMessage,
 } from "../discord";
 import { jsonResponse } from "../http";
+import { checkAiUsageAllowed } from "../limits";
 import { errorMessage, logger } from "../logger";
 import { generateThreadTitle, recordAiThread } from "../mention";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../spend";
@@ -198,7 +199,7 @@ const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
   };
 };
 
-export const handleAskCommand = (
+export const handleAskCommand = async (
   interaction: DiscordInteraction,
   env: Env,
   ctx: ExecutionContext,
@@ -218,6 +219,14 @@ export const handleAskCommand = (
     return jsonResponse({
       type: CHANNEL_MESSAGE_WITH_SOURCE,
       data: { content: "Could not defer /ask without interaction credentials.", allowed_mentions: { parse: [] } },
+    });
+  }
+
+  const usage = await checkAiUsageAllowed(env, getInvoker(interaction)?.id, "ask");
+  if (!usage.allowed) {
+    return jsonResponse({
+      type: CHANNEL_MESSAGE_WITH_SOURCE,
+      data: { content: usage.message, allowed_mentions: { parse: [] } },
     });
   }
 

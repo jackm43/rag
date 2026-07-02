@@ -2,6 +2,7 @@ import ragjamMusicConfig from "../ai-config/ragjam-music.json";
 import { buildAiGatewayMetadata } from "../ai-metadata";
 import { editOriginalInteractionResponse, type InteractionResponseFile } from "../discord";
 import { jsonResponse } from "../http";
+import { checkAiUsageAllowed } from "../limits";
 import { errorMessage, logger } from "../logger";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../spend";
 import {
@@ -248,6 +249,14 @@ export const handleRagjamCommand = async (
   }
 
   const requester = interaction.member?.user ?? interaction.user;
+  const usage = await checkAiUsageAllowed(env, requester?.id, "ragjam");
+  if (!usage.allowed) {
+    return jsonResponse({
+      type: CHANNEL_MESSAGE_WITH_SOURCE,
+      data: { content: usage.message, allowed_mentions: { parse: [] } },
+    });
+  }
+
   await env.AI_JOBS.send({
     kind: "ragjam",
     applicationId,

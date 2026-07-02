@@ -2,6 +2,7 @@ import { editOriginalInteractionResponse } from "../discord";
 import bictureImageConfig from "../ai-config/bicture-image.json";
 import { buildAiGatewayMetadata } from "../ai-metadata";
 import { jsonResponse } from "../http";
+import { checkAiUsageAllowed } from "../limits";
 import { errorMessage, logger } from "../logger";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../spend";
 import {
@@ -249,7 +250,7 @@ const runBictureCommand = async (interaction: DiscordInteraction, env: Env) => {
   };
 };
 
-export const handleBictureCommand = (
+export const handleBictureCommand = async (
   interaction: DiscordInteraction,
   env: Env,
   ctx: ExecutionContext,
@@ -271,6 +272,14 @@ export const handleBictureCommand = (
         content: "Could not defer /bicture without interaction credentials.",
         allowed_mentions: { parse: [] },
       },
+    });
+  }
+
+  const usage = await checkAiUsageAllowed(env, (interaction.member?.user ?? interaction.user)?.id, "bicture");
+  if (!usage.allowed) {
+    return jsonResponse({
+      type: CHANNEL_MESSAGE_WITH_SOURCE,
+      data: { content: usage.message, allowed_mentions: { parse: [] } },
     });
   }
 
