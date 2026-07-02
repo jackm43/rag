@@ -3,7 +3,7 @@ import { buildAiGatewayMetadata } from "../ai-metadata";
 import { editOriginalInteractionResponse, type InteractionResponseFile } from "../discord";
 import { jsonResponse } from "../http";
 import { checkAiUsageAllowed } from "../limits";
-import { errorMessage, logger } from "../logger";
+import { errorDetails, errorMessage, logger } from "../logger";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../spend";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
@@ -13,8 +13,9 @@ import {
   type RagjamJob,
 } from "../types";
 import { isRecord } from "../validation";
+import { getInvokerDisplayName } from "./rag-utils";
 
-const MAX_DISCORD_MESSAGE_LENGTH = 2000;
+const DISCORD_MESSAGE_HARD_LIMIT = 2000;
 const RAGJAM_FILENAME_PREFIX = "ragjam";
 const DEFAULT_AUDIO_CONTENT_TYPE = "audio/mpeg";
 const MAX_DISCORD_AUDIO_UPLOAD_BYTES = 25 * 1024 * 1024;
@@ -39,20 +40,12 @@ const ragjamPrompt = (interaction: DiscordInteraction) => stringOption(interacti
 const ragjamLyrics = (interaction: DiscordInteraction) => stringOption(interaction, "lyrics");
 
 const promptContent = (prompt: string, prefix: string) => {
-  const available = MAX_DISCORD_MESSAGE_LENGTH - prefix.length;
+  const available = DISCORD_MESSAGE_HARD_LIMIT - prefix.length;
   if (prompt.length <= available) {
     return `${prefix}${prompt}`;
   }
   return `${prefix}${prompt.slice(0, Math.max(0, available - 3))}...`;
 };
-
-const requesterUsernameFrom = (interaction: DiscordInteraction) =>
-  interaction.member?.nick?.trim() ||
-  interaction.member?.user?.global_name?.trim() ||
-  interaction.user?.global_name?.trim() ||
-  interaction.member?.user?.username?.trim() ||
-  interaction.user?.username?.trim() ||
-  "user";
 
 const extractAudioUrl = (result: unknown): string | null => {
   if (isRecord(result) && typeof result.audio === "string" && result.audio.length > 0) {
@@ -104,22 +97,6 @@ const audioFileFromUrl = async (url: string): Promise<InteractionResponseFile | 
     name: filenameForAudio(contentType, url),
     contentType,
     data,
-  };
-};
-
-const errorDetails = (error: unknown) => {
-  if (!(error instanceof Error)) {
-    return { message: String(error) };
-  }
-
-  return {
-    name: error.name,
-    message: error.message,
-    stack: error.stack,
-    cause: error.cause instanceof Error ? { name: error.cause.name, message: error.cause.message } : error.cause,
-    properties: Object.fromEntries(
-      Object.entries(error).filter(([, value]) => typeof value !== "function"),
-    ),
   };
 };
 
@@ -263,7 +240,7 @@ export const handleRagjamCommand = async (
     interactionToken,
     channelId: interaction.channel_id,
     requesterUserId: requester?.id,
-    requesterUsername: requesterUsernameFrom(interaction),
+    requesterUsername: getInvokerDisplayName(interaction),
     prompt,
     ...(lyrics ? { lyrics } : {}),
   });

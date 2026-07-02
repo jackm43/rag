@@ -26,11 +26,11 @@ import { createAiSpendSourceId, recordAiSpendEvent } from "../spend";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
   DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+  MAX_DISCORD_MESSAGE_LENGTH,
   type DiscordInteraction,
   type Env,
 } from "../types";
-
-const MAX_DISCORD_MESSAGE_LENGTH = 1900;
+import { getInvokerDisplayName } from "./rag-utils";
 
 export { shouldUseAskWebSearch } from "../ask-mode";
 
@@ -40,14 +40,6 @@ const askPrompt = (interaction: DiscordInteraction) => {
 };
 
 const getInvoker = (interaction: DiscordInteraction) => interaction.member?.user ?? interaction.user;
-
-const getInvokerDisplayName = (interaction: DiscordInteraction) =>
-  interaction.member?.nick?.trim() ||
-  interaction.member?.user?.global_name?.trim() ||
-  interaction.user?.global_name?.trim() ||
-  interaction.member?.user?.username?.trim() ||
-  interaction.user?.username?.trim() ||
-  "user";
 
 const resolveThreadParentChannelId = async (env: Env, channelId: string) => {
   const channel = await fetchChannel(env, channelId);

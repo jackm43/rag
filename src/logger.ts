@@ -26,3 +26,19 @@ export const logger = {
 
 export const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+
+export const errorDetails = (error: unknown) => {
+  if (!(error instanceof Error)) {
+    return { message: String(error) };
+  }
+
+  return {
+    name: error.name,
+    message: error.message,
+    stack: error.stack,
+    cause: error.cause instanceof Error ? { name: error.cause.name, message: error.cause.message } : error.cause,
+    properties: Object.fromEntries(
+      Object.entries(error).filter(([, value]) => typeof value !== "function"),
+    ),
+  };
+};

@@ -9,6 +9,14 @@ export const getInvoker = (interaction: DiscordInteraction) => {
   return user;
 };
 
+export const getInvokerDisplayName = (interaction: DiscordInteraction) =>
+  interaction.member?.nick?.trim() ||
+  interaction.member?.user?.global_name?.trim() ||
+  interaction.user?.global_name?.trim() ||
+  interaction.member?.user?.username?.trim() ||
+  interaction.user?.username?.trim() ||
+  "user";
+
 export const getOptionValue = (interaction: DiscordInteraction, optionName: string) =>
   interaction.data?.options?.find((opt) => opt.name === optionName)?.value;
 

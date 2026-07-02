@@ -137,6 +137,8 @@ export type Env = Cloudflare.Env & {
 
 export const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
 
+export const MAX_DISCORD_MESSAGE_LENGTH = 1900;
+
 export const PING = 1;
 export const APPLICATION_COMMAND = 2;
 export const CHANNEL_MESSAGE_WITH_SOURCE = 4;

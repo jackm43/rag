@@ -3,7 +3,7 @@ import bictureImageConfig from "../ai-config/bicture-image.json";
 import { buildAiGatewayMetadata } from "../ai-metadata";
 import { jsonResponse } from "../http";
 import { checkAiUsageAllowed } from "../limits";
-import { errorMessage, logger } from "../logger";
+import { errorDetails, errorMessage, logger } from "../logger";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../spend";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
@@ -12,6 +12,7 @@ import {
   type Env,
 } from "../types";
 import { isRecord } from "../validation";
+import { getInvokerDisplayName } from "./rag-utils";
 
 const BICTURE_FILENAME_PREFIX = "bicture";
 const DEFAULT_IMAGE_CONTENT_TYPE = "image/jpeg";
@@ -179,22 +180,6 @@ const runBictureImageGeneration = async (
   );
 };
 
-const errorDetails = (error: unknown) => {
-  if (!(error instanceof Error)) {
-    return { message: String(error) };
-  }
-
-  return {
-    name: error.name,
-    message: error.message,
-    stack: error.stack,
-    cause: error.cause instanceof Error ? { name: error.cause.name, message: error.cause.message } : error.cause,
-    properties: Object.fromEntries(
-      Object.entries(error).filter(([, value]) => typeof value !== "function"),
-    ),
-  };
-};
-
 const runBictureCommand = async (interaction: DiscordInteraction, env: Env) => {
   const prompt = bicturePrompt(interaction);
   if (!prompt) {
@@ -205,13 +190,7 @@ const runBictureCommand = async (interaction: DiscordInteraction, env: Env) => {
   }
 
   const requester = interaction.member?.user ?? interaction.user;
-  const requesterUsername =
-    interaction.member?.nick?.trim() ||
-    interaction.member?.user?.global_name?.trim() ||
-    interaction.user?.global_name?.trim() ||
-    interaction.member?.user?.username?.trim() ||
-    interaction.user?.username?.trim() ||
-    "user";
+  const requesterUsername = getInvokerDisplayName(interaction);
   const spendSourceId = createAiSpendSourceId();
   const result = await runBictureImageGeneration(
     env,

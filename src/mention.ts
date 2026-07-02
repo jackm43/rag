@@ -23,10 +23,16 @@ import {
 import { checkAiUsageAllowed } from "./limits";
 import { errorMessage, logger } from "./logger";
 import { createAiSpendSourceId, recordAiSpendEvent } from "./spend";
-import type { AiChatJob, AiJob, AiThread, DiscordMessage, Env } from "./types";
+import {
+  MAX_DISCORD_MESSAGE_LENGTH,
+  type AiChatJob,
+  type AiJob,
+  type AiThread,
+  type DiscordMessage,
+  type Env,
+} from "./types";
 import { isAiJob } from "./validation";
 
-const MAX_DISCORD_MESSAGE_LENGTH = 1900;
 const MAX_HISTORY_ENTRY_LENGTH = 600;
 const MAX_THREAD_TITLE_LENGTH = 80;
 
