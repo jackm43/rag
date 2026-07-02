@@ -7,7 +7,8 @@ import {
   handleGatewayMessageCreate,
 } from "../src/index.ts";
 import brainWorker from "../src/brain-worker.ts";
-import { decodeAiJobEnvelope, encodeAiJobEnvelope } from "../src/contracts/index.ts";
+import responderWorker from "../src/responder-worker.ts";
+import { decodeAiJobEnvelope, decodeReplyJobEnvelope, encodeAiJobEnvelope } from "../src/contracts/index.ts";
 import { fetchChannelMessages } from "../src/discord.ts";
 import { createDbMock, createEnv } from "./helpers.ts";
 
@@ -437,11 +438,17 @@ test("queue handler posts channel reply jobs without creating a thread", async (
   };
 
   try {
+    const outboxJobs: Uint8Array[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
       DB: createDbMock({}),
+      DISCORD_OUTBOX: {
+        send: async (body: Uint8Array) => {
+          outboxJobs.push(body);
+        },
+      },
     });
     const ackedMessages: unknown[] = [];
     const message = {
@@ -477,15 +484,16 @@ test("queue handler posts channel reply jobs without creating a thread", async (
       { role: "user", content: "metro goonin: and what about retries" },
     ]);
 
-    const postCall = fetchCalls.find(
-      (call) => call.url === `https://discord.com/api/v10/channels/${CHANNEL_ID}/messages`,
+    // The brain posts nothing to Discord directly; the reply crosses the outbox.
+    assert.equal(
+      fetchCalls.find((call) => call.url === `https://discord.com/api/v10/channels/${CHANNEL_ID}/messages`),
+      undefined,
     );
-    assert.ok(postCall);
-    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
+    assert.equal(outboxJobs.length, 1);
+    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+      kind: "reply.channel_message",
+      channelId: CHANNEL_ID,
       content: "Short answer.",
-      allowed_mentions: {
-        parse: [],
-      },
     });
     assert.deepEqual(ackedMessages, [message.body]);
   } finally {
@@ -509,10 +517,16 @@ test("queue handler treats a thread-start job as fresh, creates a thread, and po
   };
 
   try {
+    const outboxJobs: Uint8Array[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
+      DISCORD_OUTBOX: {
+        send: async (body: Uint8Array) => {
+          outboxJobs.push(body);
+        },
+      },
       DB: {
         ...createDbMock({}),
         prepare: (sql: string) => {
@@ -576,15 +590,11 @@ test("queue handler treats a thread-start job as fresh, creates a thread, and po
       auto_archive_duration: 1440,
     });
 
-    const postCall = fetchCalls.find(
-      (call) => call.url === `https://discord.com/api/v10/channels/${THREAD_ID}/messages`,
-    );
-    assert.ok(postCall);
-    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
+    assert.equal(outboxJobs.length, 1);
+    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+      kind: "reply.channel_message",
+      channelId: THREAD_ID,
       content: "Short answer.",
-      allowed_mentions: {
-        parse: [],
-      },
     });
     assert.deepEqual(insertedThreads[0].args, [
       THREAD_ID,
@@ -636,10 +646,16 @@ test("queue handler builds a conversation from tracked thread history and posts 
   };
 
   try {
+    const outboxJobs: Uint8Array[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
+      DISCORD_OUTBOX: {
+        send: async (body: Uint8Array) => {
+          outboxJobs.push(body);
+        },
+      },
       DB: createDbMock({
         aiThread: {
           thread_id: THREAD_ID,
@@ -695,15 +711,11 @@ test("queue handler builds a conversation from tracked thread history and posts 
       { role: "user", content: "metro goonin: and what about retries" },
     ]);
 
-    const postCall = fetchCalls.find(
-      (call) => call.url === `https://discord.com/api/v10/channels/${THREAD_ID}/messages`,
-    );
-    assert.ok(postCall);
-    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
+    assert.equal(outboxJobs.length, 1);
+    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+      kind: "reply.channel_message",
+      channelId: THREAD_ID,
       content: "Short answer.",
-      allowed_mentions: {
-        parse: [],
-      },
     });
     assert.deepEqual(ackedMessages, [message.body]);
   } finally {
@@ -737,6 +749,9 @@ test("queue handler keeps non-search replies inside /ask thread mode", async () 
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
+      DISCORD_OUTBOX: {
+        send: async () => undefined,
+      },
       DB: createDbMock({
         aiThread: {
           thread_id: THREAD_ID,
@@ -825,10 +840,16 @@ test("queue handler uses web search for current follow-ups in /ask threads", asy
   };
 
   try {
+    const outboxJobs: Uint8Array[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
+      DISCORD_OUTBOX: {
+        send: async (body: Uint8Array) => {
+          outboxJobs.push(body);
+        },
+      },
       DB: createDbMock({
         aiThread: {
           thread_id: THREAD_ID,
@@ -872,16 +893,12 @@ test("queue handler uses web search for current follow-ups in /ask threads", asy
     assert.match(body.messages[1].content, /what is the latest pricing/);
     assert.deepEqual(body.web_search_options, { search_context_size: "medium" });
 
-    const postCall = fetchCalls.find(
-      (call) => call.url === `https://discord.com/api/v10/channels/${THREAD_ID}/messages`,
-    );
-    assert.ok(postCall);
-    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
+    assert.equal(outboxJobs.length, 1);
+    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+      kind: "reply.channel_message",
+      channelId: THREAD_ID,
       content:
         "The current pick is ExampleDB based on recent pricing.\n\nSources: https://example.com/current-db-pricing",
-      allowed_mentions: {
-        parse: [],
-      },
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -920,6 +937,9 @@ test("queue handler excludes rag command bot output from thread history", async 
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
+      DISCORD_OUTBOX: {
+        send: async () => undefined,
+      },
       DB: createDbMock({
         aiThread: {
           thread_id: THREAD_ID,
@@ -1003,6 +1023,9 @@ test("queue handler fetches replied-to context from Discord REST", async () => {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
+      DISCORD_OUTBOX: {
+        send: async () => undefined,
+      },
       DB: createDbMock({}),
     });
     const message = {
@@ -1048,7 +1071,7 @@ test("queue handler fetches replied-to context from Discord REST", async () => {
   }
 });
 
-test("queue handler sanitizes mentions and IDs from the model output", async () => {
+test("raw model output crosses the outbox and the responder sanitizes it on egress", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   globalThis.fetch = async (url, init) => {
@@ -1060,10 +1083,16 @@ test("queue handler sanitizes mentions and IDs from the model output", async () 
   };
 
   try {
+    const outboxJobs: Uint8Array[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
+      DISCORD_OUTBOX: {
+        send: async (body: Uint8Array) => {
+          outboxJobs.push(body);
+        },
+      },
       DB: createDbMock({}),
     });
     const message = {
@@ -1082,6 +1111,18 @@ test("queue handler sanitizes mentions and IDs from the model output", async () 
     };
 
     await brainWorker.queue({ messages: [message] } as never, env);
+
+    // The brain ships the raw model text; sanitisation is the responder's job.
+    assert.equal(outboxJobs.length, 1);
+    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+      kind: "reply.channel_message",
+      channelId: THREAD_ID,
+      content: "Hello <@123456789012345678> there 123456789012345678",
+    });
+
+    await responderWorker.queue({
+      messages: [{ body: outboxJobs[0], ack: () => undefined }],
+    } as never, env);
 
     const postCall = fetchCalls.find(
       (call) => call.url === `https://discord.com/api/v10/channels/${THREAD_ID}/messages`,
@@ -1110,10 +1151,16 @@ test("queue handler uses the source-controlled partner model", async () => {
   };
 
   try {
+    const outboxJobs: Uint8Array[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
+      DISCORD_OUTBOX: {
+        send: async (body: Uint8Array) => {
+          outboxJobs.push(body);
+        },
+      },
       DB: createDbMock(),
     });
     const message = {
@@ -1140,15 +1187,11 @@ test("queue handler uses the source-controlled partner model", async () => {
     assert.equal(gatewayBody.max_tokens, 1000);
     assert.equal(gatewayBody.max_completion_tokens, undefined);
 
-    const discordCall = fetchCalls.find(
-      (call) => call.url === `https://discord.com/api/v10/channels/${THREAD_ID}/messages`,
-    );
-    assert.ok(discordCall);
-    assert.deepEqual(JSON.parse(String(discordCall.init?.body)), {
+    assert.equal(outboxJobs.length, 1);
+    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+      kind: "reply.channel_message",
+      channelId: THREAD_ID,
       content: "grok response",
-      allowed_mentions: {
-        parse: [],
-      },
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -1172,10 +1215,16 @@ test("queue handler records partner AI Gateway usage", async () => {
   };
 
   try {
+    const outboxJobs: Uint8Array[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
+      DISCORD_OUTBOX: {
+        send: async (body: Uint8Array) => {
+          outboxJobs.push(body);
+        },
+      },
       DB: createDbMock({
         onBatch: () => undefined,
       }),
@@ -1229,18 +1278,16 @@ test("queue handler records partner AI Gateway usage", async () => {
     assert.equal(gatewayMetadata.discord_channel_id, THREAD_ID);
     assert.match(gatewayMetadata.ragbot_request_id, /^aigreq:/);
 
-    const postCall = fetchCalls.find(
-      (call) => call.url === `https://discord.com/api/v10/channels/${THREAD_ID}/messages`,
-    );
-    assert.ok(postCall);
-    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
-      content: "gateway response",
-      allowed_mentions: {
-        parse: [],
-      },
+    // Raw model text crosses the outbox; the sanitized text is what gets recorded.
+    assert.equal(outboxJobs.length, 1);
+    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+      kind: "reply.channel_message",
+      channelId: THREAD_ID,
+      content: "Ragbot: gateway response",
     });
     assert.equal(insertedInteractions.length, 1);
     assert.ok(insertedInteractions[0].sql.includes("prompt_tokens"));
+    assert.equal(insertedInteractions[0].args[6], "gateway response");
     assert.deepEqual(insertedInteractions[0].args.slice(-3), [10, 2, 12]);
   } finally {
     globalThis.fetch = originalFetch;

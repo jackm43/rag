@@ -1,4 +1,4 @@
-import { sanitizeAiText, type ChatMessage, type ChatModelResult } from "./ai";
+import { type ChatMessage, type ChatModelResult } from "./ai";
 import {
   appendSourceFallback,
   buildAskConversation,
@@ -9,12 +9,14 @@ import { processBictureJob } from "./commands/bicture";
 import { processRagjamJob } from "./commands/ragjam";
 import { loadConfig } from "./config";
 import { buildNormalThreadConversation, fallbackThreadTitle, isAskThread } from "./conversation";
-import { createThreadFromMessage, postChannelMessage } from "./discord";
+import { createThreadFromMessage } from "./discord";
 import { errorMessage, logger } from "./logger";
+import { sendChannelReply } from "./outbox";
+import { finalizeAiReplyText } from "./responder-worker";
 import { recordAiThread } from "./threads";
 import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "./tracked-ai";
 import { decodeAiJobEnvelope } from "./contracts";
-import { MAX_DISCORD_MESSAGE_LENGTH, type AiAskJob, type AiChatJob, type Env } from "./types";
+import { type AiAskJob, type AiChatJob, type Env } from "./types";
 
 const recordAiInteraction = async (
   env: Env,
@@ -189,9 +191,9 @@ export const processAiQueueMessage = async (message: Message<unknown>, env: Env)
     totalTokens = result.usage?.totalTokens ?? null;
     aiDurationMs = Date.now() - aiStartedAt;
 
-    const text = sanitizeAiText(responseText);
-    content =
-      text.length > 0 ? text.slice(0, MAX_DISCORD_MESSAGE_LENGTH) : "I could not generate a response.";
+    // Record the exact text the responder's egress policy will deliver;
+    // the raw model text is what crosses the outbox.
+    content = finalizeAiReplyText(responseText);
 
     let responseChannelId = job.channelId;
     if (job.kind === "thread_start") {
@@ -215,17 +217,13 @@ export const processAiQueueMessage = async (message: Message<unknown>, env: Env)
       });
     }
 
-    const response = await postChannelMessage(env, responseChannelId, content);
-    if (response.ok) {
-      await record("ok", null);
-    } else {
-      await record(`discord_${response.status}`, await response.text().catch(() => null));
-    }
+    await sendChannelReply(env, responseChannelId, responseText);
+    await record("ok", null);
   } catch (error) {
     logger.error("ai_job_failed", { error: errorMessage(error) });
     await record("error", errorMessage(error));
     if (job.kind === "ask") {
-      await postChannelMessage(
+      await sendChannelReply(
         env,
         job.channelId,
         "I started this thread, but the AI response failed. Try again in a moment.",

@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "dev:all": "wrangler dev -c wrangler.jsonc -c wrangler.brain.jsonc -c wrangler.spend.jsonc",
-    "deploy": "wrangler deploy && wrangler deploy -c wrangler.brain.jsonc && wrangler deploy -c wrangler.spend.jsonc",
+    "dev:all": "wrangler dev -c wrangler.jsonc -c wrangler.brain.jsonc -c wrangler.responder.jsonc -c wrangler.spend.jsonc",
+    "deploy": "wrangler deploy -c wrangler.responder.jsonc && wrangler deploy && wrangler deploy -c wrangler.brain.jsonc && wrangler deploy -c wrangler.spend.jsonc",
     "deploy:main": "wrangler deploy",
     "deploy:brain": "wrangler deploy -c wrangler.brain.jsonc",
+    "deploy:responder": "wrangler deploy -c wrangler.responder.jsonc",
     "deploy:spend": "wrangler deploy -c wrangler.spend.jsonc",
     "check": "tsc --noEmit",
     "test": "vitest run",

@@ -47,6 +47,16 @@ export const createEnv = (publicKeyHex: string, overrides: Record<string, unknow
         throw new Error("AI_JOBS should not be used in this test");
       },
     },
+    DISCORD_OUTBOX: {
+      send: () => {
+        throw new Error("DISCORD_OUTBOX should not be used in this test");
+      },
+    },
+    RESPONDER: {
+      deliverInteractionEdit: () => {
+        throw new Error("RESPONDER should not be used in this test");
+      },
+    },
     ...overrides,
   }) as never;
 

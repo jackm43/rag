@@ -39,11 +39,22 @@
       "enabled": true
     }
   },
+  "services": [
+    {
+      "binding": "RESPONDER",
+      "service": "ragbot-responder-worker",
+      "entrypoint": "Responder"
+    }
+  ],
   "queues": {
     "producers": [
       {
         "binding": "SPEND_JOBS",
         "queue": "ai-spend-jobs"
+      },
+      {
+        "binding": "DISCORD_OUTBOX",
+        "queue": "discord-outbox"
       }
     ],
     "consumers": [

@@ -1,20 +1,22 @@
 import * as capnp from "capnp-es";
-import type { AiAskJob, AiChatJob, AiJob, AiSpendJob, BictureJob, RagjamJob } from "../types";
+import type { AiAskJob, AiChatJob, AiJob, AiSpendJob, BictureJob, RagjamJob, ReplyJob } from "../types";
 import {
   ChatPayload,
   EventEnvelope,
   EventEnvelope_Payload_Which,
 } from "./envelope";
-import { isOptionalSnowflake, validateAiJob, validateAiSpendJob } from "./validate";
+import { isOptionalSnowflake, validateAiJob, validateAiSpendJob, validateReplyJob } from "./validate";
 
 export {
   MAX_FREE_TEXT_LENGTH,
   MAX_INTERACTION_TOKEN_LENGTH,
+  MAX_REPLY_CONTENT_LENGTH,
   MAX_SPEND_EVENT_ID_LENGTH,
   MAX_USERNAME_LENGTH,
   SNOWFLAKE_PATTERN,
   validateAiJob,
   validateAiSpendJob,
+  validateReplyJob,
 } from "./validate";
 
 export const ENVELOPE_VERSION = 1;
@@ -130,6 +132,26 @@ export const encodeAiJobEnvelope = (job: AiJob, options: EnvelopeOptions): Uint8
     }
   }
 
+  return new Uint8Array(message.toArrayBuffer());
+};
+
+export const encodeReplyJobEnvelope = (job: ReplyJob, options: EnvelopeOptions): Uint8Array => {
+  if (!validateReplyJob(job)) {
+    throw new Error("Invalid reply job for event envelope");
+  }
+
+  const message = new capnp.Message();
+  const envelope = initEnvelope(message, job.kind, options);
+  if (job.kind === "reply.channel_message") {
+    const payload = envelope.payload._initReplyChannelMessage();
+    payload.channelId = job.channelId;
+    payload.content = job.content;
+  } else {
+    const payload = envelope.payload._initReplyInteractionEdit();
+    payload.applicationId = job.applicationId;
+    payload.interactionToken = job.interactionToken;
+    payload.content = job.content;
+  }
   return new Uint8Array(message.toArrayBuffer());
 };
 
@@ -256,6 +278,43 @@ export const decodeAiJobEnvelope = (bytes: unknown): AiJob | null => {
   try {
     const job = aiJobFrom(envelope);
     return validateAiJob(job) && envelope.type === job.kind ? job : null;
+  } catch {
+    return null;
+  }
+};
+
+const replyJobFrom = (envelope: EventEnvelope): ReplyJob | null => {
+  switch (envelope.payload.which()) {
+    case EventEnvelope_Payload_Which.REPLY_CHANNEL_MESSAGE: {
+      const payload = envelope.payload.replyChannelMessage;
+      return {
+        kind: "reply.channel_message",
+        channelId: payload.channelId,
+        content: payload.content,
+      };
+    }
+    case EventEnvelope_Payload_Which.REPLY_INTERACTION_EDIT: {
+      const payload = envelope.payload.replyInteractionEdit;
+      return {
+        kind: "reply.interaction_edit",
+        applicationId: payload.applicationId,
+        interactionToken: payload.interactionToken,
+        content: payload.content,
+      };
+    }
+    default:
+      return null;
+  }
+};
+
+export const decodeReplyJobEnvelope = (bytes: unknown): ReplyJob | null => {
+  const envelope = readEnvelope(bytes);
+  if (!envelope) {
+    return null;
+  }
+  try {
+    const job = replyJobFrom(envelope);
+    return job && validateReplyJob(job) && envelope.type === job.kind ? job : null;
   } catch {
     return null;
   }

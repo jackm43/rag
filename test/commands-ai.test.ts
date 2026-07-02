@@ -4,7 +4,7 @@ import nacl from "tweetnacl";
 import worker from "../src/index.ts";
 import brainWorker from "../src/brain-worker.ts";
 import { shouldUseAskWebSearch } from "../src/commands/ask.ts";
-import { decodeAiJobEnvelope, encodeAiJobEnvelope } from "../src/contracts/index.ts";
+import { decodeAiJobEnvelope, decodeReplyJobEnvelope, encodeAiJobEnvelope } from "../src/contracts/index.ts";
 import { createDbMock, createEnv, createSignedRequest } from "./helpers.ts";
 
 const RAGJAM_APPLICATION_ID = "500000000000000001";
@@ -22,6 +22,7 @@ test("/ask replies with the thread link immediately and answers via the AI jobs 
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   const enqueuedJobs: Uint8Array[] = [];
+  const outboxJobs: Uint8Array[] = [];
   const insertedThreads: Array<{ sql: string; args: unknown[] }> = [];
   const insertedInteractions: Array<{ sql: string; args: unknown[] }> = [];
   const waitUntilPromises: Promise<unknown>[] = [];
@@ -49,6 +50,11 @@ test("/ask replies with the thread link immediately and answers via the AI jobs 
       AI_JOBS: {
         send: async (body: Uint8Array) => {
           enqueuedJobs.push(body);
+        },
+      },
+      DISCORD_OUTBOX: {
+        send: async (body: Uint8Array) => {
+          outboxJobs.push(body);
         },
       },
       DB: {
@@ -162,15 +168,16 @@ test("/ask replies with the thread link immediately and answers via the AI jobs 
       { role: "user", content: "Alice: How do queue retries work?" },
     ]);
 
-    const postCall = fetchCalls.find(
-      (call) => call.url === `https://discord.com/api/v10/channels/${ASK_THREAD_ID}/messages`,
+    // The brain posts nothing to Discord itself; the answer goes through the outbox.
+    assert.equal(
+      fetchCalls.find((call) => call.url === `https://discord.com/api/v10/channels/${ASK_THREAD_ID}/messages`),
+      undefined,
     );
-    assert.ok(postCall);
-    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
+    assert.equal(outboxJobs.length, 1);
+    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+      kind: "reply.channel_message",
+      channelId: ASK_THREAD_ID,
       content: "Queues retry failed jobs before the DLQ.",
-      allowed_mentions: {
-        parse: [],
-      },
     });
     assert.equal(acked, true);
     assert.equal(insertedInteractions.length, 1);
@@ -231,12 +238,13 @@ test("/bicture interaction is deferred and enqueues image generation", async () 
   });
 });
 
-test("queue handler edits /bicture response with an image attachment", async () => {
+test("queue handler delivers the /bicture image through the responder RPC binding", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   const imageBytes = new Uint8Array([255, 216, 255, 217]);
   const imageBase64 = Buffer.from(imageBytes).toString("base64");
   const aiRuns: Array<{ model: string; input: unknown; options: unknown }> = [];
+  const rpcCalls: Array<{ envelope: Uint8Array; attachment: { name: string; contentType: string; data: ArrayBuffer } }> = [];
   let acked = false;
 
   globalThis.fetch = async (url, init) => {
@@ -250,6 +258,11 @@ test("queue handler edits /bicture response with an image attachment", async () 
         run: async (model: string, input: unknown, options: unknown) => {
           aiRuns.push({ model, input, options });
           return { result: { image: `data:image/png;base64,${imageBase64}` } };
+        },
+      },
+      RESPONDER: {
+        deliverInteractionEdit: async (envelope: Uint8Array, attachment: { name: string; contentType: string; data: ArrayBuffer }) => {
+          rpcCalls.push({ envelope, attachment });
         },
       },
     });
@@ -291,25 +304,18 @@ test("queue handler edits /bicture response with an image attachment", async () 
     assert.equal(bictureOptions.gateway.metadata.discord_channel_id, BICTURE_CHANNEL_ID);
     assert.match(bictureOptions.gateway.metadata.ragbot_request_id, /^aigreq:/);
 
-    const editCall = fetchCalls.find(
-      (call) => call.url === `https://discord.com/api/v10/webhooks/${BICTURE_APPLICATION_ID}/interaction-token/messages/@original`,
-    );
-    assert.ok(editCall);
-    assert.equal(editCall.init?.method, "PATCH");
-    assert.ok(editCall.init?.body instanceof FormData);
-
-    const form = editCall.init.body as FormData;
-    assert.deepEqual(JSON.parse(String(form.get("payload_json"))), {
+    // No direct Discord egress from the brain; the media edit goes over RPC.
+    assert.equal(fetchCalls.find((call) => call.url.includes("discord.com")), undefined);
+    assert.equal(rpcCalls.length, 1);
+    assert.deepEqual(decodeReplyJobEnvelope(rpcCalls[0].envelope), {
+      kind: "reply.interaction_edit",
+      applicationId: BICTURE_APPLICATION_ID,
+      interactionToken: "interaction-token",
       content: "a tiny jpeg test image",
-      allowed_mentions: { parse: [] },
-      attachments: [{ id: "0", filename: "bicture.png" }],
     });
-
-    const file = form.get("files[0]");
-    assert.ok(file instanceof File);
-    assert.equal(file.name, "bicture.png");
-    assert.equal(file.type, "image/png");
-    assert.deepEqual(new Uint8Array(await file.arrayBuffer()), imageBytes);
+    assert.equal(rpcCalls[0].attachment.name, "bicture.png");
+    assert.equal(rpcCalls[0].attachment.contentType, "image/png");
+    assert.deepEqual(new Uint8Array(rpcCalls[0].attachment.data), imageBytes);
     assert.equal(acked, true);
   } finally {
     globalThis.fetch = originalFetch;
@@ -362,9 +368,15 @@ test("queue handler downloads url-returned /bicture images with a timeout signal
   };
 
   try {
+    const rpcCalls: Array<{ envelope: Uint8Array; attachment: { name: string; contentType: string; data: ArrayBuffer } }> = [];
     const env = createEnv("unused", {
       AI: {
         run: async () => ({ result: { image: "https://example.com/generated-image.png" } }),
+      },
+      RESPONDER: {
+        deliverInteractionEdit: async (envelope: Uint8Array, attachment: { name: string; contentType: string; data: ArrayBuffer }) => {
+          rpcCalls.push({ envelope, attachment });
+        },
       },
     });
     await brainWorker.queue({
@@ -390,17 +402,15 @@ test("queue handler downloads url-returned /bicture images with a timeout signal
     assert.ok(downloadCall);
     assert.ok(downloadCall.init?.signal instanceof AbortSignal);
 
-    const editCall = fetchCalls.find(
-      (call) => call.url === `https://discord.com/api/v10/webhooks/${BICTURE_APPLICATION_ID}/interaction-token/messages/@original`,
-    );
-    assert.ok(editCall);
-    assert.ok(editCall.init?.body instanceof FormData);
-
-    const form = editCall.init.body as FormData;
-    const file = form.get("files[0]");
-    assert.ok(file instanceof File);
-    assert.equal(file.name, "bicture.png");
-    assert.deepEqual(new Uint8Array(await file.arrayBuffer()), imageBytes);
+    assert.equal(rpcCalls.length, 1);
+    assert.deepEqual(decodeReplyJobEnvelope(rpcCalls[0].envelope), {
+      kind: "reply.interaction_edit",
+      applicationId: BICTURE_APPLICATION_ID,
+      interactionToken: "interaction-token",
+      content: "a tiny png test image",
+    });
+    assert.equal(rpcCalls[0].attachment.name, "bicture.png");
+    assert.deepEqual(new Uint8Array(rpcCalls[0].attachment.data), imageBytes);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -428,9 +438,15 @@ test("queue handler edits /bicture response with a failure message when the imag
   };
 
   try {
+    const outboxJobs: Uint8Array[] = [];
     const env = createEnv("unused", {
       AI: {
         run: async () => ({ result: { image: "https://example.com/generated-image.png" } }),
+      },
+      DISCORD_OUTBOX: {
+        send: async (body: Uint8Array) => {
+          outboxJobs.push(body);
+        },
       },
     });
     await brainWorker.queue({
@@ -456,13 +472,13 @@ test("queue handler edits /bicture response with a failure message when the imag
 
     assert.equal(servedOversizedContentLength, true);
 
-    const editCall = fetchCalls.find(
-      (call) => call.url === `https://discord.com/api/v10/webhooks/${BICTURE_APPLICATION_ID}/interaction-token/messages/@original`,
-    );
-    assert.ok(editCall);
-    assert.deepEqual(JSON.parse(String(editCall.init?.body)), {
+    // The failure notice is text-only, so it travels through the outbox queue.
+    assert.equal(outboxJobs.length, 1);
+    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+      kind: "reply.interaction_edit",
+      applicationId: BICTURE_APPLICATION_ID,
+      interactionToken: "interaction-token",
       content: "Could not generate that image. Try a different prompt.",
-      allowed_mentions: { parse: [] },
     });
     assert.equal(acked, true);
   } finally {
@@ -516,11 +532,12 @@ test("/ragjam interaction is deferred and enqueues music generation", async () =
   });
 });
 
-test("queue handler edits /ragjam response with an audio attachment", async () => {
+test("queue handler delivers the /ragjam audio through the responder RPC binding", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
   const audioBytes = new Uint8Array([73, 68, 51, 4]);
   const aiRuns: Array<{ model: string; input: unknown; options: unknown }> = [];
+  const rpcCalls: Array<{ envelope: Uint8Array; attachment: { name: string; contentType: string; data: ArrayBuffer } }> = [];
   let acked = false;
 
   globalThis.fetch = async (url, init) => {
@@ -543,6 +560,11 @@ test("queue handler edits /ragjam response with an audio attachment", async () =
         run: async (model: string, input: unknown, options: unknown) => {
           aiRuns.push({ model, input, options });
           return { result: { audio: "https://example.com/generated-song.mp3" } };
+        },
+      },
+      RESPONDER: {
+        deliverInteractionEdit: async (envelope: Uint8Array, attachment: { name: string; contentType: string; data: ArrayBuffer }) => {
+          rpcCalls.push({ envelope, attachment });
         },
       },
     });
@@ -588,25 +610,18 @@ test("queue handler edits /ragjam response with an audio attachment", async () =
     assert.ok(downloadCall);
     assert.ok(downloadCall.init?.signal instanceof AbortSignal);
 
-    const editCall = fetchCalls.find(
-      (call) => call.url === `https://discord.com/api/v10/webhooks/${RAGJAM_APPLICATION_ID}/interaction-token/messages/@original`,
-    );
-    assert.ok(editCall);
-    assert.equal(editCall.init?.method, "PATCH");
-    assert.ok(editCall.init?.body instanceof FormData);
-
-    const form = editCall.init.body as FormData;
-    assert.deepEqual(JSON.parse(String(form.get("payload_json"))), {
+    // No direct Discord egress from the brain; the media edit goes over RPC.
+    assert.equal(fetchCalls.find((call) => call.url.includes("discord.com")), undefined);
+    assert.equal(rpcCalls.length, 1);
+    assert.deepEqual(decodeReplyJobEnvelope(rpcCalls[0].envelope), {
+      kind: "reply.interaction_edit",
+      applicationId: RAGJAM_APPLICATION_ID,
+      interactionToken: "interaction-token",
       content: "Prompt: A warm acoustic folk ballad with fingerpicked guitar and gentle vocals",
-      allowed_mentions: { parse: [] },
-      attachments: [{ id: "0", filename: "ragjam.mp3" }],
     });
-
-    const file = form.get("files[0]");
-    assert.ok(file instanceof File);
-    assert.equal(file.name, "ragjam.mp3");
-    assert.equal(file.type, "audio/mpeg");
-    assert.deepEqual(new Uint8Array(await file.arrayBuffer()), audioBytes);
+    assert.equal(rpcCalls[0].attachment.name, "ragjam.mp3");
+    assert.equal(rpcCalls[0].attachment.contentType, "audio/mpeg");
+    assert.deepEqual(new Uint8Array(rpcCalls[0].attachment.data), audioBytes);
     assert.equal(acked, true);
   } finally {
     globalThis.fetch = originalFetch;
@@ -634,9 +649,15 @@ test("queue handler preserves long /ragjam prompt text up to the Discord message
   };
 
   try {
+    const rpcCalls: Array<{ envelope: Uint8Array; attachment: { name: string; contentType: string; data: ArrayBuffer } }> = [];
     const env = createEnv("unused", {
       AI: {
         run: async () => ({ result: { audio: "https://example.com/generated-song.mp3" } }),
+      },
+      RESPONDER: {
+        deliverInteractionEdit: async (envelope: Uint8Array, attachment: { name: string; contentType: string; data: ArrayBuffer }) => {
+          rpcCalls.push({ envelope, attachment });
+        },
       },
     });
     await brainWorker.queue({
@@ -656,14 +677,8 @@ test("queue handler preserves long /ragjam prompt text up to the Discord message
       ],
     } as never, env);
 
-    const editCall = fetchCalls.find(
-      (call) => call.url === `https://discord.com/api/v10/webhooks/${RAGJAM_APPLICATION_ID}/interaction-token/messages/@original`,
-    );
-    assert.ok(editCall);
-    assert.ok(editCall.init?.body instanceof FormData);
-
-    const form = editCall.init.body as FormData;
-    assert.deepEqual(JSON.parse(String(form.get("payload_json"))).content, `Prompt: ${longPrompt}`);
+    assert.equal(rpcCalls.length, 1);
+    assert.equal(decodeReplyJobEnvelope(rpcCalls[0].envelope)?.content, `Prompt: ${longPrompt}`);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -737,6 +752,9 @@ test("queue handler lets /ragjam auto-generate lyrics when omitted", async () =>
           aiRuns.push({ model, input, options });
           return { result: { audio: "https://example.com/generated-song.mp3" } };
         },
+      },
+      RESPONDER: {
+        deliverInteractionEdit: async () => undefined,
       },
     });
     await brainWorker.queue({
@@ -814,6 +832,7 @@ test("/ask uses the web-search model for current research prompts", async () => 
 
   try {
     const baseDb = createDbMock();
+    const outboxJobs: Uint8Array[] = [];
     const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
@@ -821,6 +840,11 @@ test("/ask uses the web-search model for current research prompts", async () => 
       AI_JOBS: {
         send: async (body: Uint8Array) => {
           enqueuedJobs.push(body);
+        },
+      },
+      DISCORD_OUTBOX: {
+        send: async (body: Uint8Array) => {
+          outboxJobs.push(body);
         },
       },
       DB: {
@@ -909,16 +933,12 @@ test("/ask uses the web-search model for current research prompts", async () => 
     assert.equal(webSearchBody.max_tokens, 1200);
     assert.deepEqual(webSearchBody.web_search_options, { search_context_size: "medium" });
 
-    const postCall = fetchCalls.find(
-      (call) => call.url === `https://discord.com/api/v10/channels/${ASK_THREAD_ID}/messages`,
-    );
-    assert.ok(postCall);
-    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
+    assert.equal(outboxJobs.length, 1);
+    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+      kind: "reply.channel_message",
+      channelId: ASK_THREAD_ID,
       content:
         "Based on current reviews, compare RTX 5090, RTX 5080, RX 9990 XTX, and RX 9980 XT by price, power, and workload.\n\nSources: https://example.com/gpu-roundup",
-      allowed_mentions: {
-        parse: [],
-      },
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -938,11 +958,17 @@ test("queue handler posts a failure notice into the thread when the /ask answer 
   };
 
   try {
+    const outboxJobs: Uint8Array[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
       DB: createDbMock(),
+      DISCORD_OUTBOX: {
+        send: async (body: Uint8Array) => {
+          outboxJobs.push(body);
+        },
+      },
     });
     let acked = false;
 
@@ -966,15 +992,11 @@ test("queue handler posts a failure notice into the thread when the /ask answer 
       ],
     } as never, env);
 
-    const threadMessage = fetchCalls.find(
-      (call) => call.url === `https://discord.com/api/v10/channels/${ASK_THREAD_ID}/messages`,
-    );
-    assert.ok(threadMessage);
-    assert.deepEqual(JSON.parse(String(threadMessage.init?.body)), {
+    assert.equal(outboxJobs.length, 1);
+    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+      kind: "reply.channel_message",
+      channelId: ASK_THREAD_ID,
       content: "I started this thread, but the AI response failed. Try again in a moment.",
-      allowed_mentions: {
-        parse: [],
-      },
     });
     assert.equal(acked, true);
   } finally {

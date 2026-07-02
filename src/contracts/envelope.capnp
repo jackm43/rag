@@ -33,6 +33,17 @@ struct SpendPayload {
   spendEventId @0 :Text;
 }
 
+struct ChannelMessagePayload {
+  channelId @0 :Text;
+  content @1 :Text;
+}
+
+struct InteractionEditPayload {
+  applicationId @0 :Text;
+  interactionToken @1 :Text;
+  content @2 :Text;
+}
+
 struct EventEnvelope {
   v @0 :UInt16;
   type @1 :Text;
@@ -52,5 +63,7 @@ struct EventEnvelope {
     spend @12 :SpendPayload;
     ask @13 :ChatPayload;
     bicture @14 :BicturePayload;
+    replyChannelMessage @15 :ChannelMessagePayload;
+    replyInteractionEdit @16 :InteractionEditPayload;
   }
 }

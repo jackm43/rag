@@ -1,12 +1,12 @@
 import ragjamMusicConfig from "../ai-config/ragjam-music.json";
 import { buildAiGatewayMetadata } from "../ai-metadata";
 import { encodeAiJobEnvelope } from "../contracts";
-import { editOriginalInteractionResponse, type InteractionResponseFile } from "../discord";
 import { jsonResponse } from "../http";
 import { checkAiUsageAllowed } from "../limits";
 import { errorDetails, errorMessage, logger } from "../logger";
 import { PolicyViolationError } from "../net/boundary-client";
 import { boundaryClients } from "../net/clients";
+import { sendInteractionEdit, sendInteractionMediaEdit } from "../outbox";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../spend";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
@@ -14,6 +14,7 @@ import {
   type DiscordInteraction,
   type Env,
   type RagjamJob,
+  type ResponderAttachment,
 } from "../types";
 import { isRecord } from "../validation";
 import { getInvokerDisplayName } from "./rag-utils";
@@ -77,7 +78,7 @@ const extensionForAudio = (contentType: string, url: string) => {
 const filenameForAudio = (contentType: string, url: string) =>
   `${RAGJAM_FILENAME_PREFIX}.${extensionForAudio(contentType, url)}`;
 
-const audioFileFromUrl = async (env: Env, url: string): Promise<InteractionResponseFile | null> => {
+const audioFileFromUrl = async (env: Env, url: string): Promise<ResponderAttachment | null> => {
   try {
     const response = await boundaryClients(env).mediaDownload(url);
     if (!response.ok) {
@@ -120,10 +121,7 @@ const buildRagjamResponse = async (job: RagjamJob, env: Env) => {
   const { prompt } = job;
   const lyrics = job.lyrics?.trim() || "";
   if (!prompt) {
-    return {
-      data: { content: "A music prompt is required.", allowed_mentions: { parse: [] } },
-      files: [],
-    };
+    return { content: "A music prompt is required.", file: null };
   }
 
   const spendSourceId = createAiSpendSourceId();
@@ -152,7 +150,7 @@ const buildRagjamResponse = async (job: RagjamJob, env: Env) => {
     throw new Error("missing_ragjam_audio");
   }
 
-  let audioFile: InteractionResponseFile | null = null;
+  let audioFile: ResponderAttachment | null = null;
   try {
     audioFile = await audioFileFromUrl(env, audioUrl);
   } catch (error) {
@@ -163,29 +161,20 @@ const buildRagjamResponse = async (job: RagjamJob, env: Env) => {
   }
 
   if (audioFile) {
-    return {
-      data: {
-        content: promptContent(prompt, "Prompt: "),
-        allowed_mentions: { parse: [] },
-        attachments: [{ id: "0", filename: audioFile.name }],
-      },
-      files: [audioFile],
-    };
+    return { content: promptContent(prompt, "Prompt: "), file: audioFile };
   }
 
-  return {
-    data: {
-      content: promptContent(prompt, `Generated song: ${audioUrl}\nPrompt: `),
-      allowed_mentions: { parse: [] },
-    },
-    files: [],
-  };
+  return { content: promptContent(prompt, `Generated song: ${audioUrl}\nPrompt: `), file: null };
 };
 
 export const processRagjamJob = async (job: RagjamJob, env: Env) => {
   try {
     const response = await buildRagjamResponse(job, env);
-    await editOriginalInteractionResponse(env, job.applicationId, job.interactionToken, response.data, response.files);
+    if (response.file) {
+      await sendInteractionMediaEdit(env, job.applicationId, job.interactionToken, response.content, response.file);
+    } else {
+      await sendInteractionEdit(env, job.applicationId, job.interactionToken, response.content);
+    }
   } catch (error) {
     logger.error("ragjam_command_failed", {
       error: errorMessage(error),
@@ -194,10 +183,12 @@ export const processRagjamJob = async (job: RagjamJob, env: Env) => {
       promptLength: job.prompt.length,
       lyricsLength: job.lyrics?.length ?? 0,
     });
-    await editOriginalInteractionResponse(env, job.applicationId, job.interactionToken, {
-      content: "Could not generate that song. Try a different prompt or lyrics.",
-      allowed_mentions: { parse: [] },
-    }).catch(() => undefined);
+    await sendInteractionEdit(
+      env,
+      job.applicationId,
+      job.interactionToken,
+      "Could not generate that song. Try a different prompt or lyrics.",
+    ).catch(() => undefined);
   }
 };
 

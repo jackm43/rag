@@ -4,9 +4,12 @@ import * as capnp from "capnp-es";
 import {
   decodeAiJobEnvelope,
   decodeAiSpendJobEnvelope,
+  decodeReplyJobEnvelope,
   encodeAiJobEnvelope,
   encodeAiSpendJobEnvelope,
+  encodeReplyJobEnvelope,
   MAX_FREE_TEXT_LENGTH,
+  MAX_REPLY_CONTENT_LENGTH,
   MAX_USERNAME_LENGTH,
 } from "../src/contracts/index.ts";
 import { EventEnvelope } from "../src/contracts/envelope.ts";
@@ -72,6 +75,71 @@ test("ragjam jobs round-trip through the event envelope", () => {
   };
 
   assert.deepEqual(decodeAiJobEnvelope(encodeAiJobEnvelope(job, { source: "interactions" })), job);
+});
+
+test("bicture jobs round-trip through the event envelope", () => {
+  const job = {
+    kind: "bicture" as const,
+    applicationId: APPLICATION_ID,
+    interactionToken: "interaction-token",
+    channelId: CHANNEL_ID,
+    requesterUserId: USER_ID,
+    requesterUsername: "alice",
+    prompt: "a tiny jpeg test image",
+  };
+
+  assert.deepEqual(decodeAiJobEnvelope(encodeAiJobEnvelope(job, { source: "interactions" })), job);
+});
+
+test("reply jobs round-trip through the event envelope", () => {
+  const channelReply = {
+    kind: "reply.channel_message" as const,
+    channelId: CHANNEL_ID,
+    content: "Short answer.",
+  };
+  const interactionEdit = {
+    kind: "reply.interaction_edit" as const,
+    applicationId: APPLICATION_ID,
+    interactionToken: "interaction-token",
+    content: "Prompt: a tiny jpeg test image",
+  };
+
+  const channelBytes = encodeReplyJobEnvelope(channelReply, { source: "worker" });
+  assert.deepEqual(decodeReplyJobEnvelope(channelBytes), channelReply);
+  assert.deepEqual(
+    decodeReplyJobEnvelope(encodeReplyJobEnvelope(interactionEdit, { source: "worker" })),
+    interactionEdit,
+  );
+  // Reply payloads are not AI jobs and vice versa.
+  assert.equal(decodeAiJobEnvelope(channelBytes), null);
+  assert.equal(
+    decodeReplyJobEnvelope(
+      encodeAiJobEnvelope({ kind: "channel_reply", channelId: CHANNEL_ID, prompt: "hey" }, { source: "gateway" }),
+    ),
+    null,
+  );
+});
+
+test("reply jobs allow empty content but reject bad ids and oversized content", () => {
+  const empty = { kind: "reply.channel_message" as const, channelId: CHANNEL_ID, content: "" };
+  assert.deepEqual(decodeReplyJobEnvelope(encodeReplyJobEnvelope(empty, { source: "worker" })), empty);
+
+  assert.throws(() =>
+    encodeReplyJobEnvelope(
+      { kind: "reply.channel_message", channelId: "../users/@me", content: "hey" },
+      { source: "worker" },
+    ),
+  );
+  assert.throws(() =>
+    encodeReplyJobEnvelope(
+      {
+        kind: "reply.channel_message",
+        channelId: CHANNEL_ID,
+        content: "a".repeat(MAX_REPLY_CONTENT_LENGTH + 1),
+      },
+      { source: "worker" },
+    ),
+  );
 });
 
 test("spend jobs round-trip through the event envelope", () => {

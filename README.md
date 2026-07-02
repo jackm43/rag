@@ -4,11 +4,11 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
 
 ## Tech Stack
 
-- Runtime: Cloudflare Workers (`src/index.ts`, `src/brain-worker.ts`, `src/spend-worker.ts`)
+- Runtime: Cloudflare Workers (`src/index.ts`, `src/brain-worker.ts`, `src/responder-worker.ts`, `src/spend-worker.ts`)
 - Language: TypeScript
 - Database: Cloudflare D1 (`DB`)
 - AI: Workers AI binding (`AI`) and AI Gateway REST; model and prompt config live in `src/ai-config` (`@cf/...` Workers AI models, Unified Billing partner chat models such as `grok/grok-4.3`, and web-search models such as `openai/gpt-4o-search-preview`)
-- Queue: Cloudflare Queues (`AI_JOBS`, `ai-jobs`, `SPEND_JOBS`, `ai-spend-jobs`, dead-letter queues)
+- Queue: Cloudflare Queues (`AI_JOBS`, `ai-jobs`, `DISCORD_OUTBOX`, `discord-outbox`, `SPEND_JOBS`, `ai-spend-jobs`, dead-letter queues)
 - Queue contracts: Cap'n Proto event envelopes (`src/contracts`) via `capnp-es`; every queue message is encoded and value-validated at the producer and re-validated at the consumer (snowflake id shape, free-text length caps). The generated `src/contracts/envelope.ts` is committed; regenerate after schema changes with `npm run contracts:build`, which needs the native `capnp` compiler (`brew install capnp`)
 - Stateful connection: Durable Objects (`DiscordGateway`)
 - Discord integration:
@@ -109,6 +109,8 @@ sequenceDiagram
   participant DiscordGateway as Discord Gateway WebSocket
   participant Queue as Cloudflare Queue ai-jobs
   participant Consumer as Brain worker queue consumer
+  participant Outbox as Cloudflare Queue discord-outbox
+  participant Responder as Responder worker
   participant DiscordREST as Discord REST API
   participant AI as AI Gateway / Workers AI
   participant DB as D1 DB
@@ -127,12 +129,14 @@ sequenceDiagram
   DiscordREST-->>Consumer: Replied-to message JSON: author, content, attachments
   Consumer->>AI: Chat request: fresh user prompt
   AI-->>Consumer: Chat response: generated text + optional usage
-  Consumer->>DB: INSERT rag_ai_interactions: prompt, response, model, status, token usage
+  Consumer->>DB: INSERT rag_ai_interactions: prompt, sanitized response, model, status, token usage
   Consumer->>Queue: Enqueue spend reconciliation job in ai-spend-jobs
   Queue-->>Consumer: Spend worker reads AI Gateway logs and updates rag_ai_spend_totals from raw cost
-  Consumer->>DiscordREST: POST channel message: sanitized content, allowed_mentions parse=[]
-  DiscordREST-->>Consumer: Created message JSON or API error
-  Consumer->>Queue: ack on success/terminal 4xx, retry on transient errors
+  Consumer->>Outbox: Enqueue encoded reply.channel_message with raw model text
+  Outbox-->>Responder: Deliver reply batch
+  Responder->>DiscordREST: POST channel message: sanitized content, length-capped, allowed_mentions parse=[]
+  DiscordREST-->>Responder: Created message JSON or API error
+  Responder->>Outbox: ack on success/terminal 4xx, retry on 429/5xx
 
   User->>DiscordGateway: Later message inside tracked thread, no @ required
   DiscordGateway-->>GatewayDO: MESSAGE_CREATE payload for thread channel
@@ -140,7 +144,7 @@ sequenceDiagram
   GatewayDO->>Queue: Enqueue thread_reply AiJob
   Consumer->>DiscordREST: GET thread messages before messageId, limit historyLimit
   Consumer->>AI: Chat request: stored initial prompt + thread history + current message
-  Consumer->>DiscordREST: POST thread message
+  Consumer->>Outbox: Enqueue reply.channel_message; responder posts into the thread
 ```
 
 ## Command-by-Command Details
@@ -201,9 +205,9 @@ sequenceDiagram
 - Handler: `src/commands/bicture.ts` (enqueue) and `src/consumer.ts` (image generation)
 - Behavior:
   - defers the interaction
-  - enqueues an encoded `bicture` job in `ai-jobs`; the queue consumer sends the prompt to the configured Unified Billing image model through the Workers AI binding and AI Gateway
+  - enqueues an encoded `bicture` job in `ai-jobs`; the brain worker sends the prompt to the configured Unified Billing image model through the Workers AI binding and AI Gateway
   - records a pending AI spend event tagged with AI Gateway metadata
-  - edits the original interaction response with the generated image attachment
+  - hands the image to the responder over the RPC binding, which edits the original interaction response with the attachment (text-only failure notices go through `discord-outbox`)
   - with this in place every AI/spend path is queue-driven; the interaction fetch path does no AI work
 
 ### `/ragjam`
@@ -216,8 +220,8 @@ sequenceDiagram
   - sets `lyrics_optimizer: true` when lyrics are omitted so the model auto-generates lyrics from the prompt
   - uses the configured AI Gateway id on the Workers AI binding for Unified Billing and spend reconciliation metadata
   - records a pending AI spend event tagged with AI Gateway metadata
-  - downloads the generated audio URL and edits the original interaction response with a Discord audio attachment
-  - falls back to the generated song URL if the audio cannot be attached
+  - downloads the generated audio URL and hands it to the responder over the RPC binding, which edits the original interaction response with a Discord audio attachment
+  - falls back to the generated song URL as a text edit through `discord-outbox` if the audio cannot be attached
 
 ### Mention-based AI (not a slash command)
 
@@ -232,8 +236,8 @@ sequenceDiagram
   - thread titles everywhere are derived from the user prompt (`sanitizeThreadTitle`), so no model call is spent on titles
   - later messages in a tracked thread enqueue `thread_reply` jobs automatically without requiring an @ mention
   - reply jobs build context from the stored initial prompt plus recent messages in that thread only
-  - generated replies are sanitized for mentions/IDs
-- Delivery:
+  - generated replies cross `discord-outbox` as raw model text; the responder sanitizes mentions/IDs on egress
+- Delivery (always via the responder worker):
   - direct mentions post in the same Discord channel
   - `/ask` and tracked-thread follow-ups post inside the Discord thread
 
@@ -256,23 +260,32 @@ Every AI ingress (`/ask`, `/bicture`, `/ragjam`, and gateway mentions/tracked-th
 
 The guard fails open on D1 errors, and the `/rag` command family is not rate limited.
 
-## Workers and Secrets
+## Workers, Trust Zones, and Secrets
 
-| Worker | Config | Role | Secrets |
+| Worker | Config | Trust zone / role | Secrets |
 | --- | --- | --- | --- |
 | `ragbot-worker` | `wrangler.jsonc` | Public entrypoint (`/discord`, gateway control) + `DiscordGateway` Durable Object | `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (DO IDENTIFY + Discord REST), `GATEWAY_CONTROL_TOKEN` |
-| `ragbot-brain-worker` | `wrangler.brain.jsonc` | `ai-jobs` consumer: AI calls, D1 reads/writes, spend events | `CF_AIG_TOKEN` (belongs to brain **only** — remove it from `ragbot-worker` with `wrangler secret delete CF_AIG_TOKEN`), `DISCORD_BOT_TOKEN` (temporarily: the brain still posts replies/edits to Discord itself until a dedicated responder worker owns Discord egress) |
+| `ragbot-brain-worker` | `wrangler.brain.jsonc` | `ai-jobs` consumer: **read Discord + AI + D1**. Reads thread history, replied-to messages, and bot roles over Discord REST, and creates `/ask`-style threads; every message/edit it produces leaves via the outbox queue or the responder RPC binding, never directly | `CF_AIG_TOKEN` (belongs to brain **only** — remove it from `ragbot-worker` with `wrangler secret delete CF_AIG_TOKEN`), `DISCORD_BOT_TOKEN` (honestly required: Discord *reads* need the bot token too, so the brain keeps it even though writes go through the responder) |
+| `ragbot-responder-worker` | `wrangler.responder.jsonc` | **Write Discord** — the single egress choke point. No public route. Consumes `discord-outbox` for text replies and exposes the `Responder` RPC entrypoint for media-bearing interaction edits. The only place `sanitizeAiText`, the message length cap, and `allowed_mentions: { parse: [] }` run on AI output before it reaches Discord | `DISCORD_BOT_TOKEN` |
 | `ragbot-spend-worker` | `wrangler.spend.jsonc` | `ai-spend-jobs` consumer: AI Gateway log reconciliation | `CLOUDFLARE_API_TOKEN` (scoped to AI Gateway read) |
 
 Set a secret on a specific worker with `wrangler secret put NAME -c wrangler.brain.jsonc` (or the matching config file).
+
+### Discord egress design
+
+- **Text-only replies** (channel/thread posts, text interaction edits) go through the durable, retryable `discord-outbox` queue as encoded/validated envelopes (`reply.channel_message`, `reply.interaction_edit`).
+- **Media-bearing interaction edits** (`/bicture` image, `/ragjam` audio) go over a **service-binding RPC** (`Responder.deliverInteractionEdit`) instead: queue messages are capped at 128 KiB, the media bytes are already in brain memory, and a queue retry would regenerate the media anyway. RPC is direct worker-to-worker with no network exposure.
+- The brain sends **raw model text** over the outbox; the responder applies the final output policy (sanitize, truncate to `MAX_DISCORD_MESSAGE_LENGTH`, `allowed_mentions: { parse: [] }`). `rag_ai_interactions.response_text` still records the **sanitized** text (the brain computes the same pure policy function for the record), and `status = 'ok'` now means "handed to the outbox" — delivery failures show up in responder logs and its DLQ, not in that column.
+- Interaction-edit text (prompt echoes, failure notices) is not model output: the responder caps it at the Discord 2000-char hard limit and locks down `allowed_mentions`, but does not run `sanitizeAiText` speaker-line stripping over it.
+- **Deliberate boundary:** the main worker's deferred `/rag`-family and `/ask` responses still PATCH the interaction webhook directly. Interaction tokens are scoped and short-lived, the main worker owns the interaction, and no bot token is involved (webhook edits are token-authenticated), so this stays outside the responder.
 
 ## Local and Deploy Commands
 
 `./deploy.sh`
 
-`npm run dev:all` runs the Discord worker, the brain worker, and the spend worker locally.
+`npm run dev:all` runs the Discord worker, the brain worker, the responder worker, and the spend worker locally.
 
-`npm run deploy` deploys all workers. Use `npm run deploy:main`, `npm run deploy:brain`, or `npm run deploy:spend` to deploy one worker.
+`npm run deploy` deploys all workers (responder first, so the brain's service binding target exists). Use `npm run deploy:main`, `npm run deploy:brain`, `npm run deploy:responder`, or `npm run deploy:spend` to deploy one worker.
 
 ### One-time bootstrap
 
@@ -283,4 +296,6 @@ wrangler queues create ai-jobs
 wrangler queues create ai-jobs-dlq
 wrangler queues create ai-spend-jobs
 wrangler queues create ai-spend-jobs-dlq
+wrangler queues create discord-outbox
+wrangler queues create discord-outbox-dlq
 ```

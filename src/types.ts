@@ -100,6 +100,27 @@ export type AiSpendJob = {
   spendEventId: string;
 };
 
+export type ChannelMessageReplyJob = {
+  kind: "reply.channel_message";
+  channelId: string;
+  content: string;
+};
+
+export type InteractionEditReplyJob = {
+  kind: "reply.interaction_edit";
+  applicationId: string;
+  interactionToken: string;
+  content: string;
+};
+
+export type ReplyJob = ChannelMessageReplyJob | InteractionEditReplyJob;
+
+export type ResponderAttachment = {
+  name: string;
+  contentType: string;
+  data: ArrayBuffer;
+};
+
 export type AiThread = {
   threadId: string;
   parentChannelId?: string;
@@ -150,6 +171,13 @@ export type DiscordChannel = {
 export type Env = Cloudflare.Env & {
   AI_JOBS: Queue<Uint8Array>;
   SPEND_JOBS?: Queue<Uint8Array>;
+  DISCORD_OUTBOX?: Queue<Uint8Array>;
+  RESPONDER?: {
+    deliverInteractionEdit: (
+      envelope: Uint8Array,
+      attachment: ResponderAttachment,
+    ) => Promise<void>;
+  };
   CLOUDFLARE_API_TOKEN?: string;
   CF_AIG_GATEWAY_ID?: string;
   GATEWAY_CONTROL_TOKEN?: string;

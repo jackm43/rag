@@ -133,6 +133,52 @@ export class SpendPayload extends $.Struct {
   }
   toString(): string { return "SpendPayload_" + super.toString(); }
 }
+export class ChannelMessagePayload extends $.Struct {
+  static readonly _capnp = {
+    displayName: "ChannelMessagePayload",
+    id: "d949edd25bc563a2",
+    size: new $.ObjectSize(0, 2),
+  };
+  get channelId(): string {
+    return $.utils.getText(0, this);
+  }
+  set channelId(value: string) {
+    $.utils.setText(0, value, this);
+  }
+  get content(): string {
+    return $.utils.getText(1, this);
+  }
+  set content(value: string) {
+    $.utils.setText(1, value, this);
+  }
+  toString(): string { return "ChannelMessagePayload_" + super.toString(); }
+}
+export class InteractionEditPayload extends $.Struct {
+  static readonly _capnp = {
+    displayName: "InteractionEditPayload",
+    id: "931ede4bd09855b5",
+    size: new $.ObjectSize(0, 3),
+  };
+  get applicationId(): string {
+    return $.utils.getText(0, this);
+  }
+  set applicationId(value: string) {
+    $.utils.setText(0, value, this);
+  }
+  get interactionToken(): string {
+    return $.utils.getText(1, this);
+  }
+  set interactionToken(value: string) {
+    $.utils.setText(1, value, this);
+  }
+  get content(): string {
+    return $.utils.getText(2, this);
+  }
+  set content(value: string) {
+    $.utils.setText(2, value, this);
+  }
+  toString(): string { return "InteractionEditPayload_" + super.toString(); }
+}
 export class EventEnvelope_Actor extends $.Struct {
   static readonly _capnp = {
     displayName: "actor",
@@ -160,7 +206,9 @@ export const EventEnvelope_Payload_Which = {
   RAGJAM: 3,
   SPEND: 4,
   ASK: 5,
-  BICTURE: 6
+  BICTURE: 6,
+  REPLY_CHANNEL_MESSAGE: 7,
+  REPLY_INTERACTION_EDIT: 8
 } as const;
 export type EventEnvelope_Payload_Which = (typeof EventEnvelope_Payload_Which)[keyof typeof EventEnvelope_Payload_Which];
 export class EventEnvelope_Payload extends $.Struct {
@@ -171,6 +219,8 @@ export class EventEnvelope_Payload extends $.Struct {
   static readonly SPEND = EventEnvelope_Payload_Which.SPEND;
   static readonly ASK = EventEnvelope_Payload_Which.ASK;
   static readonly BICTURE = EventEnvelope_Payload_Which.BICTURE;
+  static readonly REPLY_CHANNEL_MESSAGE = EventEnvelope_Payload_Which.REPLY_CHANNEL_MESSAGE;
+  static readonly REPLY_INTERACTION_EDIT = EventEnvelope_Payload_Which.REPLY_INTERACTION_EDIT;
   static readonly _capnp = {
     displayName: "payload",
     id: "a636c8f1ec42d04d",
@@ -349,6 +399,56 @@ export class EventEnvelope_Payload extends $.Struct {
   }
   set bicture(value: BicturePayload) {
     $.utils.setUint16(2, 6, this);
+    $.utils.copyFrom(value, $.utils.getPointer(7, this));
+  }
+  _adoptReplyChannelMessage(value: $.Orphan<ChannelMessagePayload>): void {
+    $.utils.setUint16(2, 7, this);
+    $.utils.adopt(value, $.utils.getPointer(7, this));
+  }
+  _disownReplyChannelMessage(): $.Orphan<ChannelMessagePayload> {
+    return $.utils.disown(this.replyChannelMessage);
+  }
+  get replyChannelMessage(): ChannelMessagePayload {
+    $.utils.testWhich("replyChannelMessage", $.utils.getUint16(2, this), 7, this);
+    return $.utils.getStruct(7, ChannelMessagePayload, this);
+  }
+  _hasReplyChannelMessage(): boolean {
+    return !$.utils.isNull($.utils.getPointer(7, this));
+  }
+  _initReplyChannelMessage(): ChannelMessagePayload {
+    $.utils.setUint16(2, 7, this);
+    return $.utils.initStructAt(7, ChannelMessagePayload, this);
+  }
+  get _isReplyChannelMessage(): boolean {
+    return $.utils.getUint16(2, this) === 7;
+  }
+  set replyChannelMessage(value: ChannelMessagePayload) {
+    $.utils.setUint16(2, 7, this);
+    $.utils.copyFrom(value, $.utils.getPointer(7, this));
+  }
+  _adoptReplyInteractionEdit(value: $.Orphan<InteractionEditPayload>): void {
+    $.utils.setUint16(2, 8, this);
+    $.utils.adopt(value, $.utils.getPointer(7, this));
+  }
+  _disownReplyInteractionEdit(): $.Orphan<InteractionEditPayload> {
+    return $.utils.disown(this.replyInteractionEdit);
+  }
+  get replyInteractionEdit(): InteractionEditPayload {
+    $.utils.testWhich("replyInteractionEdit", $.utils.getUint16(2, this), 8, this);
+    return $.utils.getStruct(7, InteractionEditPayload, this);
+  }
+  _hasReplyInteractionEdit(): boolean {
+    return !$.utils.isNull($.utils.getPointer(7, this));
+  }
+  _initReplyInteractionEdit(): InteractionEditPayload {
+    $.utils.setUint16(2, 8, this);
+    return $.utils.initStructAt(7, InteractionEditPayload, this);
+  }
+  get _isReplyInteractionEdit(): boolean {
+    return $.utils.getUint16(2, this) === 8;
+  }
+  set replyInteractionEdit(value: InteractionEditPayload) {
+    $.utils.setUint16(2, 8, this);
     $.utils.copyFrom(value, $.utils.getPointer(7, this));
   }
   toString(): string { return "EventEnvelope_Payload_" + super.toString(); }
