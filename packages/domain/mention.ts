@@ -1,5 +1,6 @@
 import { encodeAiJobEnvelope, isSnowflake, MAX_FREE_TEXT_LENGTH, MAX_MENTION_IDS } from "../contracts";
 import { fetchBotRoleIds } from "../discord";
+import { isGuildAllowed } from "./guilds";
 import { checkAiUsageAllowed } from "./limits";
 import { errorMessage, logger } from "../logger";
 import { sendChannelReply } from "./outbox";
@@ -103,6 +104,12 @@ export const handleGatewayMessageCreate = async (
     return;
   }
 
+  // Guild allowlist gate: drop events from non-allowed guilds (and DMs,
+  // which carry no guild_id) before anything reaches the queue.
+  if (!isGuildAllowed(env, message.guild_id)) {
+    return;
+  }
+
   if (!stripMentionTokens(message.content ?? "")) {
     return;
   }
@@ -119,6 +126,12 @@ export const resolveGatewayMessage = async (
   job: MessageReceivedJob,
   env: Env,
 ): Promise<AiChatJob | null> => {
+  // Defense in depth: the Durable Object already gates on the guild
+  // allowlist before enqueueing, but queue hops are zero-trust.
+  if (!isGuildAllowed(env, job.guildId)) {
+    return null;
+  }
+
   const existingThread = job.guildId ? await findAiThread(env, job.channelId) : null;
   if (existingThread) {
     const prompt = stripMentionTokens(job.content);

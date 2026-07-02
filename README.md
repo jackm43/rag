@@ -264,6 +264,16 @@ Every AI ingress (`/ask`, `/bicture`, `/ragjam`, and gateway mentions/tracked-th
 
 The guard fails open on D1 errors, and the `/rag` command family is not rate limited.
 
+### Guild allowlist
+
+`ALLOWED_GUILD_IDS` (comma-separated guild snowflakes, e.g. `ALLOWED_GUILD_IDS="123456789012345678"`) gates every ingress through `packages/domain/guilds.ts`:
+
+- Interactions: non-allowed guilds get "This bot only works in its home server." (PING stays exempt so Discord's endpoint verification keeps working).
+- Gateway `MESSAGE_CREATE`: the Durable Object drops events from non-allowed guilds before enqueueing; DMs (no guild id) are denied.
+- Brain `message.received` processing repeats the check (zero-trust between queue hops).
+
+When set, the gate fails closed — unparseable entries are dropped, so a misconfigured value denies everything. When unset, the gate allows all guilds but logs `allowed_guild_ids_unset` once per isolate, so existing deploys keep working until the var is configured. Set it in the gateway and brain wrangler configs (documented placeholders are in each `vars` block).
+
 ## Workers, Trust Zones, and Secrets
 
 | Worker | Config | Trust zone / role | Secrets |

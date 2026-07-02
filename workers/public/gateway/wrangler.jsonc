@@ -24,6 +24,9 @@
   "vars": {
     "DISCORD_APPLICATION_ID": "1496842508251172895",
     "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271"
+    // Guild allowlist (comma-separated guild snowflakes). Unset allows all
+    // guilds with a warning; set it to fail closed, e.g.:
+    // "ALLOWED_GUILD_IDS": "123456789012345678"
   },
   "d1_databases": [
     {

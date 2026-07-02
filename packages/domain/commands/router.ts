@@ -1,3 +1,4 @@
+import { GUILD_NOT_ALLOWED_MESSAGE, isGuildAllowed } from "../guilds";
 import { jsonResponse } from "../http";
 import { errorMessage, logger } from "../../logger";
 import {
@@ -21,6 +22,13 @@ export const routeInteraction = async (
 ): Promise<Response> => {
   if (interaction.type === PING) {
     return jsonResponse({ type: PING });
+  }
+
+  if (!isGuildAllowed(env, interaction.guild_id)) {
+    return jsonResponse({
+      type: CHANNEL_MESSAGE_WITH_SOURCE,
+      data: { content: GUILD_NOT_ALLOWED_MESSAGE, allowed_mentions: { parse: [] } },
+    });
   }
 
   if (interaction.type !== APPLICATION_COMMAND) {
