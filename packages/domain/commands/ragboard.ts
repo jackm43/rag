@@ -7,7 +7,7 @@ type RagboardRow = {
   rag_count: number;
 };
 
-export const handleRagboardCommand = async (env: Env) => {
+export const runRagboardCommand = async (env: Env) => {
   const result = await env.DB.prepare(
     "SELECT ragged_user_id, ragged_username, rag_count FROM rag_totals ORDER BY rag_count DESC, ragged_user_id ASC LIMIT 10",
   ).run<RagboardRow>();

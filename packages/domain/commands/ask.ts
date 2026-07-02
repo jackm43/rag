@@ -1,26 +1,12 @@
 import { encodeAiJobEnvelope } from "../../contracts";
 import { fallbackThreadTitle } from "../conversation";
 import { createThreadWithoutMessage, fetchChannel, isThreadChannel } from "../../discord";
-import { jsonResponse } from "../http";
-import { checkAiUsageAllowed } from "../limits";
 import { errorMessage, logger } from "../../logger";
 import { recordAiThread } from "../threads";
-import {
-  CHANNEL_MESSAGE_WITH_SOURCE,
-  type DiscordInteraction,
-  type Env,
-} from "../../contracts/types";
-import { handleDeferredInteraction } from "./deferred";
-import { getInvokerDisplayName } from "./rag-utils";
+import type { Env } from "../../contracts/types";
+import { stringOption, type CommandContext } from "./context";
 
 export { shouldUseAskWebSearch } from "../../ai/ask-mode";
-
-const askPrompt = (interaction: DiscordInteraction) => {
-  const value = interaction.data?.options?.find((option) => option.name === "prompt")?.value;
-  return typeof value === "string" ? value.trim() : "";
-};
-
-const getInvoker = (interaction: DiscordInteraction) => interaction.member?.user ?? interaction.user;
 
 const resolveThreadParentChannelId = async (env: Env, channelId: string) => {
   const channel = await fetchChannel(env, channelId);
@@ -30,18 +16,18 @@ const resolveThreadParentChannelId = async (env: Env, channelId: string) => {
   return channelId;
 };
 
-const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
-  const prompt = askPrompt(interaction);
-  const parentChannelId = interaction.channel_id;
-  if (!prompt) {
-    return { content: "A question is required.", allowed_mentions: { parse: [] } };
-  }
+// /ask escape hatch: creates the thread over Discord REST before enqueueing
+// the AI job, so it runs as a deferred-inline command instead of a plain
+// enqueue spec.
+export const runAskCommand = async (ctx: CommandContext, env: Env) => {
+  const prompt = stringOption(ctx, "prompt");
+  const parentChannelId = ctx.channelId;
   if (!parentChannelId) {
     return { content: "Run /ask in a server channel so I can create a thread.", allowed_mentions: { parse: [] } };
   }
 
-  const requester = getInvoker(interaction);
-  const requesterUsername = getInvokerDisplayName(interaction);
+  const requester = ctx.invoker;
+  const requesterUsername = ctx.displayName;
   const title = fallbackThreadTitle(prompt);
   const targetChannelId = await resolveThreadParentChannelId(env, parentChannelId);
   const thread = await createThreadWithoutMessage(env, targetChannelId, title).catch((error) => {
@@ -73,7 +59,7 @@ const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
         requesterUsername,
         prompt,
       },
-      { source: "interactions", guildId: interaction.guild_id },
+      { source: "interactions", guildId: ctx.guildId },
     ),
   );
 
@@ -81,38 +67,4 @@ const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
     content: `Started <#${thread.id}>`,
     allowed_mentions: { parse: [] },
   };
-};
-
-export const handleAskCommand = async (
-  interaction: DiscordInteraction,
-  env: Env,
-  ctx: ExecutionContext,
-) => {
-  const prompt = askPrompt(interaction);
-
-  if (!prompt) {
-    return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: "A question is required.", allowed_mentions: { parse: [] } },
-    });
-  }
-
-  const usage = await checkAiUsageAllowed(env, getInvoker(interaction)?.id, "ask");
-  if (!usage.allowed) {
-    return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: usage.message, allowed_mentions: { parse: [] } },
-    });
-  }
-
-  return handleDeferredInteraction(interaction, env, ctx, {
-    run: () => runAskCommand(interaction, env),
-    failureMessage: "Could not start that AI thread. Try again.",
-    logEvent: "ask_command_failed",
-    onMissingCredentials: () =>
-      jsonResponse({
-        type: CHANNEL_MESSAGE_WITH_SOURCE,
-        data: { content: "Could not defer /ask without interaction credentials.", allowed_mentions: { parse: [] } },
-      }),
-  });
 };

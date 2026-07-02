@@ -1,11 +1,6 @@
-import { isRagAdminUser } from "../admins";
 import { jsonResponse } from "../http";
-import {
-  CHANNEL_MESSAGE_WITH_SOURCE,
-  type DiscordInteraction,
-  type Env,
-} from "../../contracts/types";
-import { getInvoker, getOptionValue } from "./rag-utils";
+import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../../contracts/types";
+import { idOption, type CommandContext } from "./context";
 
 type RagEventRow = {
   id: number;
@@ -15,23 +10,8 @@ type RagRow = {
   rag_count: number;
 };
 
-export const handleUndoragCommand = async (interaction: DiscordInteraction, env: Env) => {
-  const invoker = getInvoker(interaction);
-  if (!isRagAdminUser(invoker.id)) {
-    return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: "You are not allowed to use /undorag.", allowed_mentions: { parse: [] } },
-    });
-  }
-
-  const targetIdValue = getOptionValue(interaction, "user");
-  const targetId = targetIdValue ? String(targetIdValue) : "";
-  if (!targetId) {
-    return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: "A user mention is required.", allowed_mentions: { parse: [] } },
-    });
-  }
+export const runUndoragCommand = async (ctx: CommandContext, env: Env) => {
+  const targetId = idOption(ctx, "user");
 
   const latestEvent = await env.DB.prepare(
     "SELECT id FROM rag_events WHERE ragged_user_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",

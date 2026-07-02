@@ -1,12 +1,3 @@
-import { handleAskCommand } from "./ask";
-import { handleBictureCommand } from "./bicture";
-import { handleDeferredRagCommand } from "./rag";
-import { handleRagboardCommand } from "./ragboard";
-import { handleRagjamCommand } from "./ragjam";
-import { handleRagspendCommand, handleRagspendboardCommand } from "./ragspend";
-import { handleRaghammerCommand } from "./raghammer";
-import { handleRagunbanCommand } from "./ragunban";
-import { handleUndoragCommand } from "./undorag";
 import { jsonResponse } from "../http";
 import { errorMessage, logger } from "../../logger";
 import {
@@ -16,25 +7,12 @@ import {
   type DiscordInteraction,
   type Env,
 } from "../../contracts/types";
+import { executeCommand, type CommandSpec } from "./registry";
+import { commandSpecs } from "./specs";
 
-type CommandHandler = (
-  interaction: DiscordInteraction,
-  env: Env,
-  ctx: ExecutionContext,
-) => Response | Promise<Response>;
-
-const commandHandlers: Record<string, CommandHandler> = {
-  rag: handleDeferredRagCommand,
-  ragboard: (_interaction, env) => handleRagboardCommand(env),
-  ragspend: (interaction, env) => handleRagspendCommand(interaction, env),
-  ragspendboard: (_interaction, env) => handleRagspendboardCommand(env),
-  raghammer: (interaction, env) => handleRaghammerCommand(interaction, env),
-  ragunban: (interaction, env) => handleRagunbanCommand(interaction, env),
-  undorag: (interaction, env) => handleUndoragCommand(interaction, env),
-  ask: handleAskCommand,
-  bicture: (interaction, env) => handleBictureCommand(interaction, env),
-  ragjam: (interaction, env) => handleRagjamCommand(interaction, env),
-};
+const registry: ReadonlyMap<string, CommandSpec> = new Map(
+  commandSpecs.map((spec) => [spec.name, spec]),
+);
 
 export const routeInteraction = async (
   interaction: DiscordInteraction,
@@ -54,11 +32,9 @@ export const routeInteraction = async (
 
   try {
     const commandName = interaction.data?.name;
-    const handler = commandName && Object.hasOwn(commandHandlers, commandName)
-      ? commandHandlers[commandName]
-      : undefined;
-    if (handler) {
-      return handler(interaction, env, ctx);
+    const spec = commandName ? registry.get(commandName) : undefined;
+    if (spec) {
+      return executeCommand(spec, interaction, env, ctx);
     }
 
     return jsonResponse({

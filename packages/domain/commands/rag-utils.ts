@@ -1,14 +1,6 @@
 import { fetchUsername } from "../../discord";
 import type { DiscordInteraction, Env } from "../../contracts/types";
 
-export const getInvoker = (interaction: DiscordInteraction) => {
-  const user = interaction.member?.user ?? interaction.user;
-  if (!user) {
-    throw new Error("missing_invoker");
-  }
-  return user;
-};
-
 export const getInvokerDisplayName = (interaction: DiscordInteraction) =>
   interaction.member?.nick?.trim() ||
   interaction.member?.user?.global_name?.trim() ||
@@ -16,9 +8,6 @@ export const getInvokerDisplayName = (interaction: DiscordInteraction) =>
   interaction.member?.user?.username?.trim() ||
   interaction.user?.username?.trim() ||
   "user";
-
-export const getOptionValue = (interaction: DiscordInteraction, optionName: string) =>
-  interaction.data?.options?.find((opt) => opt.name === optionName)?.value;
 
 export const getTargetUsername = async (interaction: DiscordInteraction, env: Env, targetId: string) => {
   const targetUser =

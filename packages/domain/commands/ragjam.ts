@@ -1,23 +1,12 @@
 import ragjamMusicConfig from "../../ai/ai-config/ragjam-music.json";
 import { buildAiGatewayMetadata } from "../../ai/ai-metadata";
-import { encodeAiJobEnvelope } from "../../contracts";
-import { jsonResponse } from "../http";
-import { checkAiUsageAllowed } from "../limits";
 import { errorDetails, errorMessage, logger } from "../../logger";
 import { PolicyViolationError } from "../../net/boundary-client";
 import { boundaryClients } from "../../net/clients";
 import { sendInteractionEdit, sendInteractionMediaEdit } from "../outbox";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../../ai/spend";
-import {
-  CHANNEL_MESSAGE_WITH_SOURCE,
-  DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
-  type DiscordInteraction,
-  type Env,
-  type RagjamJob,
-  type ResponderAttachment,
-} from "../../contracts/types";
+import { type Env, type RagjamJob, type ResponderAttachment } from "../../contracts/types";
 import { isRecord } from "../../contracts/validation";
-import { getInvokerDisplayName } from "./rag-utils";
 
 const DISCORD_MESSAGE_HARD_LIMIT = 2000;
 const RAGJAM_FILENAME_PREFIX = "ragjam";
@@ -31,15 +20,6 @@ type RagjamMusicConfig = {
 };
 
 const activeRagjamConfig = ragjamMusicConfig as RagjamMusicConfig;
-
-const stringOption = (interaction: DiscordInteraction, name: string) => {
-  const value = interaction.data?.options?.find((option) => option.name === name)?.value;
-  return typeof value === "string" ? value.trim() : "";
-};
-
-const ragjamPrompt = (interaction: DiscordInteraction) => stringOption(interaction, "prompt");
-
-const ragjamLyrics = (interaction: DiscordInteraction) => stringOption(interaction, "lyrics");
 
 const promptContent = (prompt: string, prefix: string) => {
   const available = DISCORD_MESSAGE_HARD_LIMIT - prefix.length;
@@ -190,57 +170,4 @@ export const processRagjamJob = async (job: RagjamJob, env: Env) => {
       "Could not generate that song. Try a different prompt or lyrics.",
     ).catch(() => undefined);
   }
-};
-
-export const handleRagjamCommand = async (
-  interaction: DiscordInteraction,
-  env: Env,
-) => {
-  const prompt = ragjamPrompt(interaction);
-  const lyrics = ragjamLyrics(interaction);
-  if (!prompt) {
-    return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: "A music prompt is required.", allowed_mentions: { parse: [] } },
-    });
-  }
-
-  const applicationId = interaction.application_id;
-  const interactionToken = interaction.token;
-  if (!applicationId || !interactionToken) {
-    return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
-      data: {
-        content: "Could not defer /ragjam without interaction credentials.",
-        allowed_mentions: { parse: [] },
-      },
-    });
-  }
-
-  const requester = interaction.member?.user ?? interaction.user;
-  const usage = await checkAiUsageAllowed(env, requester?.id, "ragjam");
-  if (!usage.allowed) {
-    return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: usage.message, allowed_mentions: { parse: [] } },
-    });
-  }
-
-  await env.AI_JOBS.send(
-    encodeAiJobEnvelope(
-      {
-        kind: "ragjam",
-        applicationId,
-        interactionToken,
-        channelId: interaction.channel_id,
-        requesterUserId: requester?.id,
-        requesterUsername: getInvokerDisplayName(interaction),
-        prompt,
-        ...(lyrics ? { lyrics } : {}),
-      },
-      { source: "interactions", guildId: interaction.guild_id },
-    ),
-  );
-
-  return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
 };

@@ -1,11 +1,7 @@
 import { jsonResponse } from "../http";
 import { formatUsdMicros } from "../../ai/spend";
-import {
-  CHANNEL_MESSAGE_WITH_SOURCE,
-  type DiscordInteraction,
-  type Env,
-} from "../../contracts/types";
-import { getInvoker } from "./rag-utils";
+import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../../contracts/types";
+import { requireInvoker, type CommandContext } from "./context";
 
 type SpendTotalRow = {
   requester_user_id: string;
@@ -14,8 +10,8 @@ type SpendTotalRow = {
   event_count: number;
 };
 
-export const handleRagspendCommand = async (interaction: DiscordInteraction, env: Env) => {
-  const invoker = getInvoker(interaction);
+export const runRagspendCommand = async (ctx: CommandContext, env: Env) => {
+  const invoker = requireInvoker(ctx);
   if (!invoker?.id) {
     return jsonResponse({
       type: CHANNEL_MESSAGE_WITH_SOURCE,
@@ -38,7 +34,7 @@ export const handleRagspendCommand = async (interaction: DiscordInteraction, env
   });
 };
 
-export const handleRagspendboardCommand = async (env: Env) => {
+export const runRagspendboardCommand = async (env: Env) => {
   const result = await env.DB.prepare(
     "SELECT requester_user_id, requester_username, estimated_cost_micros, event_count FROM rag_ai_spend_totals ORDER BY estimated_cost_micros DESC, requester_user_id ASC LIMIT 10",
   ).run<SpendTotalRow>();

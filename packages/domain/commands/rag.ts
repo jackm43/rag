@@ -1,12 +1,8 @@
 import type { InteractionMessageData } from "../../discord";
 import { jsonResponse } from "../http";
-import {
-  CHANNEL_MESSAGE_WITH_SOURCE,
-  type DiscordInteraction,
-  type Env,
-} from "../../contracts/types";
-import { handleDeferredInteraction } from "./deferred";
-import { getInvoker, getOptionValue, getTargetUsername } from "./rag-utils";
+import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../../contracts/types";
+import { idOption, requireInvoker, type CommandContext } from "./context";
+import { getTargetUsername } from "./rag-utils";
 
 type RagRow = {
   rag_count: number;
@@ -31,17 +27,14 @@ const formatBanExpiry = (expiresAt: string) => {
   return `<t:${Math.floor(timestamp / 1000)}:R>`;
 };
 
-const buildRagCommandResponseData = async (
-  interaction: DiscordInteraction,
+// /rag escape hatch: ban lookup plus the D1 write flow run inside the
+// deferred window, so it stays a `run` function rather than a buildJob spec.
+export const runRagCommand = async (
+  ctx: CommandContext,
   env: Env,
 ): Promise<InteractionMessageData> => {
-  const invoker = getInvoker(interaction);
-  const targetIdValue = getOptionValue(interaction, "user");
-  const targetId = targetIdValue ? String(targetIdValue) : "";
-
-  if (!targetId) {
-    return { content: "A user mention is required." };
-  }
+  const invoker = requireInvoker(ctx);
+  const targetId = idOption(ctx, "user");
 
   const activeBan = await activeRagBanForUser(env, invoker.id, new Date());
   if (activeBan) {
@@ -51,7 +44,7 @@ const buildRagCommandResponseData = async (
     };
   }
 
-  const targetUsername = await getTargetUsername(interaction, env, targetId);
+  const targetUsername = await getTargetUsername(ctx.interaction, env, targetId);
 
   const results = await env.DB.batch<RagRow>([
     env.DB.prepare(
@@ -72,20 +65,10 @@ const buildRagCommandResponseData = async (
   };
 };
 
-export const handleRagCommand = async (interaction: DiscordInteraction, env: Env) =>
+// Fallback when the interaction carries no application_id/token to defer
+// against: answer synchronously instead.
+export const runRagCommandInline = async (ctx: CommandContext, env: Env) =>
   jsonResponse({
     type: CHANNEL_MESSAGE_WITH_SOURCE,
-    data: await buildRagCommandResponseData(interaction, env),
-  });
-
-export const handleDeferredRagCommand = (
-  interaction: DiscordInteraction,
-  env: Env,
-  ctx: ExecutionContext,
-) =>
-  handleDeferredInteraction(interaction, env, ctx, {
-    run: () => buildRagCommandResponseData(interaction, env),
-    failureMessage: "Command failed. Try again.",
-    logEvent: "rag_command_failed",
-    onMissingCredentials: () => handleRagCommand(interaction, env),
+    data: await runRagCommand(ctx, env),
   });

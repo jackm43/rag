@@ -17,7 +17,13 @@ import { finalizeAiReplyText } from "./responder";
 import { recordAiThread } from "./threads";
 import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "../ai/tracked-ai";
 import { decodeAiJobEnvelope } from "../contracts";
-import { type AiAskJob, type AiChatJob, type Env } from "../contracts/types";
+import {
+  type AiAskJob,
+  type AiChatJob,
+  type AiJob,
+  type Env,
+  type MessageReceivedJob,
+} from "../contracts/types";
 
 const recordAiInteraction = async (
   env: Env,
@@ -83,46 +89,26 @@ const recordAiInteraction = async (
   }
 };
 
-export const processAiQueueMessage = async (message: Message<unknown>, env: Env) => {
-  const startedAt = Date.now();
-  const decoded = decodeAiJobEnvelope(message.body);
-  if (!decoded) {
-    logger.warn("ai_job_invalid");
-    message.ack();
+// Raw gateway messages resolve (thread lookup, mention/role resolution,
+// limits) into a chat job processed in-process — no re-enqueue.
+const processMessageReceivedJob = async (
+  decoded: MessageReceivedJob,
+  env: Env,
+  startedAt: number,
+) => {
+  let resolved: AiChatJob | null = null;
+  try {
+    resolved = await resolveGatewayMessage(decoded, env);
+  } catch (error) {
+    logger.error("gateway_message_resolve_failed", { error: errorMessage(error) });
+  }
+  if (!resolved) {
     return;
   }
+  await processChatJob(resolved, env, startedAt);
+};
 
-  if (decoded.kind === "ragjam") {
-    await processRagjamJob(decoded, env);
-    message.ack();
-    return;
-  }
-
-  if (decoded.kind === "bicture") {
-    await processBictureJob(decoded, env);
-    message.ack();
-    return;
-  }
-
-  // Raw gateway messages resolve (thread lookup, mention/role resolution,
-  // limits) into a chat job processed in-process — no re-enqueue.
-  let job: AiChatJob | AiAskJob;
-  if (decoded.kind === "message.received") {
-    let resolved: AiChatJob | null = null;
-    try {
-      resolved = await resolveGatewayMessage(decoded, env);
-    } catch (error) {
-      logger.error("gateway_message_resolve_failed", { error: errorMessage(error) });
-    }
-    if (!resolved) {
-      message.ack();
-      return;
-    }
-    job = resolved;
-  } else {
-    job = decoded;
-  }
-
+const processChatJob = async (job: AiChatJob | AiAskJob, env: Env, startedAt: number) => {
   let model = "unknown";
   let aiDurationMs: number | null = null;
   let content: string | null = null;
@@ -221,7 +207,6 @@ export const processAiQueueMessage = async (message: Message<unknown>, env: Env)
       const thread = await createThreadFromMessage(env, job.channelId, job.messageId, title);
       if (!thread) {
         await record("discord_thread_create_invalid", null);
-        message.ack();
         return;
       }
 
@@ -250,5 +235,42 @@ export const processAiQueueMessage = async (message: Message<unknown>, env: Env)
       ).catch(() => undefined);
     }
   }
+};
+
+// One processor per job kind. Interaction-shaped jobs (ragjam, bicture) edit
+// their deferred responses; the chat kinds share the model-call pipeline.
+type AiJobProcessors = {
+  [K in AiJob["kind"]]: (
+    job: Extract<AiJob, { kind: K }>,
+    env: Env,
+    startedAt: number,
+  ) => Promise<void>;
+};
+
+const jobProcessors: AiJobProcessors = {
+  ragjam: (job, env) => processRagjamJob(job, env),
+  bicture: (job, env) => processBictureJob(job, env),
+  "message.received": processMessageReceivedJob,
+  ask: processChatJob,
+  thread_start: processChatJob,
+  thread_reply: processChatJob,
+  channel_reply: processChatJob,
+};
+
+export const processAiQueueMessage = async (message: Message<unknown>, env: Env) => {
+  const startedAt = Date.now();
+  const decoded = decodeAiJobEnvelope(message.body);
+  if (!decoded) {
+    logger.warn("ai_job_invalid");
+    message.ack();
+    return;
+  }
+
+  const process = jobProcessors[decoded.kind] as (
+    job: AiJob,
+    env: Env,
+    startedAt: number,
+  ) => Promise<void>;
+  await process(decoded, env, startedAt);
   message.ack();
 };

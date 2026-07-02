@@ -1,11 +1,7 @@
-import { isRagAdminUser } from "../admins";
 import { jsonResponse } from "../http";
-import {
-  CHANNEL_MESSAGE_WITH_SOURCE,
-  type DiscordInteraction,
-  type Env,
-} from "../../contracts/types";
-import { getInvoker, getOptionValue, getTargetUsername } from "./rag-utils";
+import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../../contracts/types";
+import { idOption, requireInvoker, type CommandContext } from "./context";
+import { getTargetUsername } from "./rag-utils";
 
 const TIMEFRAME_PATTERN = /^([1-9]\d*)([mhd])$/;
 const UNIT_MS: Record<string, number> = {
@@ -13,6 +9,9 @@ const UNIT_MS: Record<string, number> = {
   h: 60 * 60 * 1000,
   d: 24 * 60 * 60 * 1000,
 };
+
+export const TIMEFRAME_FORMAT_MESSAGE =
+  "Timeframe must use minutes, hours, or days, like 5m, 1h, or 1d.";
 
 const parseTimeframe = (timeframe: string) => {
   const match = TIMEFRAME_PATTERN.exec(timeframe.trim().toLowerCase());
@@ -32,35 +31,18 @@ const parseTimeframe = (timeframe: string) => {
   };
 };
 
-export const handleRaghammerCommand = async (interaction: DiscordInteraction, env: Env) => {
-  const invoker = getInvoker(interaction);
-  if (!isRagAdminUser(invoker.id)) {
-    return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: "You are not allowed to use /raghammer.", allowed_mentions: { parse: [] } },
-    });
-  }
-
-  const targetIdValue = getOptionValue(interaction, "user");
-  const targetId = targetIdValue ? String(targetIdValue) : "";
-  if (!targetId) {
-    return jsonResponse({
-      type: CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: "A user mention is required.", allowed_mentions: { parse: [] } },
-    });
-  }
-
-  const timeframeValue = getOptionValue(interaction, "timeframe");
-  const timeframe = timeframeValue ? String(timeframeValue) : "";
-  const parsedTimeframe = parseTimeframe(timeframe);
+export const runRaghammerCommand = async (ctx: CommandContext, env: Env) => {
+  const invoker = requireInvoker(ctx);
+  const targetId = idOption(ctx, "user");
+  const parsedTimeframe = parseTimeframe(idOption(ctx, "timeframe"));
   if (!parsedTimeframe) {
     return jsonResponse({
       type: CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: "Timeframe must use minutes, hours, or days, like 5m, 1h, or 1d.", allowed_mentions: { parse: [] } },
+      data: { content: TIMEFRAME_FORMAT_MESSAGE, allowed_mentions: { parse: [] } },
     });
   }
 
-  const targetUsername = await getTargetUsername(interaction, env, targetId);
+  const targetUsername = await getTargetUsername(ctx.interaction, env, targetId);
   const expiresAt = new Date(Date.now() + parsedTimeframe.durationMs).toISOString();
 
   await env.DB.prepare(
