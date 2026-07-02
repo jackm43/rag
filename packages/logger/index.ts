@@ -27,6 +27,10 @@ export const logger = {
 export const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
+// Deliberately narrow: stacks and enumerable error properties can embed
+// upstream response bodies (which may carry prompts or secrets), so only
+// the error's name/message and its cause's name/message are logged. Call
+// sites log their own structured context (model, profile, lengths).
 export const errorDetails = (error: unknown) => {
   if (!(error instanceof Error)) {
     return { message: String(error) };
@@ -35,10 +39,13 @@ export const errorDetails = (error: unknown) => {
   return {
     name: error.name,
     message: error.message,
-    stack: error.stack,
-    cause: error.cause instanceof Error ? { name: error.cause.name, message: error.cause.message } : error.cause,
-    properties: Object.fromEntries(
-      Object.entries(error).filter(([, value]) => typeof value !== "function"),
-    ),
+    ...(error.cause !== undefined
+      ? {
+        cause:
+          error.cause instanceof Error
+            ? { name: error.cause.name, message: error.cause.message }
+            : { message: String(error.cause) },
+      }
+      : {}),
   };
 };
