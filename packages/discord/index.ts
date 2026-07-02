@@ -1,4 +1,5 @@
 import { boundaryClients } from "../net/clients";
+import { logger } from "../logger";
 import { DISCORD_API_BASE_URL, type DiscordChannel, type DiscordMessage, type Env } from "../contracts/types";
 import { isDiscordMessage, isRecord } from "../contracts/validation";
 
@@ -200,7 +201,7 @@ export const editOriginalInteractionResponse = async (
   interactionToken: string,
   data: InteractionMessageData,
   files: InteractionResponseFile[] = [],
-) => {
+): Promise<boolean> => {
   const body = files.length > 0
     ? (() => {
       const form = new FormData();
@@ -216,7 +217,7 @@ export const editOriginalInteractionResponse = async (
     })()
     : JSON.stringify(data);
 
-  await boundaryClients(env).discordWebhook(
+  const response = await boundaryClients(env).discordWebhook(
     `${DISCORD_API_BASE_URL}/webhooks/${applicationId}/${interactionToken}/messages/@original`,
     {
       method: "PATCH",
@@ -224,4 +225,9 @@ export const editOriginalInteractionResponse = async (
       body,
     },
   );
+  if (!response.ok) {
+    // Never log the interaction token: it authenticates webhook edits.
+    logger.warn("interaction_edit_rejected", { status: response.status, applicationId });
+  }
+  return response.ok;
 };

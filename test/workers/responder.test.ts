@@ -7,6 +7,7 @@ import {
   suppressUrlEmbeds,
 } from "../../packages/domain/responder.ts";
 import { appendSourceFallback } from "../../packages/ai/ask-mode.ts";
+import { editOriginalInteractionResponse } from "../../packages/discord/index.ts";
 import { encodeReplyJobEnvelope } from "../../packages/contracts/index.ts";
 import { createEnv } from "../helpers.ts";
 
@@ -69,6 +70,43 @@ test("appendSourceFallback wraps web-search source URLs so they stay clickable w
     ]),
     "Latest figures say 42.\n\nSources: <https://example.com/a> <https://example.com/b>",
   );
+});
+
+test("editOriginalInteractionResponse logs rejected edits without the token and returns the ok flag", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const warnLines: string[] = [];
+  console.warn = (line: unknown) => {
+    warnLines.push(String(line));
+  };
+  globalThis.fetch = async () => new Response("{}", { status: 404 });
+
+  try {
+    const env = createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" });
+
+    const rejectedOk = await editOriginalInteractionResponse(env, APPLICATION_ID, "interaction-token", {
+      content: "hello",
+    });
+    assert.isFalse(rejectedOk);
+    const rejectedEntry = warnLines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((entry) => entry.message === "interaction_edit_rejected");
+    assert.ok(rejectedEntry, "a rejected edit must be logged");
+    assert.equal(rejectedEntry?.status, 404);
+    assert.equal(rejectedEntry?.applicationId, APPLICATION_ID);
+    assert.notInclude(JSON.stringify(rejectedEntry), "interaction-token");
+
+    warnLines.length = 0;
+    globalThis.fetch = async () => new Response("{}", { status: 200 });
+    const acceptedOk = await editOriginalInteractionResponse(env, APPLICATION_ID, "interaction-token", {
+      content: "hello",
+    });
+    assert.isTrue(acceptedOk);
+    assert.notInclude(warnLines.join("\n"), "interaction_edit_rejected");
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
 });
 
 test("responder posts sanitized channel messages with allowed_mentions locked down", async () => {
