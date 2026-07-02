@@ -8,6 +8,7 @@ import {
   type Env,
 } from "../../contracts/types";
 import { isRagAdminUser } from "../admins";
+import { activeAiBanForUser, aiBanMessage } from "../bans";
 import { jsonResponse } from "../http";
 import { checkAiUsageAllowed } from "../limits";
 import { buildCommandContext, hasOption, type CommandContext } from "./context";
@@ -69,8 +70,9 @@ const hasCredentials = (ctx: CommandContext): ctx is CredentialedCommandContext 
   Boolean(ctx.applicationId && ctx.interactionToken);
 
 // Shared pre-flight chain: option validation -> interaction credentials ->
-// admin check -> usage limits -> dispatch (enqueue+defer, inline, or
-// defer+run). Every command goes through the same guards in the same order.
+// admin check -> raghammer ban (AI commands) -> usage limits -> dispatch
+// (enqueue+defer, inline, or defer+run). Every command goes through the same
+// guards in the same order.
 export const executeCommand = async (
   spec: CommandSpec,
   interaction: DiscordInteraction,
@@ -97,6 +99,13 @@ export const executeCommand = async (
   }
 
   if (spec.limitKind) {
+    if (ctx.invoker) {
+      const activeBan = await activeAiBanForUser(env, ctx.invoker.id, new Date());
+      if (activeBan) {
+        return inlineMessage(aiBanMessage(activeBan.expires_at));
+      }
+    }
+
     const usage = await checkAiUsageAllowed(env, ctx.invoker?.id, spec.limitKind);
     if (!usage.allowed) {
       return inlineMessage(usage.message);

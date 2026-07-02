@@ -1,4 +1,5 @@
 import type { InteractionMessageData } from "../../discord";
+import { activeRagBanForUser, formatBanExpiry } from "../bans";
 import { jsonResponse } from "../http";
 import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../../contracts/types";
 import { idOption, requireInvoker, type CommandContext } from "./context";
@@ -6,25 +7,6 @@ import { getTargetUsername } from "./rag-utils";
 
 type RagRow = {
   rag_count: number;
-};
-
-type RagBanRow = {
-  expires_at: string;
-};
-
-const activeRagBanForUser = async (env: Env, userId: string, now: Date) =>
-  env.DB.prepare(
-    "SELECT expires_at FROM rag_command_bans WHERE banned_user_id = ? AND expires_at > ? ORDER BY expires_at DESC LIMIT 1",
-  )
-    .bind(userId, now.toISOString())
-    .first<RagBanRow>();
-
-const formatBanExpiry = (expiresAt: string) => {
-  const timestamp = Date.parse(expiresAt);
-  if (Number.isNaN(timestamp)) {
-    return expiresAt;
-  }
-  return `<t:${Math.floor(timestamp / 1000)}:R>`;
 };
 
 // /rag escape hatch: ban lookup plus the D1 write flow run inside the

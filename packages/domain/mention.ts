@@ -1,5 +1,6 @@
 import { encodeAiJobEnvelope, isSnowflake, MAX_FREE_TEXT_LENGTH, MAX_MENTION_IDS } from "../contracts";
 import { fetchBotRoleIds } from "../discord";
+import { activeAiBanForUser } from "./bans";
 import { isGuildAllowed } from "./guilds";
 import { checkAiUsageAllowed } from "./limits";
 import { errorMessage, logger } from "../logger";
@@ -193,6 +194,12 @@ export const resolveGatewayMessage = async (
 };
 
 const gatewayUsageAllowed = async (job: MessageReceivedJob, env: Env, kind: string) => {
+  // raghammer bans cover gateway AI too: mentions and tracked-thread replies
+  // from banned users are ignored outright (no notice).
+  if (job.authorId && (await activeAiBanForUser(env, job.authorId, new Date()))) {
+    return false;
+  }
+
   const usage = await checkAiUsageAllowed(env, job.authorId, kind);
   if (usage.allowed) {
     return true;
