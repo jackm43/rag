@@ -3,6 +3,7 @@ import { buildAiGatewayMetadata } from "../ai-metadata";
 import { jsonResponse } from "../http";
 import { checkAiUsageAllowed } from "../limits";
 import { errorDetails } from "../logger";
+import { boundaryClients } from "../net/clients";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../spend";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
@@ -17,8 +18,6 @@ const BICTURE_FILENAME_PREFIX = "bicture";
 const DEFAULT_IMAGE_CONTENT_TYPE = "image/jpeg";
 const MAX_PROMPT_ECHO_LENGTH = 300;
 const DEFAULT_BICTURE_IMAGE_PROFILE = "standard";
-const MAX_DISCORD_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024;
-const IMAGE_DOWNLOAD_TIMEOUT_MS = 30_000;
 
 type BictureImageProfile = {
   model: string;
@@ -73,25 +72,15 @@ const extensionForContentType = (contentType: string) => {
 const filenameForContentType = (contentType: string) =>
   `${BICTURE_FILENAME_PREFIX}.${extensionForContentType(contentType)}`;
 
-const imageFileFromString = async (value: string) => {
+const imageFileFromString = async (env: Env, value: string) => {
   if (/^https:\/\//i.test(value)) {
-    const response = await fetch(value, { signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS) });
+    const response = await boundaryClients(env).mediaDownload(value);
     if (!response.ok) {
       throw new Error(`Generated image download failed (${response.status}): ${response.statusText}`);
     }
 
-    const contentLength = response.headers.get("content-length");
-    if (contentLength && Number(contentLength) > MAX_DISCORD_IMAGE_UPLOAD_BYTES) {
-      throw new Error(`Generated image download exceeds ${MAX_DISCORD_IMAGE_UPLOAD_BYTES} bytes`);
-    }
-
-    const data = await response.arrayBuffer();
-    if (data.byteLength > MAX_DISCORD_IMAGE_UPLOAD_BYTES) {
-      throw new Error(`Generated image download exceeds ${MAX_DISCORD_IMAGE_UPLOAD_BYTES} bytes`);
-    }
-
     return {
-      data,
+      data: await response.arrayBuffer(),
       contentType: response.headers.get("content-type") ?? DEFAULT_IMAGE_CONTENT_TYPE,
     };
   }
@@ -134,7 +123,7 @@ const extractImageString = (result: unknown) => {
   return null;
 };
 
-const imageFileFrom = async (result: unknown) => {
+const imageFileFrom = async (env: Env, result: unknown) => {
   if (result instanceof Uint8Array) {
     return { data: bytesToArrayBuffer(result), contentType: DEFAULT_IMAGE_CONTENT_TYPE };
   }
@@ -150,7 +139,7 @@ const imageFileFrom = async (result: unknown) => {
 
   const imageString = extractImageString(result);
   if (imageString) {
-    return imageFileFromString(imageString);
+    return imageFileFromString(env, imageString);
   }
 
   throw new Error("missing_bicture_image");
@@ -209,7 +198,7 @@ const runBictureCommand = async (interaction: DiscordInteraction, env: Env) => {
     unitCount: 1,
     sourceId: spendSourceId,
   });
-  const imageFile = await imageFileFrom(result);
+  const imageFile = await imageFileFrom(env, result);
   const filename = filenameForContentType(imageFile.contentType);
 
   return {
@@ -249,7 +238,7 @@ export const handleBictureCommand = async (
     });
   }
 
-  return handleDeferredInteraction(interaction, ctx, {
+  return handleDeferredInteraction(interaction, env, ctx, {
     run: () => runBictureCommand(interaction, env),
     failureMessage: "Could not generate that image. Try a different prompt.",
     logEvent: "bicture_command_failed",

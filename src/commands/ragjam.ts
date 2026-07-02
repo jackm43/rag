@@ -5,6 +5,8 @@ import { editOriginalInteractionResponse, type InteractionResponseFile } from ".
 import { jsonResponse } from "../http";
 import { checkAiUsageAllowed } from "../limits";
 import { errorDetails, errorMessage, logger } from "../logger";
+import { PolicyViolationError } from "../net/boundary-client";
+import { boundaryClients } from "../net/clients";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../spend";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
@@ -19,8 +21,6 @@ import { getInvokerDisplayName } from "./rag-utils";
 const DISCORD_MESSAGE_HARD_LIMIT = 2000;
 const RAGJAM_FILENAME_PREFIX = "ragjam";
 const DEFAULT_AUDIO_CONTENT_TYPE = "audio/mpeg";
-const MAX_DISCORD_AUDIO_UPLOAD_BYTES = 25 * 1024 * 1024;
-const AUDIO_DOWNLOAD_TIMEOUT_MS = 30_000;
 
 type RagjamMusicConfig = {
   model: string;
@@ -77,28 +77,25 @@ const extensionForAudio = (contentType: string, url: string) => {
 const filenameForAudio = (contentType: string, url: string) =>
   `${RAGJAM_FILENAME_PREFIX}.${extensionForAudio(contentType, url)}`;
 
-const audioFileFromUrl = async (url: string): Promise<InteractionResponseFile | null> => {
-  const response = await fetch(url, { signal: AbortSignal.timeout(AUDIO_DOWNLOAD_TIMEOUT_MS) });
-  if (!response.ok) {
-    throw new Error(`Generated audio download failed (${response.status}): ${response.statusText}`);
-  }
+const audioFileFromUrl = async (env: Env, url: string): Promise<InteractionResponseFile | null> => {
+  try {
+    const response = await boundaryClients(env).mediaDownload(url);
+    if (!response.ok) {
+      throw new Error(`Generated audio download failed (${response.status}): ${response.statusText}`);
+    }
 
-  const contentLength = response.headers.get("content-length");
-  if (contentLength && Number(contentLength) > MAX_DISCORD_AUDIO_UPLOAD_BYTES) {
-    return null;
+    const contentType = response.headers.get("content-type") ?? DEFAULT_AUDIO_CONTENT_TYPE;
+    return {
+      name: filenameForAudio(contentType, url),
+      contentType,
+      data: await response.arrayBuffer(),
+    };
+  } catch (error) {
+    if (error instanceof PolicyViolationError && error.reason === "response_too_large") {
+      return null;
+    }
+    throw error;
   }
-
-  const contentType = response.headers.get("content-type") ?? DEFAULT_AUDIO_CONTENT_TYPE;
-  const data = await response.arrayBuffer();
-  if (data.byteLength > MAX_DISCORD_AUDIO_UPLOAD_BYTES) {
-    return null;
-  }
-
-  return {
-    name: filenameForAudio(contentType, url),
-    contentType,
-    data,
-  };
 };
 
 const runRagjamMusicGeneration = async (
@@ -157,9 +154,12 @@ const buildRagjamResponse = async (job: RagjamJob, env: Env) => {
 
   let audioFile: InteractionResponseFile | null = null;
   try {
-    audioFile = await audioFileFromUrl(audioUrl);
+    audioFile = await audioFileFromUrl(env, audioUrl);
   } catch (error) {
-    logger.warn("ragjam_audio_download_failed", { error: errorMessage(error), audioUrl });
+    logger.warn("ragjam_audio_download_failed", {
+      error: errorMessage(error),
+      audioHost: URL.canParse(audioUrl) ? new URL(audioUrl).hostname : "invalid",
+    });
   }
 
   if (audioFile) {
@@ -185,7 +185,7 @@ const buildRagjamResponse = async (job: RagjamJob, env: Env) => {
 export const processRagjamJob = async (job: RagjamJob, env: Env) => {
   try {
     const response = await buildRagjamResponse(job, env);
-    await editOriginalInteractionResponse(job.applicationId, job.interactionToken, response.data, response.files);
+    await editOriginalInteractionResponse(env, job.applicationId, job.interactionToken, response.data, response.files);
   } catch (error) {
     logger.error("ragjam_command_failed", {
       error: errorMessage(error),
@@ -194,7 +194,7 @@ export const processRagjamJob = async (job: RagjamJob, env: Env) => {
       promptLength: job.prompt.length,
       lyricsLength: job.lyrics?.length ?? 0,
     });
-    await editOriginalInteractionResponse(job.applicationId, job.interactionToken, {
+    await editOriginalInteractionResponse(env, job.applicationId, job.interactionToken, {
       content: "Could not generate that song. Try a different prompt or lyrics.",
       allowed_mentions: { parse: [] },
     }).catch(() => undefined);

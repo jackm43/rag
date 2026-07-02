@@ -83,7 +83,7 @@ export const handleDeferredRagCommand = (
   env: Env,
   ctx: ExecutionContext,
 ) =>
-  handleDeferredInteraction(interaction, ctx, {
+  handleDeferredInteraction(interaction, env, ctx, {
     run: () => buildRagCommandResponseData(interaction, env),
     failureMessage: "Command failed. Try again.",
     logEvent: "rag_command_failed",

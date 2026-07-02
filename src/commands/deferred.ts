@@ -5,7 +5,7 @@ import {
 } from "../discord";
 import { jsonResponse } from "../http";
 import { errorMessage, logger } from "../logger";
-import { DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, type DiscordInteraction } from "../types";
+import { DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, type DiscordInteraction, type Env } from "../types";
 
 type DeferredResult =
   | InteractionMessageData
@@ -21,6 +21,7 @@ type DeferredOptions = {
 
 export const handleDeferredInteraction = (
   interaction: DiscordInteraction,
+  env: Env,
   ctx: ExecutionContext,
   options: DeferredOptions,
 ): Response | Promise<Response> => {
@@ -37,13 +38,13 @@ export const handleDeferredInteraction = (
         const { data, files } = "data" in result
           ? result
           : { data: result, files: [] as InteractionResponseFile[] };
-        await editOriginalInteractionResponse(applicationId, interactionToken, data, files);
+        await editOriginalInteractionResponse(env, applicationId, interactionToken, data, files);
       } catch (error) {
         logger.error(options.logEvent, {
           error: errorMessage(error),
           ...options.logContext?.(error),
         });
-        await editOriginalInteractionResponse(applicationId, interactionToken, {
+        await editOriginalInteractionResponse(env, applicationId, interactionToken, {
           content: options.failureMessage,
           allowed_mentions: { parse: [] },
         }).catch(() => undefined);

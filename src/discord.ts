@@ -1,3 +1,4 @@
+import { boundaryClients } from "./net/clients";
 import { DISCORD_API_BASE_URL, type DiscordChannel, type DiscordMessage, type Env } from "./types";
 import { isDiscordMessage, isRecord } from "./validation";
 
@@ -13,10 +14,6 @@ const threadsRoute = (channelId: string, messageId?: string) =>
     ? `/channels/${channelId}/messages/${messageId}/threads` as const
     : `/channels/${channelId}/threads` as const;
 
-const botHeaders = (env: Env) => ({
-  authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
-});
-
 const auditLogReasonHeader = (reason: string) => encodeURIComponent(reason);
 
 const discordJsonRequest = async (
@@ -25,13 +22,7 @@ const discordJsonRequest = async (
   init: RequestInit = {},
   options: { nullOnError?: boolean } = {},
 ): Promise<unknown> => {
-  const response = await fetch(`${DISCORD_API_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      ...botHeaders(env),
-      ...(init.headers ?? {}),
-    },
-  });
+  const response = await boundaryClients(env).discordRest(`${DISCORD_API_BASE_URL}${path}`, init);
 
   if (!response.ok) {
     if (options.nullOnError) {
@@ -76,10 +67,9 @@ export type InteractionResponseFile = {
 };
 
 export const postChannelMessage = async (env: Env, channelId: string, content: string) =>
-  fetch(`${DISCORD_API_BASE_URL}/channels/${channelId}/messages`, {
+  boundaryClients(env).discordRest(`${DISCORD_API_BASE_URL}/channels/${channelId}/messages`, {
     method: "POST",
     headers: {
-      ...botHeaders(env),
       "content-type": "application/json",
     },
     body: JSON.stringify({
@@ -189,9 +179,9 @@ export const fetchBotRoleIds = async (
     return cached.roleIds;
   }
 
-  const response = await fetch(`${DISCORD_API_BASE_URL}/guilds/${guildId}/members/${botUserId}`, {
-    headers: botHeaders(env),
-  }).catch(() => null);
+  const response = await boundaryClients(env)
+    .discordRest(`${DISCORD_API_BASE_URL}/guilds/${guildId}/members/${botUserId}`)
+    .catch(() => null);
   if (!response?.ok) {
     return cached?.roleIds ?? [];
   }
@@ -205,6 +195,7 @@ export const fetchBotRoleIds = async (
 };
 
 export const editOriginalInteractionResponse = async (
+  env: Env,
   applicationId: string,
   interactionToken: string,
   data: InteractionMessageData,
@@ -225,7 +216,7 @@ export const editOriginalInteractionResponse = async (
     })()
     : JSON.stringify(data);
 
-  await fetch(
+  await boundaryClients(env).discordWebhook(
     `${DISCORD_API_BASE_URL}/webhooks/${applicationId}/${interactionToken}/messages/@original`,
     {
       method: "PATCH",

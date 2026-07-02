@@ -1,5 +1,6 @@
 import { decodeAiSpendJobEnvelope, encodeAiSpendJobEnvelope } from "./contracts";
 import { errorMessage, logger } from "./logger";
+import { boundaryClients } from "./net/clients";
 import type { Env } from "./types";
 import { isRecord } from "./validation";
 
@@ -112,8 +113,8 @@ const costMicrosFrom = (log: unknown) => {
 };
 
 const findGatewayLogCostMicros = async (env: Env, sourceId: string) => {
-  if (!env.CLOUDFLARE_API_TOKEN || !env.CF_ACCOUNT_ID) {
-    throw new Error("CLOUDFLARE_API_TOKEN and CF_ACCOUNT_ID are required to reconcile AI Gateway spend");
+  if (!env.CF_ACCOUNT_ID) {
+    throw new Error("CF_ACCOUNT_ID is required to reconcile AI Gateway spend");
   }
 
   const gatewayId = env.CF_AIG_GATEWAY_ID || DEFAULT_AIG_GATEWAY_ID;
@@ -121,9 +122,7 @@ const findGatewayLogCostMicros = async (env: Env, sourceId: string) => {
     const url = new URL(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/ai-gateway/gateways/${gatewayId}/logs`);
     url.searchParams.set("page", String(page));
     url.searchParams.set("per_page", "50");
-    const response = await fetch(url, {
-      headers: { authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
-    });
+    const response = await boundaryClients(env).cloudflareApi(url);
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(`AI Gateway logs request failed (${response.status}): ${JSON.stringify(payload)}`);

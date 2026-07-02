@@ -105,7 +105,7 @@ export const handleAskCommand = async (
     });
   }
 
-  return handleDeferredInteraction(interaction, ctx, {
+  return handleDeferredInteraction(interaction, env, ctx, {
     run: () => runAskCommand(interaction, env),
     failureMessage: "Could not start that AI thread. Try again.",
     logEvent: "ask_command_failed",

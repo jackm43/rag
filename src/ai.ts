@@ -1,4 +1,5 @@
 import type { BotConfig } from "./config";
+import { boundaryClients } from "./net/clients";
 import type { Env } from "./types";
 import { isRecord } from "./validation";
 
@@ -86,17 +87,16 @@ const gatewayChatCompletions = async (
   temperature: number,
   metadata?: AiGatewayMetadata,
 ) => {
-  if (!env.CF_ACCOUNT_ID || !env.CF_AIG_TOKEN) {
-    throw new Error("CF_ACCOUNT_ID and CF_AIG_TOKEN are required for partner AI Gateway models");
+  if (!env.CF_ACCOUNT_ID) {
+    throw new Error("CF_ACCOUNT_ID is required for partner AI Gateway models");
   }
 
-  const response = await fetch(
+  const response = await boundaryClients(env).aiGateway(
     `https://gateway.ai.cloudflare.com/v1/${env.CF_ACCOUNT_ID}/${gatewayId}/compat/chat/completions`,
     {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "cf-aig-authorization": `Bearer ${env.CF_AIG_TOKEN}`,
         ...(metadata ? { "cf-aig-metadata": JSON.stringify(metadata) } : {}),
       },
       body: JSON.stringify({
@@ -127,17 +127,16 @@ const gatewayWebSearchChatCompletions = async (
   searchContextSize: WebSearchContextSize,
   metadata?: AiGatewayMetadata,
 ) => {
-  if (!env.CF_ACCOUNT_ID || !env.CF_AIG_TOKEN) {
-    throw new Error("CF_ACCOUNT_ID and CF_AIG_TOKEN are required for AI Gateway web-search models");
+  if (!env.CF_ACCOUNT_ID) {
+    throw new Error("CF_ACCOUNT_ID is required for AI Gateway web-search models");
   }
 
-  const response = await fetch(
+  const response = await boundaryClients(env).aiGateway(
     `https://gateway.ai.cloudflare.com/v1/${env.CF_ACCOUNT_ID}/${gatewayId}/compat/chat/completions`,
     {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "cf-aig-authorization": `Bearer ${env.CF_AIG_TOKEN}`,
         ...(metadata ? { "cf-aig-metadata": JSON.stringify(metadata) } : {}),
       },
       body: JSON.stringify({
