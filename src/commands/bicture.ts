@@ -16,6 +16,8 @@ const BICTURE_FILENAME_PREFIX = "bicture";
 const DEFAULT_IMAGE_CONTENT_TYPE = "image/jpeg";
 const MAX_PROMPT_ECHO_LENGTH = 300;
 const DEFAULT_BICTURE_IMAGE_PROFILE = "standard";
+const MAX_DISCORD_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024;
+const IMAGE_DOWNLOAD_TIMEOUT_MS = 30_000;
 
 type BictureImageProfile = {
   model: string;
@@ -72,12 +74,23 @@ const filenameForContentType = (contentType: string) =>
 
 const imageFileFromString = async (value: string) => {
   if (/^https:\/\//i.test(value)) {
-    const response = await fetch(value);
+    const response = await fetch(value, { signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS) });
     if (!response.ok) {
       throw new Error(`Generated image download failed (${response.status}): ${response.statusText}`);
     }
+
+    const contentLength = response.headers.get("content-length");
+    if (contentLength && Number(contentLength) > MAX_DISCORD_IMAGE_UPLOAD_BYTES) {
+      throw new Error(`Generated image download exceeds ${MAX_DISCORD_IMAGE_UPLOAD_BYTES} bytes`);
+    }
+
+    const data = await response.arrayBuffer();
+    if (data.byteLength > MAX_DISCORD_IMAGE_UPLOAD_BYTES) {
+      throw new Error(`Generated image download exceeds ${MAX_DISCORD_IMAGE_UPLOAD_BYTES} bytes`);
+    }
+
     return {
-      data: await response.arrayBuffer(),
+      data,
       contentType: response.headers.get("content-type") ?? DEFAULT_IMAGE_CONTENT_TYPE,
     };
   }

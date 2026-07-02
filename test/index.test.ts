@@ -539,6 +539,144 @@ test("/bicture without a prompt returns an immediate validation message", async 
   });
 });
 
+test("/bicture downloads url-returned images with a timeout signal and attaches them", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const waitUntilPromises: Promise<unknown>[] = [];
+  const imageBytes = new Uint8Array([255, 216, 255, 217]);
+
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url) === "https://example.com/generated-image.png") {
+      return new Response(imageBytes, {
+        status: 200,
+        headers: {
+          "content-type": "image/png",
+          "content-length": String(imageBytes.byteLength),
+        },
+      });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      AI: {
+        run: async () => ({ result: { image: "https://example.com/generated-image.png" } }),
+      },
+    });
+    const request = createSignedRequest(
+      {
+        application_id: "application-id",
+        token: "interaction-token",
+        type: 2,
+        data: {
+          name: "bicture",
+          options: [{ name: "prompt", value: "a tiny png test image" }],
+        },
+        user: { id: "1", username: "alice" },
+      },
+      keyPair.secretKey,
+    );
+
+    const response = await worker.fetch(request, env, {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise);
+      },
+    } as never);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { type: 5 });
+    await Promise.all(waitUntilPromises);
+
+    const downloadCall = fetchCalls.find((call) => call.url === "https://example.com/generated-image.png");
+    assert.ok(downloadCall);
+    assert.ok(downloadCall.init?.signal instanceof AbortSignal);
+
+    const editCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+    );
+    assert.ok(editCall);
+    assert.ok(editCall.init?.body instanceof FormData);
+
+    const form = editCall.init.body as FormData;
+    const file = form.get("files[0]");
+    assert.ok(file instanceof File);
+    assert.equal(file.name, "bicture.png");
+    assert.deepEqual(new Uint8Array(await file.arrayBuffer()), imageBytes);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("/bicture replies with a failure message when the generated image download exceeds the size cap", async () => {
+  const keyPair = nacl.sign.keyPair();
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const waitUntilPromises: Promise<unknown>[] = [];
+  let servedOversizedContentLength = false;
+
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url) === "https://example.com/generated-image.png") {
+      servedOversizedContentLength = true;
+      return new Response(new Uint8Array([255, 216, 255, 217]), {
+        status: 200,
+        headers: {
+          "content-type": "image/png",
+          "content-length": String(25 * 1024 * 1024 + 1),
+        },
+      });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+      AI: {
+        run: async () => ({ result: { image: "https://example.com/generated-image.png" } }),
+      },
+    });
+    const request = createSignedRequest(
+      {
+        application_id: "application-id",
+        token: "interaction-token",
+        type: 2,
+        data: {
+          name: "bicture",
+          options: [{ name: "prompt", value: "an oversized image" }],
+        },
+        user: { id: "1", username: "alice" },
+      },
+      keyPair.secretKey,
+    );
+
+    const response = await worker.fetch(request, env, {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise);
+      },
+    } as never);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { type: 5 });
+    await Promise.all(waitUntilPromises);
+
+    assert.equal(servedOversizedContentLength, true);
+
+    const editCall = fetchCalls.find(
+      (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
+    );
+    assert.ok(editCall);
+    assert.deepEqual(JSON.parse(String(editCall.init?.body)), {
+      content: "Could not generate that image. Try a different prompt.",
+      allowed_mentions: { parse: [] },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("/ragjam interaction is deferred and enqueues music generation", async () => {
   const keyPair = nacl.sign.keyPair();
   const enqueuedJobs: unknown[] = [];
@@ -649,6 +787,10 @@ test("queue handler edits /ragjam response with an audio attachment", async () =
     assert.equal(ragjamOptions.gateway.metadata.discord_user_id, "1");
     assert.equal(ragjamOptions.gateway.metadata.discord_channel_id, "channel-id");
     assert.match(ragjamOptions.gateway.metadata.ragbot_request_id, /^aigreq:/);
+
+    const downloadCall = fetchCalls.find((call) => call.url === "https://example.com/generated-song.mp3");
+    assert.ok(downloadCall);
+    assert.ok(downloadCall.init?.signal instanceof AbortSignal);
 
     const editCall = fetchCalls.find(
       (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",

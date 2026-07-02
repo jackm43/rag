@@ -17,6 +17,7 @@ const MAX_DISCORD_MESSAGE_LENGTH = 2000;
 const RAGJAM_FILENAME_PREFIX = "ragjam";
 const DEFAULT_AUDIO_CONTENT_TYPE = "audio/mpeg";
 const MAX_DISCORD_AUDIO_UPLOAD_BYTES = 25 * 1024 * 1024;
+const AUDIO_DOWNLOAD_TIMEOUT_MS = 30_000;
 
 type RagjamMusicConfig = {
   model: string;
@@ -82,7 +83,7 @@ const filenameForAudio = (contentType: string, url: string) =>
   `${RAGJAM_FILENAME_PREFIX}.${extensionForAudio(contentType, url)}`;
 
 const audioFileFromUrl = async (url: string): Promise<InteractionResponseFile | null> => {
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: AbortSignal.timeout(AUDIO_DOWNLOAD_TIMEOUT_MS) });
   if (!response.ok) {
     throw new Error(`Generated audio download failed (${response.status}): ${response.statusText}`);
   }
