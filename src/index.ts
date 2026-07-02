@@ -1,6 +1,5 @@
 import { handleAskCommand } from "./commands/ask";
 import { handleBictureCommand } from "./commands/bicture";
-import { processAiQueueMessage } from "./consumer";
 import { handleDeferredRagCommand } from "./commands/rag";
 import { handleRagboardCommand } from "./commands/ragboard";
 import { handleRagjamCommand } from "./commands/ragjam";
@@ -157,10 +156,5 @@ export default {
     }
 
     return handleInteractionRequest(request, env, ctx);
-  },
-  async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
-    for (const message of batch.messages) {
-      await processAiQueueMessage(message, env);
-    }
   },
 };

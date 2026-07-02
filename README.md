@@ -4,7 +4,7 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
 
 ## Tech Stack
 
-- Runtime: Cloudflare Workers (`src/index.ts`, `src/spend-worker.ts`)
+- Runtime: Cloudflare Workers (`src/index.ts`, `src/brain-worker.ts`, `src/spend-worker.ts`)
 - Language: TypeScript
 - Database: Cloudflare D1 (`DB`)
 - AI: Workers AI binding (`AI`) and AI Gateway REST; model and prompt config live in `src/ai-config` (`@cf/...` Workers AI models, Unified Billing partner chat models such as `grok/grok-4.3`, and web-search models such as `openai/gpt-4o-search-preview`)
@@ -108,7 +108,7 @@ sequenceDiagram
   participant GatewayDO as DiscordGateway Durable Object
   participant DiscordGateway as Discord Gateway WebSocket
   participant Queue as Cloudflare Queue ai-jobs
-  participant Consumer as Queue consumer
+  participant Consumer as Brain worker queue consumer
   participant DiscordREST as Discord REST API
   participant AI as AI Gateway / Workers AI
   participant DB as D1 DB
@@ -256,10 +256,31 @@ Every AI ingress (`/ask`, `/bicture`, `/ragjam`, and gateway mentions/tracked-th
 
 The guard fails open on D1 errors, and the `/rag` command family is not rate limited.
 
+## Workers and Secrets
+
+| Worker | Config | Role | Secrets |
+| --- | --- | --- | --- |
+| `ragbot-worker` | `wrangler.jsonc` | Public entrypoint (`/discord`, gateway control) + `DiscordGateway` Durable Object | `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (DO IDENTIFY + Discord REST), `GATEWAY_CONTROL_TOKEN` |
+| `ragbot-brain-worker` | `wrangler.brain.jsonc` | `ai-jobs` consumer: AI calls, D1 reads/writes, spend events | `CF_AIG_TOKEN` (belongs to brain **only** — remove it from `ragbot-worker` with `wrangler secret delete CF_AIG_TOKEN`), `DISCORD_BOT_TOKEN` (temporarily: the brain still posts replies/edits to Discord itself until a dedicated responder worker owns Discord egress) |
+| `ragbot-spend-worker` | `wrangler.spend.jsonc` | `ai-spend-jobs` consumer: AI Gateway log reconciliation | `CLOUDFLARE_API_TOKEN` (scoped to AI Gateway read) |
+
+Set a secret on a specific worker with `wrangler secret put NAME -c wrangler.brain.jsonc` (or the matching config file).
+
 ## Local and Deploy Commands
 
 `./deploy.sh`
 
-`npm run dev:all` runs the Discord worker plus the spend worker locally.
+`npm run dev:all` runs the Discord worker, the brain worker, and the spend worker locally.
 
-`npm run deploy` deploys both workers. Use `npm run deploy:main` or `npm run deploy:spend` to deploy one worker.
+`npm run deploy` deploys all workers. Use `npm run deploy:main`, `npm run deploy:brain`, or `npm run deploy:spend` to deploy one worker.
+
+### One-time bootstrap
+
+Queues must exist before the first deploy of a config that references them:
+
+```sh
+wrangler queues create ai-jobs
+wrangler queues create ai-jobs-dlq
+wrangler queues create ai-spend-jobs
+wrangler queues create ai-spend-jobs-dlq
+```

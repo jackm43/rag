@@ -2,10 +2,11 @@ import { assert, test } from "vitest";
 import { env as testEnv } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 
-import worker, {
+import {
   extractBotMentionPrompt,
   handleGatewayMessageCreate,
 } from "../src/index.ts";
+import brainWorker from "../src/brain-worker.ts";
 import { decodeAiJobEnvelope, encodeAiJobEnvelope } from "../src/contracts/index.ts";
 import { fetchChannelMessages } from "../src/discord.ts";
 import { createDbMock, createEnv } from "./helpers.ts";
@@ -368,7 +369,7 @@ test("queue handler acknowledges malformed AI jobs without side effects", async 
   let acked = false;
   const env = createEnv("unused");
 
-  await worker.queue(
+  await brainWorker.queue(
     {
       messages: [
         {
@@ -464,7 +465,7 @@ test("queue handler posts channel reply jobs without creating a thread", async (
       },
     };
 
-    await worker.queue({ messages: [message] } as never, env);
+    await brainWorker.queue({ messages: [message] } as never, env);
 
     assert.equal(fetchCalls.find((call) => call.url.includes("/threads")), undefined);
     assert.equal(fetchCalls.find((call) => call.url.includes("/messages?")), undefined);
@@ -553,7 +554,7 @@ test("queue handler treats a thread-start job as fresh, creates a thread, and po
       },
     };
 
-    await worker.queue({ messages: [message] } as never, env);
+    await brainWorker.queue({ messages: [message] } as never, env);
 
     const historyCall = fetchCalls.find((call) => call.url.includes("/messages?"));
     assert.equal(historyCall, undefined);
@@ -673,7 +674,7 @@ test("queue handler builds a conversation from tracked thread history and posts 
       },
     };
 
-    await worker.queue({ messages: [message] } as never, env);
+    await brainWorker.queue({ messages: [message] } as never, env);
 
     const historyCall = fetchCalls.find((call) => call.url.includes("/messages?"));
     assert.ok(historyCall);
@@ -767,7 +768,7 @@ test("queue handler keeps non-search replies inside /ask thread mode", async () 
       },
     };
 
-    await worker.queue({ messages: [message] } as never, env);
+    await brainWorker.queue({ messages: [message] } as never, env);
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
@@ -859,7 +860,7 @@ test("queue handler uses web search for current follow-ups in /ask threads", asy
       },
     };
 
-    await worker.queue({ messages: [message] } as never, env);
+    await brainWorker.queue({ messages: [message] } as never, env);
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
@@ -949,7 +950,7 @@ test("queue handler excludes rag command bot output from thread history", async 
       },
     };
 
-    await worker.queue({ messages: [message] } as never, env);
+    await brainWorker.queue({ messages: [message] } as never, env);
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
@@ -1024,7 +1025,7 @@ test("queue handler fetches replied-to context from Discord REST", async () => {
       },
     };
 
-    await worker.queue({ messages: [message] } as never, env);
+    await brainWorker.queue({ messages: [message] } as never, env);
 
     assert.ok(
       fetchCalls.find(
@@ -1080,7 +1081,7 @@ test("queue handler sanitizes mentions and IDs from the model output", async () 
       },
     };
 
-    await worker.queue({ messages: [message] } as never, env);
+    await brainWorker.queue({ messages: [message] } as never, env);
 
     const postCall = fetchCalls.find(
       (call) => call.url === `https://discord.com/api/v10/channels/${THREAD_ID}/messages`,
@@ -1130,7 +1131,7 @@ test("queue handler uses the source-controlled partner model", async () => {
       },
     };
 
-    await worker.queue({ messages: [message] } as never, env);
+    await brainWorker.queue({ messages: [message] } as never, env);
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
@@ -1212,7 +1213,7 @@ test("queue handler records partner AI Gateway usage", async () => {
       },
     };
 
-    await worker.queue({ messages: [message] } as never, env);
+    await brainWorker.queue({ messages: [message] } as never, env);
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);

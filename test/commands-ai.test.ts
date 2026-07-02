@@ -2,6 +2,7 @@ import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
 import worker from "../src/index.ts";
+import brainWorker from "../src/brain-worker.ts";
 import { shouldUseAskWebSearch } from "../src/commands/ask.ts";
 import { decodeAiJobEnvelope, encodeAiJobEnvelope } from "../src/contracts/index.ts";
 import { createDbMock, createEnv, createSignedRequest } from "./helpers.ts";
@@ -142,7 +143,7 @@ test("/ask replies with the thread link immediately and answers via the AI jobs 
 
     // The queue consumer posts the answer into the thread.
     let acked = false;
-    await worker.queue({
+    await brainWorker.queue({
       messages: [
         {
           body: enqueuedJobs[0],
@@ -252,7 +253,7 @@ test("queue handler edits /bicture response with an image attachment", async () 
         },
       },
     });
-    await worker.queue({
+    await brainWorker.queue({
       messages: [
         {
           body: encodeAiJobEnvelope(
@@ -366,7 +367,7 @@ test("queue handler downloads url-returned /bicture images with a timeout signal
         run: async () => ({ result: { image: "https://example.com/generated-image.png" } }),
       },
     });
-    await worker.queue({
+    await brainWorker.queue({
       messages: [
         {
           body: encodeAiJobEnvelope(
@@ -432,7 +433,7 @@ test("queue handler edits /bicture response with a failure message when the imag
         run: async () => ({ result: { image: "https://example.com/generated-image.png" } }),
       },
     });
-    await worker.queue({
+    await brainWorker.queue({
       messages: [
         {
           body: encodeAiJobEnvelope(
@@ -545,7 +546,7 @@ test("queue handler edits /ragjam response with an audio attachment", async () =
         },
       },
     });
-    await worker.queue({
+    await brainWorker.queue({
       messages: [
         {
           body: encodeAiJobEnvelope(
@@ -638,7 +639,7 @@ test("queue handler preserves long /ragjam prompt text up to the Discord message
         run: async () => ({ result: { audio: "https://example.com/generated-song.mp3" } }),
       },
     });
-    await worker.queue({
+    await brainWorker.queue({
       messages: [
         {
           body: encodeAiJobEnvelope(
@@ -738,7 +739,7 @@ test("queue handler lets /ragjam auto-generate lyrics when omitted", async () =>
         },
       },
     });
-    await worker.queue({
+    await brainWorker.queue({
       messages: [
         {
           body: encodeAiJobEnvelope(
@@ -882,7 +883,7 @@ test("/ask uses the web-search model for current research prompts", async () => 
     ]);
     assert.equal(enqueuedJobs.length, 1);
 
-    await worker.queue({
+    await brainWorker.queue({
       messages: [{ body: enqueuedJobs[0], ack: () => undefined }],
     } as never, env);
 
@@ -945,7 +946,7 @@ test("queue handler posts a failure notice into the thread when the /ask answer 
     });
     let acked = false;
 
-    await worker.queue({
+    await brainWorker.queue({
       messages: [
         {
           body: encodeAiJobEnvelope(
