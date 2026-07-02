@@ -23,6 +23,7 @@ const discordJsonRequest = async (
   env: Env,
   path: string,
   init: RequestInit = {},
+  options: { nullOnError?: boolean } = {},
 ): Promise<unknown> => {
   const response = await fetch(`${DISCORD_API_BASE_URL}${path}`, {
     ...init,
@@ -33,6 +34,9 @@ const discordJsonRequest = async (
   });
 
   if (!response.ok) {
+    if (options.nullOnError) {
+      return null;
+    }
     throw new Error(`Discord API request failed: ${response.status} ${response.statusText}`);
   }
 
@@ -142,14 +146,12 @@ export const fetchChannelMessages = async (
   }
   params.set("limit", String(options.limit ?? 12));
 
-  const response = await fetch(
-    `${DISCORD_API_BASE_URL}/channels/${channelId}/messages?${params}`,
-    { headers: botHeaders(env) },
+  const payload = await discordJsonRequest(
+    env,
+    `/channels/${channelId}/messages?${params}`,
+    {},
+    { nullOnError: true },
   );
-  if (!response.ok) {
-    return [];
-  }
-  const payload = await response.json().catch(() => null);
   return Array.isArray(payload) ? payload.filter(isDiscordMessage) : [];
 };
 
@@ -158,25 +160,18 @@ export const fetchMessage = async (
   channelId: string,
   messageId: string,
 ): Promise<DiscordMessage | null> => {
-  const response = await fetch(
-    `${DISCORD_API_BASE_URL}/channels/${channelId}/messages/${messageId}`,
-    { headers: botHeaders(env) },
+  const payload = await discordJsonRequest(
+    env,
+    `/channels/${channelId}/messages/${messageId}`,
+    {},
+    { nullOnError: true },
   );
-  if (!response.ok) {
-    return null;
-  }
-  const payload = await response.json().catch(() => null);
   return isDiscordMessage(payload) ? payload : null;
 };
 
 export const fetchUsername = async (env: Env, userId: string): Promise<string | null> => {
-  const response = await fetch(`${DISCORD_API_BASE_URL}/users/${userId}`, {
-    headers: botHeaders(env),
-  }).catch(() => null);
-  if (!response?.ok) {
-    return null;
-  }
-  const user = await response.json().catch(() => null);
+  const user = await discordJsonRequest(env, `/users/${userId}`, {}, { nullOnError: true })
+    .catch(() => null);
   return isRecord(user) && typeof user.username === "string" ? user.username : null;
 };
 
