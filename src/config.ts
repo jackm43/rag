@@ -1,6 +1,5 @@
 import responseConfig from "./ai-config/discord-response.json";
 import askWebSearchConfig from "./ai-config/ask-web-search.json";
-import type { Env } from "./types";
 
 const isNodeRuntime = () =>
   typeof process !== "undefined" &&
@@ -22,22 +21,6 @@ const loadAskWebSearchSystemPrompt = async () =>
   isNodeRuntime()
     ? readPromptFile("ask-web-search-system-prompt.md")
     : (await import("./ai-config/ask-web-search-system-prompt.md")).default;
-
-export const CONFIG_DEFAULTS = {
-  ai_response_model: responseConfig.model,
-  ai_ask_web_search_model: askWebSearchConfig.model,
-  ai_system_prompt: "",
-  ai_ask_web_search_system_prompt: "",
-  ai_max_tokens: String(responseConfig.maxTokens),
-  ai_temperature: String(responseConfig.temperature),
-  ai_history_limit: String(responseConfig.historyLimit),
-  ai_gateway_id: responseConfig.gatewayId,
-  ai_ask_web_search_gateway_id: askWebSearchConfig.gatewayId,
-} as const;
-
-export type ConfigKey = keyof typeof CONFIG_DEFAULTS;
-
-export const isConfigKey = (key: string): key is ConfigKey => key in CONFIG_DEFAULTS;
 
 export type BotConfig = {
   responseModel: string;
@@ -68,7 +51,7 @@ const parseTemperature = (value: string, fallback: number) => {
 const parseSearchContextSize = (value: string): "low" | "medium" | "high" =>
   value === "low" || value === "medium" || value === "high" ? value : "medium";
 
-export const loadConfig = async (_env: Env): Promise<BotConfig> => {
+export const loadConfig = async (): Promise<BotConfig> => {
   const [systemPrompt, askWebSearchSystemPrompt] = await Promise.all([
     loadResponseSystemPrompt(),
     loadAskWebSearchSystemPrompt(),

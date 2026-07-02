@@ -518,7 +518,7 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
     );
 
   try {
-    const config = await loadConfig(env);
+    const config = await loadConfig();
     model = config.responseModel;
     const builtConversation = job.kind === "thread_reply"
       ? await buildNormalThreadConversation(env, config, job)

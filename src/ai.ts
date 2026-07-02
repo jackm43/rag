@@ -269,13 +269,6 @@ export const runChatCompletion = async (
   };
 };
 
-export const runChatModel = async (
-  env: Env,
-  config: BotConfig,
-  messages: ChatMessage[],
-  options: ChatOptions = {},
-): Promise<string> => (await runChatCompletion(env, config, messages, options)).content;
-
 const extractResponsesText = (result: unknown): string => {
   if (!isRecord(result)) {
     return extractText(result);
@@ -392,11 +385,4 @@ export const runWebSearchCompletion = async (
     usage: isRecord(result) ? usageFrom(result.usage) : undefined,
     webSearchCalls: countWebSearchCalls(result),
   };
-};
-
-export const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error("timeout")), timeoutMs);
-  });
-  return Promise.race([promise, timeoutPromise]);
 };

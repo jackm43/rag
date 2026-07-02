@@ -67,7 +67,7 @@ const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
     return { content: "Run /ask in a server channel so I can create a thread.", allowed_mentions: { parse: [] } };
   }
 
-  const config = await loadConfig(env);
+  const config = await loadConfig();
   const requester = getInvoker(interaction);
   const requesterUsername = getInvokerDisplayName(interaction);
   const title = await generateThreadTitle(env, config, prompt, {
