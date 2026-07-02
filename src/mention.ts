@@ -1,10 +1,9 @@
 import {
   runChatCompletion,
-  runWebSearchCompletion,
   sanitizeAiText,
   type ChatMessage,
+  type ChatModelResult,
 } from "./ai";
-import { buildAiGatewayMetadata } from "./ai-metadata";
 import {
   appendSourceFallback,
   buildAskConversation,
@@ -22,7 +21,7 @@ import {
 } from "./discord";
 import { checkAiUsageAllowed } from "./limits";
 import { errorMessage, logger } from "./logger";
-import { createAiSpendSourceId, recordAiSpendEvent } from "./spend";
+import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "./tracked-ai";
 import {
   MAX_DISCORD_MESSAGE_LENGTH,
   type AiChatJob,
@@ -207,42 +206,23 @@ export const generateThreadTitle = async (
 ) => {
   const fallback = fallbackThreadTitle(prompt);
   try {
-    const spendSourceId = spendAttribution ? createAiSpendSourceId() : undefined;
-    const result = await runChatCompletion(
-      env,
-      config,
-      [
-        {
-          role: "system",
-          content:
-            "Create a concise Discord thread title for this user question. Plain text only, no quotes, no mentions, no IDs, 8 words or fewer.",
-        },
-        { role: "user", content: prompt },
-      ],
+    const messages: ChatMessage[] = [
       {
-        maxTokens: 32,
-        temperature: 0.2,
-        metadata: spendAttribution
-          ? buildAiGatewayMetadata({
-            kind: spendAttribution.kind,
-            requestId: spendSourceId,
-            requesterUserId: spendAttribution.requesterUserId,
-          })
-          : undefined,
+        role: "system",
+        content:
+          "Create a concise Discord thread title for this user question. Plain text only, no quotes, no mentions, no IDs, 8 words or fewer.",
       },
-    );
-    if (spendAttribution) {
-      await recordAiSpendEvent(env, {
+      { role: "user", content: prompt },
+    ];
+    const options = { maxTokens: 32, temperature: 0.2 };
+    const result = spendAttribution
+      ? await runTrackedChatCompletion(env, config, messages, {
+        ...options,
         kind: spendAttribution.kind,
         requesterUserId: spendAttribution.requesterUserId,
         requesterUsername: spendAttribution.requesterUsername,
-        model: result.model,
-        promptTokens: result.usage?.promptTokens ?? null,
-        completionTokens: result.usage?.completionTokens ?? null,
-        totalTokens: result.usage?.totalTokens ?? null,
-        sourceId: spendSourceId,
-      });
-    }
+      })
+      : await runChatCompletion(env, config, messages, options);
     return sanitizeThreadTitle(result.content) ?? fallback;
   } catch (error) {
     logger.warn("thread_title_generation_failed", { error: errorMessage(error) });
@@ -420,9 +400,6 @@ const buildNormalThreadConversation = async (
   };
 };
 
-const buildConversation = async (env: Env, config: BotConfig, job: AiChatJob): Promise<ChatMessage[]> =>
-  (await buildNormalThreadConversation(env, config, job)).messages;
-
 const recordAiInteraction = async (
   env: Env,
   job: AiChatJob,
@@ -526,17 +503,22 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
   try {
     const config = await loadConfig();
     model = config.responseModel;
-    const builtConversation = job.kind === "thread_reply"
-      ? await buildNormalThreadConversation(env, config, job)
-      : { messages: await buildConversation(env, config, job), thread: null };
+    const builtConversation = await buildNormalThreadConversation(env, config, job);
+    const attribution = {
+      kind: job.kind,
+      requesterUserId: job.requesterUserId,
+      requesterUsername: job.requesterUsername,
+      channelId: job.channelId,
+      messageId: job.messageId,
+    };
 
     let responseText: string;
+    let result: ChatModelResult;
 
     const aiStartedAt = Date.now();
     if (job.kind === "thread_reply" && isAskThread(builtConversation.thread)) {
       if (shouldUseAskWebSearch(job.prompt)) {
-        const spendSourceId = createAiSpendSourceId();
-        const result = await runWebSearchCompletion(
+        const webSearchResult = await runTrackedWebSearchCompletion(
           env,
           buildAskWebSearchInput(
             job.prompt,
@@ -551,89 +533,28 @@ export const processAiQueueMessage = async (message: Message<AiJob>, env: Env) =
             searchContextSize: config.askWebSearchContextSize,
             temperature: config.askWebSearchTemperature,
             gatewayId: config.askWebSearchGatewayId,
-            metadata: buildAiGatewayMetadata({
-              kind: job.kind,
-              requestId: spendSourceId,
-              requesterUserId: job.requesterUserId,
-              channelId: job.channelId,
-              messageId: job.messageId,
-            }),
+            ...attribution,
           },
         );
-        responseText = appendSourceFallback(result.content, result.sources);
-        model = result.model;
-        promptTokens = result.usage?.promptTokens ?? null;
-        completionTokens = result.usage?.completionTokens ?? null;
-        totalTokens = result.usage?.totalTokens ?? null;
-        await recordAiSpendEvent(env, {
-          kind: job.kind,
-          requesterUserId: job.requesterUserId,
-          requesterUsername: job.requesterUsername,
-          model,
-          promptTokens,
-          completionTokens,
-          totalTokens,
-          sourceId: spendSourceId,
-        });
+        responseText = appendSourceFallback(webSearchResult.content, webSearchResult.sources);
+        result = webSearchResult;
       } else {
-        const spendSourceId = createAiSpendSourceId();
-        const result = await runChatCompletion(
+        result = await runTrackedChatCompletion(
           env,
           config,
           buildAskConversation(config, builtConversation.messages.filter((message) => message.role !== "system")),
-          {
-            metadata: buildAiGatewayMetadata({
-              kind: job.kind,
-              requestId: spendSourceId,
-              requesterUserId: job.requesterUserId,
-              channelId: job.channelId,
-              messageId: job.messageId,
-            }),
-          },
+          attribution,
         );
         responseText = result.content;
-        model = result.model;
-        promptTokens = result.usage?.promptTokens ?? null;
-        completionTokens = result.usage?.completionTokens ?? null;
-        totalTokens = result.usage?.totalTokens ?? null;
-        await recordAiSpendEvent(env, {
-          kind: job.kind,
-          requesterUserId: job.requesterUserId,
-          requesterUsername: job.requesterUsername,
-          model,
-          promptTokens,
-          completionTokens,
-          totalTokens,
-          sourceId: spendSourceId,
-        });
       }
     } else {
-      const spendSourceId = createAiSpendSourceId();
-      const result = await runChatCompletion(env, config, builtConversation.messages, {
-        metadata: buildAiGatewayMetadata({
-          kind: job.kind,
-          requestId: spendSourceId,
-          requesterUserId: job.requesterUserId,
-          channelId: job.channelId,
-          messageId: job.messageId,
-        }),
-      });
+      result = await runTrackedChatCompletion(env, config, builtConversation.messages, attribution);
       responseText = result.content;
-      model = result.model;
-      promptTokens = result.usage?.promptTokens ?? null;
-      completionTokens = result.usage?.completionTokens ?? null;
-      totalTokens = result.usage?.totalTokens ?? null;
-      await recordAiSpendEvent(env, {
-        kind: job.kind,
-        requesterUserId: job.requesterUserId,
-        requesterUsername: job.requesterUsername,
-        model,
-        promptTokens,
-        completionTokens,
-        totalTokens,
-        sourceId: spendSourceId,
-      });
     }
+    model = result.model;
+    promptTokens = result.usage?.promptTokens ?? null;
+    completionTokens = result.usage?.completionTokens ?? null;
+    totalTokens = result.usage?.totalTokens ?? null;
     aiDurationMs = Date.now() - aiStartedAt;
 
     const text = sanitizeAiText(responseText);

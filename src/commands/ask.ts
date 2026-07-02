@@ -1,9 +1,4 @@
-import {
-  runChatCompletion,
-  runWebSearchCompletion,
-  sanitizeAiText,
-} from "../ai";
-import { buildAiGatewayMetadata } from "../ai-metadata";
+import { sanitizeAiText } from "../ai";
 import {
   appendSourceFallback,
   buildAskConversation,
@@ -21,7 +16,7 @@ import { jsonResponse } from "../http";
 import { checkAiUsageAllowed } from "../limits";
 import { errorMessage, logger } from "../logger";
 import { generateThreadTitle, recordAiThread } from "../mention";
-import { createAiSpendSourceId, recordAiSpendEvent } from "../spend";
+import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "../tracked-ai";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
   MAX_DISCORD_MESSAGE_LENGTH,
@@ -88,16 +83,16 @@ const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
   });
 
   const webSearch = shouldUseAskWebSearch(prompt);
+  const attribution = {
+    kind: "ask",
+    requesterUserId: requester?.id,
+    requesterUsername,
+    channelId: parentChannelId,
+  };
   let responseText: string;
-  let spendModel = config.responseModel;
-  let promptTokens: number | null = null;
-  let completionTokens: number | null = null;
-  let totalTokens: number | null = null;
-  let spendSourceId: string | null = null;
   try {
     if (webSearch) {
-      spendSourceId = createAiSpendSourceId();
-      const result = await runWebSearchCompletion(
+      const result = await runTrackedWebSearchCompletion(
         env,
         buildAskWebSearchInput(prompt, requesterUsername),
         {
@@ -108,50 +103,19 @@ const runAskCommand = async (interaction: DiscordInteraction, env: Env) => {
           searchContextSize: config.askWebSearchContextSize,
           temperature: config.askWebSearchTemperature,
           gatewayId: config.askWebSearchGatewayId,
-          metadata: buildAiGatewayMetadata({
-            kind: "ask",
-            requestId: spendSourceId,
-            requesterUserId: requester?.id,
-            channelId: parentChannelId,
-          }),
+          ...attribution,
         },
       );
       responseText = appendSourceFallback(result.content, result.sources);
-      spendModel = result.model;
-      promptTokens = result.usage?.promptTokens ?? null;
-      completionTokens = result.usage?.completionTokens ?? null;
-      totalTokens = result.usage?.totalTokens ?? null;
     } else {
-      spendSourceId = createAiSpendSourceId();
-      const result = await runChatCompletion(
+      const result = await runTrackedChatCompletion(
         env,
         config,
         buildAskConversation(config, [{ role: "user", content: `${requesterUsername}: ${prompt}` }]),
-        {
-          metadata: buildAiGatewayMetadata({
-            kind: "ask",
-            requestId: spendSourceId,
-            requesterUserId: requester?.id,
-            channelId: parentChannelId,
-          }),
-        },
+        attribution,
       );
       responseText = result.content;
-      spendModel = result.model;
-      promptTokens = result.usage?.promptTokens ?? null;
-      completionTokens = result.usage?.completionTokens ?? null;
-      totalTokens = result.usage?.totalTokens ?? null;
     }
-    await recordAiSpendEvent(env, {
-      kind: "ask",
-      requesterUserId: requester?.id,
-      requesterUsername,
-      model: spendModel,
-      promptTokens,
-      completionTokens,
-      totalTokens,
-      sourceId: spendSourceId,
-    });
   } catch (error) {
     logger.error("ask_ai_response_failed", {
       error: errorMessage(error),
