@@ -192,7 +192,7 @@ const buildBictureResponse = async (job: BictureJob, env: Env) => {
 export const processBictureJob = async (job: BictureJob, env: Env) => {
   try {
     const response = await buildBictureResponse(job, env);
-    await sendInteractionMediaEdit(env, job.applicationId, job.interactionToken, response.content, response.file);
+    await sendInteractionMediaEdit(env, job.applicationId, job.interactionToken, response.content, response.file, job.requesterUserId);
   } catch (error) {
     logger.error("bicture_command_failed", {
       error: errorMessage(error),
@@ -206,6 +206,7 @@ export const processBictureJob = async (job: BictureJob, env: Env) => {
       job.applicationId,
       job.interactionToken,
       "Could not generate that image. Try a different prompt.",
+      job.requesterUserId,
     ).catch(() => undefined);
   }
 };

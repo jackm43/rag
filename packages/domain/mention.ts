@@ -1,4 +1,5 @@
-import { peerSend } from "../boundaries/peer/queue";
+import { peerLinks } from "../boundaries/peer/links";
+import { SYSTEM_SUBJECT } from "../identity";
 import { encodeAiJobEnvelope, isSnowflake, MAX_FREE_TEXT_LENGTH, MAX_MENTION_IDS } from "../contracts";
 import { fetchBotRoleIds } from "../discord";
 import { activeAiBanForUser } from "./bans";
@@ -116,10 +117,10 @@ export const handleGatewayMessageCreate = async (
     return;
   }
 
-  await peerSend(
+  await peerLinks(env).gatewayToBrain.send(
     env.AI_JOBS,
     encodeAiJobEnvelope(gatewayMessageJob(message, botUserId), { source: "gateway" }),
-    "gateway",
+    { sub: message.author?.id ?? SYSTEM_SUBJECT },
   );
 };
 
@@ -208,7 +209,7 @@ const gatewayUsageAllowed = async (job: MessageReceivedJob, env: Env, kind: stri
     return true;
   }
 
-  await sendChannelReply(env, job.channelId, usage.message).catch((error) => {
+  await sendChannelReply(env, job.channelId, usage.message, job.authorId ?? SYSTEM_SUBJECT).catch((error) => {
     logger.warn("ai_usage_denial_notice_failed", { error: errorMessage(error) });
   });
   return false;

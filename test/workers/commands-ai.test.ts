@@ -4,8 +4,8 @@ import nacl from "tweetnacl";
 import worker from "../../workers/public/gateway/src/index.ts";
 import brainWorker from "../../workers/services/brain/src/index.ts";
 import { shouldUseAskWebSearch } from "../../packages/domain/commands/ask.ts";
-import { decodeAiJobEnvelope, decodeReplyJobEnvelope, encodeAiJobEnvelope } from "../../packages/contracts/index.ts";
-import { createDbMock, createEnv, createSignedRequest } from "../helpers.ts";
+import { decodeAiJobEnvelope, decodeReplyJobEnvelope } from "../../packages/contracts/index.ts";
+import { createDbMock, createEnv, createSignedRequest, gatewayAiJob, sentEnvelope } from "../helpers.ts";
 
 const RAGJAM_APPLICATION_ID = "500000000000000001";
 const RAGJAM_CHANNEL_ID = "500000000000000002";
@@ -21,8 +21,8 @@ test("/ask replies with the thread link immediately and answers via the AI jobs 
   const keyPair = nacl.sign.keyPair();
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
-  const enqueuedJobs: Uint8Array[] = [];
-  const outboxJobs: Uint8Array[] = [];
+  const enqueuedJobs: unknown[] = [];
+  const outboxJobs: unknown[] = [];
   const insertedThreads: Array<{ sql: string; args: unknown[] }> = [];
   const insertedInteractions: Array<{ sql: string; args: unknown[] }> = [];
   const waitUntilPromises: Promise<unknown>[] = [];
@@ -48,12 +48,12 @@ test("/ask replies with the thread link immediately and answers via the AI jobs 
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
       AI_JOBS: {
-        send: async (body: Uint8Array) => {
+        send: async (body: unknown) => {
           enqueuedJobs.push(body);
         },
       },
       DISCORD_OUTBOX: {
-        send: async (body: Uint8Array) => {
+        send: async (body: unknown) => {
           outboxJobs.push(body);
         },
       },
@@ -138,8 +138,8 @@ test("/ask replies with the thread link immediately and answers via the AI jobs 
     ]);
 
     assert.equal(enqueuedJobs.length, 1);
-    assert.ok(enqueuedJobs[0] instanceof Uint8Array);
-    assert.deepEqual(decodeAiJobEnvelope(enqueuedJobs[0]), {
+    assert.ok(sentEnvelope(enqueuedJobs[0]) instanceof Uint8Array);
+    assert.deepEqual(decodeAiJobEnvelope(sentEnvelope(enqueuedJobs[0])), {
       kind: "ask",
       channelId: ASK_THREAD_ID,
       requesterUserId: ASK_USER_ID,
@@ -174,7 +174,7 @@ test("/ask replies with the thread link immediately and answers via the AI jobs 
       undefined,
     );
     assert.equal(outboxJobs.length, 1);
-    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+    assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(outboxJobs[0])), {
       kind: "reply.channel_message",
       channelId: ASK_THREAD_ID,
       content: "Queues retry failed jobs before the DLQ.",
@@ -226,8 +226,8 @@ test("/bicture interaction is deferred and enqueues image generation", async () 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { type: 5 });
   assert.equal(enqueuedJobs.length, 1);
-  assert.ok(enqueuedJobs[0] instanceof Uint8Array);
-  assert.deepEqual(decodeAiJobEnvelope(enqueuedJobs[0]), {
+  assert.ok(sentEnvelope(enqueuedJobs[0]) instanceof Uint8Array);
+  assert.deepEqual(decodeAiJobEnvelope(sentEnvelope(enqueuedJobs[0])), {
     kind: "bicture",
     applicationId: BICTURE_APPLICATION_ID,
     interactionToken: "interaction-token",
@@ -269,7 +269,7 @@ test("queue handler delivers the /bicture image through the responder RPC bindin
     await brainWorker.queue({
       messages: [
         {
-          body: encodeAiJobEnvelope(
+          body: await gatewayAiJob(
             {
               kind: "bicture",
               applicationId: BICTURE_APPLICATION_ID,
@@ -382,7 +382,7 @@ test("queue handler downloads url-returned /bicture images with a timeout signal
     await brainWorker.queue({
       messages: [
         {
-          body: encodeAiJobEnvelope(
+          body: await gatewayAiJob(
             {
               kind: "bicture",
               applicationId: BICTURE_APPLICATION_ID,
@@ -438,13 +438,13 @@ test("queue handler edits /bicture response with a failure message when the imag
   };
 
   try {
-    const outboxJobs: Uint8Array[] = [];
+    const outboxJobs: unknown[] = [];
     const env = createEnv("unused", {
       AI: {
         run: async () => ({ result: { image: "https://example.com/generated-image.png" } }),
       },
       DISCORD_OUTBOX: {
-        send: async (body: Uint8Array) => {
+        send: async (body: unknown) => {
           outboxJobs.push(body);
         },
       },
@@ -452,7 +452,7 @@ test("queue handler edits /bicture response with a failure message when the imag
     await brainWorker.queue({
       messages: [
         {
-          body: encodeAiJobEnvelope(
+          body: await gatewayAiJob(
             {
               kind: "bicture",
               applicationId: BICTURE_APPLICATION_ID,
@@ -474,7 +474,7 @@ test("queue handler edits /bicture response with a failure message when the imag
 
     // The failure notice is text-only, so it travels through the outbox queue.
     assert.equal(outboxJobs.length, 1);
-    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+    assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(outboxJobs[0])), {
       kind: "reply.interaction_edit",
       applicationId: BICTURE_APPLICATION_ID,
       interactionToken: "interaction-token",
@@ -519,8 +519,8 @@ test("/ragjam interaction is deferred and enqueues music generation", async () =
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { type: 5 });
   assert.equal(enqueuedJobs.length, 1);
-  assert.ok(enqueuedJobs[0] instanceof Uint8Array);
-  assert.deepEqual(decodeAiJobEnvelope(enqueuedJobs[0]), {
+  assert.ok(sentEnvelope(enqueuedJobs[0]) instanceof Uint8Array);
+  assert.deepEqual(decodeAiJobEnvelope(sentEnvelope(enqueuedJobs[0])), {
     kind: "ragjam",
     applicationId: RAGJAM_APPLICATION_ID,
     interactionToken: "interaction-token",
@@ -571,7 +571,7 @@ test("queue handler delivers the /ragjam audio through the responder RPC binding
     await brainWorker.queue({
       messages: [
         {
-          body: encodeAiJobEnvelope(
+          body: await gatewayAiJob(
             {
               kind: "ragjam",
               applicationId: RAGJAM_APPLICATION_ID,
@@ -663,7 +663,7 @@ test("queue handler preserves long /ragjam prompt text up to the Discord message
     await brainWorker.queue({
       messages: [
         {
-          body: encodeAiJobEnvelope(
+          body: await gatewayAiJob(
             {
               kind: "ragjam",
               applicationId: RAGJAM_APPLICATION_ID,
@@ -714,7 +714,7 @@ test("/ragjam without lyrics enqueues auto-generated lyrics job", async () => {
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { type: 5 });
   assert.equal(enqueuedJobs.length, 1);
-  assert.deepEqual(decodeAiJobEnvelope(enqueuedJobs[0]), {
+  assert.deepEqual(decodeAiJobEnvelope(sentEnvelope(enqueuedJobs[0])), {
     kind: "ragjam",
     applicationId: RAGJAM_APPLICATION_ID,
     interactionToken: "interaction-token",
@@ -760,7 +760,7 @@ test("queue handler lets /ragjam auto-generate lyrics when omitted", async () =>
     await brainWorker.queue({
       messages: [
         {
-          body: encodeAiJobEnvelope(
+          body: await gatewayAiJob(
             {
               kind: "ragjam",
               applicationId: RAGJAM_APPLICATION_ID,
@@ -792,7 +792,7 @@ test("/ask uses the web-search model for current research prompts", async () => 
   const keyPair = nacl.sign.keyPair();
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
-  const enqueuedJobs: Uint8Array[] = [];
+  const enqueuedJobs: unknown[] = [];
   const insertedThreads: Array<{ sql: string; args: unknown[] }> = [];
   const waitUntilPromises: Promise<unknown>[] = [];
 
@@ -832,18 +832,18 @@ test("/ask uses the web-search model for current research prompts", async () => 
 
   try {
     const baseDb = createDbMock();
-    const outboxJobs: Uint8Array[] = [];
+    const outboxJobs: unknown[] = [];
     const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
       AI_JOBS: {
-        send: async (body: Uint8Array) => {
+        send: async (body: unknown) => {
           enqueuedJobs.push(body);
         },
       },
       DISCORD_OUTBOX: {
-        send: async (body: Uint8Array) => {
+        send: async (body: unknown) => {
           outboxJobs.push(body);
         },
       },
@@ -934,7 +934,7 @@ test("/ask uses the web-search model for current research prompts", async () => 
     assert.deepEqual(webSearchBody.web_search_options, { search_context_size: "medium" });
 
     assert.equal(outboxJobs.length, 1);
-    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+    assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(outboxJobs[0])), {
       kind: "reply.channel_message",
       channelId: ASK_THREAD_ID,
       content:
@@ -958,14 +958,14 @@ test("queue handler posts a failure notice into the thread when the /ask answer 
   };
 
   try {
-    const outboxJobs: Uint8Array[] = [];
+    const outboxJobs: unknown[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
       DB: createDbMock(),
       DISCORD_OUTBOX: {
-        send: async (body: Uint8Array) => {
+        send: async (body: unknown) => {
           outboxJobs.push(body);
         },
       },
@@ -975,7 +975,7 @@ test("queue handler posts a failure notice into the thread when the /ask answer 
     await brainWorker.queue({
       messages: [
         {
-          body: encodeAiJobEnvelope(
+          body: await gatewayAiJob(
             {
               kind: "ask",
               channelId: ASK_THREAD_ID,
@@ -993,7 +993,7 @@ test("queue handler posts a failure notice into the thread when the /ask answer 
     } as never, env);
 
     assert.equal(outboxJobs.length, 1);
-    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+    assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(outboxJobs[0])), {
       kind: "reply.channel_message",
       channelId: ASK_THREAD_ID,
       content: "I started this thread, but the AI response failed. Try again in a moment.",

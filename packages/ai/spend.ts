@@ -2,7 +2,9 @@ import { decodeAiSpendJobEnvelope, encodeAiSpendJobEnvelope } from "../contracts
 import { errorMessage, logger } from "../logger";
 import { boundaryClients } from "../boundaries/outbound/clients";
 import { peerDeliveryAuthorize } from "../authz/peer";
-import { peerReceive, peerSend } from "../boundaries/peer/queue";
+import { peerLinks } from "../boundaries/peer/links";
+import { peerReceive } from "../boundaries/peer/queue";
+import { SYSTEM_SUBJECT } from "../identity";
 import type { Env } from "../contracts/types";
 import { isRecord } from "../contracts/validation";
 
@@ -72,10 +74,13 @@ export const recordAiSpendEvent = async (env: Env, input: SpendEventInput) => {
       .run();
 
     if (env.SPEND_JOBS) {
-      await peerSend(
+      // Spend reconciliation is a brain-originated flow: it re-mints an
+      // on-behalf-of token for the original requester when known, else the
+      // user-less "system" subject.
+      await peerLinks(env).brainToSpend.send(
         env.SPEND_JOBS,
         encodeAiSpendJobEnvelope({ spendEventId: sourceId }, { source: "worker" }),
-        "brain",
+        { sub: input.requesterUserId ?? SYSTEM_SUBJECT },
         { delaySeconds: 120 },
       );
     }
@@ -151,7 +156,11 @@ const findGatewayLogCostMicros = async (env: Env, sourceId: string) => {
 };
 
 export const processSpendQueueMessage = async (message: Message<unknown>, env: Env) => {
-  const job = peerReceive(message.body, decodeAiSpendJobEnvelope, "brain", peerDeliveryAuthorize("spend"));
+  const job = await peerReceive(message.body, decodeAiSpendJobEnvelope, {
+    self: "spend",
+    expectedIssuers: ["brain"],
+    authorize: peerDeliveryAuthorize("spend"),
+  });
   if (!job) {
     message.ack();
     return;

@@ -5,7 +5,7 @@ import worker from "../../../workers/public/gateway/src/index.ts";
 import { checkAiUsageAllowed } from "../../../packages/domain/limits.ts";
 import { resolveGatewayMessage } from "../../../packages/domain/mention.ts";
 import { decodeReplyJobEnvelope } from "../../../packages/contracts/index.ts";
-import { createEnv, createSignedRequest } from "../../helpers.ts";
+import { createEnv, createSignedRequest, sentEnvelope } from "../../helpers.ts";
 
 const BOT_USER_ID = "100000000000000001";
 const GUILD_ID = "100000000000000002";
@@ -264,11 +264,11 @@ test("/ragjam does not enqueue a job when the requester is burst limited", async
 });
 
 test("gateway mention resolution sends a burst limit notice through the outbox", async () => {
-  const outboxJobs: Uint8Array[] = [];
+  const outboxJobs: unknown[] = [];
   const env = createEnv("unused", {
     DB: createLimitsDbMock({ requestCount: 8 }),
     DISCORD_OUTBOX: {
-      send: async (body: Uint8Array) => {
+      send: async (body: unknown) => {
         outboxJobs.push(body);
       },
     },
@@ -291,7 +291,7 @@ test("gateway mention resolution sends a burst limit notice through the outbox",
 
   assert.equal(job, null);
   assert.equal(outboxJobs.length, 1);
-  assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+  assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(outboxJobs[0])), {
     kind: "reply.channel_message",
     channelId: CHANNEL_ID,
     content: BURST_DENIAL_MESSAGE,
@@ -299,7 +299,7 @@ test("gateway mention resolution sends a burst limit notice through the outbox",
 });
 
 test("tracked thread reply resolution sends a global budget notice through the outbox", async () => {
-  const outboxJobs: Uint8Array[] = [];
+  const outboxJobs: unknown[] = [];
   const env = createEnv("unused", {
     DB: createLimitsDbMock({
       spendMicros: 10_000_000,
@@ -314,7 +314,7 @@ test("tracked thread reply resolution sends a global budget notice through the o
       },
     }),
     DISCORD_OUTBOX: {
-      send: async (body: Uint8Array) => {
+      send: async (body: unknown) => {
         outboxJobs.push(body);
       },
     },
@@ -338,7 +338,7 @@ test("tracked thread reply resolution sends a global budget notice through the o
 
   assert.equal(job, null);
   assert.equal(outboxJobs.length, 1);
-  assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+  assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(outboxJobs[0])), {
     kind: "reply.channel_message",
     channelId: THREAD_ID,
     content: BUDGET_DENIAL_MESSAGE,

@@ -1,5 +1,6 @@
 import type { InteractionMessageData, InteractionResponseFile } from "../../discord";
-import { peerSend } from "../../boundaries/peer/queue";
+import { peerLinks } from "../../boundaries/peer/links";
+import { SYSTEM_SUBJECT } from "../../identity";
 import { encodeAiJobEnvelope } from "../../contracts";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
@@ -131,13 +132,13 @@ export const executeCommand = async (
   }
 
   if (spec.kind === "enqueue") {
-    await peerSend(
+    await peerLinks(env).gatewayToBrain.send(
       env.AI_JOBS,
       encodeAiJobEnvelope(spec.buildJob(ctx), {
         source: "interactions",
         guildId: ctx.guildId,
       }),
-      "gateway",
+      { sub: ctx.invoker?.id ?? SYSTEM_SUBJECT },
     );
     return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
   }

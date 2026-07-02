@@ -4,7 +4,7 @@ import nacl from "tweetnacl";
 import worker from "../../workers/public/gateway/src/index.ts";
 import { encodeAiSpendJobEnvelope } from "../../packages/contracts/index.ts";
 import { processSpendQueueMessage } from "../../packages/ai/spend.ts";
-import { createDbMock, createEnv, createSignedRequest } from "../helpers.ts";
+import { createDbMock, createEnv, createSignedRequest, signedPeerMessage } from "../helpers.ts";
 
 test("/rag interaction is deferred and edits the original response from waitUntil", async () => {
   const keyPair = nacl.sign.keyPair();
@@ -703,7 +703,10 @@ test("spend worker aggregates pending spend events", async () => {
 
     await processSpendQueueMessage(
       {
-        body: encodeAiSpendJobEnvelope({ spendEventId: "event-1" }, { source: "worker" }),
+        body: await signedPeerMessage(
+          encodeAiSpendJobEnvelope({ spendEventId: "event-1" }, { source: "worker" }),
+          { iss: "brain", aud: "spend" },
+        ),
         attempts: 1,
         ack: () => {
           acked = true;

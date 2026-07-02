@@ -8,6 +8,7 @@ import { errorMessage, logger } from "../logger";
 import {
   MAX_DISCORD_MESSAGE_LENGTH,
   type Env,
+  type InteractionEditReplyJob,
   type ResponderAttachment,
 } from "../contracts/types";
 
@@ -53,16 +54,14 @@ export const finalizeAiReplyText = (value: string) => {
 // allowed_mentions lockdown — matching what the inline handlers enforced.
 const truncateInteractionContent = (value: string) => value.slice(0, DISCORD_MESSAGE_HARD_LIMIT);
 
-export const deliverInteractionEdit = async (
+// Apply a verified interaction-edit job to Discord. Shared by the binding RPC
+// entrypoint (media edits) and the outbox queue consumer (text edits); the
+// token has already been verified by the time a job reaches here.
+const applyInteractionEdit = async (
   env: Env,
-  envelopeBytes: unknown,
-  attachment: ResponderAttachment | null = null,
+  job: InteractionEditReplyJob,
+  attachment: ResponderAttachment | null,
 ) => {
-  const job = receiveResponderInteractionEdit(envelopeBytes, peerDeliveryAuthorize("responder"));
-  if (!job) {
-    throw new Error("Invalid interaction edit envelope");
-  }
-
   await editOriginalInteractionResponse(
     env,
     job.applicationId,
@@ -76,10 +75,34 @@ export const deliverInteractionEdit = async (
   );
 };
 
+// Binding RPC entrypoint: verify the identity-context token that rode as a
+// sibling RPC argument (aud must be the responder, envelope hash must match),
+// run Cedar, then apply the media edit.
+export const deliverInteractionEdit = async (
+  env: Env,
+  envelopeBytes: unknown,
+  idToken: string,
+  attachment: ResponderAttachment | null = null,
+) => {
+  const job = await receiveResponderInteractionEdit(envelopeBytes, idToken, {
+    expectedIssuers: ["brain"],
+    authorize: peerDeliveryAuthorize("responder"),
+  });
+  if (!job) {
+    throw new Error("Invalid interaction edit envelope");
+  }
+
+  await applyInteractionEdit(env, job, attachment);
+};
+
 const isRetryableDiscordStatus = (status: number) => status === 429 || status >= 500;
 
 export const processOutboxMessage = async (message: Message<unknown>, env: Env) => {
-  const job = peerReceive(message.body, decodeReplyJobEnvelope, "brain", peerDeliveryAuthorize("responder"));
+  const job = await peerReceive(message.body, decodeReplyJobEnvelope, {
+    self: "responder",
+    expectedIssuers: ["brain"],
+    authorize: peerDeliveryAuthorize("responder"),
+  });
   if (!job) {
     message.ack();
     return;
@@ -96,7 +119,8 @@ export const processOutboxMessage = async (message: Message<unknown>, env: Env) 
         }
       }
     } else {
-      await deliverInteractionEdit(env, message.body);
+      // Already verified + decoded above; apply directly rather than re-verifying.
+      await applyInteractionEdit(env, job, null);
     }
     message.ack();
   } catch (error) {

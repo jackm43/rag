@@ -283,7 +283,7 @@ Every hop into, between, and out of the workers crosses a named boundary in `pac
 | Boundary | Module | Trust zones | Shape |
 | --- | --- | --- | --- |
 | Inbound | `packages/boundaries/inbound` | `ingress-discord`, `ingress-operator` | Guards (`{identity, trustZone, verify}`) that yield a typed principal (`discord` + verified interaction, `operator`) or a typed denial (reason + HTTP response) |
-| Peer | `packages/boundaries/peer` | `peer-queue`, `peer-binding` | `peerSend`/`peerReceive` around contracts-encoded queue envelopes, plus the brain→responder binding RPC hop; receives re-validate the envelope and run the `authorize` seam, which every consumer plugs Cedar into via `peerDeliveryAuthorize` (service manifests refine this per envelope kind next) |
+| Peer | `packages/boundaries/peer` | `peer-queue`, `peer-binding` | Senders (`peerLinks`) mint a signed identity-context token beside the contracts-encoded envelope; receives verify the token (signature, audience, expiry, envelope-hash binding) **before** running the Cedar `authorize` seam via `peerDeliveryAuthorize`, so the principal Cedar sees is cryptographically established. See [Identity exchange](#identity-exchange-on-trust-zone-transitions) |
 | Outbound | `packages/boundaries/outbound` | `egress-discord`, `egress-ai-gateway`, `egress-cloudflare-api`, `egress-media` | Per-identity boundary clients enforcing credential injection, host allowlists, https-only, timeouts, and response-size caps; failure logs redact paths for identities whose paths embed credentials (`logPath: false` for `discord-webhook` and `media-download`) |
 
 ## Authorization (Cedar)
@@ -296,12 +296,41 @@ All allow/deny decisions are centralised in `packages/authz` and evaluated by [C
 
 The guild allowlist deliberately stays at ingress (`packages/domain/guilds.ts`), not in Cedar, for now.
 
+## Identity exchange on trust-zone transitions
+
+Every worker-to-worker hop carries a **signed identity-context token** (`packages/identity`) alongside the Cap'n Proto envelope, so the on-behalf-of principal and the minting worker are cryptographically established rather than asserted.
+
+**Why not literal mTLS?** Cloudflare service bindings and queues are in-process, isolate-to-isolate calls within one account: a binding/queue can only be invoked by a worker configured with it, so the platform *already* guarantees the transport identity ("which worker is calling"). That platform guarantee is the practical equivalent of mTLS transport-level identity here — there are no sockets to negotiate TLS on, so we do not (and cannot, and need not) implement literal mTLS. What the platform does not carry is the *application* identity: who the request acts on behalf of, and an explicit, testable proof of the minting worker. The identity-context token layers exactly that on top.
+
+**The token** (compact JWS, Ed25519/EdDSA) binds `{sub, act, iss, aud, trustZone, iat, exp (60s), jti, envelopeSha256}`. `sub` is the Discord user the request acts for (or `"system"` for user-less flows like spend reconciliation); `act` is the RFC 8693-style actor chain of workers traversed; `envelopeSha256` binds the token to one payload so a captured token cannot be replayed against different bytes. It rides as a sibling to the envelope — the queue message wrapper is `{ envelope, idToken }` and the responder binding takes `idToken` as a third RPC argument — leaving the capnp contract wire format untouched.
+
+**The flow (RFC 8693-style token exchange):**
+
+```
+Discord → gateway (verifies interaction/gateway signature)
+        → mints ORIGIN context: iss=gateway, aud=brain, sub=<discord user id>
+        → brain verifies (sig + aud=brain + envelope hash) → Cedar peer.deliver
+        → re-mints on behalf of the SAME sub: iss=brain, aud=responder|spend, act+=brain
+        → responder / spend verify → Cedar → process
+```
+
+At each receive the token is verified **before** Cedar runs, and the verified issuer becomes the Cedar `Peer` principal; any failure denies with the shared `peer_denied` log shape and the message is dropped/acked.
+
+**Key provisioning.** Each sending worker holds a private Ed25519 signing key as a secret; public keys are committed (not secret) in `packages/identity/keyring.ts`. Generate a keypair with `tsx scripts/generate-keys.ts <worker>`, then:
+
+```sh
+wrangler secret put GATEWAY_SIGNING_KEY -c workers/public/gateway/wrangler.jsonc
+wrangler secret put BRAIN_SIGNING_KEY   -c workers/services/brain/wrangler.jsonc
+```
+
+Only the gateway (origin mint) and brain (downstream re-mint) sign; the responder and spend workers are leaves that only verify against the committed keyring. To rotate a key, deploy the new private key to the secret and update the public JWK in `keyring.ts`.
+
 ## Workers, Trust Zones, and Secrets
 
 | Worker | Config | Trust zone / role | Secrets |
 | --- | --- | --- | --- |
-| `ragbot-worker` | `workers/public/gateway/wrangler.jsonc` | Public entrypoint (`/discord`, gateway control) + `DiscordGateway` Durable Object. The DO keeps only the WebSocket lifecycle + IDENTIFY (bot token, unavoidable), payload validation, and encode+enqueue of `message.received` events — it uses no D1 and no Discord REST | `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (DO IDENTIFY + interaction-path Discord REST), `GATEWAY_CONTROL_TOKEN` |
-| `ragbot-brain-worker` | `workers/services/brain/wrangler.jsonc` | `ai-jobs` consumer: **read Discord + AI + D1**. Resolves raw `message.received` events (thread lookup, mention/role resolution, usage limits) in-process, reads thread history, replied-to messages, and bot roles over Discord REST, and creates `/ask`-style threads; every message/edit it produces leaves via the outbox queue or the responder RPC binding, never directly | `CF_AIG_TOKEN` (belongs to brain **only** — remove it from `ragbot-worker` with `wrangler secret delete CF_AIG_TOKEN`), `DISCORD_BOT_TOKEN` (honestly required: Discord *reads* need the bot token too, so the brain keeps it even though writes go through the responder) |
+| `ragbot-worker` | `workers/public/gateway/wrangler.jsonc` | Public entrypoint (`/discord`, gateway control) + `DiscordGateway` Durable Object. The DO keeps only the WebSocket lifecycle + IDENTIFY (bot token, unavoidable), payload validation, and encode+enqueue of `message.received` events — it uses no D1 and no Discord REST | `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (DO IDENTIFY + interaction-path Discord REST), `GATEWAY_CONTROL_TOKEN`, `GATEWAY_SIGNING_KEY` (mints origin identity-context tokens) |
+| `ragbot-brain-worker` | `workers/services/brain/wrangler.jsonc` | `ai-jobs` consumer: **read Discord + AI + D1**. Resolves raw `message.received` events (thread lookup, mention/role resolution, usage limits) in-process, reads thread history, replied-to messages, and bot roles over Discord REST, and creates `/ask`-style threads; every message/edit it produces leaves via the outbox queue or the responder RPC binding, never directly | `CF_AIG_TOKEN` (belongs to brain **only** — remove it from `ragbot-worker` with `wrangler secret delete CF_AIG_TOKEN`), `DISCORD_BOT_TOKEN` (honestly required: Discord *reads* need the bot token too, so the brain keeps it even though writes go through the responder), `BRAIN_SIGNING_KEY` (re-mints on-behalf-of identity-context tokens for the responder and spend hops) |
 | `ragbot-responder-worker` | `workers/services/responder/wrangler.jsonc` | **Write Discord** — the single egress choke point. No public route. Consumes `discord-outbox` for text replies and exposes the `Responder` RPC entrypoint for media-bearing interaction edits. The only place `sanitizeAiText`, the message length cap, and `allowed_mentions: { parse: [] }` run on AI output before it reaches Discord | `DISCORD_BOT_TOKEN` |
 | `ragbot-spend-worker` | `workers/services/spend/wrangler.jsonc` | `ai-spend-jobs` consumer: AI Gateway log reconciliation | `CLOUDFLARE_API_TOKEN` (scoped to AI Gateway read) |
 

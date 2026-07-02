@@ -151,9 +151,9 @@ export const processRagjamJob = async (job: RagjamJob, env: Env) => {
   try {
     const response = await buildRagjamResponse(job, env);
     if (response.file) {
-      await sendInteractionMediaEdit(env, job.applicationId, job.interactionToken, response.content, response.file);
+      await sendInteractionMediaEdit(env, job.applicationId, job.interactionToken, response.content, response.file, job.requesterUserId);
     } else {
-      await sendInteractionEdit(env, job.applicationId, job.interactionToken, response.content);
+      await sendInteractionEdit(env, job.applicationId, job.interactionToken, response.content, job.requesterUserId);
     }
   } catch (error) {
     logger.error("ragjam_command_failed", {
@@ -168,6 +168,7 @@ export const processRagjamJob = async (job: RagjamJob, env: Env) => {
       job.applicationId,
       job.interactionToken,
       "Could not generate that song. Try a different prompt or lyrics.",
+      job.requesterUserId,
     ).catch(() => undefined);
   }
 };

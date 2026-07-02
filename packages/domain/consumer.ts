@@ -229,7 +229,7 @@ const processChatJob = async (job: AiChatJob | AiAskJob, env: Env, startedAt: nu
       });
     }
 
-    await sendChannelReply(env, responseChannelId, responseText);
+    await sendChannelReply(env, responseChannelId, responseText, job.requesterUserId);
     await record("ok", null);
   } catch (error) {
     logger.error("ai_job_failed", { error: errorMessage(error) });
@@ -239,6 +239,7 @@ const processChatJob = async (job: AiChatJob | AiAskJob, env: Env, startedAt: nu
         env,
         job.channelId,
         "I started this thread, but the AI response failed. Try again in a moment.",
+        job.requesterUserId,
       ).catch(() => undefined);
     }
   }
@@ -266,7 +267,11 @@ const jobProcessors: AiJobProcessors = {
 
 export const processAiQueueMessage = async (message: Message<unknown>, env: Env) => {
   const startedAt = Date.now();
-  const decoded = peerReceive(message.body, decodeAiJobEnvelope, "gateway", peerDeliveryAuthorize("brain"));
+  const decoded = await peerReceive(message.body, decodeAiJobEnvelope, {
+    self: "brain",
+    expectedIssuers: ["gateway"],
+    authorize: peerDeliveryAuthorize("brain"),
+  });
   if (!decoded) {
     message.ack();
     return;

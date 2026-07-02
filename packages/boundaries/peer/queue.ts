@@ -1,42 +1,31 @@
 import {
-  allowAll,
-  logPeerDenial,
   receiveAtBoundary,
   type PeerAuthorize,
-  type PeerHop,
 } from "./peer";
+import type { WorkerIdentity } from "../../identity";
 
-// Queue transport for the peer boundary. Producers enqueue contracts-encoded
-// envelopes through peerSend; consumers decode through peerReceive so decode
-// denials are logged with the boundary context in exactly one place.
+// Queue transport for the peer boundary. Producers enqueue through the senders
+// built by peerLinks (which mint the identity-context token and wrap it beside
+// the contracts-encoded envelope); consumers decode through peerReceive, which
+// verifies the token and runs the Cedar authorize hook before handing the
+// payload to domain code.
 
-const queueHop = (identity: string): PeerHop => ({ identity, trustZone: "peer-queue" });
-
-export type PeerSendOptions = {
-  delaySeconds?: number;
+export type PeerQueueReceiveConfig = {
+  self: WorkerIdentity;
+  expectedIssuers: readonly WorkerIdentity[];
   authorize?: PeerAuthorize;
-};
-
-export const peerSend = async (
-  queue: Queue<Uint8Array>,
-  envelope: Uint8Array,
-  identity: string,
-  options: PeerSendOptions = {},
-) => {
-  const hop = queueHop(identity);
-  if (!(options.authorize ?? allowAll)(hop)) {
-    logPeerDenial(hop, "not_authorized");
-    throw new Error(`Peer send denied for ${identity}`);
-  }
-  await queue.send(
-    envelope,
-    options.delaySeconds === undefined ? undefined : { delaySeconds: options.delaySeconds },
-  );
+  now?: number;
 };
 
 export const peerReceive = <T>(
   body: unknown,
-  decode: (body: unknown) => T | null,
-  identity: string,
-  authorize?: PeerAuthorize,
-): T | null => receiveAtBoundary(body, decode, queueHop(identity), authorize);
+  decode: (bytes: Uint8Array) => T | null,
+  config: PeerQueueReceiveConfig,
+): Promise<T | null> =>
+  receiveAtBoundary(body, decode, {
+    self: config.self,
+    expectedIssuers: config.expectedIssuers,
+    trustZone: "peer-queue",
+    authorize: config.authorize,
+    now: config.now,
+  });

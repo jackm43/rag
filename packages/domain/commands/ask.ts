@@ -1,4 +1,5 @@
-import { peerSend } from "../../boundaries/peer/queue";
+import { peerLinks } from "../../boundaries/peer/links";
+import { SYSTEM_SUBJECT } from "../../identity";
 import { encodeAiJobEnvelope } from "../../contracts";
 import { fallbackThreadTitle } from "../conversation";
 import { createThreadWithoutMessage, fetchChannel, isThreadChannel } from "../../discord";
@@ -51,7 +52,7 @@ export const runAskCommand = async (ctx: CommandContext, env: Env) => {
     title,
   });
 
-  await peerSend(
+  await peerLinks(env).gatewayToBrain.send(
     env.AI_JOBS,
     encodeAiJobEnvelope(
       {
@@ -63,7 +64,7 @@ export const runAskCommand = async (ctx: CommandContext, env: Env) => {
       },
       { source: "interactions", guildId: ctx.guildId },
     ),
-    "gateway",
+    { sub: requester?.id ?? SYSTEM_SUBJECT },
   );
 
   return {

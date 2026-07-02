@@ -13,8 +13,12 @@ import type { Env, ResponderAttachment } from "../../../../packages/contracts/ty
 // the binding). A retry would regenerate the media anyway, so losing queue
 // durability here costs nothing.
 export class Responder extends WorkerEntrypoint<Env> {
-  async deliverInteractionEdit(envelope: Uint8Array, attachment: ResponderAttachment) {
-    await deliverInteractionEdit(this.env, envelope, attachment);
+  async deliverInteractionEdit(
+    envelope: Uint8Array,
+    attachment: ResponderAttachment,
+    idToken: string,
+  ) {
+    await deliverInteractionEdit(this.env, envelope, idToken, attachment);
   }
 }
 

@@ -3,6 +3,7 @@ import {
   decodeAiSpendJobEnvelope,
   decodeReplyJobEnvelope,
 } from "../contracts";
+import { peerEnvelopeBytes } from "../boundaries/peer/peer";
 import { logger } from "../logger";
 
 // Dead-letter consumers: a message landing here has exhausted its retries,
@@ -19,11 +20,15 @@ const logAndAck = (queue: string, message: Message<unknown>, kind: string | unde
   message.ack();
 };
 
+// Dead letters carry the wrapped peer message; unwrap to the capnp envelope
+// bytes before decoding the kind (falls back to raw bytes for resilience).
+const envelopeOf = (message: Message<unknown>) => peerEnvelopeBytes(message.body);
+
 export const processAiJobsDlqMessage = (message: Message<unknown>) =>
-  logAndAck("ai-jobs-dlq", message, decodeAiJobEnvelope(message.body)?.kind);
+  logAndAck("ai-jobs-dlq", message, decodeAiJobEnvelope(envelopeOf(message))?.kind);
 
 export const processSpendJobsDlqMessage = (message: Message<unknown>) =>
-  logAndAck("ai-spend-jobs-dlq", message, decodeAiSpendJobEnvelope(message.body) ? "spend" : undefined);
+  logAndAck("ai-spend-jobs-dlq", message, decodeAiSpendJobEnvelope(envelopeOf(message)) ? "spend" : undefined);
 
 export const processOutboxDlqMessage = (message: Message<unknown>) =>
-  logAndAck("discord-outbox-dlq", message, decodeReplyJobEnvelope(message.body)?.kind);
+  logAndAck("discord-outbox-dlq", message, decodeReplyJobEnvelope(envelopeOf(message))?.kind);

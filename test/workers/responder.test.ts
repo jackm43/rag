@@ -9,7 +9,7 @@ import {
 import { appendSourceFallback } from "../../packages/ai/ask-mode.ts";
 import { editOriginalInteractionResponse } from "../../packages/discord/index.ts";
 import { encodeReplyJobEnvelope } from "../../packages/contracts/index.ts";
-import { createEnv } from "../helpers.ts";
+import { createEnv, mintPeerToken, signedPeerMessage } from "../helpers.ts";
 
 const CHANNEL_ID = "200000000000000001";
 const APPLICATION_ID = "500000000000000001";
@@ -124,13 +124,16 @@ test("responder posts sanitized channel messages with allowed_mentions locked do
     await responderWorker.queue({
       messages: [
         {
-          body: encodeReplyJobEnvelope(
-            {
-              kind: "reply.channel_message",
-              channelId: CHANNEL_ID,
-              content: "Ping <@123456789012345678> and @everyone",
-            },
-            { source: "worker" },
+          body: await signedPeerMessage(
+            encodeReplyJobEnvelope(
+              {
+                kind: "reply.channel_message",
+                channelId: CHANNEL_ID,
+                content: "Ping <@123456789012345678> and @everyone",
+              },
+              { source: "worker" },
+            ),
+            { iss: "brain", aud: "responder" },
           ),
           ack: () => {
             acked = true;
@@ -177,14 +180,17 @@ test("responder edits interactions with text-only content through the outbox", a
     await responderWorker.queue({
       messages: [
         {
-          body: encodeReplyJobEnvelope(
-            {
-              kind: "reply.interaction_edit",
-              applicationId: APPLICATION_ID,
-              interactionToken: "interaction-token",
-              content: `Generated song: https://example.com/song.mp3\nPrompt: ${"a".repeat(2100)}`,
-            },
-            { source: "worker" },
+          body: await signedPeerMessage(
+            encodeReplyJobEnvelope(
+              {
+                kind: "reply.interaction_edit",
+                applicationId: APPLICATION_ID,
+                interactionToken: "interaction-token",
+                content: `Generated song: https://example.com/song.mp3\nPrompt: ${"a".repeat(2100)}`,
+              },
+              { source: "worker" },
+            ),
+            { iss: "brain", aud: "responder" },
           ),
           ack: () => {
             acked = true;
@@ -226,17 +232,19 @@ test("responder delivers media interaction edits over the RPC path", async () =>
   try {
     const env = createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" });
 
+    const mediaEnvelope = encodeReplyJobEnvelope(
+      {
+        kind: "reply.interaction_edit",
+        applicationId: APPLICATION_ID,
+        interactionToken: "interaction-token",
+        content: "a tiny jpeg test image",
+      },
+      { source: "worker" },
+    );
     await deliverInteractionEdit(
       env,
-      encodeReplyJobEnvelope(
-        {
-          kind: "reply.interaction_edit",
-          applicationId: APPLICATION_ID,
-          interactionToken: "interaction-token",
-          content: "a tiny jpeg test image",
-        },
-        { source: "worker" },
-      ),
+      mediaEnvelope,
+      await mintPeerToken(mediaEnvelope, { iss: "brain", aud: "responder" }),
       {
         name: "bicture.png",
         contentType: "image/png",
@@ -278,17 +286,20 @@ test("responder rejects RPC envelopes that are not interaction edits", async () 
     assert.equal(rejected, true);
   };
 
-  await rejects(() =>
+  const channelEnvelope = encodeReplyJobEnvelope(
+    { kind: "reply.channel_message", channelId: CHANNEL_ID, content: "hello" },
+    { source: "worker" },
+  );
+  await rejects(async () =>
     deliverInteractionEdit(
       env,
-      encodeReplyJobEnvelope(
-        { kind: "reply.channel_message", channelId: CHANNEL_ID, content: "hello" },
-        { source: "worker" },
-      ),
+      channelEnvelope,
+      await mintPeerToken(channelEnvelope, { iss: "brain", aud: "responder" }),
       { name: "bicture.png", contentType: "image/png", data: new ArrayBuffer(4) },
     ),
   );
-  await rejects(() => deliverInteractionEdit(env, new Uint8Array([1, 2, 3, 4, 5]), null));
+  // A garbage token fails verification, so the edit is denied before decoding.
+  await rejects(() => deliverInteractionEdit(env, new Uint8Array([1, 2, 3, 4, 5]), "not-a-token", null));
 });
 
 test("responder acknowledges malformed outbox messages without egress", async () => {
@@ -331,9 +342,12 @@ test("responder retries channel posts on retryable Discord errors and acks termi
 
   try {
     const env = createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" });
-    const body = encodeReplyJobEnvelope(
-      { kind: "reply.channel_message", channelId: CHANNEL_ID, content: "hello" },
-      { source: "worker" },
+    const body = await signedPeerMessage(
+      encodeReplyJobEnvelope(
+        { kind: "reply.channel_message", channelId: CHANNEL_ID, content: "hello" },
+        { source: "worker" },
+      ),
+      { iss: "brain", aud: "responder" },
     );
 
     let retried = false;

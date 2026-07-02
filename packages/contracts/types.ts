@@ -139,6 +139,16 @@ export type ResponderAttachment = {
   data: ArrayBuffer;
 };
 
+// Peer-hop queue message: the Cap'n Proto envelope bytes are carried unchanged,
+// with the signed identity-context token (compact JWS) as a sibling field. The
+// token is minted by the sending worker and verified at the receiving boundary
+// before Cedar runs; keeping it out of the capnp envelope means the contract
+// wire format is untouched and the token binds a hash of `envelope`.
+export type PeerQueueMessage = {
+  envelope: Uint8Array;
+  idToken: string;
+};
+
 export type AiThread = {
   threadId: string;
   parentChannelId?: string;
@@ -187,13 +197,14 @@ export type DiscordChannel = {
 };
 
 export type Env = Cloudflare.Env & {
-  AI_JOBS: Queue<Uint8Array>;
-  SPEND_JOBS?: Queue<Uint8Array>;
-  DISCORD_OUTBOX?: Queue<Uint8Array>;
+  AI_JOBS: Queue<PeerQueueMessage>;
+  SPEND_JOBS?: Queue<PeerQueueMessage>;
+  DISCORD_OUTBOX?: Queue<PeerQueueMessage>;
   RESPONDER?: {
     deliverInteractionEdit: (
       envelope: Uint8Array,
       attachment: ResponderAttachment,
+      idToken: string,
     ) => Promise<void>;
   };
   CLOUDFLARE_API_TOKEN?: string;
@@ -202,6 +213,12 @@ export type Env = Cloudflare.Env & {
   ALLOWED_GUILD_IDS?: string;
   AI_BURST_LIMIT_PER_MINUTE?: string;
   AI_GLOBAL_DAILY_BUDGET_USD?: string;
+  // Per-worker Ed25519 signing keys (private JWK JSON), provisioned as secrets.
+  // Only the sending workers hold one: the gateway mints origin contexts, the
+  // brain re-mints on-behalf-of tokens for its downstream hops. Receivers read
+  // public keys from the committed keyring, not these.
+  GATEWAY_SIGNING_KEY?: string;
+  BRAIN_SIGNING_KEY?: string;
 };
 
 export const DISCORD_API_BASE_URL = "https://discord.com/api/v10";

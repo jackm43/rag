@@ -9,9 +9,9 @@ import {
 import brainWorker from "../../workers/services/brain/src/index.ts";
 import { resolveGatewayMessage } from "../../packages/domain/mention.ts";
 import responderWorker from "../../workers/services/responder/src/index.ts";
-import { decodeAiJobEnvelope, decodeReplyJobEnvelope, encodeAiJobEnvelope } from "../../packages/contracts/index.ts";
+import { decodeAiJobEnvelope, decodeReplyJobEnvelope } from "../../packages/contracts/index.ts";
 import { fetchChannelMessages } from "../../packages/discord/index.ts";
-import { createDbMock, createEnv } from "../helpers.ts";
+import { createDbMock, createEnv, gatewayAiJob, sentEnvelope } from "../helpers.ts";
 
 const BOT_USER_ID = "100000000000000001";
 const GUILD_ID = "100000000000000002";
@@ -75,8 +75,8 @@ test("gateway message create encodes a validated message.received event with no 
     // No D1 (createEnv's DB throws) and no Discord REST from the DO path.
     assert.deepEqual(fetchCalls, []);
     assert.equal(queuedJobs.length, 1);
-    assert.ok(queuedJobs[0] instanceof Uint8Array);
-    assert.deepEqual(decodeAiJobEnvelope(queuedJobs[0]), {
+    assert.ok(sentEnvelope(queuedJobs[0]) instanceof Uint8Array);
+    assert.deepEqual(decodeAiJobEnvelope(sentEnvelope(queuedJobs[0])), {
       kind: "message.received",
       messageId: MESSAGE_ID,
       channelId: CHANNEL_ID,
@@ -121,7 +121,7 @@ test("gateway message create carries only replied-to message metadata", async ()
   );
 
   assert.equal(queuedJobs.length, 1);
-  assert.deepEqual(decodeAiJobEnvelope(queuedJobs[0]), {
+  assert.deepEqual(decodeAiJobEnvelope(sentEnvelope(queuedJobs[0])), {
     kind: "message.received",
     messageId: MESSAGE_ID,
     channelId: CHANNEL_ID,
@@ -181,7 +181,7 @@ test("gateway message create skips bots and empty prompts but enqueues everythin
     BOT_USER_ID,
   );
   assert.equal(queuedJobs.length, 1);
-  assert.equal(decodeAiJobEnvelope(queuedJobs[0])?.kind, "message.received");
+  assert.equal(decodeAiJobEnvelope(sentEnvelope(queuedJobs[0]))?.kind, "message.received");
 });
 
 test("resolveGatewayMessage resolves channel mentions into channel replies", async () => {
@@ -345,14 +345,14 @@ test("queue handler processes message.received mentions in-process without re-en
   };
 
   try {
-    const outboxJobs: Uint8Array[] = [];
+    const outboxJobs: unknown[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
       DB: createDbMock({}),
       DISCORD_OUTBOX: {
-        send: async (body: Uint8Array) => {
+        send: async (body: unknown) => {
           outboxJobs.push(body);
         },
       },
@@ -362,7 +362,7 @@ test("queue handler processes message.received mentions in-process without re-en
     await brainWorker.queue({
       messages: [
         {
-          body: encodeAiJobEnvelope(
+          body: await gatewayAiJob(
             {
               kind: "message.received",
               messageId: MESSAGE_ID,
@@ -392,7 +392,7 @@ test("queue handler processes message.received mentions in-process without re-en
     assert.deepEqual(input.messages.slice(1), [{ role: "user", content: "alice: Explain queues" }]);
 
     assert.equal(outboxJobs.length, 1);
-    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+    assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(outboxJobs[0])), {
       kind: "reply.channel_message",
       channelId: CHANNEL_ID,
       content: "Short answer.",
@@ -410,7 +410,7 @@ test("queue handler acknowledges irrelevant message.received events without side
   await brainWorker.queue({
     messages: [
       {
-        body: encodeAiJobEnvelope(
+        body: await gatewayAiJob(
           {
             kind: "message.received",
             messageId: MESSAGE_ID,
@@ -588,21 +588,21 @@ test("queue handler posts channel reply jobs without creating a thread", async (
   };
 
   try {
-    const outboxJobs: Uint8Array[] = [];
+    const outboxJobs: unknown[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
       DB: createDbMock({}),
       DISCORD_OUTBOX: {
-        send: async (body: Uint8Array) => {
+        send: async (body: unknown) => {
           outboxJobs.push(body);
         },
       },
     });
     const ackedMessages: unknown[] = [];
     const message = {
-      body: encodeAiJobEnvelope(
+      body: await gatewayAiJob(
         {
           kind: "channel_reply",
           channelId: CHANNEL_ID,
@@ -640,7 +640,7 @@ test("queue handler posts channel reply jobs without creating a thread", async (
       undefined,
     );
     assert.equal(outboxJobs.length, 1);
-    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+    assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(outboxJobs[0])), {
       kind: "reply.channel_message",
       channelId: CHANNEL_ID,
       content: "Short answer.",
@@ -667,13 +667,13 @@ test("queue handler treats a thread-start job as fresh, creates a thread, and po
   };
 
   try {
-    const outboxJobs: Uint8Array[] = [];
+    const outboxJobs: unknown[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
       DISCORD_OUTBOX: {
-        send: async (body: Uint8Array) => {
+        send: async (body: unknown) => {
           outboxJobs.push(body);
         },
       },
@@ -698,7 +698,7 @@ test("queue handler treats a thread-start job as fresh, creates a thread, and po
     });
     const ackedMessages: unknown[] = [];
     const message = {
-      body: encodeAiJobEnvelope(
+      body: await gatewayAiJob(
         {
           kind: "thread_start",
           channelId: CHANNEL_ID,
@@ -741,7 +741,7 @@ test("queue handler treats a thread-start job as fresh, creates a thread, and po
     });
 
     assert.equal(outboxJobs.length, 1);
-    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+    assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(outboxJobs[0])), {
       kind: "reply.channel_message",
       channelId: THREAD_ID,
       content: "Short answer.",
@@ -796,13 +796,13 @@ test("queue handler builds a conversation from tracked thread history and posts 
   };
 
   try {
-    const outboxJobs: Uint8Array[] = [];
+    const outboxJobs: unknown[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
       DISCORD_OUTBOX: {
-        send: async (body: Uint8Array) => {
+        send: async (body: unknown) => {
           outboxJobs.push(body);
         },
       },
@@ -820,7 +820,7 @@ test("queue handler builds a conversation from tracked thread history and posts 
     });
     const ackedMessages: unknown[] = [];
     const message = {
-      body: encodeAiJobEnvelope(
+      body: await gatewayAiJob(
         {
           kind: "thread_reply",
           channelId: THREAD_ID,
@@ -862,7 +862,7 @@ test("queue handler builds a conversation from tracked thread history and posts 
     ]);
 
     assert.equal(outboxJobs.length, 1);
-    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+    assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(outboxJobs[0])), {
       kind: "reply.channel_message",
       channelId: THREAD_ID,
       content: "Short answer.",
@@ -915,7 +915,7 @@ test("queue handler keeps non-search replies inside /ask thread mode", async () 
       }),
     });
     const message = {
-      body: encodeAiJobEnvelope(
+      body: await gatewayAiJob(
         {
           kind: "thread_reply",
           channelId: THREAD_ID,
@@ -990,13 +990,13 @@ test("queue handler uses web search for current follow-ups in /ask threads", asy
   };
 
   try {
-    const outboxJobs: Uint8Array[] = [];
+    const outboxJobs: unknown[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
       DISCORD_OUTBOX: {
-        send: async (body: Uint8Array) => {
+        send: async (body: unknown) => {
           outboxJobs.push(body);
         },
       },
@@ -1013,7 +1013,7 @@ test("queue handler uses web search for current follow-ups in /ask threads", asy
       }),
     });
     const message = {
-      body: encodeAiJobEnvelope(
+      body: await gatewayAiJob(
         {
           kind: "thread_reply",
           channelId: THREAD_ID,
@@ -1044,7 +1044,7 @@ test("queue handler uses web search for current follow-ups in /ask threads", asy
     assert.deepEqual(body.web_search_options, { search_context_size: "medium" });
 
     assert.equal(outboxJobs.length, 1);
-    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+    assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(outboxJobs[0])), {
       kind: "reply.channel_message",
       channelId: THREAD_ID,
       content:
@@ -1103,7 +1103,7 @@ test("queue handler excludes rag command bot output from thread history", async 
       }),
     });
     const message = {
-      body: encodeAiJobEnvelope(
+      body: await gatewayAiJob(
         {
           kind: "thread_reply",
           channelId: THREAD_ID,
@@ -1179,7 +1179,7 @@ test("queue handler fetches replied-to context from Discord REST", async () => {
       DB: createDbMock({}),
     });
     const message = {
-      body: encodeAiJobEnvelope(
+      body: await gatewayAiJob(
         {
           kind: "thread_reply",
           channelId: THREAD_ID,
@@ -1233,20 +1233,20 @@ test("raw model output crosses the outbox and the responder sanitizes it on egre
   };
 
   try {
-    const outboxJobs: Uint8Array[] = [];
+    const outboxJobs: unknown[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
       DISCORD_OUTBOX: {
-        send: async (body: Uint8Array) => {
+        send: async (body: unknown) => {
           outboxJobs.push(body);
         },
       },
       DB: createDbMock({}),
     });
     const message = {
-      body: encodeAiJobEnvelope(
+      body: await gatewayAiJob(
         {
           kind: "thread_reply",
           channelId: THREAD_ID,
@@ -1264,7 +1264,7 @@ test("raw model output crosses the outbox and the responder sanitizes it on egre
 
     // The brain ships the raw model text; sanitisation is the responder's job.
     assert.equal(outboxJobs.length, 1);
-    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+    assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(outboxJobs[0])), {
       kind: "reply.channel_message",
       channelId: THREAD_ID,
       content: "Hello <@123456789012345678> there 123456789012345678",
@@ -1301,20 +1301,20 @@ test("queue handler uses the source-controlled partner model", async () => {
   };
 
   try {
-    const outboxJobs: Uint8Array[] = [];
+    const outboxJobs: unknown[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
       DISCORD_OUTBOX: {
-        send: async (body: Uint8Array) => {
+        send: async (body: unknown) => {
           outboxJobs.push(body);
         },
       },
       DB: createDbMock(),
     });
     const message = {
-      body: encodeAiJobEnvelope(
+      body: await gatewayAiJob(
         {
           kind: "thread_reply",
           channelId: THREAD_ID,
@@ -1338,7 +1338,7 @@ test("queue handler uses the source-controlled partner model", async () => {
     assert.equal(gatewayBody.max_completion_tokens, undefined);
 
     assert.equal(outboxJobs.length, 1);
-    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+    assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(outboxJobs[0])), {
       kind: "reply.channel_message",
       channelId: THREAD_ID,
       content: "grok response",
@@ -1365,13 +1365,13 @@ test("queue handler records partner AI Gateway usage", async () => {
   };
 
   try {
-    const outboxJobs: Uint8Array[] = [];
+    const outboxJobs: unknown[] = [];
     const env = createEnv("unused", {
       DISCORD_BOT_TOKEN: "bot-token",
       CF_ACCOUNT_ID: "account-id",
       CF_AIG_TOKEN: "gateway-token",
       DISCORD_OUTBOX: {
-        send: async (body: Uint8Array) => {
+        send: async (body: unknown) => {
           outboxJobs.push(body);
         },
       },
@@ -1398,7 +1398,7 @@ test("queue handler records partner AI Gateway usage", async () => {
       },
     } as never;
     const message = {
-      body: encodeAiJobEnvelope(
+      body: await gatewayAiJob(
         {
           kind: "thread_reply",
           channelId: THREAD_ID,
@@ -1430,7 +1430,7 @@ test("queue handler records partner AI Gateway usage", async () => {
 
     // Raw model text crosses the outbox; the sanitized text is what gets recorded.
     assert.equal(outboxJobs.length, 1);
-    assert.deepEqual(decodeReplyJobEnvelope(outboxJobs[0]), {
+    assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(outboxJobs[0])), {
       kind: "reply.channel_message",
       channelId: THREAD_ID,
       content: "Ragbot: gateway response",
