@@ -16,6 +16,7 @@ import { sendChannelReply } from "./outbox";
 import { finalizeAiReplyText } from "./responder";
 import { recordAiThread } from "./threads";
 import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "../ai/tracked-ai";
+import { peerReceive } from "../boundaries/peer/queue";
 import { decodeAiJobEnvelope } from "../contracts";
 import {
   type AiAskJob,
@@ -264,9 +265,8 @@ const jobProcessors: AiJobProcessors = {
 
 export const processAiQueueMessage = async (message: Message<unknown>, env: Env) => {
   const startedAt = Date.now();
-  const decoded = decodeAiJobEnvelope(message.body);
+  const decoded = peerReceive(message.body, decodeAiJobEnvelope, "gateway");
   if (!decoded) {
-    logger.warn("ai_job_invalid");
     message.ack();
     return;
   }

@@ -1,6 +1,7 @@
 import { decodeAiSpendJobEnvelope, encodeAiSpendJobEnvelope } from "../contracts";
 import { errorMessage, logger } from "../logger";
 import { boundaryClients } from "../boundaries/outbound/clients";
+import { peerReceive, peerSend } from "../boundaries/peer/queue";
 import type { Env } from "../contracts/types";
 import { isRecord } from "../contracts/validation";
 
@@ -69,10 +70,14 @@ export const recordAiSpendEvent = async (env: Env, input: SpendEventInput) => {
       )
       .run();
 
-    await env.SPEND_JOBS?.send(
-      encodeAiSpendJobEnvelope({ spendEventId: sourceId }, { source: "worker" }),
-      { delaySeconds: 120 },
-    );
+    if (env.SPEND_JOBS) {
+      await peerSend(
+        env.SPEND_JOBS,
+        encodeAiSpendJobEnvelope({ spendEventId: sourceId }, { source: "worker" }),
+        "brain",
+        { delaySeconds: 120 },
+      );
+    }
   } catch (error) {
     logger.warn("ai_spend_event_record_failed", { error: errorMessage(error), kind: input.kind, model: input.model });
   }
@@ -145,9 +150,8 @@ const findGatewayLogCostMicros = async (env: Env, sourceId: string) => {
 };
 
 export const processSpendQueueMessage = async (message: Message<unknown>, env: Env) => {
-  const job = decodeAiSpendJobEnvelope(message.body);
+  const job = peerReceive(message.body, decodeAiSpendJobEnvelope, "brain");
   if (!job) {
-    logger.warn("ai_spend_job_invalid");
     message.ack();
     return;
   }

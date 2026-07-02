@@ -1,4 +1,5 @@
 import type { InteractionMessageData, InteractionResponseFile } from "../../discord";
+import { peerSend } from "../../boundaries/peer/queue";
 import { encodeAiJobEnvelope } from "../../contracts";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
@@ -122,11 +123,13 @@ export const executeCommand = async (
   }
 
   if (spec.kind === "enqueue") {
-    await env.AI_JOBS.send(
+    await peerSend(
+      env.AI_JOBS,
       encodeAiJobEnvelope(spec.buildJob(ctx), {
         source: "interactions",
         guildId: ctx.guildId,
       }),
+      "gateway",
     );
     return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
   }

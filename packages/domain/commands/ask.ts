@@ -1,3 +1,4 @@
+import { peerSend } from "../../boundaries/peer/queue";
 import { encodeAiJobEnvelope } from "../../contracts";
 import { fallbackThreadTitle } from "../conversation";
 import { createThreadWithoutMessage, fetchChannel, isThreadChannel } from "../../discord";
@@ -50,7 +51,8 @@ export const runAskCommand = async (ctx: CommandContext, env: Env) => {
     title,
   });
 
-  await env.AI_JOBS.send(
+  await peerSend(
+    env.AI_JOBS,
     encodeAiJobEnvelope(
       {
         kind: "ask",
@@ -61,6 +63,7 @@ export const runAskCommand = async (ctx: CommandContext, env: Env) => {
       },
       { source: "interactions", guildId: ctx.guildId },
     ),
+    "gateway",
   );
 
   return {

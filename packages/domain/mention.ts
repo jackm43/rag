@@ -1,3 +1,4 @@
+import { peerSend } from "../boundaries/peer/queue";
 import { encodeAiJobEnvelope, isSnowflake, MAX_FREE_TEXT_LENGTH, MAX_MENTION_IDS } from "../contracts";
 import { fetchBotRoleIds } from "../discord";
 import { activeAiBanForUser } from "./bans";
@@ -115,8 +116,10 @@ export const handleGatewayMessageCreate = async (
     return;
   }
 
-  await env.AI_JOBS.send(
+  await peerSend(
+    env.AI_JOBS,
     encodeAiJobEnvelope(gatewayMessageJob(message, botUserId), { source: "gateway" }),
+    "gateway",
   );
 };
 
