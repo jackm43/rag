@@ -1,0 +1,67 @@
+{
+  "name": "ragbot-connectors-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  // Cedar policy sources are bundled as Text (the wasm engine is bundled via
+  // wrangler's built-in CompiledWasm rule). No .md is needed here.
+  "rules": [
+    {
+      "type": "Text",
+      "globs": [
+        "**/*.cedar"
+      ],
+      "fallthrough": true
+    }
+  ],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  // The credential broker has NO public route and NO queue. It is reachable only
+  // through the CONNECTORS service binding a caller declares — no internet-facing
+  // worker owns provider credentials.
+  "workers_dev": false,
+  "vars": {
+    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271"
+  },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true
+    }
+  },
+  "durable_objects": {
+    "bindings": [
+      // Service registry hosted by the standalone ragbot-registry-worker.
+      {
+        "name": "SERVICE_REGISTRY",
+        "class_name": "ServiceRegistry",
+        "script_name": "ragbot-registry-worker"
+      },
+      // The broker's own grant/token store, defined in THIS worker.
+      {
+        "name": "CONNECTOR_STORE",
+        "class_name": "ConnectorStore"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ConnectorStore"
+      ]
+    }
+  ]
+  // Secrets (set with `wrangler secret put -c this-file`), NOT committed:
+  //   GITHUB_APP_ID            — the numeric GitHub App id (JWT iss)
+  //   GITHUB_APP_PRIVATE_KEY   — the App's RSA private-key PEM (PKCS#8 or PKCS#1)
+  //   SERVICE_PUBLIC_KEYS      — production verifying keyring (JSON; a var, but
+  //                              set as a secret to keep it out of the config)
+  //   CONNECTORS_TOKEN_ENC_KEY — optional AES-GCM key (base64url 32 bytes) for
+  //                              3LO token values-at-rest
+  // These can later be sourced from Cloudflare Secrets Store; worker secrets for
+  // now (see CONNECTORS.md).
+}
