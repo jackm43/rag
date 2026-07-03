@@ -36,7 +36,7 @@ paths:
       operationId: devProxyCommand
       summary: Proxy a slash command through the gateway
       description: >
-        Runs a command through the production gateway → brain path, authorized as
+        Runs a command through the production gateway → workflows path, authorized as
         the authenticated Discord user. Requires BOTH a valid Access token AND a
         Better Auth session that is bound to the same Access identity. The
         response is the gateway's command result relayed verbatim.
@@ -195,73 +195,197 @@ paths:
                 properties:
                   secret:
                     $ref: "#/components/schemas/SetConnectorSecretResult"
-    post:
-      operationId: connectorGrant
-      summary: "Reserved: issue an admin-initiated grant (not yet implemented)"
-      description: >
-        Reserved so the contract is stable while grant wiring lands later.
-        Returns 501 today.
-      security:
-        - cfAccess: []
-          betterAuthSession: []
-      parameters:
-        - $ref: "#/components/parameters/ConnectorId"
-      responses:
-        "501":
-          description: Not implemented yet (reserved path).
   /api/connectors/{id}/grant:
     post:
-      operationId: connectorGrantReserved
-      summary: "Reserved: admin grant (not yet implemented)"
-      description: Reserved path; returns 501 today.
+      operationId: connectorGrant
+      summary: Begin an admin-initiated 3LO authorization
+      description: >
+        Starts a connector's oauth2_authorization_code (3LO) consent flow as the
+        authenticated Discord admin (connector.authorize at the broker). The
+        broker mints a SINGLE-USE state bound to that acting subject, persists
+        it, and returns the provider consent URL; the UI sends the admin there,
+        and the provider redirects back to
+        GET /api/connectors/{id}/callback with the code and that state. Only a
+        connector whose kind supports 3LO can begin — anything else is the
+        broker's fail-closed 400, relayed honestly. No request body.
       security:
         - cfAccess: []
           betterAuthSession: []
       parameters:
         - $ref: "#/components/parameters/ConnectorId"
       responses:
-        "501":
-          description: Not implemented yet (reserved path).
+        "200":
+          description: The provider consent URL to send the admin to.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GrantAuthorizationResult"
+        "400":
+          description: The connector's kind has no 3LO authorization flow.
+        "401":
+          description: Missing/invalid Access token or no valid session.
+        "403":
+          description: The dev-proxy is not authorized for connector.authorize.
+        "404":
+          description: Unknown connector.
+        "502":
+          description: Broker error.
   /api/connectors/{id}/installations:
     get:
-      operationId: connectorInstallations
-      summary: "Reserved: list a connector's installations (not yet implemented)"
-      description: Reserved path; returns 501 today.
+      operationId: listConnectorInstallations
+      summary: List a github_app connector's App installations
+      description: >
+        The connector's GitHub App installations (connector.admin.read at the
+        broker), trimmed to {id, accountLogin, repositorySelection} for the
+        admin UI's installation picker. The App JWT that lists them stays
+        broker-side; only a github_app connector has installations to list
+        (anything else is the broker's fail-closed 400).
       security:
         - cfAccess: []
           betterAuthSession: []
       parameters:
         - $ref: "#/components/parameters/ConnectorId"
       responses:
-        "501":
-          description: Not implemented yet (reserved path).
+        "200":
+          description: The connector's installations.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  installations:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ConnectorInstallation"
+        "400":
+          description: The connector's kind has no installations to list.
+        "401":
+          description: Missing/invalid Access token or no valid session.
+        "403":
+          description: The dev-proxy is not authorized for connector.admin.read.
+        "404":
+          description: Unknown connector.
+        "502":
+          description: Broker error.
   /api/connectors/{id}/callback:
     get:
       operationId: connectorCallbackGet
-      summary: "Reserved: OAuth/app callback (not yet implemented)"
+      summary: 3LO provider redirect callback (browser)
       description: >
-        Reserved for a connector's authorization callback
-        (ragbot-dev.jsmunro.me/api/connectors/{id}/callback). Returns 501 today.
+        The connector's authorization callback
+        (https://ragbot-dev.jsmunro.me/api/connectors/{id}/callback) — where the
+        provider redirects the admin's browser after the consent page. The
+        browser still carries the Access cookie and the Better Auth session, so
+        the SAME layered auth applies as on begin; the broker additionally
+        enforces that the completing subject is the one the single-use state was
+        minted for. With ?code=&state= the worker forwards both to the broker's
+        complete_authorization (the code is sensitive — forwarded only, never
+        logged or echoed); with a provider denial (?error=...) it reports
+        failure WITHOUT calling the broker. Responds with a minimal
+        self-contained HTML page either way.
       security:
         - cfAccess: []
           betterAuthSession: []
       parameters:
         - $ref: "#/components/parameters/ConnectorId"
+        - name: code
+          in: query
+          required: false
+          description: The provider's authorization code (success redirect).
+          schema:
+            type: string
+            maxLength: 2048
+        - name: state
+          in: query
+          required: false
+          description: The broker-minted single-use state from begin.
+          schema:
+            type: string
+            maxLength: 2048
+        - name: error
+          in: query
+          required: false
+          description: The provider's denial code (e.g. access_denied).
+          schema:
+            type: string
+        - name: error_description
+          in: query
+          required: false
+          description: The provider's human-readable denial detail.
+          schema:
+            type: string
       responses:
-        "501":
-          description: Not implemented yet (reserved path).
+        "200":
+          description: Authorization complete (HTML page).
+          content:
+            text/html:
+              schema:
+                type: string
+        "400":
+          description: >
+            Provider denial (?error=...) or missing/malformed code/state
+            (HTML page).
+          content:
+            text/html:
+              schema:
+                type: string
+        "401":
+          description: Missing/invalid Access token or no valid session.
+        "403":
+          description: >
+            The state is unknown, expired, already used, or bound to a
+            different subject than the session's (HTML page).
+          content:
+            text/html:
+              schema:
+                type: string
+        "404":
+          description: Unknown connector.
+        "502":
+          description: The broker's code-for-token exchange failed (HTML page).
+          content:
+            text/html:
+              schema:
+                type: string
     post:
       operationId: connectorCallbackPost
-      summary: "Reserved: OAuth/app callback (not yet implemented)"
-      description: Reserved path; returns 501 today.
+      summary: 3LO completion (API variant)
+      description: >
+        Completes a 3LO authorization with the same params as the browser
+        callback, as a JSON body instead of a query string — for an API-driven
+        caller that received the provider redirect out-of-band. Same layered
+        auth, same broker-side subject-bound single-use state enforcement, same
+        code-sensitivity rules.
       security:
         - cfAccess: []
           betterAuthSession: []
       parameters:
         - $ref: "#/components/parameters/ConnectorId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteAuthorizationRequest"
       responses:
-        "501":
-          description: Not implemented yet (reserved path).
+        "200":
+          description: Authorization complete; the broker stored the subject's tokens.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompleteAuthorizationResult"
+        "400":
+          description: Malformed body (missing code/state).
+        "401":
+          description: Missing/invalid Access token or no valid session.
+        "403":
+          description: >
+            The state is unknown, expired, already used, or bound to a
+            different subject than the session's.
+        "404":
+          description: Unknown connector.
+        "502":
+          description: The broker's code-for-token exchange failed.
   /api/secrets/providers:
     get:
       operationId: getSecretsProviders
@@ -481,3 +605,73 @@ components:
         detail:
           type: string
           description: A human-readable operator message (never the secret value).
+    GrantAuthorizationResult:
+      type: object
+      description: >
+        A begun 3LO authorization. The state is the broker-minted single-use
+        handle bound to the acting subject; it rides in the consent URL and
+        comes back on the callback.
+      required:
+        - url
+        - state
+        - connectorId
+      properties:
+        url:
+          type: string
+          description: The provider consent URL to send the admin to.
+        state:
+          type: string
+          description: The broker-minted single-use, subject-bound state.
+        connectorId:
+          type: string
+          description: The connector the authorization was begun for.
+    CompleteAuthorizationRequest:
+      type: object
+      description: >
+        The 3LO completion params (the POST variant of the browser callback's
+        query string). The code is sensitive — forwarded to the broker only,
+        never logged, never returned.
+      required:
+        - code
+        - state
+      properties:
+        code:
+          type: string
+          maxLength: 2048
+          description: The provider's authorization code.
+        state:
+          type: string
+          maxLength: 2048
+          description: The broker-minted single-use state from begin.
+    CompleteAuthorizationResult:
+      type: object
+      description: A completed 3LO authorization. Never carries a token or the code.
+      required:
+        - authorized
+        - connectorId
+      properties:
+        authorized:
+          type: boolean
+          description: Always true on 200 — the broker stored the subject's tokens.
+        connectorId:
+          type: string
+          description: The connector the authorization completed for.
+    ConnectorInstallation:
+      type: object
+      description: >
+        One GitHub App installation, trimmed to the identifying fields the
+        admin surface needs (the raw provider response stays broker-side).
+      required:
+        - id
+        - accountLogin
+        - repositorySelection
+      properties:
+        id:
+          type: number
+          description: The installation id (github_app grant input).
+        accountLogin:
+          type: string
+          description: The org/user account the App is installed on.
+        repositorySelection:
+          type: string
+          description: Whether the installation covers all or selected repositories.

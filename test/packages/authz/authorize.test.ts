@@ -94,23 +94,23 @@ const exchangeRequest = (
 });
 
 test("service invocation is allowed for the legitimate hops and denied for the rest", () => {
-  assert.isTrue(authorize(invokeRequest("gateway", "brain")).allowed);
-  assert.isTrue(authorize(invokeRequest("brain", "responder")).allowed);
-  assert.isTrue(authorize(invokeRequest("brain", "spend")).allowed);
+  assert.isTrue(authorize(invokeRequest("gateway", "workflows")).allowed);
+  assert.isTrue(authorize(invokeRequest("workflows", "responder")).allowed);
+  assert.isTrue(authorize(invokeRequest("workflows", "spend")).allowed);
 
   assert.isFalse(authorize(invokeRequest("gateway", "spend")).allowed);
-  assert.isFalse(authorize(invokeRequest("responder", "brain")).allowed);
+  assert.isFalse(authorize(invokeRequest("responder", "workflows")).allowed);
   assert.isFalse(authorize(invokeRequest("spend", "gateway")).allowed);
 });
 
 test("service exchange is permitted only for the legitimate zone transitions", () => {
-  assert.isTrue(authorize(exchangeRequest("gateway", "brain", "edge", "application")).allowed);
-  assert.isTrue(authorize(exchangeRequest("brain", "responder", "application", "application")).allowed);
-  assert.isTrue(authorize(exchangeRequest("brain", "spend", "application", "application")).allowed);
+  assert.isTrue(authorize(exchangeRequest("gateway", "workflows", "edge", "application")).allowed);
+  assert.isTrue(authorize(exchangeRequest("workflows", "responder", "application", "application")).allowed);
+  assert.isTrue(authorize(exchangeRequest("workflows", "spend", "application", "application")).allowed);
 
   // Unauthorized pair, and a legitimate pair with mismatched zones.
-  assert.isFalse(authorize(exchangeRequest("responder", "brain", "application", "application")).allowed);
-  assert.isFalse(authorize(exchangeRequest("gateway", "brain", "edge", "trusted")).allowed);
+  assert.isFalse(authorize(exchangeRequest("responder", "workflows", "application", "application")).allowed);
+  assert.isFalse(authorize(exchangeRequest("gateway", "workflows", "edge", "trusted")).allowed);
 });
 
 // The registry snapshot shape: Machine entities with zone/targets and Service

@@ -20,8 +20,8 @@ const replyEnvelope = () =>
     { source: "worker" },
   );
 
-const brainSigningKey = () =>
-  crypto.subtle.importKey("jwk", SIGNING_KEY_JWKS.brain, { name: "Ed25519" }, false, ["sign"]);
+const workflowsSigningKey = () =>
+  crypto.subtle.importKey("jwk", SIGNING_KEY_JWKS.workflows, { name: "Ed25519" }, false, ["sign"]);
 
 const captureWarnings = () => {
   const original = console.warn;
@@ -33,11 +33,11 @@ const captureWarnings = () => {
 test("a client for an unauthorized hop denies all calls fail-closed", async () => {
   const warnings = captureWarnings();
   try {
-    // responder -> brain is not a permitted exchange: Cedar denies on first use.
+    // responder -> workflows is not a permitted exchange: Cedar denies on first use.
     const client = createServiceClient({
       self: "responder",
-      target: "brain",
-      signingKey: brainSigningKey,
+      target: "workflows",
+      signingKey: workflowsSigningKey,
     });
     let sent = false;
     const queue = { send: async () => { sent = true; } } as never;
@@ -58,8 +58,8 @@ test("a client for an unauthorized hop denies all calls fail-closed", async () =
 test("a hop without signing material denies fail-closed (every hop requires exchange)", async () => {
   const warnings = captureWarnings();
   try {
-    // gateway -> brain is authorized, but no signing key was supplied.
-    const client = createServiceClient({ self: "gateway", target: "brain", signingKey: null });
+    // gateway -> workflows is authorized, but no signing key was supplied.
+    const client = createServiceClient({ self: "gateway", target: "workflows", signingKey: null });
     let rejected = false;
     await client
       .call({
@@ -78,14 +78,14 @@ test("a hop without signing material denies fail-closed (every hop requires exch
 });
 
 test("an authorized client with a key mints a token the server verifies end to end", async () => {
-  const client = createServiceClient({ self: "brain", target: "responder", signingKey: brainSigningKey });
+  const client = createServiceClient({ self: "workflows", target: "responder", signingKey: workflowsSigningKey });
   let captured: ServiceMessageBytes | undefined;
   const queue = { send: async (body: ServiceMessageBytes) => { captured = body; } } as never;
 
   await client.call({ transport: "queue", queue, envelope: replyEnvelope(), subject: { sub: "user-1" } });
   assert.ok(captured);
 
-  const server = createServiceServer({ self: "responder", expectedIssuers: ["brain"] });
+  const server = createServiceServer({ self: "responder", expectedIssuers: ["workflows"] });
   const received = await server.receive(captured, decodeReplyJobEnvelope);
   assert.deepEqual(received?.payload, {
     kind: "reply.channel_message",
@@ -97,14 +97,14 @@ test("an authorized client with a key mints a token the server verifies end to e
 test("a token signed by the wrong key for a real issuer is denied at the server", async () => {
   const warnings = captureWarnings();
   try {
-    // Forge: claim iss=brain but sign with a freshly generated (non-keyring) key.
+    // Forge: claim iss=workflows but sign with a freshly generated (non-keyring) key.
     const forgedPair = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
       "sign",
       "verify",
     ])) as CryptoKeyPair;
     const envelope = replyEnvelope();
     const context = await buildIdentityContext({
-      iss: "brain",
+      iss: "workflows",
       aud: "responder",
       sub: "user-1",
       trustZone: "application",
@@ -112,7 +112,7 @@ test("a token signed by the wrong key for a real issuer is denied at the server"
     });
     const forgedToken = await mint(forgedPair.privateKey, context);
 
-    const server = createServiceServer({ self: "responder", expectedIssuers: ["brain"] });
+    const server = createServiceServer({ self: "responder", expectedIssuers: ["workflows"] });
     const denied = await server.receive({ envelope, idToken: forgedToken }, decodeReplyJobEnvelope);
     assert.equal(denied, null);
     const denial = warnings.lines.find((line) => line.message === "service_denied");
@@ -126,7 +126,7 @@ test("a valid token replayed against different envelope bytes is denied at the s
   const warnings = captureWarnings();
   try {
     const valid = decodeServiceMessage(
-      await signedServiceMessage(replyEnvelope(), { iss: "brain", aud: "responder" }),
+      await signedServiceMessage(replyEnvelope(), { iss: "workflows", aud: "responder" }),
     );
     assert.ok(valid);
     const replayed = encodeServiceMessage(
@@ -136,7 +136,7 @@ test("a valid token replayed against different envelope bytes is denied at the s
       ),
       valid.idToken,
     );
-    const server = createServiceServer({ self: "responder", expectedIssuers: ["brain"] });
+    const server = createServiceServer({ self: "responder", expectedIssuers: ["workflows"] });
     const denied = await server.receive(replayed, decodeReplyJobEnvelope);
     assert.equal(denied, null);
     const denial = warnings.lines.find((line) => line.message === "service_denied");
@@ -150,7 +150,7 @@ test("the binding transport also denies an unauthorized hop", async () => {
   const warnings = captureWarnings();
   try {
     // spend -> responder is not a permitted exchange.
-    const client = createServiceClient({ self: "spend", target: "responder", signingKey: brainSigningKey });
+    const client = createServiceClient({ self: "spend", target: "responder", signingKey: workflowsSigningKey });
     let rejected = false;
     await client
       .call({
@@ -179,9 +179,9 @@ test("a queue send without a loadable signing key fails closed via serviceClient
       },
     } as never;
     let rejected = false;
-    // Env with no BRAIN_SIGNING_KEY: minting is impossible, so the call denies.
+    // Env with no WORKFLOWS_SIGNING_KEY: minting is impossible, so the call denies.
     await serviceClients({} as never)
-      .brainToResponder.call({
+      .workflowsToResponder.call({
         transport: "queue",
         queue,
         envelope: replyEnvelope(),

@@ -71,10 +71,10 @@ export const recordAiSpendEvent = async (env: Env, input: SpendEventInput) => {
       .run();
 
     if (env.SPEND_JOBS) {
-      // Spend reconciliation is a brain-originated flow: it re-mints an
+      // Spend reconciliation is a workflows-originated flow: it re-mints an
       // on-behalf-of token for the original requester when known, else the
       // user-less "system" subject.
-      await serviceClients(env).brainToSpend.call({
+      await serviceClients(env).workflowsToSpend.call({
         transport: "queue",
         queue: env.SPEND_JOBS,
         envelope: encodeAiSpendJobEnvelope({ spendEventId: sourceId }, { source: "worker" }),
@@ -154,7 +154,7 @@ const findGatewayLogCostMicros = async (env: Env, sourceId: string) => {
 };
 
 export const processSpendQueueMessage = async (message: Message<unknown>, env: Env) => {
-  const server = createServiceServer({ self: "spend", expectedIssuers: ["brain"], env });
+  const server = createServiceServer({ self: "spend", expectedIssuers: ["workflows"], env });
   const received = await server.receive(message.body, decodeAiSpendJobEnvelope);
   if (!received) {
     message.ack();

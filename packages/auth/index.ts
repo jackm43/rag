@@ -34,4 +34,5 @@ export {
   registryEntities,
   resetRegistryCaches,
 } from "./registry";
+export { createQueueWorker, type QueueMessageHandler } from "./queue-worker";
 export type { ServiceManifest } from "./manifest";

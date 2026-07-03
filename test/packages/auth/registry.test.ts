@@ -4,9 +4,9 @@ import { manifestsToEntities, type ServiceManifest } from "../../../packages/aut
 import { authorize } from "../../../packages/authz/authorize.ts";
 
 const MANIFESTS: ServiceManifest[] = [
-  { service: "gateway", zone: "edge", targets: ["brain"], operations: [] },
+  { service: "gateway", zone: "edge", targets: ["workflows"], operations: [] },
   {
-    service: "brain",
+    service: "workflows",
     zone: "application",
     targets: ["responder", "spend"],
     operations: ["thread_start", "ask"],
@@ -22,11 +22,11 @@ const MANIFESTS: ServiceManifest[] = [
 
 test("a service's clients are derived from the other manifests' targets", () => {
   const entities = manifestsToEntities(MANIFESTS);
-  const brainService = entities.find(
-    (entity) => entity.uid.type === "Service" && entity.uid.id === "brain",
+  const workflowsService = entities.find(
+    (entity) => entity.uid.type === "Service" && entity.uid.id === "workflows",
   );
-  assert.ok(brainService);
-  assert.deepEqual(brainService.attrs.clients, [{ __entity: { type: "Machine", id: "gateway" } }]);
+  assert.ok(workflowsService);
+  assert.deepEqual(workflowsService.attrs.clients, [{ __entity: { type: "Machine", id: "gateway" } }]);
 
   // Nothing targets the gateway, so it has no clients.
   const gatewayService = entities.find(
@@ -48,9 +48,9 @@ test("the registered snapshot authorizes exactly the manifest hops through Cedar
       entities,
     ).allowed;
 
-  assert.isTrue(invoke("gateway", "brain"));
-  assert.isTrue(invoke("brain", "responder"));
-  assert.isTrue(invoke("brain", "spend"));
+  assert.isTrue(invoke("gateway", "workflows"));
+  assert.isTrue(invoke("workflows", "responder"));
+  assert.isTrue(invoke("workflows", "spend"));
   assert.isFalse(invoke("responder", "gateway"));
-  assert.isFalse(invoke("spend", "brain"));
+  assert.isFalse(invoke("spend", "workflows"));
 });

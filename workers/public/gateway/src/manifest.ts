@@ -1,7 +1,7 @@
 import { SERVICE_OPERATIONS, SERVICE_ZONE } from "../../../../packages/auth/principal";
 import type { ServiceManifest } from "../../../../packages/auth/manifest";
 
-// The gateway's position: an edge service that exchanges into the brain. Its
+// The gateway's position: an edge service that exchanges into the workflows worker. Its
 // public HTTP surface (openapi.yaml) is not a service-boundary operation; its
 // one registered service operation is the DevProxy entrypoint's
 // `devproxy.command` (SERVICE_OPERATIONS.gateway), the sole hop it accepts over
@@ -11,6 +11,6 @@ import type { ServiceManifest } from "../../../../packages/auth/manifest";
 export const GATEWAY_MANIFEST: ServiceManifest = {
   service: "gateway",
   zone: SERVICE_ZONE.gateway,
-  targets: ["brain"],
+  targets: ["workflows"],
   operations: [...SERVICE_OPERATIONS.gateway],
 };

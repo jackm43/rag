@@ -2,7 +2,7 @@ import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
 import worker from "../../workers/public/gateway/src/index.ts";
-import brainWorker from "../../workers/services/brain/src/index.ts";
+import workflowsWorker from "../../workers/services/workflows/src/index.ts";
 import { shouldUseAskWebSearch } from "../../packages/domain/commands/ask.ts";
 import { decodeAiJobEnvelope, decodeReplyJobEnvelope } from "../../packages/contracts/index.ts";
 import { createDbMock, createEnv, createSignedRequest, gatewayAiJob, sentEnvelope } from "../helpers.ts";
@@ -149,7 +149,8 @@ test("/ask replies with the thread link immediately and answers via the AI jobs 
 
     // The queue consumer posts the answer into the thread.
     let acked = false;
-    await brainWorker.queue({
+    await workflowsWorker.queue({
+      queue: "ai-jobs",
       messages: [
         {
           body: enqueuedJobs[0],
@@ -168,7 +169,7 @@ test("/ask replies with the thread link immediately and answers via the AI jobs 
       { role: "user", content: "Alice: How do queue retries work?" },
     ]);
 
-    // The brain posts nothing to Discord itself; the answer goes through the outbox.
+    // The workflows worker posts nothing to Discord itself; the answer goes through the outbox.
     assert.equal(
       fetchCalls.find((call) => call.url === `https://discord.com/api/v10/channels/${ASK_THREAD_ID}/messages`),
       undefined,
@@ -266,7 +267,8 @@ test("queue handler delivers the /bicture image through the responder RPC bindin
         },
       },
     });
-    await brainWorker.queue({
+    await workflowsWorker.queue({
+      queue: "ai-jobs",
       messages: [
         {
           body: await gatewayAiJob(
@@ -304,7 +306,7 @@ test("queue handler delivers the /bicture image through the responder RPC bindin
     assert.equal(bictureOptions.gateway.metadata.discord_channel_id, BICTURE_CHANNEL_ID);
     assert.match(bictureOptions.gateway.metadata.ragbot_request_id, /^aigreq:/);
 
-    // No direct Discord egress from the brain; the media edit goes over RPC.
+    // No direct Discord egress from the workflows worker; the media edit goes over RPC.
     assert.equal(fetchCalls.find((call) => call.url.includes("discord.com")), undefined);
     assert.equal(rpcCalls.length, 1);
     assert.deepEqual(decodeReplyJobEnvelope(rpcCalls[0].envelope), {
@@ -379,7 +381,8 @@ test("queue handler downloads url-returned /bicture images with a timeout signal
         },
       },
     });
-    await brainWorker.queue({
+    await workflowsWorker.queue({
+      queue: "ai-jobs",
       messages: [
         {
           body: await gatewayAiJob(
@@ -449,7 +452,8 @@ test("queue handler edits /bicture response with a failure message when the imag
         },
       },
     });
-    await brainWorker.queue({
+    await workflowsWorker.queue({
+      queue: "ai-jobs",
       messages: [
         {
           body: await gatewayAiJob(
@@ -568,7 +572,8 @@ test("queue handler delivers the /ragjam audio through the responder RPC binding
         },
       },
     });
-    await brainWorker.queue({
+    await workflowsWorker.queue({
+      queue: "ai-jobs",
       messages: [
         {
           body: await gatewayAiJob(
@@ -610,7 +615,7 @@ test("queue handler delivers the /ragjam audio through the responder RPC binding
     assert.ok(downloadCall);
     assert.ok(downloadCall.init?.signal instanceof AbortSignal);
 
-    // No direct Discord egress from the brain; the media edit goes over RPC.
+    // No direct Discord egress from the workflows worker; the media edit goes over RPC.
     assert.equal(fetchCalls.find((call) => call.url.includes("discord.com")), undefined);
     assert.equal(rpcCalls.length, 1);
     assert.deepEqual(decodeReplyJobEnvelope(rpcCalls[0].envelope), {
@@ -660,7 +665,8 @@ test("queue handler preserves long /ragjam prompt text up to the Discord message
         },
       },
     });
-    await brainWorker.queue({
+    await workflowsWorker.queue({
+      queue: "ai-jobs",
       messages: [
         {
           body: await gatewayAiJob(
@@ -757,7 +763,8 @@ test("queue handler lets /ragjam auto-generate lyrics when omitted", async () =>
         deliverInteractionEdit: async () => undefined,
       },
     });
-    await brainWorker.queue({
+    await workflowsWorker.queue({
+      queue: "ai-jobs",
       messages: [
         {
           body: await gatewayAiJob(
@@ -907,7 +914,8 @@ test("/ask uses the web-search model for current research prompts", async () => 
     ]);
     assert.equal(enqueuedJobs.length, 1);
 
-    await brainWorker.queue({
+    await workflowsWorker.queue({
+      queue: "ai-jobs",
       messages: [{ body: enqueuedJobs[0], ack: () => undefined }],
     } as never, env);
 
@@ -972,7 +980,8 @@ test("queue handler posts a failure notice into the thread when the /ask answer 
     });
     let acked = false;
 
-    await brainWorker.queue({
+    await workflowsWorker.queue({
+      queue: "ai-jobs",
       messages: [
         {
           body: await gatewayAiJob(

@@ -54,32 +54,32 @@ when
 
 // Bootstrap permits: the legitimate hops, one permit each.
 
-@id("invoke-gateway-to-brain")
+@id("invoke-gateway-to-workflows")
 permit (
   principal == Machine::"gateway",
   action == Action::"service.invoke",
-  resource == Service::"brain"
+  resource == Service::"workflows"
 );
 
-@id("invoke-brain-to-responder")
+@id("invoke-workflows-to-responder")
 permit (
-  principal == Machine::"brain",
+  principal == Machine::"workflows",
   action == Action::"service.invoke",
   resource == Service::"responder"
 );
 
-@id("invoke-brain-to-spend")
+@id("invoke-workflows-to-spend")
 permit (
-  principal == Machine::"brain",
+  principal == Machine::"workflows",
   action == Action::"service.invoke",
   resource == Service::"spend"
 );
 
-// The brain invokes the credential broker (a connector.invoke hop). The broker
-// independently gates which connector the brain may touch via connectors.cedar.
-@id("invoke-brain-to-connectors")
+// The workflows worker invokes the credential broker (a connector.invoke hop). The broker
+// independently gates which connector the workflows worker may touch via connectors.cedar.
+@id("invoke-workflows-to-connectors")
 permit (
-  principal == Machine::"brain",
+  principal == Machine::"workflows",
   action == Action::"service.invoke",
   resource == Service::"connectors"
 );
@@ -99,7 +99,7 @@ permit (
 // registered service operation (connector.invoke), carrying a connector.admin.*
 // management op. The broker independently gates which admin op via connectors.cedar
 // (dev-proxy holds no connector.grant/fetch/token permit). This is the second
-// caller of the broker after the brain.
+// caller of the broker after the workflows worker.
 @id("invoke-devproxy-to-connectors")
 permit (
   principal == Machine::"dev-proxy",
@@ -107,33 +107,56 @@ permit (
   resource == Service::"connectors"
 );
 
-@id("exchange-gateway-to-brain")
+// The webhooks edge worker invokes the broker's one registered service
+// operation (connector.invoke), carrying webhook_verify. The broker
+// independently gates it to connector.webhook.verify on the connectors that
+// have a webhook config (connectors.cedar) — the webhooks worker holds no
+// grant/fetch/token permit, so this hop can never reach a credential.
+@id("invoke-webhooks-to-connectors")
+permit (
+  principal == Machine::"webhooks",
+  action == Action::"service.invoke",
+  resource == Service::"connectors"
+);
+
+// The webhooks worker enqueues verified webhook events to the workflows worker (an
+// on-behalf-of ServiceMessage onto the webhook queue), exactly as the gateway
+// enqueues AI jobs. Which envelope kinds the workflows worker accepts is enforced by its
+// registered-operation gate, not here.
+@id("invoke-webhooks-to-workflows")
+permit (
+  principal == Machine::"webhooks",
+  action == Action::"service.invoke",
+  resource == Service::"workflows"
+);
+
+@id("exchange-gateway-to-workflows")
 permit (
   principal == Machine::"gateway",
   action == Action::"service.exchange",
-  resource == Service::"brain"
+  resource == Service::"workflows"
 )
 when { context.fromZone == "edge" && context.toZone == "application" };
 
-@id("exchange-brain-to-responder")
+@id("exchange-workflows-to-responder")
 permit (
-  principal == Machine::"brain",
+  principal == Machine::"workflows",
   action == Action::"service.exchange",
   resource == Service::"responder"
 )
 when { context.fromZone == "application" && context.toZone == "application" };
 
-@id("exchange-brain-to-spend")
+@id("exchange-workflows-to-spend")
 permit (
-  principal == Machine::"brain",
+  principal == Machine::"workflows",
   action == Action::"service.exchange",
   resource == Service::"spend"
 )
 when { context.fromZone == "application" && context.toZone == "application" };
 
-@id("exchange-brain-to-connectors")
+@id("exchange-workflows-to-connectors")
 permit (
-  principal == Machine::"brain",
+  principal == Machine::"workflows",
   action == Action::"service.exchange",
   resource == Service::"connectors"
 )
@@ -141,7 +164,7 @@ when { context.fromZone == "application" && context.toZone == "application" };
 
 // The dev-proxy exchanges an on-behalf-of token from its own edge zone into
 // the gateway's edge zone (an intra-edge hop, unlike the edge→application
-// gateway→brain hop).
+// gateway→workflows hop).
 @id("exchange-devproxy-to-gateway")
 permit (
   principal == Machine::"dev-proxy",
@@ -151,11 +174,31 @@ permit (
 when { context.fromZone == "edge" && context.toZone == "edge" };
 
 // The dev-proxy exchanges into the connectors broker for the admin surface —
-// an edge→application hop, like the gateway→brain crossing.
+// an edge→application hop, like the gateway→workflows crossing.
 @id("exchange-devproxy-to-connectors")
 permit (
   principal == Machine::"dev-proxy",
   action == Action::"service.exchange",
   resource == Service::"connectors"
+)
+when { context.fromZone == "edge" && context.toZone == "application" };
+
+// The webhooks worker exchanges into the connectors broker for signature
+// verification — an edge→application hop, like dev-proxy→connectors.
+@id("exchange-webhooks-to-connectors")
+permit (
+  principal == Machine::"webhooks",
+  action == Action::"service.exchange",
+  resource == Service::"connectors"
+)
+when { context.fromZone == "edge" && context.toZone == "application" };
+
+// The webhooks worker exchanges into the workflows worker for the verified-event enqueue —
+// an edge→application hop, like gateway→workflows.
+@id("exchange-webhooks-to-workflows")
+permit (
+  principal == Machine::"webhooks",
+  action == Action::"service.exchange",
+  resource == Service::"workflows"
 )
 when { context.fromZone == "edge" && context.toZone == "application" };

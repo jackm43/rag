@@ -35,7 +35,7 @@ export interface paths {
         put?: never;
         /**
          * Proxy a slash command through the gateway
-         * @description Runs a command through the production gateway → brain path, authorized as the authenticated Discord user. Requires BOTH a valid Access token AND a Better Auth session that is bound to the same Access identity. The response is the gateway's command result relayed verbatim.
+         * @description Runs a command through the production gateway → workflows path, authorized as the authenticated Discord user. Requires BOTH a valid Access token AND a Better Auth session that is bound to the same Access identity. The response is the gateway's command result relayed verbatim.
          */
         post: operations["devProxyCommand"];
         delete?: never;
@@ -97,11 +97,7 @@ export interface paths {
          * @description Write or re-point a connector's secret (connector.admin.write). The secret `value` flows INWARD only — to the broker, then the backend — and is NEVER returned. The outcome depends on the backend's runtime write capability: `written` (hashicorp-vault, onepassword), `provision_required` (cloudflare-secret-store — re-pointed but must be provisioned via the CF control plane; returned as 202), or `rejected` (wrangler-env with a value is deploy-time only; returned as 409). No outcome is faked.
          */
         put: operations["setConnectorSecret"];
-        /**
-         * Reserved: issue an admin-initiated grant (not yet implemented)
-         * @description Reserved so the contract is stable while grant wiring lands later. Returns 501 today.
-         */
-        post: operations["connectorGrant"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -118,10 +114,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Reserved: admin grant (not yet implemented)
-         * @description Reserved path; returns 501 today.
+         * Begin an admin-initiated 3LO authorization
+         * @description Starts a connector's oauth2_authorization_code (3LO) consent flow as the authenticated Discord admin (connector.authorize at the broker). The broker mints a SINGLE-USE state bound to that acting subject, persists it, and returns the provider consent URL; the UI sends the admin there, and the provider redirects back to GET /api/connectors/{id}/callback with the code and that state. Only a connector whose kind supports 3LO can begin — anything else is the broker's fail-closed 400, relayed honestly. No request body.
          */
-        post: operations["connectorGrantReserved"];
+        post: operations["connectorGrant"];
         delete?: never;
         options?: never;
         head?: never;
@@ -136,10 +132,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Reserved: list a connector's installations (not yet implemented)
-         * @description Reserved path; returns 501 today.
+         * List a github_app connector's App installations
+         * @description The connector's GitHub App installations (connector.admin.read at the broker), trimmed to {id, accountLogin, repositorySelection} for the admin UI's installation picker. The App JWT that lists them stays broker-side; only a github_app connector has installations to list (anything else is the broker's fail-closed 400).
          */
-        get: operations["connectorInstallations"];
+        get: operations["listConnectorInstallations"];
         put?: never;
         post?: never;
         delete?: never;
@@ -156,14 +152,14 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Reserved: OAuth/app callback (not yet implemented)
-         * @description Reserved for a connector's authorization callback (ragbot-dev.jsmunro.me/api/connectors/{id}/callback). Returns 501 today.
+         * 3LO provider redirect callback (browser)
+         * @description The connector's authorization callback (https://ragbot-dev.jsmunro.me/api/connectors/{id}/callback) — where the provider redirects the admin's browser after the consent page. The browser still carries the Access cookie and the Better Auth session, so the SAME layered auth applies as on begin; the broker additionally enforces that the completing subject is the one the single-use state was minted for. With ?code=&state= the worker forwards both to the broker's complete_authorization (the code is sensitive — forwarded only, never logged or echoed); with a provider denial (?error=...) it reports failure WITHOUT calling the broker. Responds with a minimal self-contained HTML page either way.
          */
         get: operations["connectorCallbackGet"];
         put?: never;
         /**
-         * Reserved: OAuth/app callback (not yet implemented)
-         * @description Reserved path; returns 501 today.
+         * 3LO completion (API variant)
+         * @description Completes a 3LO authorization with the same params as the browser callback, as a JSON body instead of a query string — for an API-driven caller that received the provider redirect out-of-band. Same layered auth, same broker-side subject-bound single-use state enforcement, same code-sensitivity rules.
          */
         post: operations["connectorCallbackPost"];
         delete?: never;
@@ -265,6 +261,38 @@ export interface components {
             secretConfigured: boolean;
             /** @description A human-readable operator message (never the secret value). */
             detail?: string;
+        };
+        /** @description A begun 3LO authorization. The state is the broker-minted single-use handle bound to the acting subject; it rides in the consent URL and comes back on the callback. */
+        GrantAuthorizationResult: {
+            /** @description The provider consent URL to send the admin to. */
+            url: string;
+            /** @description The broker-minted single-use, subject-bound state. */
+            state: string;
+            /** @description The connector the authorization was begun for. */
+            connectorId: string;
+        };
+        /** @description The 3LO completion params (the POST variant of the browser callback's query string). The code is sensitive — forwarded to the broker only, never logged, never returned. */
+        CompleteAuthorizationRequest: {
+            /** @description The provider's authorization code. */
+            code: string;
+            /** @description The broker-minted single-use state from begin. */
+            state: string;
+        };
+        /** @description A completed 3LO authorization. Never carries a token or the code. */
+        CompleteAuthorizationResult: {
+            /** @description Always true on 200 — the broker stored the subject's tokens. */
+            authorized: boolean;
+            /** @description The connector the authorization completed for. */
+            connectorId: string;
+        };
+        /** @description One GitHub App installation, trimmed to the identifying fields the admin surface needs (the raw provider response stays broker-side). */
+        ConnectorInstallation: {
+            /** @description The installation id (github_app grant input). */
+            id: number;
+            /** @description The org/user account the App is installed on. */
+            accountLogin: string;
+            /** @description Whether the installation covers all or selected repositories. */
+            repositorySelection: string;
         };
     };
     responses: never;
@@ -539,8 +567,45 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Not implemented yet (reserved path). */
-            501: {
+            /** @description The provider consent URL to send the admin to. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantAuthorizationResult"];
+                };
+            };
+            /** @description The connector's kind has no 3LO authorization flow. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing/invalid Access token or no valid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The dev-proxy is not authorized for connector.authorize. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown connector. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Broker error. */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -548,7 +613,7 @@ export interface operations {
             };
         };
     };
-    connectorGrantReserved: {
+    listConnectorInstallations: {
         parameters: {
             query?: never;
             header?: never;
@@ -560,29 +625,47 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Not implemented yet (reserved path). */
-            501: {
+            /** @description The connector's installations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        installations?: components["schemas"]["ConnectorInstallation"][];
+                    };
+                };
+            };
+            /** @description The connector's kind has no installations to list. */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-        };
-    };
-    connectorInstallations: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The connector's stable slug id. */
-                id: components["parameters"]["ConnectorId"];
+            /** @description Missing/invalid Access token or no valid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Not implemented yet (reserved path). */
-            501: {
+            /** @description The dev-proxy is not authorized for connector.admin.read. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown connector. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Broker error. */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -592,7 +675,16 @@ export interface operations {
     };
     connectorCallbackGet: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description The provider's authorization code (success redirect). */
+                code?: string;
+                /** @description The broker-minted single-use state from begin. */
+                state?: string;
+                /** @description The provider's denial code (e.g. access_denied). */
+                error?: string;
+                /** @description The provider's human-readable denial detail. */
+                error_description?: string;
+            };
             header?: never;
             path: {
                 /** @description The connector's stable slug id. */
@@ -602,12 +694,55 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Not implemented yet (reserved path). */
-            501: {
+            /** @description Authorization complete (HTML page). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Provider denial (?error=...) or missing/malformed code/state (HTML page). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Missing/invalid Access token or no valid session. */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description The state is unknown, expired, already used, or bound to a different subject than the session's (HTML page). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Unknown connector. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The broker's code-for-token exchange failed (HTML page). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
             };
         };
     };
@@ -621,10 +756,51 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompleteAuthorizationRequest"];
+            };
+        };
         responses: {
-            /** @description Not implemented yet (reserved path). */
-            501: {
+            /** @description Authorization complete; the broker stored the subject's tokens. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompleteAuthorizationResult"];
+                };
+            };
+            /** @description Malformed body (missing code/state). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing/invalid Access token or no valid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The state is unknown, expired, already used, or bound to a different subject than the session's. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown connector. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The broker's code-for-token exchange failed. */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

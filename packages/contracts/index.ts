@@ -11,6 +11,8 @@ import type {
   MessageReceivedJob,
   RagjamJob,
   ReplyJob,
+  WebhookEventJob,
+  WebhookEventProvider,
 } from "./types";
 import {
   ChatPayload,
@@ -18,6 +20,7 @@ import {
   DevProxyCommandPayload,
   EventEnvelope,
   EventEnvelope_Payload_Which,
+  WebhookEventPayload,
 } from "./envelope";
 import { asFramedBytes } from "./framing";
 import {
@@ -27,6 +30,7 @@ import {
   validateConnectorInvokeJob,
   validateDevProxyCommandJob,
   validateReplyJob,
+  validateWebhookEventJob,
 } from "./validate";
 
 export {
@@ -57,12 +61,18 @@ export {
   MAX_REPLY_CONTENT_LENGTH,
   MAX_SPEND_EVENT_ID_LENGTH,
   MAX_USERNAME_LENGTH,
+  MAX_WEBHOOK_BODY_BASE64_LENGTH,
+  MAX_WEBHOOK_BODY_BYTES,
+  MAX_WEBHOOK_EVENT_ID_LENGTH,
+  MAX_WEBHOOK_EVENT_TYPE_LENGTH,
   SNOWFLAKE_PATTERN,
   validateAiJob,
   validateAiSpendJob,
   validateConnectorInvokeJob,
   validateDevProxyCommandJob,
   validateReplyJob,
+  validateWebhookEventJob,
+  WEBHOOK_PROVIDERS,
 } from "./validate";
 
 export const ENVELOPE_VERSION = 1;
@@ -86,6 +96,10 @@ const DEVPROXY_COMMAND_TYPE = "devproxy.command";
 // registered service operation) — kept as a literal here to avoid a
 // contracts→auth import cycle, like SPEND_EVENT_TYPE and DEVPROXY_COMMAND_TYPE.
 const CONNECTOR_INVOKE_TYPE = "connector.invoke";
+// The envelope `type` for a verified webhook event (the webhooks worker's
+// enqueue to the workflows worker). Mirrors the entry in SERVICE_OPERATIONS.workflows
+// (packages/auth/principal.ts) — a literal here for the same no-cycle reason.
+const WEBHOOK_EVENT_TYPE = "webhook.event";
 
 type ChatLikeKind = AiChatJob["kind"] | AiAskJob["kind"];
 
@@ -520,6 +534,56 @@ export const decodeConnectorInvokeEnvelope = (bytes: unknown): ConnectorInvokeJo
     }
     const job = connectorInvokeFrom(envelope.payload.connectorInvoke);
     return validateConnectorInvokeJob(job) && envelope.type === CONNECTOR_INVOKE_TYPE ? job : null;
+  } catch {
+    return null;
+  }
+};
+
+export const encodeWebhookEventEnvelope = (
+  job: WebhookEventJob,
+  options: EnvelopeOptions,
+): Uint8Array => {
+  if (!validateWebhookEventJob(job)) {
+    throw new Error("Invalid webhook event for event envelope");
+  }
+  const message = new capnp.Message();
+  const envelope = initEnvelope(message, WEBHOOK_EVENT_TYPE, options);
+  const payload = envelope.payload._initWebhookEvent();
+  payload.connectorId = job.connectorId;
+  payload.provider = job.provider;
+  if (job.eventId !== undefined) {
+    payload.eventId = job.eventId;
+  }
+  if (job.eventType !== undefined) {
+    payload.eventType = job.eventType;
+  }
+  payload.receivedAt = job.receivedAt;
+  payload.bodyBase64 = job.bodyBase64;
+  return new Uint8Array(message.toArrayBuffer());
+};
+
+const webhookEventFrom = (payload: WebhookEventPayload): WebhookEventJob =>
+  compact({
+    kind: "webhook.event",
+    connectorId: payload.connectorId,
+    provider: payload.provider as WebhookEventProvider,
+    eventId: optionalText(payload.eventId),
+    eventType: optionalText(payload.eventType),
+    receivedAt: payload.receivedAt,
+    bodyBase64: payload.bodyBase64,
+  }) as WebhookEventJob;
+
+export const decodeWebhookEventEnvelope = (bytes: unknown): WebhookEventJob | null => {
+  const envelope = readEnvelope(bytes);
+  if (!envelope) {
+    return null;
+  }
+  try {
+    if (envelope.payload.which() !== EventEnvelope_Payload_Which.WEBHOOK_EVENT) {
+      return null;
+    }
+    const job = webhookEventFrom(envelope.payload.webhookEvent);
+    return validateWebhookEventJob(job) && envelope.type === WEBHOOK_EVENT_TYPE ? job : null;
   } catch {
     return null;
   }

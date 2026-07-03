@@ -29,7 +29,7 @@ being implemented.
 ## Today (decentralised)
 
 Each sending worker holds its **own** Ed25519 signing key (`GATEWAY_SIGNING_KEY`,
-`BRAIN_SIGNING_KEY`, `DEV_PROXY_SIGNING_KEY`) and mints its own identity-context token per
+`WORKFLOWS_SIGNING_KEY`, `DEV_PROXY_SIGNING_KEY`) and mints its own identity-context token per
 hop. Receivers verify with the committed/`SERVICE_PUBLIC_KEYS` keyring + Cedar. Strengths:
 no broker on the hot path; simple. Weaknesses: signing keys spread across workers; issuance
 isn't centrally audited; two different patterns (inter-service tokens vs connector grants).

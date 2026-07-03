@@ -34,7 +34,7 @@ test("raw event-envelope bytes do not decode as a service message", () => {
 
 test("a manifest and a snapshot round-trip over the wire", () => {
   const manifest = {
-    service: "brain",
+    service: "workflows",
     zone: "application",
     targets: ["responder", "spend"],
     operations: ["ask"],
@@ -44,7 +44,7 @@ test("a manifest and a snapshot round-trip over the wire", () => {
 
   const snapshot = encodeManifestSnapshot([
     manifest,
-    { service: "gateway", zone: "edge", targets: ["brain"], operations: [], scopes: [] },
+    { service: "gateway", zone: "edge", targets: ["workflows"], operations: [], scopes: [] },
   ]);
   const decoded = decodeManifestSnapshot(snapshot);
   assert.ok(decoded);

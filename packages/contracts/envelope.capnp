@@ -98,6 +98,26 @@ struct ConnectorInvokePayload {
   paramsJson @5 :Text;
 }
 
+struct WebhookEventPayload {
+  # A verified third-party webhook delivery, enqueued by the webhooks edge
+  # worker (webhooks.jsmunro.me) AFTER the broker's webhook_verify confirmed the
+  # provider signature over the exact body bytes. `connectorId` names the
+  # connector whose secret verified it; `provider` is the signature scheme
+  # ("github"/"stripe"); `eventId` is the broker-returned provider event id
+  # (GitHub's X-GitHub-Delivery, Stripe's body id) — present only when the
+  # provider sent one; `eventType` is the provider's event name (e.g. GitHub's
+  # X-GitHub-Event) when one travels in a header; `receivedAt` is the edge
+  # receipt time (ISO 8601). The body rides base64 because the signature was
+  # computed over exact bytes and the workflows worker may need to re-derive facts from
+  # the same bytes.
+  connectorId @0 :Text;
+  provider @1 :Text;
+  eventId @2 :Text;
+  eventType @3 :Text;
+  receivedAt @4 :Text;
+  bodyBase64 @5 :Text;
+}
+
 struct EventEnvelope {
   v @0 :UInt16;
   type @1 :Text;
@@ -122,5 +142,6 @@ struct EventEnvelope {
     messageReceived @17 :MessageReceivedPayload;
     devproxyCommand @18 :DevProxyCommandPayload;
     connectorInvoke @19 :ConnectorInvokePayload;
+    webhookEvent @20 :WebhookEventPayload;
   }
 }

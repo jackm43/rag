@@ -431,6 +431,64 @@ export class ConnectorInvokePayload extends $.Struct {
   }
   toString(): string { return "ConnectorInvokePayload_" + super.toString(); }
 }
+/**
+* A verified third-party webhook delivery, enqueued by the webhooks edge
+* worker (webhooks.jsmunro.me) AFTER the broker's webhook_verify confirmed the
+* provider signature over the exact body bytes. `connectorId` names the
+* connector whose secret verified it; `provider` is the signature scheme
+* ("github"/"stripe"); `eventId` is the broker-returned provider event id
+* (GitHub's X-GitHub-Delivery, Stripe's body id) — present only when the
+* provider sent one; `eventType` is the provider's event name (e.g. GitHub's
+* X-GitHub-Event) when one travels in a header; `receivedAt` is the edge
+* receipt time (ISO 8601). The body rides base64 because the signature was
+* computed over exact bytes and the workflows worker may need to re-derive facts from
+* the same bytes.
+*
+*/
+export class WebhookEventPayload extends $.Struct {
+  static readonly _capnp = {
+    displayName: "WebhookEventPayload",
+    id: "da02b4842df55cbf",
+    size: new $.ObjectSize(0, 6),
+  };
+  get connectorId(): string {
+    return $.utils.getText(0, this);
+  }
+  set connectorId(value: string) {
+    $.utils.setText(0, value, this);
+  }
+  get provider(): string {
+    return $.utils.getText(1, this);
+  }
+  set provider(value: string) {
+    $.utils.setText(1, value, this);
+  }
+  get eventId(): string {
+    return $.utils.getText(2, this);
+  }
+  set eventId(value: string) {
+    $.utils.setText(2, value, this);
+  }
+  get eventType(): string {
+    return $.utils.getText(3, this);
+  }
+  set eventType(value: string) {
+    $.utils.setText(3, value, this);
+  }
+  get receivedAt(): string {
+    return $.utils.getText(4, this);
+  }
+  set receivedAt(value: string) {
+    $.utils.setText(4, value, this);
+  }
+  get bodyBase64(): string {
+    return $.utils.getText(5, this);
+  }
+  set bodyBase64(value: string) {
+    $.utils.setText(5, value, this);
+  }
+  toString(): string { return "WebhookEventPayload_" + super.toString(); }
+}
 export class EventEnvelope_Actor extends $.Struct {
   static readonly _capnp = {
     displayName: "actor",
@@ -463,7 +521,8 @@ export const EventEnvelope_Payload_Which = {
   REPLY_INTERACTION_EDIT: 8,
   MESSAGE_RECEIVED: 9,
   DEVPROXY_COMMAND: 10,
-  CONNECTOR_INVOKE: 11
+  CONNECTOR_INVOKE: 11,
+  WEBHOOK_EVENT: 12
 } as const;
 export type EventEnvelope_Payload_Which = (typeof EventEnvelope_Payload_Which)[keyof typeof EventEnvelope_Payload_Which];
 export class EventEnvelope_Payload extends $.Struct {
@@ -479,6 +538,7 @@ export class EventEnvelope_Payload extends $.Struct {
   static readonly MESSAGE_RECEIVED = EventEnvelope_Payload_Which.MESSAGE_RECEIVED;
   static readonly DEVPROXY_COMMAND = EventEnvelope_Payload_Which.DEVPROXY_COMMAND;
   static readonly CONNECTOR_INVOKE = EventEnvelope_Payload_Which.CONNECTOR_INVOKE;
+  static readonly WEBHOOK_EVENT = EventEnvelope_Payload_Which.WEBHOOK_EVENT;
   static readonly _capnp = {
     displayName: "payload",
     id: "a636c8f1ec42d04d",
@@ -782,6 +842,31 @@ export class EventEnvelope_Payload extends $.Struct {
   }
   set connectorInvoke(value: ConnectorInvokePayload) {
     $.utils.setUint16(2, 11, this);
+    $.utils.copyFrom(value, $.utils.getPointer(7, this));
+  }
+  _adoptWebhookEvent(value: $.Orphan<WebhookEventPayload>): void {
+    $.utils.setUint16(2, 12, this);
+    $.utils.adopt(value, $.utils.getPointer(7, this));
+  }
+  _disownWebhookEvent(): $.Orphan<WebhookEventPayload> {
+    return $.utils.disown(this.webhookEvent);
+  }
+  get webhookEvent(): WebhookEventPayload {
+    $.utils.testWhich("webhookEvent", $.utils.getUint16(2, this), 12, this);
+    return $.utils.getStruct(7, WebhookEventPayload, this);
+  }
+  _hasWebhookEvent(): boolean {
+    return !$.utils.isNull($.utils.getPointer(7, this));
+  }
+  _initWebhookEvent(): WebhookEventPayload {
+    $.utils.setUint16(2, 12, this);
+    return $.utils.initStructAt(7, WebhookEventPayload, this);
+  }
+  get _isWebhookEvent(): boolean {
+    return $.utils.getUint16(2, this) === 12;
+  }
+  set webhookEvent(value: WebhookEventPayload) {
+    $.utils.setUint16(2, 12, this);
     $.utils.copyFrom(value, $.utils.getPointer(7, this));
   }
   toString(): string { return "EventEnvelope_Payload_" + super.toString(); }

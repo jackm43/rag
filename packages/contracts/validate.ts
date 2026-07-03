@@ -6,6 +6,8 @@ import type {
   DevProxyCommandJob,
   DevProxyCommandOption,
   ReplyJob,
+  WebhookEventJob,
+  WebhookEventProvider,
 } from "./types";
 import { isRecord } from "./validation";
 
@@ -38,6 +40,20 @@ export const MAX_CONNECTOR_SUBJECT_LENGTH = 200;
 export const MAX_CONNECTOR_SCOPES = 50;
 export const MAX_CONNECTOR_SCOPE_LENGTH = 200;
 export const MAX_CONNECTOR_PARAMS_LENGTH = 96 * 1024;
+// Webhook-event envelope constraints. The raw body is capped well below the
+// 128 KiB framed-message ceiling so the envelope (base64 body + metadata +
+// the wrapping ServiceMessage) always fits a queue message; the receiver
+// enforces the same raw-byte cap at ingress before base64ing. Event ids and
+// types are short provider identifiers (a GitHub delivery GUID, a Stripe
+// `evt_…` id, an event name), not free text.
+export const WEBHOOK_PROVIDERS: readonly WebhookEventProvider[] = ["github", "stripe"];
+export const MAX_WEBHOOK_BODY_BYTES = 64 * 1024;
+// Base64 expansion of the raw-byte cap: 4 output chars per 3 input bytes.
+export const MAX_WEBHOOK_BODY_BASE64_LENGTH = Math.ceil(MAX_WEBHOOK_BODY_BYTES / 3) * 4;
+export const MAX_WEBHOOK_EVENT_ID_LENGTH = 200;
+export const MAX_WEBHOOK_EVENT_TYPE_LENGTH = 100;
+const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
+
 const CONNECTOR_OPERATIONS: readonly ConnectorOperation[] = [
   "grant",
   "fetch",
@@ -45,10 +61,12 @@ const CONNECTOR_OPERATIONS: readonly ConnectorOperation[] = [
   "introspect",
   "begin_authorization",
   "complete_authorization",
+  "webhook_verify",
   "admin_list",
   "admin_describe",
   "admin_set_secret",
   "admin_providers",
+  "admin_installations",
 ];
 
 const isString = (value: unknown): value is string => typeof value === "string";
@@ -72,7 +90,7 @@ const isInteractionToken = (value: unknown): value is string =>
   isString(value) && value.length > 0 && value.length <= MAX_INTERACTION_TOKEN_LENGTH;
 
 // Gateway message content may be empty (e.g. attachment-only messages); the
-// brain drops anything that resolves to an empty prompt.
+// workflows drops anything that resolves to an empty prompt.
 const isCappedText = (value: unknown): value is string =>
   isString(value) && value.length <= MAX_FREE_TEXT_LENGTH;
 
@@ -218,12 +236,42 @@ export const validateConnectorInvokeJob = (value: unknown): value is ConnectorIn
     return value.connectorId === undefined && value.handle === undefined;
   }
   // A handle operation must carry a handle; every other operation (grant,
-  // authorization, and the per-connector admin ops describe/set_secret) must
-  // carry the connector it targets. Fail closed on the wrong locator.
+  // authorization, webhook_verify, and the per-connector admin ops
+  // describe/set_secret/installations) must carry the connector it targets.
+  // Fail closed on the wrong locator.
   return usesHandle
     ? isString(value.handle) && value.connectorId === undefined
     : isString(value.connectorId);
 };
+
+// Wire-shape validation for a verified webhook event: the connector id and
+// provider match their vocabularies, the ids/type are capped provider
+// identifiers, receivedAt is a real timestamp, and the body is well-formed
+// base64 within the raw-byte cap. Applied at encode (the webhooks worker) and
+// decode (the workflows worker) so neither side trusts the queue hop. The body's CONTENT
+// is deliberately not inspected here — the signature was verified broker-side
+// and the consumer parses it under its own rules.
+export const validateWebhookEventJob = (value: unknown): value is WebhookEventJob =>
+  isRecord(value) &&
+  value.kind === "webhook.event" &&
+  isString(value.connectorId) &&
+  CONNECTOR_ID_PATTERN.test(value.connectorId) &&
+  WEBHOOK_PROVIDERS.includes(value.provider as WebhookEventProvider) &&
+  (value.eventId === undefined ||
+    (isString(value.eventId) &&
+      value.eventId.length > 0 &&
+      value.eventId.length <= MAX_WEBHOOK_EVENT_ID_LENGTH)) &&
+  (value.eventType === undefined ||
+    (isString(value.eventType) &&
+      value.eventType.length > 0 &&
+      value.eventType.length <= MAX_WEBHOOK_EVENT_TYPE_LENGTH)) &&
+  isString(value.receivedAt) &&
+  value.receivedAt.length <= 40 &&
+  !Number.isNaN(Date.parse(value.receivedAt)) &&
+  isString(value.bodyBase64) &&
+  value.bodyBase64.length <= MAX_WEBHOOK_BODY_BASE64_LENGTH &&
+  value.bodyBase64.length % 4 === 0 &&
+  BASE64_PATTERN.test(value.bodyBase64);
 
 export const validateAiSpendJob = (value: unknown): value is AiSpendJob =>
   isRecord(value) &&

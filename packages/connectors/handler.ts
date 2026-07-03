@@ -10,6 +10,7 @@ import type {
   ConnectorOperation,
   ConnectorResult,
   ConnectorSummary,
+  ConnectorWebhookVerification,
   Env,
   SetConnectorSecretResult,
 } from "../contracts/types";
@@ -22,18 +23,22 @@ import {
   type SecretRef,
 } from "../secrets";
 import { sharedAccessTokenCache } from "./cache";
+import { listAppInstallations } from "./providers/github";
 import { CONNECTOR_REGISTRY, lookupConnector } from "./registry";
 import {
   createConnectorConfigStore,
   createGrantStore,
+  createOAuthStateStore,
   createOAuthTokenStore,
   durableObjectKeyValueStore,
   generateHandle,
   type ConnectorConfigStore,
   type GrantStore,
+  type OAuthStateStore,
   type OAuthTokenStore,
 } from "./store";
 import { strategyFor } from "./strategy";
+import { verifyWebhookSignature } from "./webhooks";
 import { ConnectorError, type ConnectorConfig, type GrantEntry, type StrategyContext } from "./types";
 
 // The credential broker's ingress. Every operation runs the SAME fail-closed
@@ -63,11 +68,14 @@ import { ConnectorError, type ConnectorConfig, type GrantEntry, type StrategyCon
 // not the authorization. Add a caller here (and grant it in the policies) to let
 // a new service use the broker.
 //
-// `brain` is the credential caller (grant/fetch/token). `dev-proxy` is the ADMIN
-// caller: it reaches only the `connector.admin.*` management ops (list, describe,
-// set-secret, providers), each separately Cedar-gated in connectors.cedar — it
-// holds no `connector.grant/fetch/token` permit, so it cannot use a credential.
-const CONNECTOR_CALLERS: readonly MachinePrincipal[] = ["brain", "dev-proxy"];
+// `workflows` is the credential caller (grant/fetch/token). `dev-proxy` is the ADMIN
+// caller: it reaches the `connector.admin.*` management ops (list, describe,
+// set-secret, providers, installations) and drives the 3LO consent ceremony
+// (connector.authorize) — it holds no `connector.grant/fetch/token` permit, so
+// it cannot use a credential. `webhooks` is the webhook-ingress edge worker: it
+// reaches ONLY `connector.webhook.verify` (a boolean out, never a secret), so a
+// compromised receiver can verify signatures but never touch a credential.
+const CONNECTOR_CALLERS: readonly MachinePrincipal[] = ["workflows", "dev-proxy", "webhooks"];
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 
@@ -89,11 +97,13 @@ const denied = (status: number): ConnectorResult => ({ status });
 
 // The Cedar action each credential-facing operation authorizes against
 // Connector::<id>. introspect reuses connector.fetch (a read on the caller's own
-// grant); begin/complete map to connector.authorize. The admin operations are
-// gated separately (authorizeAdmin, connector.admin.*), so they are not here.
+// grant); begin/complete map to connector.authorize; webhook_verify has its own
+// action so the webhooks caller can be permitted verification and nothing else.
+// The admin operations are gated separately (authorizeAdmin, connector.admin.*),
+// so they are not here.
 type CredentialOperation = Exclude<
   ConnectorOperation,
-  "admin_list" | "admin_describe" | "admin_set_secret" | "admin_providers"
+  "admin_list" | "admin_describe" | "admin_set_secret" | "admin_providers" | "admin_installations"
 >;
 const CEDAR_ACTION: Record<CredentialOperation, string> = {
   grant: "connector.grant",
@@ -102,6 +112,7 @@ const CEDAR_ACTION: Record<CredentialOperation, string> = {
   introspect: "connector.fetch",
   begin_authorization: "connector.authorize",
   complete_authorization: "connector.authorize",
+  webhook_verify: "connector.webhook.verify",
 };
 
 const parseParams = (json: string): Record<string, unknown> => {
@@ -194,6 +205,7 @@ const kvStore = (env: Env) => {
 const grantStore = (env: Env): GrantStore => createGrantStore(kvStore(env));
 const oauthStore = (env: Env): OAuthTokenStore =>
   createOAuthTokenStore(kvStore(env), env.CONNECTORS_TOKEN_ENC_KEY);
+const oauthStateStore = (env: Env): OAuthStateStore => createOAuthStateStore(kvStore(env));
 const configStore = (env: Env): ConnectorConfigStore => createConnectorConfigStore(kvStore(env));
 
 // Overlay any admin-set secret-reference override onto a connector's registry
@@ -236,6 +248,7 @@ const strategyContext = (
   now: () => Date.now(),
   tokenCache: sharedAccessTokenCache(),
   oauthTokens: oauthStore(env),
+  oauthStates: oauthStateStore(env),
   subject,
   scopes,
   params,
@@ -556,6 +569,111 @@ const handleAuthorization = async (
   return { status: 200 };
 };
 
+// The webhook_verify request body (rides in paramsJson). The body travels as
+// base64 because signatures are computed over EXACT bytes — any re-encoding at
+// the receiver would silently break verification.
+type WebhookVerifyInput = {
+  provider: string;
+  signatureHeaders: Record<string, string>;
+  body: Uint8Array;
+};
+
+const parseWebhookVerify = (params: Record<string, unknown>): WebhookVerifyInput => {
+  const { provider, signatureHeaders, bodyBase64 } = params;
+  if (typeof provider !== "string" || provider.length === 0) {
+    throw new ConnectorError(400, "webhook_provider_invalid");
+  }
+  if (!signatureHeaders || typeof signatureHeaders !== "object" || Array.isArray(signatureHeaders)) {
+    throw new ConnectorError(400, "webhook_headers_invalid");
+  }
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(signatureHeaders as Record<string, unknown>)) {
+    if (typeof value === "string") {
+      headers[key] = value;
+    }
+  }
+  if (typeof bodyBase64 !== "string") {
+    throw new ConnectorError(400, "webhook_body_invalid");
+  }
+  let binary: string;
+  try {
+    binary = atob(bodyBase64);
+  } catch {
+    throw new ConnectorError(400, "webhook_body_invalid");
+  }
+  const body = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    body[index] = binary.charCodeAt(index);
+  }
+  return { provider, signatureHeaders: headers, body };
+};
+
+// Verify an inbound webhook's signature for the webhooks edge worker. The same
+// fail-closed order as every credential op — Cedar connector.webhook.verify,
+// then the connector's webhook config must exist and be enabled, then the
+// caller-passed provider must EQUAL the configured one (the URL path segment on
+// the receiver is routing sugar; this config is authoritative) — before the
+// secret is resolved and the provider's HMAC scheme computed (webhooks.ts,
+// constant-time). The caller receives only { valid, eventId? }; the secret, the
+// digest, and the body never leave the broker, and none of them is logged.
+const handleWebhookVerify = async (
+  job: ConnectorInvokeJob,
+  caller: MachinePrincipal,
+  context: RequestContext,
+  env: Env,
+): Promise<ConnectorResult> => {
+  const connector = lookupConnector(job.connectorId);
+  if (!connector) {
+    logDenied("unknown_connector", { caller, connectorId: job.connectorId });
+    return denied(404);
+  }
+  if (!(await authorizeConnector(caller, "webhook_verify", connector, env))) {
+    logDenied("not_authorized", { caller, connectorId: connector.id, action: "connector.webhook.verify" });
+    return denied(403);
+  }
+  const webhook = connector.webhook;
+  if (!webhook || !webhook.enabled) {
+    logDenied("webhook_not_configured", { caller, connectorId: connector.id });
+    return denied(404);
+  }
+  const input = parseWebhookVerify(parseParams(job.paramsJson));
+  if (input.provider !== webhook.provider) {
+    // The receiver's URL said one scheme, the connector is configured for
+    // another. Never verify under the caller's choice of scheme — fail closed.
+    logDenied("webhook_provider_mismatch", { caller, connectorId: connector.id });
+    return denied(403);
+  }
+  // The secret-resolution gate, same as every strategy: an unresolvable webhook
+  // secret denies rather than "verifying" against an empty key.
+  const secret = await resolveSecretRef(env, webhook.secret);
+  if (!secret) {
+    logDenied(`webhook_secret_unresolved:${webhook.secret.provider}`, { caller, connectorId: connector.id });
+    return denied(500);
+  }
+  const verification = await verifyWebhookSignature({
+    provider: webhook.provider,
+    secret,
+    signatureHeaders: input.signatureHeaders,
+    body: input.body,
+  });
+  // The audit line carries the actor chain and the coarse outcome — never the
+  // secret, the digest, or the body.
+  logger.info("connector_webhook_verify", {
+    operation: "webhook_verify",
+    connectorId: connector.id,
+    provider: webhook.provider,
+    callerPrincipal: caller,
+    delegates: context.delegates,
+    subject: context.subject,
+    valid: verification.valid,
+  });
+  const webhookResult: ConnectorWebhookVerification = {
+    valid: verification.valid,
+    ...(verification.eventId !== undefined ? { eventId: verification.eventId } : {}),
+  };
+  return { status: 200, webhook: webhookResult };
+};
+
 // Build a connector's admin summary from its registry entry plus any secret-ref
 // override: the config-level facts, and whether the referenced secret currently
 // resolves (a boolean — NEVER the value). `override` is read once by the caller.
@@ -765,6 +883,40 @@ const handleAdminSetSecret = async (
   });
 };
 
+// List a github_app connector's App installations for the admin surface (the
+// reserved GET /api/connectors/{id}/installations endpoint). Gated under the
+// existing connector.admin.read action — it discloses configuration-level facts
+// (which accounts installed the App), not a credential. The App JWT is minted
+// and used entirely broker-side (providers/github.ts listAppInstallations); the
+// caller receives only the trimmed {id, accountLogin, repositorySelection} list.
+const handleAdminInstallations = async (
+  job: ConnectorInvokeJob,
+  caller: MachinePrincipal,
+  context: RequestContext,
+  env: Env,
+): Promise<ConnectorResult> => {
+  const connector = lookupConnector(job.connectorId);
+  if (!connector) {
+    logDenied("unknown_connector", { caller, connectorId: job.connectorId });
+    return denied(404);
+  }
+  if (!(await authorizeAdmin(caller, "connector.admin.read", connector.cedarResource, env))) {
+    logDenied("not_authorized", { caller, connectorId: connector.id, action: "connector.admin.read" });
+    return denied(403);
+  }
+  if (connector.kind !== "github_app") {
+    // Installations are a GitHub App concept; any other kind has none to list.
+    throw new ConnectorError(400, "installations_unsupported");
+  }
+  const effective = await effectiveConnector(connector, env);
+  const installations = await listAppInstallations(env, effective, connectorBoundary(effective));
+  auditAdmin("admin_installations", caller, context, {
+    connectorId: connector.id,
+    count: installations.length,
+  });
+  return { status: 200, installations };
+};
+
 export const handleConnectorInvoke = async (
   message: unknown,
   env: Env,
@@ -790,6 +942,8 @@ export const handleConnectorInvoke = async (
       case "begin_authorization":
       case "complete_authorization":
         return await handleAuthorization(job, caller, env);
+      case "webhook_verify":
+        return await handleWebhookVerify(job, caller, received.context, env);
       case "admin_list":
         return await handleAdminList(caller, received.context, env);
       case "admin_describe":
@@ -798,6 +952,8 @@ export const handleConnectorInvoke = async (
         return await handleAdminSetSecret(job, caller, received.context, env);
       case "admin_providers":
         return await handleAdminProviders(caller, received.context, env);
+      case "admin_installations":
+        return await handleAdminInstallations(job, caller, received.context, env);
       default:
         return denied(400);
     }

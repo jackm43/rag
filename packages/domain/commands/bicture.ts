@@ -2,6 +2,7 @@ import bictureImageConfig from "../../ai/ai-config/bicture-image.json";
 import { buildAiGatewayMetadata } from "../../ai/ai-metadata";
 import { errorDetails, errorMessage, logger } from "../../logger";
 import { boundaryClients } from "../../boundaries/outbound/clients";
+import { inferenceClient } from "../../inference";
 import { sendInteractionEdit, sendInteractionMediaEdit } from "../outbox";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../../ai/spend";
 import { type BictureJob, type Env } from "../../contracts/types";
@@ -143,7 +144,7 @@ const runBictureImageGeneration = async (
   prompt: string,
   metadata?: ReturnType<typeof buildAiGatewayMetadata>,
 ) => {
-  return env.AI.run(
+  return inferenceClient(env).run(
     activeBictureProfile.model,
     {
       prompt,
@@ -152,7 +153,7 @@ const runBictureImageGeneration = async (
       quality: activeBictureProfile.quality,
       resolution: activeBictureProfile.resolution,
     },
-    { gateway: { id: activeBictureProfile.gatewayId, metadata } } as never,
+    { gatewayId: activeBictureProfile.gatewayId, metadata },
   );
 };
 

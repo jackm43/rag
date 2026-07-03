@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 
-import { ensureRegistered } from "../../../../packages/auth";
+import { createQueueWorker, ensureRegistered } from "../../../../packages/auth";
 import {
   deliverInteractionEdit,
   processOutboxMessage,
@@ -25,20 +25,7 @@ export class Responder extends WorkerEntrypoint<Env> {
   }
 }
 
-export default {
-  async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
-    // Memoised per isolate and never rejects; a no-op after the first batch.
-    await ensureRegistered(env, RESPONDER_MANIFEST);
-
-    if (batch.queue === "discord-outbox-dlq") {
-      for (const message of batch.messages) {
-        processOutboxDlqMessage(message);
-      }
-      return;
-    }
-
-    for (const message of batch.messages) {
-      await processOutboxMessage(message, env);
-    }
-  },
-};
+export default createQueueWorker(RESPONDER_MANIFEST, {
+  "discord-outbox": processOutboxMessage,
+  "discord-outbox-dlq": processOutboxDlqMessage,
+});

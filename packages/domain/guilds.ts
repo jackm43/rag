@@ -3,7 +3,7 @@ import { logger } from "../logger";
 import type { Env } from "../contracts/types";
 
 // Guild allowlist shared by every ingress: the interactions webhook, the
-// gateway Durable Object's MESSAGE_CREATE path, and the brain's
+// gateway Durable Object's MESSAGE_CREATE path, and the workflows worker's
 // message.received processing (defense in depth between hops).
 //
 // Semantics: when ALLOWED_GUILD_IDS is set, the gate FAILS CLOSED — only the

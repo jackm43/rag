@@ -12,7 +12,7 @@ import { DEV_PROXY_MANIFEST } from "./manifest";
 import { DEV_PROXY_PAGE } from "./page";
 
 // The dev-proxy worker: the human-facing admin application for ragbot. It runs
-// in production so an operator can drive the real gateway → brain command path
+// in production so an operator can drive the real gateway → workflows command path
 // (and, over time, other sensitive service surfaces) against real data with no
 // separate dev environment.
 //
@@ -73,11 +73,58 @@ const SetConnectorSecretRequest = z
     message: "ref is required when a value is supplied",
   });
 
+// A 3LO callback completion: the provider's authorization code + the broker-
+// minted state. Both are provider-opaque handles, validated only for presence
+// and a sane bound. The code is SENSITIVE — it flows to the broker only and is
+// never logged or echoed back.
+const CompleteAuthorizationRequest = z.object({
+  code: z.string().min(1).max(2048),
+  state: z.string().min(1).max(2048),
+});
+
 const json = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" },
   });
+
+const html = (status: number, body: string): Response =>
+  new Response(body, {
+    status,
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
+
+// Escape untrusted text for interpolation into the callback page. The OAuth
+// error params (error/error_description) are attacker-influenced query values
+// and must never reach the page unescaped.
+const escapeHtml = (value: string): string =>
+  value.replace(/[&<>"']/g, (ch) =>
+    ch === "&" ? "&amp;" : ch === "<" ? "&lt;" : ch === ">" ? "&gt;" : ch === '"' ? "&quot;" : "&#39;",
+  );
+
+// The minimal self-contained page the admin's browser lands on after the 3LO
+// provider redirect (GET callback) — the visual style matches page.ts. `detail`
+// is escaped here, so no caller can forget.
+const callbackPage = (ok: boolean, detail: string): string => `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ragbot admin — authorization</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.2rem; }
+  p.ok { color: #166534; }
+  p.err { color: #991b1b; }
+  .muted { color: #71717a; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<h1>ragbot admin</h1>
+<p class="${ok ? "ok" : "err"}">${ok ? "Authorization complete" : "Authorization failed"} — ${escapeHtml(detail)}.</p>
+<p class="muted">${ok ? "You can close this tab, or go " : "Nothing was authorized. Go "}<a href="/">back to the admin page</a>.</p>
+</body>
+</html>`;
 
 // Gate 2, shared by every authenticated endpoint (the command surface and the
 // connectors admin surface). The perimeter (Access) has already been verified by
@@ -283,16 +330,76 @@ const handleConnectorsApi = async (
       return relaySetSecret(await client.setConnectorSecret(id, body));
     }
 
-    // Reserved: documented in openapi.yaml but not yet implemented, so the
-    // contract is stable while grant/installations/callback wiring lands later.
+    // Admin-initiated 3LO begin: ask the broker for the provider consent URL.
+    // The acting subject is the session's Discord admin (the same on-behalf-of
+    // token as every other admin op); the broker persists the returned state
+    // AGAINST that subject, single-use, so only the same admin can complete. A
+    // connector whose kind has no 3LO flow is the broker's fail-closed 400,
+    // relayed honestly like every other coarse denial.
     if (sub === "/grant" && method === "POST") {
-      return json(501, { error: "not_implemented" });
+      const result = await client.beginAuthorization(id, {});
+      if (result.status !== 200 || !result.authorization) {
+        return json(brokerHttpStatus(result.status), { error: "broker_error" });
+      }
+      return json(200, {
+        url: result.authorization.url,
+        state: result.authorization.state,
+        connectorId: id,
+      } satisfies components["schemas"]["GrantAuthorizationResult"]);
     }
+    // A github_app connector's App installations (id + account + repository
+    // selection) for the admin UI's installation picker. The App JWT that lists
+    // them stays broker-side; any other kind is the broker's 400.
     if (sub === "/installations" && method === "GET") {
-      return json(501, { error: "not_implemented" });
+      return relay(await client.listInstallations(id), (result) => ({
+        installations: result.installations ?? [],
+      }));
     }
-    if (sub === "/callback" && (method === "GET" || method === "POST")) {
-      return json(501, { error: "not_implemented" });
+    // 3LO completion. GET is the provider's browser redirect back from the
+    // consent page (?code=&state=, or ?error= on denial) — the admin's browser
+    // still carries the Access cookie and the session, so the SAME layered auth
+    // gates completion as begin, and the broker additionally enforces that the
+    // completing subject is the one its single-use state was minted for. The
+    // code is sensitive: forwarded to the broker only, never logged or echoed.
+    if (sub === "/callback" && method === "GET") {
+      const providerError = url.searchParams.get("error");
+      if (providerError !== null) {
+        // The provider denied (e.g. access_denied): report honestly, without
+        // ever calling the broker. callbackPage escapes both params.
+        const description = url.searchParams.get("error_description");
+        return html(400, callbackPage(false, providerError + (description ? `: ${description}` : "")));
+      }
+      const parsed = CompleteAuthorizationRequest.safeParse({
+        code: url.searchParams.get("code"),
+        state: url.searchParams.get("state"),
+      });
+      if (!parsed.success) {
+        return html(400, callbackPage(false, "the redirect is missing its code or state"));
+      }
+      const result = await client.completeAuthorization(id, parsed.data);
+      return result.status === 200
+        ? html(200, callbackPage(true, `the broker stored ${id}'s tokens for your account`))
+        : html(brokerHttpStatus(result.status), callbackPage(false, "the broker refused the completion"));
+    }
+    // The API-driven completion variant: the same params as JSON, JSON out.
+    if (sub === "/callback" && method === "POST") {
+      let body: z.infer<typeof CompleteAuthorizationRequest>;
+      try {
+        // `satisfies` links the zod shape to the OpenAPI contract (api-types),
+        // so ingress and the documented schema cannot drift.
+        body = CompleteAuthorizationRequest.parse(
+          await request.json(),
+        ) satisfies components["schemas"]["CompleteAuthorizationRequest"];
+      } catch {
+        return json(400, { error: "invalid_request" });
+      }
+      const result = await client.completeAuthorization(id, body);
+      return result.status === 200
+        ? json(200, {
+            authorized: true,
+            connectorId: id,
+          } satisfies components["schemas"]["CompleteAuthorizationResult"])
+        : json(brokerHttpStatus(result.status), { error: "broker_error" });
     }
   }
 

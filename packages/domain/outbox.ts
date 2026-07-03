@@ -2,10 +2,10 @@ import { serviceClients, SYSTEM_SUBJECT } from "../auth";
 import { encodeReplyJobEnvelope, MAX_REPLY_CONTENT_LENGTH } from "../contracts";
 import type { Env, ResponderAttachment } from "../contracts/types";
 
-// Brain-side producers for Discord egress. Text-only replies travel through
+// Workflows-side producers for Discord egress. Text-only replies travel through
 // the durable discord-outbox queue; media-bearing interaction edits go over
 // the responder service binding because queue messages cap out at 128 KiB.
-// Both hops cross the service boundary as the "brain" machine principal,
+// Both hops cross the service boundary as the "workflows" machine principal,
 // re-minting an on-behalf-of identity-context token for the original
 // requester (the subject); the requester is the verified subject from the
 // inbound request, carried through to the downstream token.
@@ -26,7 +26,7 @@ export const sendChannelReply = async (
     throw new Error("DISCORD_OUTBOX binding is required to send channel replies");
   }
 
-  await serviceClients(env).brainToResponder.call({
+  await serviceClients(env).workflowsToResponder.call({
     transport: "queue",
     queue: env.DISCORD_OUTBOX,
     envelope: encodeReplyJobEnvelope(
@@ -48,7 +48,7 @@ export const sendInteractionEdit = async (
     throw new Error("DISCORD_OUTBOX binding is required to send interaction edits");
   }
 
-  await serviceClients(env).brainToResponder.call({
+  await serviceClients(env).workflowsToResponder.call({
     transport: "queue",
     queue: env.DISCORD_OUTBOX,
     envelope: encodeReplyJobEnvelope(
@@ -67,7 +67,7 @@ export const sendInteractionMediaEdit = async (
   attachment: ResponderAttachment,
   requesterUserId?: string,
 ) => {
-  await serviceClients(env).brainToResponder.call({
+  await serviceClients(env).workflowsToResponder.call({
     transport: "binding",
     env,
     envelope: encodeReplyJobEnvelope(

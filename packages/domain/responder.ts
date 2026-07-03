@@ -39,7 +39,7 @@ export const suppressUrlEmbeds = (text: string) =>
     .join("");
 
 // Final output policy for AI-generated channel replies. The responder is the
-// single Discord egress choke point: brain workers ship raw model text and
+// single Discord egress choke point: workflows workers ship raw model text and
 // this is the only place mention/ID sanitisation, URL embed suppression, and
 // the message length cap are applied before anything reaches Discord.
 export const finalizeAiReplyText = (value: string) => {
@@ -74,7 +74,7 @@ const applyInteractionEdit = async (
 };
 
 const responderServer = (env: Env) =>
-  createServiceServer({ self: "responder", expectedIssuers: ["brain"], env });
+  createServiceServer({ self: "responder", expectedIssuers: ["workflows"], env });
 
 // Only interaction edits may arrive over the binding transport; a verified
 // envelope of any other kind is the wrong operation for this entrypoint.

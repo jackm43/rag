@@ -26,6 +26,35 @@ export const CONNECTOR_REGISTRY: ConnectorConfig[] = [
     // Installation tokens last ~1h; align the handle lifetime to that.
     grantTtlSeconds: 3600,
     maxResponseBytes: 5 * 1024 * 1024,
+    // Inbound webhook verification: the App's webhook deliveries land on the
+    // webhooks worker (webhooks.jsmunro.me/github/github-app) and are verified
+    // via webhook_verify with GitHub's HMAC-SHA256 scheme. This config — not the
+    // URL path — decides the scheme, and the secret stays broker-side.
+    webhook: {
+      provider: "github",
+      secret: { provider: "wrangler-env", ref: "GITHUB_WEBHOOK_SECRET" },
+      enabled: true,
+    },
+  },
+
+  // The Discord 3LO connector: end users authorize via the consent redirect
+  // (begin/complete), and the broker stores their tokens per subject. The
+  // consent ceremony is driven by the admin app's callback endpoint — the
+  // redirect_uri below, per the CONNECTORS.md URL convention — while the tokens
+  // themselves never leave the broker. The client id is not a secret but is
+  // deployment-specific, so it is resolved via a wrangler-env ref (mirroring
+  // github-app's appId) rather than committed as a literal.
+  {
+    id: "discord-user",
+    kind: "oauth2_authorization_code",
+    host: "discord.com",
+    cedarResource: "discord-user",
+    tokenUrl: "https://discord.com/api/oauth2/token",
+    authorizationUrl: "https://discord.com/oauth2/authorize",
+    clientIdRef: { provider: "wrangler-env", ref: "DISCORD_OAUTH_CLIENT_ID" },
+    secret: { provider: "wrangler-env", ref: "DISCORD_OAUTH_CLIENT_SECRET" },
+    redirectUri: "https://ragbot-dev.jsmunro.me/api/connectors/discord-user/callback",
+    defaultScopes: ["identify"],
   },
 
   // Example — an API-key connector (uncomment + provision the secret):

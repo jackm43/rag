@@ -266,7 +266,7 @@ const jobProcessors: AiJobProcessors = {
 
 export const processAiQueueMessage = async (message: Message<unknown>, env: Env) => {
   const startedAt = Date.now();
-  const server = createServiceServer({ self: "brain", expectedIssuers: ["gateway"], env });
+  const server = createServiceServer({ self: "workflows", expectedIssuers: ["gateway"], env });
   const received = await server.receive(message.body, decodeAiJobEnvelope);
   if (!received) {
     message.ack();

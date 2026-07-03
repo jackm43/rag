@@ -200,6 +200,74 @@ export const DEV_PROXY_PAGE = `<!doctype html>
     statusLine.appendChild(document.createTextNode(" via " + c.secretProvider + " · flows: " + (c.flows || []).join(", ")));
     box.appendChild(statusLine);
 
+    // 3LO connectors get an "Authorize" action: begin the consent flow as the
+    // signed-in admin (POST grant), then follow the returned provider URL. The
+    // provider redirects back to /api/connectors/{id}/callback, which completes
+    // broker-side and shows a self-contained result page.
+    if ((c.flows || []).indexOf("authorize") !== -1) {
+      var authorize = el("button", null, "Authorize (3LO consent)");
+      box.appendChild(authorize);
+      var authResult = el("div", { "class": "result muted" });
+      box.appendChild(authResult);
+      authorize.addEventListener("click", async function () {
+        authResult.className = "result muted";
+        authResult.textContent = "Starting authorization…";
+        try {
+          var res = await fetch("/api/connectors/" + encodeURIComponent(c.id) + "/grant", {
+            method: "POST",
+            credentials: "include"
+          });
+          var data = null;
+          try { data = await res.json(); } catch (e) { /* non-JSON error */ }
+          if (res.ok && data && data.url) {
+            authResult.textContent = "Redirecting to the provider consent page…";
+            window.location.assign(data.url);
+          } else {
+            authResult.className = "result err";
+            authResult.textContent = "HTTP " + res.status + ((data && data.error) ? " — " + data.error : "");
+          }
+        } catch (e) {
+          authResult.className = "result err";
+          authResult.textContent = "Request failed: " + e;
+        }
+      });
+    }
+
+    // github_app connectors get an installations view: the broker lists the
+    // App's installations (the App JWT stays broker-side), the identifying
+    // fields an admin needs to pick an installationId for a grant.
+    if (c.kind === "github_app") {
+      var insBtn = el("button", null, "List installations");
+      box.appendChild(insBtn);
+      var insResult = el("div", { "class": "result muted" });
+      box.appendChild(insResult);
+      insBtn.addEventListener("click", async function () {
+        insResult.className = "result muted";
+        insResult.textContent = "Loading installations…";
+        try {
+          var res = await fetch("/api/connectors/" + encodeURIComponent(c.id) + "/installations", { credentials: "include" });
+          var data = null;
+          try { data = await res.json(); } catch (e) { /* non-JSON error */ }
+          if (!res.ok) {
+            insResult.className = "result err";
+            insResult.textContent = "HTTP " + res.status + ((data && data.error) ? " — " + data.error : "");
+            return;
+          }
+          var installations = (data && data.installations) || [];
+          if (!installations.length) { insResult.textContent = "No installations."; return; }
+          insResult.textContent = "";
+          var list = el("ul");
+          installations.forEach(function (i) {
+            list.appendChild(el("li", null, "#" + i.id + " — " + i.accountLogin + " (" + i.repositorySelection + " repositories)"));
+          });
+          insResult.appendChild(list);
+        } catch (e) {
+          insResult.className = "result err";
+          insResult.textContent = "Request failed: " + e;
+        }
+      });
+    }
+
     box.appendChild(el("label", null, "Secrets provider"));
     var select = el("select");
     providersCache.forEach(function (p) {

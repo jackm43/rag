@@ -156,10 +156,13 @@ export const createServiceClient = (config: ServiceClientConfig): ServiceClient 
     call: async (request) => {
       const token = await authorizeAndMint(request.envelope, request.subject, request.transport);
       if (request.transport === "queue") {
-        await request.queue.send(
-          wrapServiceMessage(request.envelope, token),
-          request.delaySeconds === undefined ? undefined : { delaySeconds: request.delaySeconds },
-        );
+        // contentType "bytes" is load-bearing: the wrapper is capnp bytes, and
+        // the queue's default ("json") silently JSON-mangles a Uint8Array into
+        // an index-keyed object the receiving boundary rejects.
+        await request.queue.send(wrapServiceMessage(request.envelope, token), {
+          contentType: "bytes",
+          ...(request.delaySeconds === undefined ? {} : { delaySeconds: request.delaySeconds }),
+        });
         return;
       }
       if (!request.env.RESPONDER) {
@@ -170,7 +173,11 @@ export const createServiceClient = (config: ServiceClientConfig): ServiceClient 
   };
 };
 
-type SigningSecret = "GATEWAY_SIGNING_KEY" | "BRAIN_SIGNING_KEY" | "DEV_PROXY_SIGNING_KEY";
+type SigningSecret =
+  | "GATEWAY_SIGNING_KEY"
+  | "WORKFLOWS_SIGNING_KEY"
+  | "DEV_PROXY_SIGNING_KEY"
+  | "WEBHOOKS_SIGNING_KEY";
 
 // Import a private signing key from its secret (private JWK JSON). Absent or
 // unparseable keys resolve to null so the client fails closed with a logged
@@ -191,17 +198,17 @@ const loadSigningKey = async (env: Env, secret: SigningSecret): Promise<CryptoKe
 
 // Per-worker service clients: the ready-to-use client for every legitimate
 // hop, each pre-bound to the sending service's signing key. Only the services
-// that send hold a key (gateway mints origin contexts; brain re-mints
+// that send hold a key (gateway mints origin contexts; workflows re-mints
 // downstream), so a worker that never uses a given client never imports its
 // (absent) key.
 export type ServiceClients = {
-  gatewayToBrain: ServiceClient;
-  brainToResponder: ServiceClient;
-  brainToSpend: ServiceClient;
-  // Brain -> credential broker. The intended first caller of the connectors
+  gatewayToWorkflows: ServiceClient;
+  workflowsToResponder: ServiceClient;
+  workflowsToSpend: ServiceClient;
+  // Workflows -> credential broker. The intended first caller of the connectors
   // worker; no worker binds CONNECTORS yet, so this client is constructed but
   // unused until a caller wires it (the broker's authn+authz still gate it).
-  brainToConnectors: ServiceClient;
+  workflowsToConnectors: ServiceClient;
   // Dev-proxy → gateway (edge → edge), the development application's hop into
   // the gateway's DevProxy entrypoint. Only workers/public/dev-proxy holds
   // DEV_PROXY_SIGNING_KEY, so only it can construct a usable client.
@@ -210,6 +217,15 @@ export type ServiceClients = {
   // for the connector.admin.* management ops. Same DEV_PROXY_SIGNING_KEY; the
   // broker gates which admin op via connectors.cedar.
   devProxyToConnectors: ServiceClient;
+  // Webhooks → connectors broker (edge → application): the webhook-ingress
+  // worker's signature-verification hop (connector.webhook.verify — a boolean
+  // out, never a secret). Only the webhooks worker holds WEBHOOKS_SIGNING_KEY,
+  // so only it can construct a usable client.
+  webhooksToConnectors: ServiceClient;
+  // Webhooks → workflows (edge → application): the validated-event enqueue hop onto
+  // the webhook queue, mirroring how the gateway enqueues to the workflows worker. Same
+  // WEBHOOKS_SIGNING_KEY.
+  webhooksToWorkflows: ServiceClient;
 };
 
 const buildClients = (env: Env): ServiceClients => {
@@ -218,21 +234,26 @@ const buildClients = (env: Env): ServiceClients => {
   const gatewayKey = env.GATEWAY_SIGNING_KEY
     ? memo(() => loadSigningKey(env, "GATEWAY_SIGNING_KEY"))
     : null;
-  const brainKey = env.BRAIN_SIGNING_KEY
-    ? memo(() => loadSigningKey(env, "BRAIN_SIGNING_KEY"))
+  const workflowsKey = env.WORKFLOWS_SIGNING_KEY
+    ? memo(() => loadSigningKey(env, "WORKFLOWS_SIGNING_KEY"))
     : null;
   const devProxyKey = env.DEV_PROXY_SIGNING_KEY
     ? memo(() => loadSigningKey(env, "DEV_PROXY_SIGNING_KEY"))
     : null;
+  const webhooksKey = env.WEBHOOKS_SIGNING_KEY
+    ? memo(() => loadSigningKey(env, "WEBHOOKS_SIGNING_KEY"))
+    : null;
   const entities = () => registryEntities(env);
 
   return {
-    gatewayToBrain: createServiceClient({ self: "gateway", target: "brain", signingKey: gatewayKey, entities }),
-    brainToResponder: createServiceClient({ self: "brain", target: "responder", signingKey: brainKey, entities }),
-    brainToSpend: createServiceClient({ self: "brain", target: "spend", signingKey: brainKey, entities }),
-    brainToConnectors: createServiceClient({ self: "brain", target: "connectors", signingKey: brainKey, entities }),
+    gatewayToWorkflows: createServiceClient({ self: "gateway", target: "workflows", signingKey: gatewayKey, entities }),
+    workflowsToResponder: createServiceClient({ self: "workflows", target: "responder", signingKey: workflowsKey, entities }),
+    workflowsToSpend: createServiceClient({ self: "workflows", target: "spend", signingKey: workflowsKey, entities }),
+    workflowsToConnectors: createServiceClient({ self: "workflows", target: "connectors", signingKey: workflowsKey, entities }),
     devProxyToGateway: createServiceClient({ self: "dev-proxy", target: "gateway", signingKey: devProxyKey, entities }),
     devProxyToConnectors: createServiceClient({ self: "dev-proxy", target: "connectors", signingKey: devProxyKey, entities }),
+    webhooksToConnectors: createServiceClient({ self: "webhooks", target: "connectors", signingKey: webhooksKey, entities }),
+    webhooksToWorkflows: createServiceClient({ self: "webhooks", target: "workflows", signingKey: webhooksKey, entities }),
   };
 };
 

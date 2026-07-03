@@ -158,7 +158,7 @@ export const executeCommand = async (
   }
 
   if (spec.kind === "enqueue") {
-    await serviceClients(env).gatewayToBrain.call({
+    await serviceClients(env).gatewayToWorkflows.call({
       transport: "queue",
       queue: env.AI_JOBS,
       envelope: encodeAiJobEnvelope(spec.buildJob(ctx), {

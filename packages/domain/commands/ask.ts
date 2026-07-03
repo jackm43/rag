@@ -51,7 +51,7 @@ export const runAskCommand = async (ctx: CommandContext, env: Env) => {
     title,
   });
 
-  await serviceClients(env).gatewayToBrain.call({
+  await serviceClients(env).gatewayToWorkflows.call({
     transport: "queue",
     queue: env.AI_JOBS,
     envelope: encodeAiJobEnvelope(

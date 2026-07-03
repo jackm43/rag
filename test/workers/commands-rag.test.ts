@@ -705,7 +705,7 @@ test("spend worker aggregates pending spend events", async () => {
       {
         body: await signedServiceMessage(
           encodeAiSpendJobEnvelope({ spendEventId: "event-1" }, { source: "worker" }),
-          { iss: "brain", aud: "spend" },
+          { iss: "workflows", aud: "spend" },
         ),
         attempts: 1,
         ack: () => {

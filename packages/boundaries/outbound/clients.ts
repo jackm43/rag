@@ -2,15 +2,16 @@ import type { Env } from "../../contracts/types";
 import { createBoundaryClient, type BoundaryFetch } from "./boundary-client";
 
 const DISCORD_TIMEOUT_MS = 15_000;
-const AI_GATEWAY_TIMEOUT_MS = 120_000;
 const CLOUDFLARE_API_TIMEOUT_MS = 30_000;
 const MEDIA_TIMEOUT_MS = 30_000;
 const MEDIA_MAX_RESPONSE_BYTES = 25 * 1024 * 1024;
 
+// AI Gateway egress is not here: model access (credential, URL construction,
+// binding-vs-HTTP routing) is centralized behind packages/inference, which
+// builds its own boundary client for the gateway host.
 export type BoundaryClients = {
   discordRest: BoundaryFetch;
   discordWebhook: BoundaryFetch;
-  aiGateway: BoundaryFetch;
   cloudflareApi: BoundaryFetch;
   mediaDownload: BoundaryFetch;
 };
@@ -39,18 +40,6 @@ const buildClients = (env: Env): BoundaryClients => {
       // which authenticates edits — never log them.
       logPath: false,
     }));
-  const aiGateway = lazy(() => {
-    if (!env.CF_AIG_TOKEN) {
-      throw new Error("CF_AIG_TOKEN is required for AI Gateway requests");
-    }
-    return createBoundaryClient({
-      identity: "ai-gateway",
-      trustZone: "egress-ai-gateway",
-      credential: { header: "cf-aig-authorization", value: `Bearer ${env.CF_AIG_TOKEN}` },
-      allowedHosts: ["gateway.ai.cloudflare.com"],
-      defaultTimeoutMs: AI_GATEWAY_TIMEOUT_MS,
-    });
-  });
   const cloudflareApi = lazy(() => {
     if (!env.CLOUDFLARE_API_TOKEN) {
       throw new Error("CLOUDFLARE_API_TOKEN is required for Cloudflare API requests");
@@ -64,8 +53,8 @@ const buildClients = (env: Env): BoundaryClients => {
     });
   });
   // Path logging audit: discord-rest paths carry channel/message/guild ids,
-  // ai-gateway and cloudflare-api paths carry account/gateway ids — safe to
-  // log. discord-webhook and media-download are host-only (logPath: false).
+  // cloudflare-api paths carry account/gateway ids — safe to log.
+  // discord-webhook and media-download are host-only (logPath: false).
   const mediaDownload = lazy(() =>
     createBoundaryClient({
       identity: "media-download",
@@ -83,9 +72,6 @@ const buildClients = (env: Env): BoundaryClients => {
     },
     get discordWebhook() {
       return discordWebhook();
-    },
-    get aiGateway() {
-      return aiGateway();
     },
     get cloudflareApi() {
       return cloudflareApi();

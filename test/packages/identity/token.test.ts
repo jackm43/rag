@@ -26,12 +26,12 @@ const keypairFor = async (iss: MachinePrincipal) => {
   return { privateKey: keyPair.privateKey, resolver };
 };
 
-const gatewayToBrain = async (now = 1_000) => {
+const gatewayToWorkflows = async (now = 1_000) => {
   const bytes = envelope();
   const { privateKey, resolver } = await keypairFor("gateway");
   const context = await buildIdentityContext({
     iss: "gateway",
-    aud: "brain",
+    aud: "workflows",
     sub: "107426926909517824",
     trustZone: "edge",
     envelopeBytes: bytes,
@@ -41,9 +41,9 @@ const gatewayToBrain = async (now = 1_000) => {
 };
 
 test("a minted token verifies against the issuer's key and returns its context", async () => {
-  const { token, resolver, bytes, context } = await gatewayToBrain();
+  const { token, resolver, bytes, context } = await gatewayToWorkflows();
   const result = await verify(resolver, token, {
-    expectedAud: "brain",
+    expectedAud: "workflows",
     expectedIssuers: ["gateway"],
     envelopeBytes: bytes,
     now: 1_010,
@@ -57,7 +57,7 @@ test("a minted token verifies against the issuer's key and returns its context",
 });
 
 test("a token addressed to another worker is denied with aud_mismatch", async () => {
-  const { token, resolver, bytes } = await gatewayToBrain();
+  const { token, resolver, bytes } = await gatewayToWorkflows();
   const result = await verify(resolver, token, {
     expectedAud: "responder",
     expectedIssuers: ["gateway"],
@@ -68,9 +68,9 @@ test("a token addressed to another worker is denied with aud_mismatch", async ()
 });
 
 test("a token past its expiry window is denied", async () => {
-  const { token, resolver, bytes } = await gatewayToBrain(1_000);
+  const { token, resolver, bytes } = await gatewayToWorkflows(1_000);
   const result = await verify(resolver, token, {
-    expectedAud: "brain",
+    expectedAud: "workflows",
     expectedIssuers: ["gateway"],
     envelopeBytes: bytes,
     now: 1_000 + 60 + 10,
@@ -79,9 +79,9 @@ test("a token past its expiry window is denied", async () => {
 });
 
 test("a token replayed against different envelope bytes is denied", async () => {
-  const { token, resolver } = await gatewayToBrain();
+  const { token, resolver } = await gatewayToWorkflows();
   const result = await verify(resolver, token, {
-    expectedAud: "brain",
+    expectedAud: "workflows",
     expectedIssuers: ["gateway"],
     envelopeBytes: encoder.encode("a-different-payload"),
     now: 1_010,
@@ -90,9 +90,9 @@ test("a token replayed against different envelope bytes is denied", async () => 
 });
 
 test("a token from an unexpected issuer is denied", async () => {
-  const { token, resolver, bytes } = await gatewayToBrain();
+  const { token, resolver, bytes } = await gatewayToWorkflows();
   const notExpected = await verify(resolver, token, {
-    expectedAud: "brain",
+    expectedAud: "workflows",
     expectedIssuers: ["responder"],
     envelopeBytes: bytes,
     now: 1_010,
@@ -101,7 +101,7 @@ test("a token from an unexpected issuer is denied", async () => {
 
   // Expected issuer, but the resolver has no key for it.
   const noKey = await verify(() => null, token, {
-    expectedAud: "brain",
+    expectedAud: "workflows",
     expectedIssuers: ["gateway"],
     envelopeBytes: bytes,
     now: 1_010,
@@ -110,14 +110,14 @@ test("a token from an unexpected issuer is denied", async () => {
 });
 
 test("a tampered signature is denied", async () => {
-  const { token, resolver, bytes } = await gatewayToBrain();
+  const { token, resolver, bytes } = await gatewayToWorkflows();
   const [header, payload, signature] = token.split(".");
   // Flip the FIRST signature character so a full high-order bit group of byte 0
   // changes; tampering the last base64url char can touch only non-significant
   // trailing bits and decode to the same 64-byte signature (a flaky no-op).
   const flipped = `${signature[0] === "A" ? "B" : "A"}${signature.slice(1)}`;
   const result = await verify(resolver, `${header}.${payload}.${flipped}`, {
-    expectedAud: "brain",
+    expectedAud: "workflows",
     expectedIssuers: ["gateway"],
     envelopeBytes: bytes,
     now: 1_010,
@@ -129,14 +129,14 @@ test("a tampered signature is denied", async () => {
 });
 
 test("a token whose payload is edited after signing is denied", async () => {
-  const { token, resolver, bytes } = await gatewayToBrain();
+  const { token, resolver, bytes } = await gatewayToWorkflows();
   const [header, , signature] = token.split(".");
   const forgedPayload = btoa(
     JSON.stringify({
       sub: "999",
       act: ["gateway"],
       iss: "gateway",
-      aud: "brain",
+      aud: "workflows",
       trustZone: "edge",
       iat: 1_000,
       exp: 1_060,
@@ -148,7 +148,7 @@ test("a token whose payload is edited after signing is denied", async () => {
     .replace(/\//g, "_")
     .replace(/=+$/, "");
   const result = await verify(resolver, `${header}.${forgedPayload}.${signature}`, {
-    expectedAud: "brain",
+    expectedAud: "workflows",
     expectedIssuers: ["gateway"],
     envelopeBytes: bytes,
     now: 1_010,

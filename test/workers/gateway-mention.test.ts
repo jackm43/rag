@@ -6,7 +6,7 @@ import {
   extractBotMentionPrompt,
   handleGatewayMessageCreate,
 } from "../../workers/public/gateway/src/index.ts";
-import brainWorker from "../../workers/services/brain/src/index.ts";
+import workflowsWorker from "../../workers/services/workflows/src/index.ts";
 import { resolveGatewayMessage } from "../../packages/domain/mention.ts";
 import responderWorker from "../../workers/services/responder/src/index.ts";
 import { decodeAiJobEnvelope, decodeReplyJobEnvelope } from "../../packages/contracts/index.ts";
@@ -169,7 +169,7 @@ test("gateway message create skips bots and empty prompts but enqueues everythin
   assert.deepEqual(queuedJobs, []);
 
   // Thread relevance needs D1, which the DO cannot see, so non-mention
-  // messages are still enqueued and filtered by the brain.
+  // messages are still enqueued and filtered by the workflows worker.
   await handleGatewayMessageCreate(
     {
       id: MESSAGE_ID,
@@ -359,7 +359,8 @@ test("queue handler processes message.received mentions in-process without re-en
     });
     let acked = false;
 
-    await brainWorker.queue({
+    await workflowsWorker.queue({
+      queue: "ai-jobs",
       messages: [
         {
           body: await gatewayAiJob(
@@ -407,7 +408,8 @@ test("queue handler acknowledges irrelevant message.received events without side
   const env = createEnv("unused", { DB: createDbMock({}) });
   let acked = false;
 
-  await brainWorker.queue({
+  await workflowsWorker.queue({
+    queue: "ai-jobs",
     messages: [
       {
         body: await gatewayAiJob(
@@ -469,7 +471,7 @@ test("queue handler acknowledges malformed AI jobs without side effects", async 
   let acked = false;
   const env = createEnv("unused");
 
-  await brainWorker.queue(
+  await workflowsWorker.queue(
     {
       messages: [
         {
@@ -622,7 +624,7 @@ test("queue handler posts channel reply jobs without creating a thread", async (
       },
     };
 
-    await brainWorker.queue({ messages: [message] } as never, env);
+    await workflowsWorker.queue({ queue: "ai-jobs", messages: [message] } as never, env);
 
     assert.equal(fetchCalls.find((call) => call.url.includes("/threads")), undefined);
     assert.equal(fetchCalls.find((call) => call.url.includes("/messages?")), undefined);
@@ -634,7 +636,7 @@ test("queue handler posts channel reply jobs without creating a thread", async (
       { role: "user", content: "metro goonin: and what about retries" },
     ]);
 
-    // The brain posts nothing to Discord directly; the reply crosses the outbox.
+    // The workflows worker posts nothing to Discord directly; the reply crosses the outbox.
     assert.equal(
       fetchCalls.find((call) => call.url === `https://discord.com/api/v10/channels/${CHANNEL_ID}/messages`),
       undefined,
@@ -718,7 +720,7 @@ test("queue handler treats a thread-start job as fresh, creates a thread, and po
       },
     };
 
-    await brainWorker.queue({ messages: [message] } as never, env);
+    await workflowsWorker.queue({ queue: "ai-jobs", messages: [message] } as never, env);
 
     const historyCall = fetchCalls.find((call) => call.url.includes("/messages?"));
     assert.equal(historyCall, undefined);
@@ -840,7 +842,7 @@ test("queue handler builds a conversation from tracked thread history and posts 
       },
     };
 
-    await brainWorker.queue({ messages: [message] } as never, env);
+    await workflowsWorker.queue({ queue: "ai-jobs", messages: [message] } as never, env);
 
     const historyCall = fetchCalls.find((call) => call.url.includes("/messages?"));
     assert.ok(historyCall);
@@ -933,7 +935,7 @@ test("queue handler keeps non-search replies inside /ask thread mode", async () 
       },
     };
 
-    await brainWorker.queue({ messages: [message] } as never, env);
+    await workflowsWorker.queue({ queue: "ai-jobs", messages: [message] } as never, env);
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
@@ -1031,7 +1033,7 @@ test("queue handler uses web search for current follow-ups in /ask threads", asy
       },
     };
 
-    await brainWorker.queue({ messages: [message] } as never, env);
+    await workflowsWorker.queue({ queue: "ai-jobs", messages: [message] } as never, env);
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
@@ -1120,7 +1122,7 @@ test("queue handler excludes rag command bot output from thread history", async 
       },
     };
 
-    await brainWorker.queue({ messages: [message] } as never, env);
+    await workflowsWorker.queue({ queue: "ai-jobs", messages: [message] } as never, env);
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
@@ -1198,7 +1200,7 @@ test("queue handler fetches replied-to context from Discord REST", async () => {
       },
     };
 
-    await brainWorker.queue({ messages: [message] } as never, env);
+    await workflowsWorker.queue({ queue: "ai-jobs", messages: [message] } as never, env);
 
     assert.ok(
       fetchCalls.find(
@@ -1260,9 +1262,9 @@ test("raw model output crosses the outbox and the responder sanitizes it on egre
       },
     };
 
-    await brainWorker.queue({ messages: [message] } as never, env);
+    await workflowsWorker.queue({ queue: "ai-jobs", messages: [message] } as never, env);
 
-    // The brain ships the raw model text; sanitisation is the responder's job.
+    // The workflows worker ships the raw model text; sanitisation is the responder's job.
     assert.equal(outboxJobs.length, 1);
     assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(outboxJobs[0])), {
       kind: "reply.channel_message",
@@ -1271,6 +1273,7 @@ test("raw model output crosses the outbox and the responder sanitizes it on egre
     });
 
     await responderWorker.queue({
+      queue: "discord-outbox",
       messages: [{ body: outboxJobs[0], ack: () => undefined }],
     } as never, env);
 
@@ -1328,7 +1331,7 @@ test("queue handler uses the source-controlled partner model", async () => {
       },
     };
 
-    await brainWorker.queue({ messages: [message] } as never, env);
+    await workflowsWorker.queue({ queue: "ai-jobs", messages: [message] } as never, env);
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
@@ -1412,7 +1415,7 @@ test("queue handler records partner AI Gateway usage", async () => {
       },
     };
 
-    await brainWorker.queue({ messages: [message] } as never, env);
+    await workflowsWorker.queue({ queue: "ai-jobs", messages: [message] } as never, env);
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);

@@ -1,8 +1,10 @@
 # Project Status & Design
 
-Branch: `feature/security-architecture` (60 commits ahead of `main`).
-Working tree clean. `npm run check` clean, 230 tests passing (26 files). All workers
-(gateway, dev-proxy, brain, responder, spend, connectors) build under `wrangler deploy --dry-run`.
+Branch: `feature/security-architecture` (60 commits ahead of `main`, plus the
+uncommitted webhook-ingress + admin-surface-completion work).
+`npm run check` clean, 241 tests passing (27 files). All workers (gateway,
+dev-proxy, webhooks, workflows, responder, spend, connectors, registry) build under
+`wrangler deploy --dry-run`.
 
 This document is the running state of the security + architecture rework started from
 `RECOMMENDATIONS.md`. It records what is built, what remains, the design decisions taken
@@ -32,7 +34,7 @@ propagation, centralized policy, and per-identity egress control. It is deployab
 Discord ──signed interaction──▶ gateway (public)
                                   │  verify sig, Cedar authz, mint origin identity ctx
                                   ▼
-                              ai-jobs queue ──▶ brain (no public route)
+                              ai-jobs queue ──▶ workflows (no public route)
                                                  │ AI calls, D1, verify+re-mint identity
                                                  ├──▶ discord-outbox queue ──▶ responder ──▶ Discord REST (writes)
                                                  ├──▶ binding RPC (media) ────▶ responder
@@ -45,24 +47,27 @@ DiscordGateway DO (in gateway worker): websocket → validate → encode → enq
 | Worker | Folder | Role | Public route | Secrets it holds |
 |---|---|---|---|---|
 | `ragbot-worker` (gateway) | `workers/public/gateway` | Interaction webhook + gateway-control HTTP + hosts the `DiscordGateway` DO | **yes** (`ragbot.jsmunro.me`) | `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (DO IDENTIFY + interaction webhook edits), `GATEWAY_CONTROL_TOKEN`, `GATEWAY_SIGNING_KEY` |
-| `ragbot-brain-worker` | `workers/services/brain` | All AI work, D1, conversation building | no | `CF_AIG_TOKEN`, `DISCORD_BOT_TOKEN` (read-only REST + thread create), `BRAIN_SIGNING_KEY` |
+| `ragbot-workflows-worker` | `workers/services/workflows` | All AI work, D1, conversation building | no | `CF_AIG_TOKEN`, `DISCORD_BOT_TOKEN` (read-only REST + thread create), `WORKFLOWS_SIGNING_KEY` |
 | `ragbot-responder-worker` | `workers/services/responder` | **Sole** Discord write egress + final output policy | no | `DISCORD_BOT_TOKEN` (only writer) |
 | `ragbot-spend-worker` | `workers/services/spend` | AI Gateway spend reconciliation | no | `CLOUDFLARE_API_TOKEN` (scope to AI Gateway Read) |
+| `ragbot-webhooks-worker` | `workers/public/webhooks` | Centralised inbound-webhook ingress: `POST /{provider}/{id}`, broker-side signature verify (`webhook_verify`), event-id dedupe DO, enqueue-only onto `webhook-jobs` → workflows | **yes** (`webhooks.jsmunro.me`, deliberately NOT behind CF Access) | `WEBHOOKS_SIGNING_KEY` |
+| `ragbot-connectors-worker` | `workers/services/connectors` | The credential broker (see `CONNECTORS.md`) | no | provider credentials (`GITHUB_APP_ID`/`GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `DISCORD_OAUTH_CLIENT_ID`/`_SECRET`), secrets-backend env |
 
 ### Packages (shared, no build step, relative imports)
 
 - `packages/contracts` — Cap'n Proto event envelope + generated code (`npm run contracts:build`), value-constraint validation (snowflake regex, length caps), typed encode/decode. Also holds `types.ts`/`validation.ts`.
-- `packages/auth` — the **centralised auth service client library**: RFC-named identity vocabulary (`MachinePrincipal`, `Subject`, delegation chain, `Target`, trust zones untrusted→edge→application→trusted), `serviceClients(env)`/`createServiceClient` factory (Cedar exchange check, signing keys, token minting, transport selection, denial logging), `createServiceServer` receive pipeline yielding `ServiceRequest` (verified `RequestContext` + payload), service manifests + registry client.
+- `packages/auth` — the **centralised auth service client library**: RFC-named identity vocabulary (`MachinePrincipal`, `Subject`, delegation chain, `Target`, trust zones untrusted→edge→application→trusted), `serviceClients(env)`/`createServiceClient` factory (Cedar exchange check, signing keys, token minting, transport selection, denial logging), `createServiceServer` receive pipeline yielding `ServiceRequest` (verified `RequestContext` + payload), service manifests + registry client, and `createQueueWorker(manifest, handlers)` — the shared queue-consumer shell for the service workers (register manifest before any message; unknown queue → log + ack, never wedge), so each worker's index.ts is just its manifest plus a queue→handler routing table.
 - `packages/boundaries/{inbound,outbound}` — the edge boundaries:
   - **inbound** — `InboundGuard` objects (Discord Ed25519 signature guard, operator control-token guard) yielding typed principals or typed denials at the untrusted→edge crossing.
   - **outbound** — per-identity egress HTTP clients (host allowlist, credential injection, timeout, size cap, path-redaction for token-bearing identities).
 - `packages/authz` — **Cedar** policy engine (`@cedar-policy/cedar-wasm`), `.cedar` policy files, admin-group entity data, `authorize({principal, action, resource, context}, dynamicEntities)` with `Human`/`Machine` principals, `authorizeAndForward` forwarding authorizer.
 - `packages/identity` — signed **identity-context tokens** (Ed25519 JWS): mint/verify, per-worker keypairs, committed public keyring, `scripts/generate-keys.ts`.
-- `packages/ai` — model clients, tracked completions (spend recording), ask-mode heuristic, config loader (KV-backed with bundled fallback), `ai-config/` prompt files.
+- `packages/inference` — the **centralised model-access seam**: the one place that holds the AI Gateway credential (`CF_AIG_TOKEN` via a boundary client), builds account/gateway URLs, routes binding-vs-gateway-HTTP per model, and shapes the per-transport request. `InferenceClient` (`chat`/`webSearch`/`run`), memoized `inferenceClient(env)` factory; every model call in the app leaves through it.
+- `packages/ai` — ragbot's workflow layer over `packages/inference`: request parameters from config, response interpretation (text/usage/sources extraction, sanitization), tracked completions (spend recording), ask-mode heuristic, config loader (KV-backed with bundled fallback), `ai-config/` prompt files.
 - `packages/discord` — Discord REST module (built on the outbound boundary client).
 - `packages/domain` — business logic: command registry + specs, conversation/thread building, consumer processors, limits, bans, guild allowlist, DLQ handlers, responder output policy.
 - `packages/logger` — structured logging + trimmed error detail.
-- `packages/connectors` — the **credential broker** abstraction: connector strategies (`api_key`, `oauth2_client_credentials`, `oauth2_authorization_code` 3LO seam, `github_app` reference impl), the declarative connector registry, the DO-backed grant + encrypted 3LO token stores, the per-isolate access-token cache, and `handleConnectorInvoke` (the authn+authz gate). Hosted by `ragbot-connectors-worker` (`workers/services/connectors`) — no route/queue, reachable only over the `CONNECTORS` service binding. Uniform **phantom-token** model: `grant` exchanges a caller's verified identity for an opaque, caller-bound handle; `authorizedFetch`/`getAccessToken`/`introspect` present the handle and the real provider credential never leaves the broker. Every op is authenticated (identity token) + Cedar-authorized (`connector.*` on `Connector::<id>`) and audit-logged with the full actor chain. Also exposes a Cedar-gated **admin surface** (`connector.admin.*`: list/describe/set-secret/providers) that never returns a secret value; `setConnectorSecret` persists a `{provider, ref}` override in the broker config store and honestly surfaces each backend's runtime write capability (vault/1Password `written`; cloudflare-secret-store `provision_required`; wrangler-env `rejected`). The brain is the credential caller (`brainToConnectors`, not yet bound); the **dev-proxy is the admin caller** — it binds `CONNECTORS` and reaches only the admin ops. See **`CONNECTORS.md`**.
+- `packages/connectors` — the **credential broker** abstraction: connector strategies (`api_key`, `oauth2_client_credentials`, `oauth2_authorization_code` 3LO seam, `github_app` reference impl), the declarative connector registry, the DO-backed grant + encrypted 3LO token stores, the per-isolate access-token cache, and `handleConnectorInvoke` (the authn+authz gate). Hosted by `ragbot-connectors-worker` (`workers/services/connectors`) — no route/queue, reachable only over the `CONNECTORS` service binding. Uniform **phantom-token** model: `grant` exchanges a caller's verified identity for an opaque, caller-bound handle; `authorizedFetch`/`getAccessToken`/`introspect` present the handle and the real provider credential never leaves the broker. Every op is authenticated (identity token) + Cedar-authorized (`connector.*` on `Connector::<id>`) and audit-logged with the full actor chain. Also exposes a Cedar-gated **admin surface** (`connector.admin.*`: list/describe/set-secret/providers) that never returns a secret value; `setConnectorSecret` persists a `{provider, ref}` override in the broker config store and honestly surfaces each backend's runtime write capability (vault/1Password `written`; cloudflare-secret-store `provision_required`; wrangler-env `rejected`). The workflows worker is the credential caller (`workflowsToConnectors`, not yet bound); the **dev-proxy is the admin caller** — it binds `CONNECTORS` and reaches only the admin ops. See **`CONNECTORS.md`**.
 
 ### Security properties now true in code
 
@@ -83,16 +88,25 @@ DiscordGateway DO (in gateway worker): websocket → validate → encode → enq
 3. ✅ **Phase 2 cleanups** — dead code removal, duplication consolidation, deferred-response helper, tracked-completion consolidation, unified Discord REST helpers, command handler map, `discord.js` → devDeps.
 4. ✅ **Module splits** — `mention.ts` → threads/conversation/consumer; test suite split.
 5. ✅ **Contracts + queue** — Cap'n Proto envelopes for all queue messages, `/ask` moved onto the queue (immediate thread link, prompt-derived title, one fewer paid model call), `RETURNING` in rag commands.
-6. ✅ **Trust-zone split** — `/bicture` onto queue, brain worker, responder worker + `discord-outbox` + media RPC, thinned DO.
+6. ✅ **Trust-zone split** — `/bicture` onto queue, workflows worker, responder worker + `discord-outbox` + media RPC, thinned DO.
 7. ✅ **Hardening tail** — attacker-focused limits, guild allowlist, ban coverage for AI, D1 migrations, DLQ consumers, `/gateway/stop`, embed suppression for uncited URLs, trimmed error logs, logged failed interaction edits, removed prod `preview_database_id`.
 8. ✅ **Boundary HTTP client** — per-identity egress policy; all outbound HTTP migrated onto it.
 10. ✅ **Repo restructure** — `workers/` by layer + `packages/`; thin entrypoints; declarative command-spec registry.
 11. ✅ **Cedar authz** — policy engine package; `authorize()` at command pre-flight, operator control, and service boundaries; `admins.ts` replaced by policy data.
 15. ✅ **Boundary taxonomy** — `net/` reorganized into inbound/outbound/service layers with a uniform denial shape; webhook path-redaction leak fixed.
-16. ✅ **Prompts to KV** — `AI_CONFIG` KV binding on brain with bundled fallback; `config:push` deploy step.
+16. ✅ **Prompts to KV** — `AI_CONFIG` KV binding on workflows with bundled fallback; `config:push` deploy step.
 17. ✅ **Identity-context token exchange** — Ed25519 signed tokens minted at ingress, re-minted on-behalf-of at each hop, verified before Cedar; fail-closed client authorization; bindings documented as the platform-guaranteed transport-identity (mTLS-equivalent) layer.
 18. ✅ **RFC auth architecture** — identity naming standardised on RFC terms (`Human`/`Machine` principals, Subject/Delegate/Target, `service.invoke`/`service.exchange`); trust zones remodeled to untrusted→edge→application→trusted; `packages/auth` centralised service client/server library (replaces `packages/boundaries/peer`); `ServiceRegistry` Durable Object with per-worker manifests feeding Cedar dynamic entities + `authorizeAndForward` forwarding authorizer; `openapi.yaml` for the gateway public surface.
 19. ✅ **Contract-defined transport + spec-constructed gateway** — service-boundary transport types moved to capnp (`service.capnp`: `ServiceMessage` queue body, `ServiceManifest`/`ManifestSnapshot` registry RPC payloads) with generated code and total decoders (legacy object wrapper tolerated for in-flight messages); the gateway router is constructed from `openapi.yaml` via a generated route table (`npm run routes:build`) mapping paths/methods/security schemes to guards and operationId handlers, failing construction on unimplemented operations. In-process vocabulary (`Principal`, `RequestContext`, zones) deliberately stays TS, and the identity token stays RFC 7515 JWS.
+
+20. ✅ **Webhook ingress + admin-surface completion** — `ragbot-webhooks-worker` at
+   `webhooks.jsmunro.me` (validate → dedupe → enqueue-only → 2xx; signature verification
+   broker-side via the new `webhook_verify` op, `webhooks` machine principal + Cedar
+   permits, `webhook.event` envelope, `webhook-jobs` queue + workflows consumer seam);
+   dev-proxy reserved 501s implemented (`grant` = 3LO consent begin, `installations`,
+   `callback` = 3LO complete); Discord 3LO wired (`discord-user`, single-use
+   subject-bound OAuth state); workflows binds `CONNECTORS`. See `CONNECTORS.md`
+   ("Inbound webhooks") and `DEPLOY.md` for the operator steps.
 
 ---
 
@@ -171,11 +185,11 @@ to drive the deployed dev-proxy from a laptop:
 - **DO stays in the gateway worker.** Moving a Durable Object class between scripts needs a
   risky transfer migration; deliberately deferred (deviation from RECOMMENDATIONS §1). The
   DO is already thinned to validate→encode→enqueue.
-- **Bot token still in brain** for Discord **reads** (conversation context, thread creation);
+- **Bot token still in workflows** for Discord **reads** (conversation context, thread creation);
   only the responder **writes**. Documented honestly rather than hidden.
 - **Actor chain (`act`) depth:** `sub` attribution is preserved across all hops and bound to
-  the envelope hash; the full `[gateway, brain]` chain is not threaded through brain's deep
-  call graph (brain-originated egress carries `[brain]`). Bounded, documented.
+  the envelope hash; the full `[gateway, workflows]` chain is not threaded through workflows worker's deep
+  call graph (workflows-originated egress carries `[workflows]`). Bounded, documented.
 - **D1 migrations: 0001-only, legacy insert shim kept.** Prod's `rag_ai_interactions` column
   shape is unverifiable from here and SQLite lacks `ADD COLUMN IF NOT EXISTS`; a blind ALTER
   could strand deploys. The dual-INSERT fallback in `consumer.ts` stays until an operator runs
@@ -217,7 +231,7 @@ to drive the deployed dev-proxy from a laptop:
   request's live Access `sub`, so a leaked session cookie cannot be replayed by another
   Access-authenticated team member. (A DO to isolate the Discord tokens was considered and
   declined — the tokens live server-side in `AUTH_DB` and never reach the browser.)
-- **Enqueue/AI commands via dev-proxy** run the full authorized path and enqueue to the brain,
+- **Enqueue/AI commands via dev-proxy** run the full authorized path and enqueue to the workflows worker,
   but there is no real Discord interaction, so the async Discord edit uses the real application
   id with a synthetic interaction token (a no-op at Discord). AI/D1/spend all execute and are
   observable; the browser gets the deferred acknowledgement. Inline commands round-trip fully.
@@ -230,13 +244,13 @@ to drive the deployed dev-proxy from a laptop:
 These are new since `main` and are **not** automated. See README for exact commands.
 
 - [ ] `wrangler secret put GATEWAY_CONTROL_TOKEN` (gateway) + add the `op://` field to `.env`.
-- [ ] `wrangler secret put GATEWAY_SIGNING_KEY` (gateway) and `BRAIN_SIGNING_KEY` (brain) — generate with `scripts/generate-keys.ts`; commit the **public** halves to the keyring only.
-- [ ] `wrangler kv namespace create AI_CONFIG`; put the id in `workers/services/brain/wrangler.jsonc`; run `npm run config:push`.
+- [ ] `wrangler secret put GATEWAY_SIGNING_KEY` (gateway) and `WORKFLOWS_SIGNING_KEY` (workflows) — generate with `scripts/generate-keys.ts`; commit the **public** halves to the keyring only.
+- [ ] `wrangler kv namespace create AI_CONFIG`; put the id in `workers/services/workflows/wrangler.jsonc`; run `npm run config:push`.
 - [ ] `wrangler queues create` for all queues incl. DLQs (`ai-jobs`, `ai-jobs-dlq`, `discord-outbox`, `discord-outbox-dlq`, `ai-spend-jobs`, `ai-spend-jobs-dlq`).
-- [ ] Set `ALLOWED_GUILD_IDS` var on gateway + brain.
+- [ ] Set `ALLOWED_GUILD_IDS` var on gateway + workflows.
 - [ ] Confirm `CLOUDFLARE_API_TOKEN` is scoped to **AI Gateway Read** and set on the spend worker only.
 - [ ] `wrangler d1 migrations apply` (0001). Keep the insert shim until columns are verified.
-- [ ] Deploy order matters: responder before brain (brain's service binding target must exist). `npm run deploy` / `deploy.sh` handle this.
+- [ ] Deploy order matters: responder before workflows (workflows worker's service binding target must exist). `npm run deploy` / `deploy.sh` handle this.
 
 ### Dev-proxy (admin app — optional, deploy only when using it)
 

@@ -3,7 +3,8 @@ import type { MachinePrincipal } from "../auth/principal";
 import type { BoundaryFetch } from "../boundaries/outbound/boundary-client";
 import type { SecretRef } from "../secrets";
 import type { AccessTokenCache } from "./cache";
-import type { GrantStore, OAuthTokenStore } from "./store";
+import type { GrantStore, OAuthStateStore, OAuthTokenStore } from "./store";
+import type { WebhookProvider } from "./webhooks";
 
 // The connector abstraction. A connector is a declarative config entry keyed by
 // `kind`; adding a provider is a config entry plus — only for a genuinely new
@@ -43,6 +44,23 @@ export type ConnectorConfig = {
   // oauth2_authorization_code (3LO): the authorization endpoint + OAuth client id.
   authorizationUrl?: string;
   clientId?: string;
+  // Alternative to a literal `clientId`: a {provider, ref} the client id is
+  // resolved through (mirrors `appId`), so an operator can provision it as a
+  // worker secret / remote-backend entry instead of committing it. A literal
+  // `clientId` wins when both are set.
+  clientIdRef?: SecretRef;
+  // oauth2_authorization_code (3LO): the exact redirect_uri sent on both begin
+  // (the consent URL) and complete (the code exchange). The convention is the
+  // admin app's callback, https://ragbot-dev.jsmunro.me/api/connectors/{id}/callback
+  // (CONNECTORS.md "URL conventions"). Config is authoritative; when absent the
+  // strategy falls back to a caller-supplied `redirectUri` param.
+  redirectUri?: string;
+  // Inbound webhook verification for this connector: which provider signature
+  // scheme applies, the {provider, ref} of the webhook signing secret, and an
+  // enabled flag (a kill switch that fails verification closed). The URL-path
+  // provider segment on the webhooks worker is routing sugar only — THIS config
+  // is authoritative, and a mismatch denies (handler.ts webhook_verify).
+  webhook?: { provider: WebhookProvider; secret: SecretRef; enabled: boolean };
   // github_app: a {provider, ref} reference to the numeric App id (the JWT
   // `iss`). Defaults to {provider:"wrangler-env", ref:"GITHUB_APP_ID"}.
   appId?: SecretRef;
@@ -88,6 +106,9 @@ export type StrategyContext = {
   now: () => number;
   tokenCache: AccessTokenCache;
   oauthTokens: OAuthTokenStore;
+  // Pending 3LO authorization states (persisted at begin, consumed once at
+  // complete), so a completion with an unknown/foreign/replayed state fails.
+  oauthStates: OAuthStateStore;
   subject: string;
   scopes: string[];
   // Connector-specific parameters, validated by the strategy (e.g. github_app's
@@ -150,5 +171,5 @@ export class ConnectorError extends Error {
   }
 }
 
-export type { GrantStore, OAuthTokenStore, StoredOAuthToken } from "./store";
+export type { GrantStore, OAuthStateStore, OAuthTokenStore, StoredOAuthToken } from "./store";
 export type { AccessTokenCache } from "./cache";

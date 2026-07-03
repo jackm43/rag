@@ -3,6 +3,7 @@ import { buildAiGatewayMetadata } from "../../ai/ai-metadata";
 import { errorDetails, errorMessage, logger } from "../../logger";
 import { PolicyViolationError } from "../../boundaries/outbound/boundary-client";
 import { boundaryClients } from "../../boundaries/outbound/clients";
+import { inferenceClient } from "../../inference";
 import { sendInteractionEdit, sendInteractionMediaEdit } from "../outbox";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../../ai/spend";
 import { type Env, type RagjamJob, type ResponderAttachment } from "../../contracts/types";
@@ -85,7 +86,7 @@ const runRagjamMusicGeneration = async (
   lyrics: string | null,
   metadata?: ReturnType<typeof buildAiGatewayMetadata>,
 ) => {
-  return env.AI.run(
+  return inferenceClient(env).run(
     activeRagjamConfig.model,
     {
       prompt,
@@ -93,7 +94,7 @@ const runRagjamMusicGeneration = async (
       ...(lyrics ? { lyrics } : {}),
       lyrics_optimizer: lyrics ? activeRagjamConfig.lyricsOptimizer : true,
     },
-    { gateway: { id: activeRagjamConfig.gatewayId, metadata } } as never,
+    { gatewayId: activeRagjamConfig.gatewayId, metadata },
   );
 };
 

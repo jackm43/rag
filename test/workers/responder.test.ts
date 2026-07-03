@@ -122,6 +122,7 @@ test("responder posts sanitized channel messages with allowed_mentions locked do
     let acked = false;
 
     await responderWorker.queue({
+      queue: "discord-outbox",
       messages: [
         {
           body: await signedServiceMessage(
@@ -133,7 +134,7 @@ test("responder posts sanitized channel messages with allowed_mentions locked do
               },
               { source: "worker" },
             ),
-            { iss: "brain", aud: "responder" },
+            { iss: "workflows", aud: "responder" },
           ),
           ack: () => {
             acked = true;
@@ -178,6 +179,7 @@ test("responder edits interactions with text-only content through the outbox", a
     let acked = false;
 
     await responderWorker.queue({
+      queue: "discord-outbox",
       messages: [
         {
           body: await signedServiceMessage(
@@ -190,7 +192,7 @@ test("responder edits interactions with text-only content through the outbox", a
               },
               { source: "worker" },
             ),
-            { iss: "brain", aud: "responder" },
+            { iss: "workflows", aud: "responder" },
           ),
           ack: () => {
             acked = true;
@@ -244,7 +246,7 @@ test("responder delivers media interaction edits over the RPC path", async () =>
     await deliverInteractionEdit(
       env,
       mediaEnvelope,
-      await mintServiceToken(mediaEnvelope, { iss: "brain", aud: "responder" }),
+      await mintServiceToken(mediaEnvelope, { iss: "workflows", aud: "responder" }),
       {
         name: "bicture.png",
         contentType: "image/png",
@@ -294,7 +296,7 @@ test("responder rejects RPC envelopes that are not interaction edits", async () 
     deliverInteractionEdit(
       env,
       channelEnvelope,
-      await mintServiceToken(channelEnvelope, { iss: "brain", aud: "responder" }),
+      await mintServiceToken(channelEnvelope, { iss: "workflows", aud: "responder" }),
       { name: "bicture.png", contentType: "image/png", data: new ArrayBuffer(4) },
     ),
   );
@@ -315,6 +317,7 @@ test("responder acknowledges malformed outbox messages without egress", async ()
     let acked = false;
 
     await responderWorker.queue({
+      queue: "discord-outbox",
       messages: [
         {
           body: new Uint8Array([1, 2, 3, 4, 5]),
@@ -347,11 +350,12 @@ test("responder retries channel posts on retryable Discord errors and acks termi
         { kind: "reply.channel_message", channelId: CHANNEL_ID, content: "hello" },
         { source: "worker" },
       ),
-      { iss: "brain", aud: "responder" },
+      { iss: "workflows", aud: "responder" },
     );
 
     let retried = false;
     await responderWorker.queue({
+      queue: "discord-outbox",
       messages: [
         {
           body,
@@ -369,6 +373,7 @@ test("responder retries channel posts on retryable Discord errors and acks termi
     status = 403;
     let acked = false;
     await responderWorker.queue({
+      queue: "discord-outbox",
       messages: [
         {
           body,

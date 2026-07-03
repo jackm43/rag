@@ -59,7 +59,7 @@ flowchart LR
   DO -->|MessageEvent v1| JOBS
 
   subgraph internal [Internal trust zone - no public routes]
-    JOBS --> BRAIN[brain worker\nAI calls, D1 reads/writes\nsecrets: CF_AIG_TOKEN]
+    JOBS --> BRAIN[workflows worker\nAI calls, D1 reads/writes\nsecrets: CF_AIG_TOKEN]
     BRAIN -->|ReplyEvent v1| OUT[(discord-outbox queue)]
     OUT --> RESP[responder worker\nsanitize, length-cap, allowed_mentions\nsecrets: DISCORD_BOT_TOKEN]
     RESP -->|REST| DiscordAPI[Discord REST API]
@@ -86,7 +86,7 @@ Key properties:
 - **The DO is treated as a second ingress**, because `MESSAGE_CREATE` payloads are
   untrusted user content. Today `handleGatewayMessageCreate` (called from inside the DO)
   does a D1 read (`findAiThread`) and a Discord REST call (`fetchBotRoleIds`) before
-  enqueueing. Move that logic into the brain worker: the DO should validate → encode →
+  enqueueing. Move that logic into the workflows worker: the DO should validate → encode →
   enqueue and nothing else. (The DO must keep the bot token for `IDENTIFY`; that is
   unavoidable, but it should lose D1 and REST access.)
 
@@ -133,10 +133,10 @@ and the guards are already ~170 lines of code that zod would halve.
    `ask` job like `ragjam` already does. After this, every AI/spend path is queue-driven
    and the interaction handler only defers + enqueues. This also removes the risk of
    `waitUntil` being cut off mid-pipeline and is a prerequisite for the split.
-2. **Split the queue consumer out of the public worker.** New `brain` wrangler config
+2. **Split the queue consumer out of the public worker.** New `workflows` wrangler config
    consuming `ai-jobs`; remove `queue()` from the public worker. The public worker loses
    `CF_AIG_TOKEN`.
-3. **Add the responder/outbox.** Brain stops calling Discord REST directly; it emits
+3. **Add the responder/outbox.** Workflows stops calling Discord REST directly; it emits
    `reply.post` events to `discord-outbox`. Responder holds the bot token. Public worker
    loses direct posting (it keeps only the deferred-response, which needs no token).
 4. **Move the DO into its own listener worker** and thin it to validate→encode→enqueue.
@@ -151,7 +151,7 @@ worker):
 workers/
   gateway/        # public entrypoint
   listener/       # DO + websocket
-  brain/          # ai-jobs consumer
+  workflows/          # ai-jobs consumer
   responder/      # discord-outbox consumer
   spend/          # ai-spend-jobs consumer (exists: src/spend-worker.ts)
 src/
@@ -350,5 +350,5 @@ src/
 | 1 — this week | Tests in CI (2.5); control token for `/gateway/*` (2.1); rate limit + daily budget check (2.2); bicture download cap/timeout (2.3) | Closes the live exposure cheaply, no restructuring |
 | 2 — quick cleanups | Dead code removal, duplication consolidation, `discord.js` → devDeps, command map, split `mention.ts` (§3) | Smaller, clearer codebase before the split |
 | 3 — unify on events | `/ask` (and `/rag` edit path) onto `ai-jobs`; contracts module with envelope + snowflake/length validation | Single ingress→queue→worker shape; "no worker touches untrusted data" becomes true in code |
-| 4 — split trust zones | Brain worker (queue consumer) out of public worker; responder/outbox worker owns bot token + sanitisation; thin the DO to encode+enqueue | Least-privilege secrets per worker; public entrypoint holds only the public key |
+| 4 — split trust zones | Workflows worker (queue consumer) out of public worker; responder/outbox worker owns bot token + sanitisation; thin the DO to encode+enqueue | Least-privilege secrets per worker; public entrypoint holds only the public key |
 | 5 — hardening tail | Guild allowlist, ban coverage for AI commands, retention cron, D1 migrations, DLQ alerting, gateway stop endpoint | Operational maturity |

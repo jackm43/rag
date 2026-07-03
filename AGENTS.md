@@ -13,10 +13,10 @@ This project expects these environment variables:
 
 - Cloudflare Worker entrypoints:
   - `workers/public/gateway/src/index.ts` Discord routing, gateway controls (edge zone)
-  - `workers/services/brain/src/index.ts` AI job queue consumer (application zone)
+  - `workers/services/workflows/src/index.ts` AI job queue consumer (application zone)
   - `workers/services/responder/src/index.ts` Discord write egress: outbox consumer + `Responder` RPC entrypoint (application zone)
   - `workers/services/spend/src/index.ts` AI spend aggregation queue consumer (application zone)
-- Trust zones: Untrusted (public) -> Edge (gateway) -> Applications (brain, responder, spend) -> Trusted (service registry, signing roots)
+- Trust zones: Untrusted (public) -> Edge (gateway) -> Applications (workflows, responder, spend) -> Trusted (service registry, signing roots)
 - Modules:
   - `packages/auth` centralised auth service client library: RFC-named identity vocabulary (`MachinePrincipal`, `Subject`, delegation chain, `Target`, `TrustZone`), `serviceClients(env)`/`createServiceClient` factory (Cedar exchange check, signing keys, token minting, transport, denial logging), `createServiceServer` receive pipeline yielding `ServiceRequest` (verified `RequestContext` + payload), service manifests and registry client
   - `packages/contracts/service.capnp` transport-layer contract for the service boundary: `ServiceMessage` (queue hop body: envelope bytes + JWS token), `ServiceManifest`/`ManifestSnapshot` (registry RPC payloads); generated code via `npm run contracts:build`. The identity token itself stays a JWS (RFC 7515), carried as Text
@@ -32,7 +32,8 @@ This project expects these environment variables:
   - `packages/domain/mention.ts` mention handling, thread tracking, AI title generation, and AI queue consumer (thread conversation context)
   - `packages/domain/commands/ask.ts` `/ask` thread creation, normal AI response handling, and web-search research mode
   - `packages/domain/commands/ragspend.ts` `/ragspend` personal AI spend lookup and `/ragspendboard` spend leaderboard
-  - `packages/ai/ai.ts` model-agnostic chat calls through the Workers AI binding (`env.AI.run`) or AI Gateway REST. Workers AI `@cf/...` models use binding options (`gateway: { id }`), Unified Billing partner chat models use AI Gateway compat chat completions, and `/ask` research mode uses an OpenAI search model such as `openai/gpt-4o-search-preview` via AI Gateway.
+  - `packages/inference/client.ts` the centralised model-access interface: owns the AI Gateway credential (`CF_AIG_TOKEN` boundary client), URL construction, and binding-vs-gateway routing. Workers AI `@cf/...` / `workers-ai/...` models run on the `env.AI` binding (gateway-wrapped when a gatewayId is set); Unified Billing partner chat models use AI Gateway compat chat completions. Nothing outside this package touches `env.AI` or `gateway.ai.cloudflare.com`.
+  - `packages/ai/ai.ts` ragbot's chat workflows over `packages/inference`: config-derived request parameters and raw-payload interpretation (text/usage/sources extraction, mention sanitization). `/ask` research mode uses an OpenAI search model such as `openai/gpt-4o-search-preview` via the same seam.
   - `packages/ai/spend.ts` raw spend event recording, AI Gateway log cost reconciliation, spend queue consumer helper, and dollar formatting
   - `packages/ai/config.ts` loads source-controlled AI config from `packages/ai/ai-config`
   - `packages/logger/index.ts` structured logging

@@ -55,7 +55,9 @@ export const createServiceServer = (config: ServiceServerConfig): ServiceServer 
       const fallbackIdentity = config.expectedIssuers[0] ?? "unknown";
       const parsed = parseServiceMessage(body);
       if (!parsed) {
-        deny(transport, fallbackIdentity, "envelope_invalid");
+        // Distinct from the post-verify decode failure ("envelope_invalid"):
+        // here the received BODY was not a service message at all.
+        deny(transport, fallbackIdentity, "body_unparseable");
         return null;
       }
 

@@ -31,13 +31,13 @@ const replyEnvelope = () =>
     { source: "worker" },
   );
 
-const brainEnv = () =>
+const workflowsEnv = () =>
   ({
-    BRAIN_SIGNING_KEY: JSON.stringify(SIGNING_KEY_JWKS.brain),
+    WORKFLOWS_SIGNING_KEY: JSON.stringify(SIGNING_KEY_JWKS.workflows),
   }) as never;
 
 const responderServer = () =>
-  createServiceServer({ self: "responder", expectedIssuers: ["brain"] });
+  createServiceServer({ self: "responder", expectedIssuers: ["workflows"] });
 
 test("a client mints a token beside the envelope and the server verifies it into a request context", async () => {
   const sent: Array<{ body: ServiceMessageBytes; options?: { delaySeconds?: number } }> = [];
@@ -48,7 +48,7 @@ test("a client mints a token beside the envelope and the server verifies it into
   } as never;
   const envelope = replyEnvelope();
 
-  await serviceClients(brainEnv()).brainToResponder.call({
+  await serviceClients(workflowsEnv()).workflowsToResponder.call({
     transport: "queue",
     queue,
     envelope,
@@ -70,8 +70,8 @@ test("a client mints a token beside the envelope and the server verifies it into
   });
   // The verified context carries the subject and delegation chain.
   assert.equal(received.context.subject, "user-1");
-  assert.deepEqual(received.context.delegates, ["brain"]);
-  assert.equal(received.context.source, "brain");
+  assert.deepEqual(received.context.delegates, ["workflows"]);
+  assert.equal(received.context.source, "workflows");
   assert.equal(received.context.target, "responder");
   assert.equal(received.context.zone, "application");
   assert.equal(received.context.transport, "queue");
@@ -99,7 +99,7 @@ test("receive denies an invalid envelope even under a valid token", async () => 
     const garbage = new Uint8Array([1, 2, 3, 4, 5]);
     const message = {
       envelope: garbage,
-      idToken: await mintServiceToken(garbage, { iss: "brain", aud: "responder" }),
+      idToken: await mintServiceToken(garbage, { iss: "workflows", aud: "responder" }),
     };
     const invalid = await responderServer().receive(message, decodeReplyJobEnvelope);
     assert.equal(invalid, null);
@@ -116,7 +116,7 @@ test("receive denies an invalid envelope even under a valid token", async () => 
 test("receive denies a token minted for a different envelope (replay)", async () => {
   const warnings = captureWarnings();
   try {
-    const token = await mintServiceToken(replyEnvelope(), { iss: "brain", aud: "responder" });
+    const token = await mintServiceToken(replyEnvelope(), { iss: "workflows", aud: "responder" });
     const forged = encodeServiceMessage(
       encodeReplyJobEnvelope(
         { kind: "reply.channel_message", channelId: CHANNEL_ID, content: "different" },
@@ -137,7 +137,7 @@ test("receive denies a token minted for a different envelope (replay)", async ()
 test("receive denies a token addressed to another service", async () => {
   const warnings = captureWarnings();
   try {
-    const message = await signedServiceMessage(replyEnvelope(), { iss: "brain", aud: "spend" });
+    const message = await signedServiceMessage(replyEnvelope(), { iss: "workflows", aud: "spend" });
     const denied = await responderServer().receive(message, decodeReplyJobEnvelope);
     assert.equal(denied, null);
     const denial = warnings.lines.find((line) => line.message === "service_denied");
@@ -155,7 +155,7 @@ test("the forwarding authorizer drops a verified hop that policy does not permit
     // carries a registered spend operation, so it clears the registration
     // gate — but no service.invoke policy permits the pair, so the request
     // exits at the authorizer.
-    const server = createServiceServer({ self: "spend", expectedIssuers: ["gateway", "brain"] });
+    const server = createServiceServer({ self: "spend", expectedIssuers: ["gateway", "workflows"] });
     const envelope = encodeAiSpendJobEnvelope({ spendEventId: "event-1" }, { source: "worker" });
     const message = await signedServiceMessage(envelope, { iss: "gateway", aud: "spend" });
     const denied = await server.receive(message, decodeAiSpendJobEnvelope);
@@ -184,7 +184,7 @@ test("binding transport verifies the token then re-validates the envelope kind",
     { source: "worker" },
   );
   const received = await responderServer().receive(
-    { envelope, idToken: await mintServiceToken(envelope, { iss: "brain", aud: "responder" }) },
+    { envelope, idToken: await mintServiceToken(envelope, { iss: "workflows", aud: "responder" }) },
     decodeInteractionEdit,
     "binding",
   );
@@ -197,7 +197,7 @@ test("binding transport verifies the token then re-validates the envelope kind",
   try {
     const channel = replyEnvelope();
     const wrongKind = await responderServer().receive(
-      { envelope: channel, idToken: await mintServiceToken(channel, { iss: "brain", aud: "responder" }) },
+      { envelope: channel, idToken: await mintServiceToken(channel, { iss: "workflows", aud: "responder" }) },
       decodeInteractionEdit,
       "binding",
     );

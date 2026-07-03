@@ -32,7 +32,7 @@ export const SIGNING_KEY_JWKS: Record<MachinePrincipal, JsonWebKey> = {
     x: "WLBRy5_x-U27lYp3QoCm3dg4NzmMAIBT8w6oODf7-Og",
     d: "N_RqZdAxNC7iLFzXtxMtTxzTQ7PE0djTuhz7lCKRM8U",
   },
-  brain: {
+  workflows: {
     kty: "OKP",
     crv: "Ed25519",
     x: "CpovGn_wbuSw6KN94Cisarey69JrMAvJx55YtCpSBpE",
@@ -64,6 +64,12 @@ export const SIGNING_KEY_JWKS: Record<MachinePrincipal, JsonWebKey> = {
     crv: "Ed25519",
     x: "tlvX0YnwjSma94r5lPNsnwn6FwXTxJy8x6R2ph55mho",
     d: "2TruP-IMZ-FIxM-KN94LNWNtITPBAHVTKwPPZpL2FEo",
+  },
+  webhooks: {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "hYMdAmVmhbs_L4wEZVJRUtp8stUdIPCliYyjA2zdbUY",
+    d: "NHQW5FI6wxkbQiVsVh7ub8Ex_DX-NxAktpaWjfU5BFE",
   },
 };
 
@@ -103,12 +109,12 @@ const subjectOf = (job: AiJob): string => {
   return candidate.requesterUserId ?? candidate.authorId ?? SYSTEM_SUBJECT;
 };
 
-// Encode an AI job and wrap it as a gateway->brain service message, the shape
-// the brain consumer receives in production.
+// Encode an AI job and wrap it as a gateway->workflows service message, the shape
+// the workflows worker consumer receives in production.
 export const gatewayAiJob = (job: AiJob, options: EnvelopeOptions): Promise<ServiceMessageBytes> =>
   signedServiceMessage(encodeAiJobEnvelope(job, options), {
     iss: "gateway",
-    aud: "brain",
+    aud: "workflows",
     sub: subjectOf(job),
   });
 
@@ -149,9 +155,9 @@ export const createEnv = (publicKeyHex: string, overrides: Record<string, unknow
     DISCORD_PUBLIC_KEY: publicKeyHex,
     DISCORD_APPLICATION_ID: "application-id",
     DISCORD_BOT_TOKEN: "bot-token",
-    // Signing keys for the workers that mint peer tokens (gateway, brain).
+    // Signing keys for the workers that mint peer tokens (gateway, workflows).
     GATEWAY_SIGNING_KEY: JSON.stringify(SIGNING_KEY_JWKS.gateway),
-    BRAIN_SIGNING_KEY: JSON.stringify(SIGNING_KEY_JWKS.brain),
+    WORKFLOWS_SIGNING_KEY: JSON.stringify(SIGNING_KEY_JWKS.workflows),
     DB: {
       prepare: () => {
         throw new Error("DB should not be used in this test");

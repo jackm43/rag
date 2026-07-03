@@ -1,5 +1,8 @@
+import type { BoundaryFetch } from "../../boundaries/outbound/boundary-client";
+import type { Env } from "../../contracts/types";
 import {
   ConnectorError,
+  type ConnectorConfig,
   type ConnectorProvider,
   type ConnectorStrategy,
   type ResolvedToken,
@@ -221,6 +224,66 @@ const resolveInstallationToken = async (ctx: StrategyContext): Promise<ResolvedT
   const token: ResolvedToken = { value: body.token, tokenType: "Bearer", expiresAt };
   ctx.tokenCache.set(key, token);
   return token;
+};
+
+// ---------------------------------------------------------------------------
+// App installations (the admin_installations management op)
+// ---------------------------------------------------------------------------
+
+// One installation, trimmed to the identifying fields the admin surface needs.
+export type AppInstallation = {
+  id: number;
+  accountLogin: string;
+  repositorySelection: string;
+};
+
+// List the App's installations: mint the App JWT (the same crypto the strategy
+// uses — exported here so the broker never duplicates it) and GET
+// /app/installations through the connector's host-allowlisted boundary client.
+// Neither the private key nor the JWT leaves the broker; the caller receives
+// only the trimmed list.
+export const listAppInstallations = async (
+  env: Env,
+  connector: ConnectorConfig,
+  fetch: BoundaryFetch,
+  nowSeconds: number = Math.floor(Date.now() / 1000),
+): Promise<AppInstallation[]> => {
+  const appId = await resolveSecret(env, connector.appId ?? DEFAULT_APP_ID_REF);
+  const pem = await resolveSecret(env, connector.secret);
+  const jwt = await mintAppJwt(await appPrivateKey(pem), appId, nowSeconds);
+  const response = await fetch(`https://${connector.host}/app/installations?per_page=100`, {
+    method: "GET",
+    headers: {
+      authorization: `Bearer ${jwt}`,
+      accept: "application/vnd.github+json",
+      "user-agent": "ragbot-connectors",
+    },
+  });
+  if (!response.ok) {
+    throw new ConnectorError(502, `installations_status:${response.status}`);
+  }
+  const body = (await response.json()) as unknown;
+  if (!Array.isArray(body)) {
+    throw new ConnectorError(502, "installations_body");
+  }
+  return body.flatMap((item): AppInstallation[] => {
+    const record = item as {
+      id?: unknown;
+      account?: { login?: unknown } | null;
+      repository_selection?: unknown;
+    };
+    if (typeof record.id !== "number") {
+      return [];
+    }
+    return [
+      {
+        id: record.id,
+        accountLogin: typeof record.account?.login === "string" ? record.account.login : "",
+        repositorySelection:
+          typeof record.repository_selection === "string" ? record.repository_selection : "",
+      },
+    ];
+  });
 };
 
 const githubAppStrategy: ConnectorStrategy = {

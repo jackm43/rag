@@ -4,7 +4,7 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
 
 ## Tech Stack
 
-- Runtime: Cloudflare Workers (`workers/public/gateway/src/index.ts`, `workers/services/brain/src/index.ts`, `workers/services/responder/src/index.ts`, `workers/services/spend/src/index.ts`)
+- Runtime: Cloudflare Workers (`workers/public/gateway/src/index.ts`, `workers/services/workflows/src/index.ts`, `workers/services/responder/src/index.ts`, `workers/services/spend/src/index.ts`)
 - Language: TypeScript
 - Database: Cloudflare D1 (`DB`); schema lives in `migrations/` and is applied with `wrangler d1 migrations apply` (`npm run d1:migrate:local` / `d1:migrate:remote`). The wrangler configs deliberately set no `preview_database_id` — it used to point at the production database. If preview deployments are ever used, create a separate preview DB (`wrangler d1 create ragbot-preview`) and add its id as `preview_database_id`. `schema.sql` is a reference-only mirror of the full current schema — change the schema by adding a migration, not by editing it. No migration ALTERs `rag_ai_interactions` to add the token-usage columns: SQLite has no `ADD COLUMN IF NOT EXISTS`, the prod table may or may not already have them, and a failing ALTER would strand deploys, so `recordAiInteraction` keeps its dual-INSERT fallback until prod's shape is verified (`PRAGMA table_info(rag_ai_interactions)`)
 - AI: Workers AI binding (`AI`) and AI Gateway REST; model and prompt config live in `packages/ai/ai-config` (`@cf/...` Workers AI models, Unified Billing partner chat models such as `grok/grok-4.3`, and web-search models such as `openai/gpt-4o-search-preview`)
@@ -110,7 +110,7 @@ sequenceDiagram
   participant GatewayDO as DiscordGateway Durable Object
   participant DiscordGateway as Discord Gateway WebSocket
   participant Queue as Cloudflare Queue ai-jobs
-  participant Consumer as Brain worker queue consumer
+  participant Consumer as Workflows worker queue consumer
   participant Outbox as Cloudflare Queue discord-outbox
   participant Responder as Responder worker
   participant DiscordREST as Discord REST API
@@ -127,7 +127,7 @@ sequenceDiagram
   DiscordGateway-->>GatewayDO: MESSAGE_CREATE payload: author, channel_id, content, mentions
   GatewayDO->>Queue: Enqueue encoded message.received event: ids, capped content, author, mentions, reply ids (no D1, no REST)
   Queue-->>Consumer: Deliver event batch
-  Consumer->>DB: SELECT rag_ai_threads by channel id (thread tracking lives brain-side)
+  Consumer->>DB: SELECT rag_ai_threads by channel id (thread tracking lives workflows-side)
   Consumer->>DiscordREST: Optional GET bot role ids when roles are mentioned
   Consumer->>DB: Rate limit + budget pre-flight; denial notices go out via the outbox
   Consumer->>DiscordREST: Optional GET explicit replied-to message
@@ -210,7 +210,7 @@ sequenceDiagram
 - Handler: `packages/domain/commands/bicture.ts` (enqueue) and `packages/domain/consumer.ts` (image generation)
 - Behavior:
   - defers the interaction
-  - enqueues an encoded `bicture` job in `ai-jobs`; the brain worker sends the prompt to the configured Unified Billing image model through the Workers AI binding and AI Gateway
+  - enqueues an encoded `bicture` job in `ai-jobs`; the workflows worker sends the prompt to the configured Unified Billing image model through the Workers AI binding and AI Gateway
   - records a pending AI spend event tagged with AI Gateway metadata
   - hands the image to the responder over the RPC binding, which edits the original interaction response with the attachment (text-only failure notices go through `discord-outbox`)
   - with this in place every AI/spend path is queue-driven; the interaction fetch path does no AI work
@@ -233,12 +233,12 @@ sequenceDiagram
 - Entry:
   - authenticated `POST /gateway/start` starts Durable Object gateway client
   - gateway listens for Discord `MESSAGE_CREATE`
-- Handlers: `workers/public/gateway/src/gateway.ts` (connection) and `packages/domain/mention.ts` (DO-side encode + brain-side resolution)
+- Handlers: `workers/public/gateway/src/gateway.ts` (connection) and `packages/domain/mention.ts` (DO-side encode + workflows-side resolution)
 - Queue and worker:
   - the DO enqueues every non-bot message with a usable prompt as a `message.received` event (no D1 thread lookup, no REST role fetch in the DO)
-  - the brain resolves events into `channel_reply`/`thread_reply` work in-process: thread lookup, bot-role fetch for role mentions, mention resolution, and usage limits
+  - the workflows worker resolves events into `channel_reply`/`thread_reply` work in-process: thread lookup, bot-role fetch for role mentions, mention resolution, and usage limits
   - channel replies answer in the same Discord channel and do not create or record a thread
-  - `/ask` creates a Discord thread, records it in `rag_ai_threads`, and enqueues an `ask` job; the brain posts the answer inside that thread via the outbox
+  - `/ask` creates a Discord thread, records it in `rag_ai_threads`, and enqueues an `ask` job; the workflows worker posts the answer inside that thread via the outbox
   - thread titles everywhere are derived from the user prompt (`sanitizeThreadTitle`), so no model call is spent on titles
   - later messages in a tracked thread resolve to `thread_reply` work automatically without requiring an @ mention
   - reply jobs build context from the stored initial prompt plus recent messages in that thread only
@@ -259,12 +259,12 @@ AI config is checked into `packages/ai/ai-config`:
 
 #### AI config in KV (`AI_CONFIG`)
 
-The brain worker — the only worker that runs AI — binds a Workers KV namespace `AI_CONFIG` (`workers/services/brain/wrangler.jsonc`). `loadConfig` (`packages/ai/config.ts`) reads each prompt/config from KV first, keyed by the file's **basename** (`discord-response.json`, `ask-web-search.json`, `discord-response-system-prompt.md`, `ask-web-search-system-prompt.md`), and **falls back to the copy bundled into the worker** (the `import`ed file) on a miss, a null value, a KV error, or when the binding is absent. The bundled files stay checked into `packages/ai/ai-config` as both the fallback and the source of truth that `config:push` uploads, so a fresh/empty namespace or a KV outage never bricks the bot.
+The workflows worker — the only worker that runs AI — binds a Workers KV namespace `AI_CONFIG` (`workers/services/workflows/wrangler.jsonc`). `loadConfig` (`packages/ai/config.ts`) reads each prompt/config from KV first, keyed by the file's **basename** (`discord-response.json`, `ask-web-search.json`, `discord-response-system-prompt.md`, `ask-web-search-system-prompt.md`), and **falls back to the copy bundled into the worker** (the `import`ed file) on a miss, a null value, a KV error, or when the binding is absent. The bundled files stay checked into `packages/ai/ai-config` as both the fallback and the source of truth that `config:push` uploads, so a fresh/empty namespace or a KV outage never bricks the bot.
 
 `loadConfig` memoizes the resolved config **per isolate, forever** — the KV read happens once per isolate. KV values can change between deploys, but a deploy or an isolate recycle is what re-resolves them, which is fine for this bot. To publish a prompt change:
 
 - **Without a redeploy:** edit the file in `packages/ai/ai-config`, run `npm run config:push`; new isolates pick up the new value (existing warm isolates keep the old one until they recycle).
-- **Or redeploy** the brain worker, which both re-bundles the fallback and starts fresh isolates.
+- **Or redeploy** the workflows worker, which both re-bundles the fallback and starts fresh isolates.
 
 `npm run config:push` (`scripts/push-config.ts`) uploads every file in `packages/ai/ai-config` to `AI_CONFIG` via `wrangler kv key put <basename> --path <file> --binding AI_CONFIG`. `deploy.sh` runs it automatically after `npm run deploy`.
 
@@ -283,13 +283,13 @@ The guard fails open on D1 errors, and the `/rag` command family is not rate lim
 
 - Interactions: non-allowed guilds get "This bot only works in its home server." (PING stays exempt so Discord's endpoint verification keeps working).
 - Gateway `MESSAGE_CREATE`: the Durable Object drops events from non-allowed guilds before enqueueing; DMs (no guild id) are denied.
-- Brain `message.received` processing repeats the check (zero-trust between queue hops).
+- Workflows `message.received` processing repeats the check (zero-trust between queue hops).
 
-When set, the gate fails closed — unparseable entries are dropped, so a misconfigured value denies everything. When unset, the gate allows all guilds but logs `allowed_guild_ids_unset` once per isolate, so existing deploys keep working until the var is configured. Set it in the gateway and brain wrangler configs (documented placeholders are in each `vars` block).
+When set, the gate fails closed — unparseable entries are dropped, so a misconfigured value denies everything. When unset, the gate allows all guilds but logs `allowed_guild_ids_unset` once per isolate, so existing deploys keep working until the var is configured. Set it in the gateway and workflows wrangler configs (documented placeholders are in each `vars` block).
 
 ## Trust Boundaries
 
-Trust zones are ordered from least to most trusted: **Untrusted** (public callers) → **Edge** (the gateway) → **Applications** (brain, responder, spend) → **Trusted** (the service registry, signing roots). Every hop into, between, and out of the workers crosses a named boundary, carrying a uniform context and logging denials in one shape (`{identity, zone, transport, outcome: "denied", reason}`). The Cedar policy engine (see [Authorization](#authorization-cedar)) evaluates at exactly these choke points.
+Trust zones are ordered from least to most trusted: **Untrusted** (public callers) → **Edge** (the gateway) → **Applications** (workflows, responder, spend) → **Trusted** (the service registry, signing roots). Every hop into, between, and out of the workers crosses a named boundary, carrying a uniform context and logging denials in one shape (`{identity, zone, transport, outcome: "denied", reason}`). The Cedar policy engine (see [Authorization](#authorization-cedar)) evaluates at exactly these choke points.
 
 | Boundary | Module | Shape |
 | --- | --- | --- |
@@ -323,9 +323,9 @@ Every worker-to-worker hop carries a **signed identity-context token** (`package
 
 ```
 Discord (untrusted) → gateway (edge; verifies interaction/gateway signature)
-        → mints ORIGIN context: iss=gateway, aud=brain, sub=<discord user id>
-        → brain (application) verifies (sig + aud=brain + envelope hash) → Cedar service.invoke
-        → re-mints on behalf of the SAME sub: iss=brain, aud=responder|spend, act+=brain
+        → mints ORIGIN context: iss=gateway, aud=workflows, sub=<discord user id>
+        → workflows (application) verifies (sig + aud=workflows + envelope hash) → Cedar service.invoke
+        → re-mints on behalf of the SAME sub: iss=workflows, aud=responder|spend, act+=workflows
         → responder / spend (application) verify → Cedar → process
 ```
 
@@ -335,10 +335,10 @@ At each receive the token is verified **before** Cedar runs, and the verified is
 
 ```sh
 wrangler secret put GATEWAY_SIGNING_KEY -c workers/public/gateway/wrangler.jsonc
-wrangler secret put BRAIN_SIGNING_KEY   -c workers/services/brain/wrangler.jsonc
+wrangler secret put WORKFLOWS_SIGNING_KEY   -c workers/services/workflows/wrangler.jsonc
 ```
 
-Only the gateway (origin mint), brain (downstream re-mint), and dev-proxy (origin mint for browser sessions) sign; the responder and spend workers are leaves that only verify against the committed keyring. To rotate a key, deploy the new private key to the secret and update the public JWK in `keyring.ts`.
+Only the gateway (origin mint), workflows (downstream re-mint), and dev-proxy (origin mint for browser sessions) sign; the responder and spend workers are leaves that only verify against the committed keyring. To rotate a key, deploy the new private key to the secret and update the public JWK in `keyring.ts`.
 
 The identity-context token supports two optional session-binding claims, `dpopJkt` and `sid`, present only on an edge hop and absent on every service-to-service hop, so the verifier and existing minters are unchanged. The dev-proxy hop no longer populates them — the session is bound to the Cloudflare Access identity in the `ragbot-auth` store (see [Dev proxy](#dev-proxy-admin-application-that-runs-in-production)), not by a per-request proof.
 
@@ -347,32 +347,32 @@ The identity-context token supports two optional session-binding claims, `dpopJk
 | Worker | Config | Trust zone / role | Secrets |
 | --- | --- | --- | --- |
 | `ragbot-worker` | `workers/public/gateway/wrangler.jsonc` | Public entrypoint (`/discord`, gateway control) + `DiscordGateway` Durable Object. The DO keeps only the WebSocket lifecycle + IDENTIFY (bot token, unavoidable), payload validation, and encode+enqueue of `message.received` events — it uses no D1 and no Discord REST | `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (DO IDENTIFY + interaction-path Discord REST), `GATEWAY_CONTROL_TOKEN`, `GATEWAY_SIGNING_KEY` (mints origin identity-context tokens) |
-| `ragbot-brain-worker` | `workers/services/brain/wrangler.jsonc` | `ai-jobs` consumer: **read Discord + AI + D1**. Resolves raw `message.received` events (thread lookup, mention/role resolution, usage limits) in-process, reads thread history, replied-to messages, and bot roles over Discord REST, and creates `/ask`-style threads; every message/edit it produces leaves via the outbox queue or the responder RPC binding, never directly | `CF_AIG_TOKEN` (belongs to brain **only** — remove it from `ragbot-worker` with `wrangler secret delete CF_AIG_TOKEN`), `DISCORD_BOT_TOKEN` (honestly required: Discord *reads* need the bot token too, so the brain keeps it even though writes go through the responder), `BRAIN_SIGNING_KEY` (re-mints on-behalf-of identity-context tokens for the responder and spend hops) |
+| `ragbot-workflows-worker` | `workers/services/workflows/wrangler.jsonc` | `ai-jobs` consumer: **read Discord + AI + D1**. Resolves raw `message.received` events (thread lookup, mention/role resolution, usage limits) in-process, reads thread history, replied-to messages, and bot roles over Discord REST, and creates `/ask`-style threads; every message/edit it produces leaves via the outbox queue or the responder RPC binding, never directly | `CF_AIG_TOKEN` (belongs to workflows **only** — remove it from `ragbot-worker` with `wrangler secret delete CF_AIG_TOKEN`), `DISCORD_BOT_TOKEN` (honestly required: Discord *reads* need the bot token too, so the workflows worker keeps it even though writes go through the responder), `WORKFLOWS_SIGNING_KEY` (re-mints on-behalf-of identity-context tokens for the responder and spend hops) |
 | `ragbot-responder-worker` | `workers/services/responder/wrangler.jsonc` | **Write Discord** — the single egress choke point. No public route. Consumes `discord-outbox` for text replies and exposes the `Responder` RPC entrypoint for media-bearing interaction edits. The only place `sanitizeAiText`, the message length cap, and `allowed_mentions: { parse: [] }` run on AI output before it reaches Discord | `DISCORD_BOT_TOKEN` |
 | `ragbot-spend-worker` | `workers/services/spend/wrangler.jsonc` | `ai-spend-jobs` consumer: AI Gateway log reconciliation | `CLOUDFLARE_API_TOKEN` (scoped to AI Gateway read) |
 | `ragbot-dev-proxy-worker` | `workers/public/dev-proxy/wrangler.jsonc` | Public **admin app that runs in prod**: behind Cloudflare Access, with Better Auth (Discord OAuth) app identity on a standalone `ragbot-auth` D1; resolves the acting Discord subject from the session, then invokes the gateway's `DevProxy` service binding as the `dev-proxy` machine principal. No dev environment, no dev data — see [Dev proxy](#dev-proxy-admin-application-that-runs-in-production) | `DEV_PROXY_SIGNING_KEY`, `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET`, `BETTER_AUTH_SECRET` |
 
-Set a secret on a specific worker with `wrangler secret put NAME -c workers/services/brain/wrangler.jsonc` (or the matching config file).
+Set a secret on a specific worker with `wrangler secret put NAME -c workers/services/workflows/wrangler.jsonc` (or the matching config file).
 
 ### Discord egress design
 
 - **Text-only replies** (channel/thread posts, text interaction edits) go through the durable, retryable `discord-outbox` queue as encoded/validated envelopes (`reply.channel_message`, `reply.interaction_edit`).
-- **Media-bearing interaction edits** (`/bicture` image, `/ragjam` audio) go over a **service-binding RPC** (`Responder.deliverInteractionEdit`) instead: queue messages are capped at 128 KiB, the media bytes are already in brain memory, and a queue retry would regenerate the media anyway. RPC is direct worker-to-worker with no network exposure.
-- The brain sends **raw model text** over the outbox; the responder applies the final output policy (sanitize, truncate to `MAX_DISCORD_MESSAGE_LENGTH`, `allowed_mentions: { parse: [] }`). `rag_ai_interactions.response_text` still records the **sanitized** text (the brain computes the same pure policy function for the record), and `status = 'ok'` now means "handed to the outbox" — delivery failures show up in responder logs and its DLQ, not in that column.
+- **Media-bearing interaction edits** (`/bicture` image, `/ragjam` audio) go over a **service-binding RPC** (`Responder.deliverInteractionEdit`) instead: queue messages are capped at 128 KiB, the media bytes are already in workflows memory, and a queue retry would regenerate the media anyway. RPC is direct worker-to-worker with no network exposure.
+- The workflows worker sends **raw model text** over the outbox; the responder applies the final output policy (sanitize, truncate to `MAX_DISCORD_MESSAGE_LENGTH`, `allowed_mentions: { parse: [] }`). `rag_ai_interactions.response_text` still records the **sanitized** text (the workflows worker computes the same pure policy function for the record), and `status = 'ok'` now means "handed to the outbox" — delivery failures show up in responder logs and its DLQ, not in that column.
 - Interaction-edit text (prompt echoes, failure notices) is not model output: the responder caps it at the Discord 2000-char hard limit and locks down `allowed_mentions`, but does not run `sanitizeAiText` speaker-line stripping over it.
 - **Deliberate boundary:** the main worker's deferred `/rag`-family and `/ask` responses still PATCH the interaction webhook directly. Interaction tokens are scoped and short-lived, the main worker owns the interaction, and no bot token is involved (webhook edits are token-authenticated), so this stays outside the responder.
 
 ### Gateway ingress design
 
-The `DiscordGateway` Durable Object treats `MESSAGE_CREATE` as a second untrusted ingress: it validates the payload shape, encodes a `message.received` envelope (ids, length-capped content, author, mentions, mention roles, reply metadata), and enqueues it — nothing else. Because thread tracking lives in D1 and the DO deliberately has no D1 or REST access, it cannot know locally whether a non-mention message belongs to a tracked thread, so every non-bot message with a non-empty stripped prompt is enqueued and the brain filters. That trades queue volume for isolation, which is fine for a single small guild. The brain then does the thread lookup, bot-role fetch, mention resolution, and rate/budget checks, and processes the resolved reply in the same invocation (no re-enqueue); denial notices leave via the outbox.
+The `DiscordGateway` Durable Object treats `MESSAGE_CREATE` as a second untrusted ingress: it validates the payload shape, encodes a `message.received` envelope (ids, length-capped content, author, mentions, mention roles, reply metadata), and enqueues it — nothing else. Because thread tracking lives in D1 and the DO deliberately has no D1 or REST access, it cannot know locally whether a non-mention message belongs to a tracked thread, so every non-bot message with a non-empty stripped prompt is enqueued and the workflows worker filters. That trades queue volume for isolation, which is fine for a single small guild. The workflows worker then does the thread lookup, bot-role fetch, mention resolution, and rate/budget checks, and processes the resolved reply in the same invocation (no re-enqueue); denial notices leave via the outbox.
 
 **Deliberate deviation from RECOMMENDATIONS.md section 1:** the DO stays hosted in the main worker rather than moving to a dedicated listener worker — moving a Durable Object class between scripts requires a risky transfer migration. Documented here as a possible future step instead.
 
 ## Dev proxy (admin application that runs in production)
 
-The `ragbot-dev-proxy-worker` (`workers/public/dev-proxy`) is the human-facing **admin application** for ragbot: it lets an operator exercise the **real** gateway → brain command path (and, over time, other sensitive service surfaces) against **real** data with no separate dev environment, dev client, or dev data. It is a public edge worker with a **layered auth model**, and its hop into the gateway is authorized identically to a Discord-initiated command — plus two extra app-level gates.
+The `ragbot-dev-proxy-worker` (`workers/public/dev-proxy`) is the human-facing **admin application** for ragbot: it lets an operator exercise the **real** gateway → workflows command path (and, over time, other sensitive service surfaces) against **real** data with no separate dev environment, dev client, or dev data. It is a public edge worker with a **layered auth model**, and its hop into the gateway is authorized identically to a Discord-initiated command — plus two extra app-level gates.
 
-**Why this shape.** The gateway's existing ingresses are HTTP guards (Discord Ed25519 signature, operator control token). Rather than bolt a third public HTTP surface onto the gateway, the dev-proxy is a *separate* worker that reaches the gateway over a **service binding** — a hop invocable only by a worker configured with it, so the gateway's `DevProxy` entrypoint is reachable only from the dev-proxy and never from the public internet. The dev-proxy is a first-class `dev-proxy` machine principal (edge zone) with its own Ed25519 signing key, so its hop carries the same cryptographic identity as the gateway/brain hops.
+**Why this shape.** The gateway's existing ingresses are HTTP guards (Discord Ed25519 signature, operator control token). Rather than bolt a third public HTTP surface onto the gateway, the dev-proxy is a *separate* worker that reaches the gateway over a **service binding** — a hop invocable only by a worker configured with it, so the gateway's `DevProxy` entrypoint is reachable only from the dev-proxy and never from the public internet. The dev-proxy is a first-class `dev-proxy` machine principal (edge zone) with its own Ed25519 signing key, so its hop carries the same cryptographic identity as the gateway/workflows hops.
 
 **The layered auth model** (outer gate to inner):
 
@@ -409,7 +409,7 @@ gateway DevProxy entrypoint (edge)
      Discord-initiated command.
 ```
 
-Any failure returns a bare status and never discloses which gate refused. Inline commands (`/ragboard`, `/ragspend`, …) round-trip their result to the browser. Enqueue/AI commands (`/ask`, `/bicture`, `/ragjam`) run the full authorized path and enqueue to the brain; because there is no real Discord interaction, the final Discord edit targets the real application id with a synthetic interaction token (a no-op at Discord), so the AI/D1/spend work runs and is observable while the browser sees the deferred acknowledgement.
+Any failure returns a bare status and never discloses which gate refused. Inline commands (`/ragboard`, `/ragspend`, …) round-trip their result to the browser. Enqueue/AI commands (`/ask`, `/bicture`, `/ragjam`) run the full authorized path and enqueue to the workflows worker; because there is no real Discord interaction, the final Discord edit targets the real application id with a synthetic interaction token (a no-op at Discord), so the AI/D1/spend work runs and is observable while the browser sees the deferred acknowledgement.
 
 **Why Better Auth on D1.** Better Auth runs on workerd (verified under `@cloudflare/vitest-pool-workers`) and natively detects a Cloudflare D1 binding — passing the `AUTH_DB` binding directly uses its built-in D1 dialect, so there is no extra Kysely dependency. The schema is applied out-of-band as a committed D1 migration (`workers/public/dev-proxy/migrations`); Better Auth never introspects at runtime (D1 forbids the `sqlite_master` reads its migrator needs). The auth database is kept **separate** from the gateway's `ragbot` operational DB so login/session state never mingles with product data. The Discord OAuth access/refresh tokens live server-side in `AUTH_DB` and are never sent to the browser — the browser only holds an opaque session cookie.
 
@@ -459,9 +459,9 @@ The home defaults outside the repo; a repo-local `.ragctl/` is also gitignored i
 
 `./deploy.sh`
 
-`npm run dev:all` runs the Discord worker, the brain worker, the responder worker, and the spend worker locally.
+`npm run dev:all` runs the Discord worker, the workflows worker, the responder worker, and the spend worker locally.
 
-`npm run deploy` deploys all workers (responder first, so the brain's service binding target exists). Use `npm run deploy:main`, `npm run deploy:brain`, `npm run deploy:responder`, or `npm run deploy:spend` to deploy one worker.
+`npm run deploy` deploys all workers (responder first, so the workflows worker's service binding target exists). Use `npm run deploy:main`, `npm run deploy:workflows`, `npm run deploy:responder`, or `npm run deploy:spend` to deploy one worker.
 
 ### One-time bootstrap
 
@@ -476,14 +476,14 @@ wrangler queues create discord-outbox
 wrangler queues create discord-outbox-dlq
 ```
 
-The brain worker's AI config KV namespace must exist and its id filled into `workers/services/brain/wrangler.jsonc` (the committed `id` is a placeholder):
+The workflows worker's AI config KV namespace must exist and its id filled into `workers/services/workflows/wrangler.jsonc` (the committed `id` is a placeholder):
 
 ```sh
 wrangler kv namespace create AI_CONFIG
-# paste the printed id into workers/services/brain/wrangler.jsonc, then:
+# paste the printed id into workers/services/workflows/wrangler.jsonc, then:
 npm run config:push
 ```
 
 `config:push` is idempotent and also runs from `deploy.sh` after every deploy, so the namespace stays in sync with the checked-in files.
 
-Every dead-letter queue has a consumer (`packages/domain/dlq.ts`): `ai-jobs-dlq` in the brain worker, `ai-spend-jobs-dlq` in the spend worker, and `discord-outbox-dlq` in the responder. Each logs a `dead_letter_message` error with the queue name, message id, attempt count, and decoded envelope kind (ids and kinds only, never free-text content), then acks so dead letters surface in logs instead of accumulating.
+Every dead-letter queue has a consumer (`packages/domain/dlq.ts`): `ai-jobs-dlq` in the workflows worker, `ai-spend-jobs-dlq` in the spend worker, and `discord-outbox-dlq` in the responder. Each logs a `dead_letter_message` error with the queue name, message id, attempt count, and decoded envelope kind (ids and kinds only, never free-text content), then acks so dead letters surface in logs instead of accumulating.

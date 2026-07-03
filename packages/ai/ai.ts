@@ -1,23 +1,21 @@
+// Ragbot's chat workflows over the centralized inference seam. This module
+// owns WHAT to ask (config-derived request parameters) and how to interpret
+// the raw payloads (text extraction, usage, sources, sanitization); transport,
+// credentials, and gateway routing live in packages/inference.
 import type { BotConfig } from "./config";
-import { boundaryClients } from "../boundaries/outbound/clients";
+import {
+  inferenceClient,
+  toBindingModel,
+  type ChatMessage,
+  type InferenceMetadata,
+  type WebSearchContextSize,
+} from "../inference";
 import type { Env } from "../contracts/types";
 import { isRecord } from "../contracts/validation";
 
-export type ChatMessage = {
-  role: "system" | "user" | "assistant";
-  content: string;
-};
+export type { ChatMessage, WebSearchContextSize } from "../inference";
 
-export type WebSearchContextSize = "low" | "medium" | "high";
-
-export type AiGatewayMetadata = Record<string, string | number | boolean>;
-
-const isWorkersAiModel = (model: string) => model.startsWith("@cf/");
-const isGatewayWorkersAiModel = (model: string) => model.startsWith("workers-ai/");
-const isBindingModel = (model: string) => isWorkersAiModel(model) || isGatewayWorkersAiModel(model);
-
-const toBindingModel = (model: string) =>
-  isGatewayWorkersAiModel(model) ? model.slice("workers-ai/".length) : model;
+export type AiGatewayMetadata = InferenceMetadata;
 
 const extractText = (result: unknown): string => {
   if (typeof result === "string") {
@@ -48,117 +46,8 @@ const usageFrom = (usage: unknown) =>
     }
     : undefined;
 
-const errorDetailFrom = (payload: unknown, fallback: string) => {
-  if (!isRecord(payload)) {
-    return fallback;
-  }
-
-  const error = payload.error;
-  if (Array.isArray(error)) {
-    return error
-      .map((item) => isRecord(item) && typeof item.message === "string" ? item.message : null)
-      .filter((message): message is string => Boolean(message))
-      .join("; ") || fallback;
-  }
-  if (typeof error === "string") {
-    return error;
-  }
-  if (isRecord(error) && typeof error.message === "string") {
-    return error.message;
-  }
-  if (typeof payload.message === "string") {
-    return payload.message;
-  }
-  if (typeof payload.description === "string") {
-    return payload.description;
-  }
-  return fallback;
-};
-
 const modelFrom = (payload: unknown, fallback: string) =>
   isRecord(payload) && typeof payload.model === "string" ? payload.model : fallback;
-
-const gatewayChatCompletions = async (
-  env: Env,
-  gatewayId: string,
-  model: string,
-  messages: ChatMessage[],
-  maxTokens: number,
-  temperature: number,
-  metadata?: AiGatewayMetadata,
-) => {
-  if (!env.CF_ACCOUNT_ID) {
-    throw new Error("CF_ACCOUNT_ID is required for partner AI Gateway models");
-  }
-
-  const response = await boundaryClients(env).aiGateway(
-    `https://gateway.ai.cloudflare.com/v1/${env.CF_ACCOUNT_ID}/${gatewayId}/compat/chat/completions`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(metadata ? { "cf-aig-metadata": JSON.stringify(metadata) } : {}),
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        max_tokens: maxTokens,
-        temperature,
-      }),
-    },
-  );
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail = errorDetailFrom(payload, response.statusText);
-    throw new Error(`AI Gateway request failed (${response.status}): ${detail}`);
-  }
-
-  return payload;
-};
-
-const gatewayWebSearchChatCompletions = async (
-  env: Env,
-  gatewayId: string,
-  model: string,
-  input: string,
-  instructions: string,
-  maxTokens: number,
-  searchContextSize: WebSearchContextSize,
-  metadata?: AiGatewayMetadata,
-) => {
-  if (!env.CF_ACCOUNT_ID) {
-    throw new Error("CF_ACCOUNT_ID is required for AI Gateway web-search models");
-  }
-
-  const response = await boundaryClients(env).aiGateway(
-    `https://gateway.ai.cloudflare.com/v1/${env.CF_ACCOUNT_ID}/${gatewayId}/compat/chat/completions`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(metadata ? { "cf-aig-metadata": JSON.stringify(metadata) } : {}),
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: instructions },
-          { role: "user", content: input },
-        ],
-        max_tokens: maxTokens,
-        web_search_options: { search_context_size: searchContextSize },
-      }),
-    },
-  );
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail = errorDetailFrom(payload, response.statusText);
-    throw new Error(`AI Gateway web-search request failed (${response.status}): ${detail}`);
-  }
-
-  return payload;
-};
 
 const looksLikeSpeakerLine = (line: string) => {
   const colon = line.indexOf(":");
@@ -244,26 +133,18 @@ export const runChatCompletion = async (
   options: ChatOptions = {},
 ): Promise<ChatModelResult> => {
   const model = options.model ?? config.responseModel;
-  const maxTokens = options.maxTokens ?? config.maxTokens;
-  const temperature = options.temperature ?? config.temperature;
-  const requestConfig = { ...config, gatewayId: options.gatewayId ?? config.gatewayId };
-  const bindingModel = toBindingModel(model);
 
-  const input = { messages, max_tokens: maxTokens, temperature };
-
-  const result =
-    requestConfig.gatewayId && !isBindingModel(model)
-      ? await gatewayChatCompletions(env, requestConfig.gatewayId, model, messages, maxTokens, temperature, options.metadata)
-      : await env.AI.run(
-        bindingModel as never,
-        input as never,
-        requestConfig.gatewayId
-          ? ({ gateway: { id: requestConfig.gatewayId, metadata: options.metadata } } as never)
-          : undefined,
-      );
+  const result = await inferenceClient(env).chat({
+    model,
+    messages,
+    maxTokens: options.maxTokens ?? config.maxTokens,
+    temperature: options.temperature ?? config.temperature,
+    gatewayId: options.gatewayId ?? config.gatewayId,
+    metadata: options.metadata,
+  });
   return {
     content: extractText(result),
-    model: modelFrom(result, bindingModel),
+    model: modelFrom(result, toBindingModel(model)),
     usage: isRecord(result) ? usageFrom(result.usage) : undefined,
   };
 };
@@ -355,27 +236,17 @@ export const runWebSearchCompletion = async (
   input: string,
   options: WebSearchChatOptions,
 ): Promise<WebSearchModelResult> => {
-  const request = {
+  const result = await inferenceClient(env).webSearch({
+    model: options.model,
     input,
     instructions: options.instructions,
-    max_output_tokens: options.maxOutputTokens,
-    max_turns: options.maxTurns,
+    maxOutputTokens: options.maxOutputTokens,
+    maxTurns: options.maxTurns,
     temperature: options.temperature,
-    tools: [{ type: "web_search", search_context_size: options.searchContextSize }],
-  };
-
-  const result = options.gatewayId
-    ? await gatewayWebSearchChatCompletions(
-      env,
-      options.gatewayId,
-      options.model,
-      input,
-      options.instructions,
-      options.maxOutputTokens,
-      options.searchContextSize,
-      options.metadata,
-    )
-    : await env.AI.run(options.model, request, undefined);
+    searchContextSize: options.searchContextSize,
+    gatewayId: options.gatewayId,
+    metadata: options.metadata,
+  });
 
   return {
     content: extractResponsesText(result),

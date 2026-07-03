@@ -83,7 +83,7 @@ export type RagjamJob = {
 };
 
 // A raw-but-validated gateway MESSAGE_CREATE, encoded by the Durable Object
-// with no D1 or Discord REST access. The brain worker resolves it into a
+// with no D1 or Discord REST access. The workflows worker resolves it into a
 // thread_reply/channel_reply (or drops it) in-process.
 export type MessageReceivedJob = {
   kind: "message.received";
@@ -151,6 +151,14 @@ export type ConnectorOperation =
   | "introspect"
   | "begin_authorization"
   | "complete_authorization"
+  // Inbound webhook signature verification (the webhooks edge worker). The
+  // receiver hands the broker the provider's signature headers and the raw body
+  // (base64, since signatures cover exact bytes); the broker resolves the
+  // connector's webhook secret, computes the provider's HMAC scheme, and
+  // returns { valid, eventId? }. The secret never leaves the broker — the same
+  // phantom-token philosophy as fetch, applied inbound. Cedar-gated by
+  // `connector.webhook.verify` against the connector.
+  | "webhook_verify"
   // Management operations for the admin surface (the dev-proxy). These NEVER
   // touch a grant/handle and NEVER return a secret value; each is Cedar-gated by
   // a `connector.admin.*` action and audit-logged like every other broker op.
@@ -160,10 +168,14 @@ export type ConnectorOperation =
   //                      carry {provider, ref?, value?}); the value flows inward
   //                      only and is never echoed back
   //   admin_providers — the secrets backends + their runtime write capability
+  //   admin_installations — a github_app connector's App installations (id +
+  //                      account + repository selection; gated by
+  //                      connector.admin.read; the App JWT stays broker-side)
   | "admin_list"
   | "admin_describe"
   | "admin_set_secret"
-  | "admin_providers";
+  | "admin_providers"
+  | "admin_installations";
 
 // One operation against the credential broker, decoded from a connector.invoke
 // EventEnvelope. `connectorId` is present on grant/authorization operations;
@@ -179,6 +191,29 @@ export type ConnectorInvokeJob = {
   subject?: string;
   scopes: string[];
   paramsJson: string;
+};
+
+// The signature schemes the webhook ingress accepts. Mirrors the broker's
+// scheme set (packages/connectors/webhooks.ts WebhookProvider) — kept as a
+// local literal union so contracts stays a leaf package.
+export type WebhookEventProvider = "github" | "stripe";
+
+// A verified third-party webhook delivery, decoded from a webhook.event
+// EventEnvelope. Encoded by the webhooks edge worker ONLY AFTER the broker's
+// webhook_verify confirmed the provider signature; the workflows worker consumes it off
+// the webhook-jobs queue. `eventId` is the broker-returned provider event id
+// (the receiver's dedupe key) — optional because a provider may omit one (e.g.
+// a Stripe body with no parseable id); `eventType` is the provider's event
+// name when one travels in a header. The body rides base64 (signatures cover
+// exact bytes) and is never logged.
+export type WebhookEventJob = {
+  kind: "webhook.event";
+  connectorId: string;
+  provider: WebhookEventProvider;
+  eventId?: string;
+  eventType?: string;
+  receivedAt: string;
+  bodyBase64: string;
 };
 
 export type ChannelMessageReplyJob = {
@@ -255,6 +290,24 @@ export type ConnectorAuthorizationBegin = {
   state: string;
 };
 
+// The webhook_verify result body: whether the signature verified over the exact
+// body bytes, and the provider's event id (for the receiver's idempotency
+// dedupe) when one travels with a VALID request. Never the secret, never the
+// computed digest — a forger learns only the boolean.
+export type ConnectorWebhookVerification = {
+  valid: boolean;
+  eventId?: string;
+};
+
+// One GitHub App installation, trimmed to the identifying fields the admin
+// surface needs (the raw GitHub response stays broker-side, like every other
+// provider response on an admin path).
+export type ConnectorInstallation = {
+  id: number;
+  accountLogin: string;
+  repositorySelection: string;
+};
+
 // Admin (management) result bodies. None ever carries a secret value — a
 // connector's secret is described only by its {provider, ref} reference and a
 // boolean "does it currently resolve". The set-secret outcome is a status
@@ -320,11 +373,13 @@ export type ConnectorResult = {
   token?: ConnectorTokenResult;
   introspection?: ConnectorIntrospection;
   authorization?: ConnectorAuthorizationBegin;
+  webhook?: ConnectorWebhookVerification;
   // Admin (management) result bodies — one per admin operation.
   connectors?: ConnectorSummary[];
   connector?: ConnectorDetail;
   providers?: SecretsProviderStatus[];
   secret?: SetConnectorSecretResult;
+  installations?: ConnectorInstallation[];
 };
 
 // Service-hop queue body: capnp-encoded ServiceMessage bytes (service.capnp)
@@ -385,6 +440,20 @@ export type Env = Cloudflare.Env & {
   AI_JOBS: Queue<ServiceMessageBytes>;
   SPEND_JOBS?: Queue<ServiceMessageBytes>;
   DISCORD_OUTBOX?: Queue<ServiceMessageBytes>;
+  // Verified webhook events from the webhooks edge worker to the workflows worker
+  // (producer on workers/public/webhooks, consumer on the workflows worker), carrying
+  // wrapped ServiceMessage bytes exactly like AI_JOBS.
+  WEBHOOK_JOBS?: Queue<ServiceMessageBytes>;
+  // The webhooks worker's TTL'd dedupe store, a Durable Object it defines and
+  // binds (workers/public/webhooks). One object per connector; firstSeen()
+  // atomically records a provider event id and reports whether it was new
+  // within the replay window. Typed structurally, like SERVICE_REGISTRY.
+  WEBHOOK_DEDUPE?: {
+    idFromName: (name: string) => DurableObjectId;
+    get: (id: DurableObjectId) => {
+      firstSeen: (key: string, ttlMs: number) => Promise<boolean>;
+    };
+  };
   RESPONDER?: {
     deliverInteractionEdit: (
       envelope: Uint8Array,
@@ -414,7 +483,7 @@ export type Env = Cloudflare.Env & {
   };
   // The credential broker's service-binding entrypoint (workers/services/
   // connectors). Bound only on the workers permitted to use a connector — no
-  // worker binds it in this task; a future caller (e.g. the brain) declares it.
+  // worker binds it in this task; a future caller (e.g. the workflows worker) declares it.
   // A service binding is invocable solely by a worker configured with it, so this
   // RPC surface is reachable only from such a caller. Typed structurally so
   // contracts does not import worker code (mirrors RESPONDER / GATEWAY_DEVPROXY).
@@ -441,6 +510,17 @@ export type Env = Cloudflare.Env & {
   // see CONNECTORS.md for the App-creation + installation steps.
   GITHUB_APP_ID?: string;
   GITHUB_APP_PRIVATE_KEY?: string;
+  // The GitHub App's webhook signing secret (workers/services/connectors),
+  // referenced by the github-app connector's webhook config. Used ONLY inside
+  // the broker's webhook_verify HMAC — the webhooks edge worker never sees it.
+  GITHUB_WEBHOOK_SECRET?: string;
+  // The Discord 3LO connector's OAuth application credentials (workers/services/
+  // connectors) — the `discord-user` registry entry resolves both via
+  // wrangler-env refs. Distinct from the dev-proxy's DISCORD_CLIENT_ID/SECRET
+  // below (Better Auth login): this app is the one end users authorize so the
+  // BROKER can hold their tokens; the client secret never leaves the broker.
+  DISCORD_OAUTH_CLIENT_ID?: string;
+  DISCORD_OAUTH_CLIENT_SECRET?: string;
   // Optional application-level AES-GCM key (base64url of 32 bytes) for the 3LO
   // OAuth token store's values-at-rest. Durable Object storage is already
   // encrypted at rest by the platform; this adds envelope encryption for the
@@ -489,14 +569,18 @@ export type Env = Cloudflare.Env & {
   AI_GLOBAL_DAILY_BUDGET_USD?: string;
   // Per-worker Ed25519 signing keys (private JWK JSON), provisioned as secrets.
   // Only the sending workers hold one: the gateway mints origin contexts, the
-  // brain re-mints on-behalf-of tokens for its downstream hops. Receivers read
+  // workflows re-mints on-behalf-of tokens for its downstream hops. Receivers read
   // public keys from the committed keyring, not these.
   GATEWAY_SIGNING_KEY?: string;
-  BRAIN_SIGNING_KEY?: string;
+  WORKFLOWS_SIGNING_KEY?: string;
   // The dev-proxy worker's Ed25519 signing key (private JWK JSON). Held only by
   // workers/public/dev-proxy, which mints the on-behalf-of identity-context
   // token for each browser session's command hop into the gateway.
   DEV_PROXY_SIGNING_KEY?: string;
+  // The webhook-ingress worker's Ed25519 signing key (private JWK JSON). Held
+  // only by the webhooks edge worker, which mints the identity-context token
+  // for its webhook_verify hop into the broker and its enqueue hop to the workflows worker.
+  WEBHOOKS_SIGNING_KEY?: string;
   // Dev-proxy ingress configuration (workers/public/dev-proxy). All are read
   // via env so nothing about the deployment's Access team or audience is baked
   // into code. See workers/public/dev-proxy/README notes and README.md.
@@ -511,7 +595,7 @@ export type Env = Cloudflare.Env & {
   CF_ACCESS_TEAM_DOMAIN?: string;
   CF_ACCESS_AUD?: string;
   DEV_PROXY_ALLOWED_SUBJECTS?: string;
-  // Workers KV holding the AI prompt/config files, bound on the brain worker
+  // Workers KV holding the AI prompt/config files, bound on the workflows worker
   // only (the sole runtime AI consumer). loadConfig reads it with a bundled
   // fallback, so it is optional — a fresh namespace or KV outage still works.
   AI_CONFIG?: KVNamespace;

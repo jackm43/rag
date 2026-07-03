@@ -95,7 +95,7 @@ const gatewayMessageJob = (message: DiscordMessage, botUserId: string): MessageR
 // Durable Object entry point: validate → encode → enqueue, nothing else.
 // Whether a message is relevant can depend on D1 thread tracking, which the
 // DO deliberately cannot see, so every non-bot message with a usable prompt
-// is enqueued and the brain filters. The only pre-filter is pure and local:
+// is enqueued and the workflows worker filters. The only pre-filter is pure and local:
 // both reply paths require a non-empty prompt after mention stripping.
 export const handleGatewayMessageCreate = async (
   message: DiscordMessage,
@@ -116,7 +116,7 @@ export const handleGatewayMessageCreate = async (
     return;
   }
 
-  await serviceClients(env).gatewayToBrain.call({
+  await serviceClients(env).gatewayToWorkflows.call({
     transport: "queue",
     queue: env.AI_JOBS,
     envelope: encodeAiJobEnvelope(gatewayMessageJob(message, botUserId), { source: "gateway" }),
@@ -124,7 +124,7 @@ export const handleGatewayMessageCreate = async (
   });
 };
 
-// Brain-side resolution: everything the DO used to do that needs D1 or
+// Workflows-side resolution: everything the DO used to do that needs D1 or
 // Discord REST. Returns the chat job to process in-process, or null when the
 // message is irrelevant or denied (denial notices leave via the outbox).
 export const resolveGatewayMessage = async (

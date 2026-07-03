@@ -2,6 +2,7 @@ import {
   decodeAiJobEnvelope,
   decodeAiSpendJobEnvelope,
   decodeReplyJobEnvelope,
+  decodeWebhookEventEnvelope,
 } from "../contracts";
 import { serviceEnvelopeBytes } from "../auth";
 import { logger } from "../logger";
@@ -33,3 +34,6 @@ export const processSpendJobsDlqMessage = (message: Message<unknown>) =>
 
 export const processOutboxDlqMessage = (message: Message<unknown>) =>
   logAndAck("discord-outbox-dlq", message, decodeReplyJobEnvelope(envelopeOf(message))?.kind);
+
+export const processWebhookJobsDlqMessage = (message: Message<unknown>) =>
+  logAndAck("webhook-jobs-dlq", message, decodeWebhookEventEnvelope(envelopeOf(message))?.kind);

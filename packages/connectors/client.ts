@@ -7,9 +7,9 @@ import type {
   Env,
 } from "../contracts/types";
 
-// Caller-side helper for the credential broker. A future caller (e.g. the brain)
+// Caller-side helper for the credential broker. A future caller (e.g. the workflows worker)
 // binds the CONNECTORS entrypoint and holds a ServiceClient for the
-// self -> connectors hop (serviceClients(env).brainToConnectors). This wraps the
+// self -> connectors hop (serviceClients(env).workflowsToConnectors). This wraps the
 // two moving parts every call needs — framing the connector.invoke envelope and
 // minting the envelope-bound identity token via the client — so calling the
 // broker reads like an ordinary method call.
@@ -73,6 +73,19 @@ export const connectorsClient = (env: Env, client: ServiceClient, subject: Subje
       connectorId,
       paramsJson: JSON.stringify(params),
     }),
+  // Verify an inbound webhook's signature (the webhooks edge worker). The raw
+  // body travels base64 because signatures cover exact bytes; the broker
+  // resolves the connector's webhook secret, computes the provider's scheme,
+  // and returns only { valid, eventId? } — the receiver never sees the secret.
+  verifyWebhook: (
+    connectorId: string,
+    webhook: { provider: string; signatureHeaders: Record<string, string>; bodyBase64: string },
+  ) =>
+    build(env, client, subject, {
+      operation: "webhook_verify" as ConnectorOperation,
+      connectorId,
+      paramsJson: JSON.stringify(webhook),
+    }),
 
   // Management (admin) surface. These NEVER touch a grant/handle and NEVER
   // return a secret value; each is separately Cedar-gated (connector.admin.*) at
@@ -98,4 +111,13 @@ export const connectorsClient = (env: Env, client: ServiceClient, subject: Subje
     }),
   getSecretsProviders: () =>
     build(env, client, subject, { operation: "admin_providers" as ConnectorOperation, paramsJson: "" }),
+  // A github_app connector's App installations (id + account + repository
+  // selection), for the admin UI's installation picker. The App JWT that lists
+  // them stays broker-side.
+  listInstallations: (connectorId: string) =>
+    build(env, client, subject, {
+      operation: "admin_installations" as ConnectorOperation,
+      connectorId,
+      paramsJson: "",
+    }),
 });

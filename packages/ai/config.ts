@@ -4,7 +4,7 @@ import responseSystemPromptText from "./ai-config/discord-response-system-prompt
 import askWebSearchSystemPromptText from "./ai-config/ask-web-search-system-prompt.md";
 import { errorMessage, logger } from "../logger";
 
-// The brain worker binds a Workers KV namespace (AI_CONFIG) holding the same
+// The workflows worker binds a Workers KV namespace (AI_CONFIG) holding the same
 // files that live in ai-config, keyed by their basename (see KV_KEYS and
 // scripts/push-config.ts). Editing a prompt is `edit file + npm run config:push`
 // — a new isolate picks it up without a redeploy. The bundled imports above stay

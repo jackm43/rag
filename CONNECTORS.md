@@ -91,8 +91,13 @@ resolves the real credential:
 | `github_app` | the App RSA private key | mints an App JWT (RS256), exchanges it for an **installation** token, caches to ~expiry | `Authorization: Bearer <installation-token>`, `Accept: application/vnd.github+json` | the installation token |
 
 3LO additionally exposes `beginAuthorization` / `completeAuthorization`. The
-strategy + storage seam for 3LO is fully defined, but no 3LO provider is wired
-in this task (Discord is a follow-up); the abstraction supports it cleanly.
+first wired 3LO provider is **Discord** (`discord-user` in the registry):
+`begin` builds the consent URL and persists a single-use, subject-bound OAuth
+state (10-min TTL); `complete` consumes the state (a replayed, forged, or
+foreign-subject callback is denied 403), exchanges the code at `tokenUrl` with
+the connector's configured `redirectUri`, and stores the user tokens in the
+encrypted 3LO token store. The admin app drives the flow via
+`POST /api/connectors/{id}/grant` + the `{id}/callback` endpoint (below).
 
 ---
 
@@ -138,7 +143,7 @@ the operation. Callers use the `connectorsClient` helper
 (`packages/connectors/client.ts`) rather than framing this by hand:
 
 ```ts
-const client = connectorsClient(env, serviceClients(env).brainToConnectors, { sub: userId });
+const client = connectorsClient(env, serviceClients(env).workflowsToConnectors, { sub: userId });
 
 // 1. GRANT — exchange identity for a handle (never a credential)
 const { grant } = await client.grant("github-app", { params: { installationId: "12345678" } });
@@ -203,8 +208,8 @@ Every use emits `connector_use` at info level with the complete actor chain:
   "operation": "fetch",
   "connectorId": "github-app",
   "grantId": "cg_…",
-  "callerPrincipal": "brain",
-  "delegates": ["gateway", "brain"],
+  "callerPrincipal": "workflows",
+  "delegates": ["gateway", "workflows"],
   "subject": "1069…",
   "host": "api.github.com",
   "path": "/repos/canva/ragbot/issues",
@@ -280,10 +285,14 @@ the `CONNECTORS` binding), exactly as `/api/command` drives the gateway. See
 | `GET /api/connectors/{id}` | `admin_describe` | one connector's config + status |
 | `PUT /api/connectors/{id}/secret` | `admin_set_secret` | body `{provider, ref?, value?}` (zod); value write-only. Outcome → HTTP: `written`/`referenced` = 200, `provision_required` = 202, `rejected` = 409 |
 | `GET /api/secrets/providers` | `admin_providers` | backends + `{writable, configured}` |
+| `POST /api/connectors/{id}/grant` | `begin_authorization` | admin-initiated **3LO consent begin** (no body; the connector's `defaultScopes` apply). 200 `{url, state, connectorId}`; the UI sends the admin to `url`. `state` is broker-minted, single-use, and bound to the acting subject. 400 for a kind with no 3LO flow |
+| `GET /api/connectors/{id}/installations` | `admin_installations` | github_app connectors: the App's installations `[{id, accountLogin, repositorySelection}]` (via the App JWT, broker-side). 400 for other kinds |
+| `GET\|POST /api/connectors/{id}/callback` | `complete_authorization` | the provider redirect (`?code=&state=`; GET renders a self-contained success/failure page, POST is the JSON variant). The browser still crosses CF Access + the Better Auth session, so the same acting subject is minted and the broker enforces the state's subject binding + single use. A provider `?error=` short-circuits without touching the broker |
 
-Reserved (documented, returning **501** so the contract is stable ahead of the
-grant/installations/callback work): `POST /api/connectors/{id}/grant`,
-`GET /api/connectors/{id}/installations`, `GET|POST /api/connectors/{id}/callback`.
+The `grant` endpoint is deliberately the **authorization begin**, not a
+credential-issuing grant: the dev-proxy keeps `connector.authorize` (per 3LO
+connector) and `connector.admin.*` only — still no `connector.grant/fetch/token`
+permit, so the admin app can drive user consent but can never use a credential.
 
 **URL conventions.** A connector's authorization **callback** is
 `https://ragbot-dev.jsmunro.me/api/connectors/{id}/callback` (the dev-proxy, the
@@ -291,8 +300,7 @@ admin app). A connector's inbound **webhook** is
 `https://webhooks.jsmunro.me/{provider}/{id}` — a dedicated, centralised
 webhook-ingress worker (own subdomain, own edge identity), where `{provider}`
 selects the signature scheme (e.g. `/github/{id}`, `/stripe/{id}`) and `{id}` is
-the connector slug. Webhook ingress itself is a later task (see `TODO.md`); only
-the URL convention is fixed here.
+the connector slug. See "Inbound webhooks" below — the worker is live.
 
 ### Binding + deploying the admin surface (operator)
 
@@ -308,6 +316,54 @@ the URL convention is fixed here.
    **broker** worker (`VAULT_ADDR`+`VAULT_TOKEN` / `OP_CONNECT_HOST`+
    `OP_CONNECT_TOKEN`); `getSecretsProviders` then reports them
    `writable: true, configured: true`.
+
+## Inbound webhooks (verify in the broker, receive at the edge)
+
+Inbound webhooks are the **inbound mirror of `authorizedFetch`**: the edge
+receiver never sees the webhook secret, exactly as callers never see a provider
+credential.
+
+**The receiver** is `ragbot-webhooks-worker` (`workers/public/webhooks`) at
+`webhooks.jsmunro.me` — deliberately NOT behind CF Access (third parties POST to
+it) and kept off the Discord-interaction gateway (different threat model). Its
+sole route is `POST /{provider}/{id}` (`github`|`stripe` allowlist +
+`CONNECTOR_ID_PATTERN`); everything else 404s. It reads the RAW body (64 KiB
+cap), collects the signature-relevant headers, and is **validate → enqueue-only
+→ 2xx fast** — no slow work inline, since providers retry on non-2xx/timeout.
+
+**Verification stays in the broker** via the `webhook_verify` operation (params
+`{provider, signatureHeaders, bodyBase64}`), run through the same fail-closed
+pipeline as every op: identity token verify → Cedar (`connector.webhook.verify`,
+permitted to the `webhooks` machine principal per connector) → the connector's
+`webhook` config must exist and be enabled → the caller-passed `{provider}` path
+segment must EQUAL the configured provider (the URL is routing sugar; config is
+authoritative) → the webhook secret resolves through the secrets-provider →
+scheme HMAC with constant-time compare. Schemes: `github`
+(HMAC-SHA256 vs `X-Hub-Signature-256`) and `stripe` (`t=…,v1=…` over
+`<t>.<body>`, 300s timestamp tolerance). Result: `webhook: {valid, eventId?}` —
+`eventId` (GitHub's `X-GitHub-Delivery`, Stripe's body `id`) only on a valid
+signature. Per-connector config: `ConnectorConfig.webhook = {provider, secret:
+SecretRef, enabled}` (the `github-app` entry references
+`GITHUB_WEBHOOK_SECRET`). Audit: `connector_webhook_verify`, never the secret or
+body.
+
+**On valid**: the receiver dedupes on the broker-returned `eventId` (a
+`WebhookDedupe` DO per connector, 24 h TTL; a duplicate acks 200 without
+re-enqueueing — for GitHub, which signs no timestamp, this dedupe IS the replay
+control; Stripe replay is additionally bounded by the broker's signed-timestamp
+tolerance), frames a `webhook.event` capnp envelope
+(`{connectorId, provider, eventId?, eventType?, receivedAt, bodyBase64}`), mints
+an on-behalf-of token (synthetic origin subject `webhook:{connectorId}`,
+edge→application — Cedar-gated like gateway→workflows), and enqueues the
+`ServiceMessage` onto the `webhook-jobs` queue (DLQ `webhook-jobs-dlq`) → 202.
+The **workflows** consumes it through the same verified receive pipeline
+(`createServiceServer`, issuer `webhooks`), logs `webhook_event_received`
+(never the body), and acks; real event processing is a documented seam.
+
+Operator: create the two queues, `wrangler secret put WEBHOOKS_SIGNING_KEY` on
+the webhooks worker, `GITHUB_WEBHOOK_SECRET` on the broker, and add the
+`webhooks` public JWK to `SERVICE_PUBLIC_KEYS` on workflows + connectors. Deploy
+order broker → workflows → webhooks. See `DEPLOY.md`.
 
 ## How to add a new connector
 
@@ -340,11 +396,11 @@ reference + a Cedar permit.
 2. **Cedar permit** — grant a caller the operations it needs:
 
    ```cedar
-   @id("brain-example-api-grant")
-   permit (principal == Machine::"brain", action == Action::"connector.grant",
+   @id("workflows-example-api-grant")
+   permit (principal == Machine::"workflows", action == Action::"connector.grant",
            resource == Connector::"example-api");
-   @id("brain-example-api-fetch")
-   permit (principal == Machine::"brain", action == Action::"connector.fetch",
+   @id("workflows-example-api-fetch")
+   permit (principal == Machine::"workflows", action == Action::"connector.fetch",
            resource == Connector::"example-api");
    ```
 
@@ -386,8 +442,8 @@ Basic client auth), caches the access token until ~expiry, and injects
    issuer allowlist).
 2. Add its `Connector::<id>` permits in `connectors.cedar`, and the
    `service.invoke` / `service.exchange` bootstrap permits + manifest target for
-   the `<caller> → connectors` hop (mirror `brain` in `services.cedar` and
-   `workers/services/brain/src/manifest.ts`).
+   the `<caller> → connectors` hop (mirror `workflows` in `services.cedar` and
+   `workers/services/workflows/src/manifest.ts`).
 3. Bind `CONNECTORS` on the caller's worker (`services` binding to
    `ragbot-connectors-worker`, entrypoint `Connectors`) and hold a
    `<caller>ToConnectors` client (`packages/auth/client.ts`).
@@ -422,13 +478,12 @@ The `github-app` connector is wired and tested. To make it live:
    #   (the production verifying keyring JSON — public keys, kept out of config)
    ```
 
-5. **Which worker binds the broker.** No worker binds `CONNECTORS` yet. The
-   intended first caller is the **brain**: add a `services` binding
-   (`ragbot-connectors-worker`, entrypoint `Connectors`) to
-   `workers/services/brain/wrangler.jsonc`, then call via
-   `connectorsClient(env, serviceClients(env).brainToConnectors, subject)`. The
-   `brainToConnectors` client and the `brain → connectors` Cedar permits already
-   exist.
+5. **Which worker binds the broker.** The **workflows** binds `CONNECTORS`
+   (`ragbot-connectors-worker`, entrypoint `Connectors`, in
+   `workers/services/workflows/wrangler.jsonc`) as the first credential caller —
+   call via `connectorsClient(env, serviceClients(env).workflowsToConnectors,
+   subject)`; the `workflows → connectors` Cedar permits exist. The dev-proxy binds
+   it for the admin ops, and the webhooks worker for `webhook_verify`.
 
 6. **Use it:**
 

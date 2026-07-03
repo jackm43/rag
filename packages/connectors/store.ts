@@ -167,6 +167,48 @@ export const createConnectorConfigStore = (kv: KeyValueStore): ConnectorConfigSt
   },
 });
 
+// The 3LO OAUTH STATE store: pending authorization states, keyed by
+// (connectorId, state). beginAuthorization persists the high-entropy `state` it
+// put in the consent URL together with the subject it was minted for;
+// completeAuthorization CONSUMES it (single use) and requires the subject to
+// match, so a completion carrying an unknown, expired, replayed, or
+// another-user's state fails closed. States are short-lived — a consent
+// ceremony either finishes promptly or starts over.
+const OAUTH_STATE_PREFIX = "oauthstate:";
+export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+export type OAuthStateStore = {
+  put: (connectorId: string, state: string, subject: string) => Promise<void>;
+  // Single use: returns the subject the state was minted for and deletes it,
+  // or null when the state is unknown/expired (already-consumed included).
+  consume: (connectorId: string, state: string) => Promise<string | null>;
+};
+
+export const createOAuthStateStore = (kv: KeyValueStore): OAuthStateStore => ({
+  put: async (connectorId, state, subject) => {
+    await kv.write(
+      `${OAUTH_STATE_PREFIX}${connectorId}:${state}`,
+      JSON.stringify({ subject }),
+      OAUTH_STATE_TTL_MS,
+    );
+  },
+  consume: async (connectorId, state) => {
+    const key = `${OAUTH_STATE_PREFIX}${connectorId}:${state}`;
+    const raw = await kv.read(key);
+    if (!raw) {
+      return null;
+    }
+    await kv.remove(key);
+    try {
+      const parsed = JSON.parse(raw) as { subject?: unknown };
+      return typeof parsed.subject === "string" ? parsed.subject : null;
+    } catch (error) {
+      logger.warn("connector_oauth_state_decode_failed", { connectorId, error: errorMessage(error) });
+      return null;
+    }
+  },
+});
+
 // A stored 3LO user token set, keyed by (connectorId, subject).
 export type StoredOAuthToken = {
   accessToken: string;

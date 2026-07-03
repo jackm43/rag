@@ -19,7 +19,7 @@
 // (Discord) subject. It occupies
 // the edge zone alongside the gateway and exchanges into it; it holds its own
 // Ed25519 signing key so its hops carry strong crypto identity, exactly like
-// the gateway/brain. See workers/public/dev-proxy/README section in README.md.
+// the gateway/workflows. See workers/public/dev-proxy/README section in README.md.
 //
 // `connectors` is the credential broker (workers/services/connectors): the
 // single home for provider credentials (GitHub App keys, API keys, OAuth
@@ -28,13 +28,22 @@
 // to use a connector, but it does not itself sign outbound service tokens (its
 // egress is provider HTTP through a boundary client, not a service hop), so it
 // holds no signing key. See packages/connectors and CONNECTORS.md.
+//
+// `webhooks` is the webhook-ingress edge worker (webhooks.jsmunro.me): the
+// centralised receiver third-party providers POST to (NOT behind CF Access —
+// providers cannot pass it). It verifies nothing locally — signature
+// verification is the broker's `connector.webhook.verify` op, so the webhook
+// secret never reaches the edge — then enqueues validated events to the workflows worker,
+// exactly as the gateway does. It holds its own Ed25519 signing key
+// (WEBHOOKS_SIGNING_KEY) for both hops.
 export type MachinePrincipal =
   | "gateway"
-  | "brain"
+  | "workflows"
   | "responder"
   | "spend"
   | "dev-proxy"
-  | "connectors";
+  | "connectors"
+  | "webhooks";
 
 // The single service operation the connectors broker accepts over its service
 // binding. Every connector operation (fetch/token/authorize) is carried as one
@@ -54,7 +63,7 @@ export const CONNECTOR_INVOKE_OPERATION = "connector.invoke";
 export const DEVPROXY_COMMAND_OPERATION = "devproxy.command";
 
 // The subject used for flows with no human behind them (e.g. spend
-// reconciliation kicked off by the brain itself).
+// reconciliation kicked off by the workflows worker itself).
 export const SYSTEM_SUBJECT = "system";
 
 // The subject of a service call plus the delegation chain accumulated so far,
@@ -77,7 +86,7 @@ export type TrustZone = "untrusted" | "edge" | "application" | "trusted";
 // evaluated by Cedar `service.exchange` policy at client construction.
 export const SERVICE_ZONE: Record<MachinePrincipal, TrustZone> = {
   gateway: "edge",
-  brain: "application",
+  workflows: "application",
   responder: "application",
   spend: "application",
   // The dev-proxy is a public-facing worker like the gateway: it terminates an
@@ -86,8 +95,12 @@ export const SERVICE_ZONE: Record<MachinePrincipal, TrustZone> = {
   // authorized by Cedar.
   "dev-proxy": "edge",
   // The credential broker is an internal application-zone service like the
-  // brain: authorized callers exchange into it from the application zone.
+  // workflows: authorized callers exchange into it from the application zone.
   connectors: "application",
+  // The webhook-ingress worker terminates untrusted third-party POSTs on its
+  // own subdomain, so it sits at the edge like the gateway and dev-proxy, and
+  // exchanges edge → application into the broker and the workflows worker.
+  webhooks: "edge",
 };
 
 // A service is a collection of registered operations. Each service accepts
@@ -105,7 +118,7 @@ export const SERVICE_ZONE: Record<MachinePrincipal, TrustZone> = {
 // so it registers none.
 export const SERVICE_OPERATIONS: Record<MachinePrincipal, readonly string[]> = {
   gateway: [DEVPROXY_COMMAND_OPERATION],
-  brain: [
+  workflows: [
     "thread_start",
     "thread_reply",
     "channel_reply",
@@ -113,6 +126,12 @@ export const SERVICE_OPERATIONS: Record<MachinePrincipal, readonly string[]> = {
     "ragjam",
     "bicture",
     "message.received",
+    // A verified third-party webhook delivery enqueued by the webhooks edge
+    // worker onto the webhook-jobs queue (mirroring how the gateway's chat
+    // kinds above arrive on ai-jobs). Registered here so the workflows worker's boundary
+    // gate, its manifest, and the registry-driven invoke policy all accept the
+    // same envelope kind.
+    "webhook.event",
   ],
   responder: ["reply.channel_message", "reply.interaction_edit"],
   spend: ["spend"],
@@ -121,6 +140,10 @@ export const SERVICE_OPERATIONS: Record<MachinePrincipal, readonly string[]> = {
   // specific operation (fetch/token/authorize) rides in the payload and is
   // gated per-connector by the `connector.*` policies, not at this layer.
   connectors: [CONNECTOR_INVOKE_OPERATION],
+  // Like the dev-proxy, the webhooks worker's ingress is public HTTP (provider
+  // webhook POSTs); it exposes no service boundary of its own, so it registers
+  // no operations — it only SENDS hops (to the broker and the workflows worker).
+  webhooks: [],
 };
 
 // How a request crossed into the receiving service.
@@ -128,11 +151,12 @@ export type Transport = "queue" | "binding" | "http";
 
 export const isMachinePrincipal = (value: unknown): value is MachinePrincipal =>
   value === "gateway" ||
-  value === "brain" ||
+  value === "workflows" ||
   value === "responder" ||
   value === "spend" ||
   value === "dev-proxy" ||
-  value === "connectors";
+  value === "connectors" ||
+  value === "webhooks";
 
 export const isTrustZone = (value: unknown): value is TrustZone =>
   value === "untrusted" || value === "edge" || value === "application" || value === "trusted";

@@ -128,13 +128,13 @@ test("admin_list: the dev-proxy admin caller lists connectors and their status, 
   }
 });
 
-test("admin ops fail closed: the brain (a credential caller, not an admin) is denied", async () => {
+test("admin ops fail closed: the workflows worker (a credential caller, not an admin) is denied", async () => {
   const logs = captureLogs();
   try {
-    // The brain is a valid broker caller for connector.grant/fetch/token, but it
+    // The workflows worker is a valid broker caller for connector.grant/fetch/token, but it
     // holds NO connector.admin.* permit — an admin op is refused by Cedar.
     const message = await signedServiceMessage(encode(adminJob("admin_list")), {
-      iss: "brain",
+      iss: "workflows",
       aud: "connectors",
     });
     const result = await handleConnectorInvoke(message, storeEnv().env);
@@ -259,10 +259,10 @@ test("set-secret: hashicorp-vault writes the value at runtime and the connector 
 test("denies an unauthenticated call — a token not addressed to the broker", async () => {
   const logs = captureLogs();
   try {
-    // A cryptographically valid brain token, but minted for the spend service:
+    // A cryptographically valid workflows token, but minted for the spend service:
     // the broker's verifier rejects the audience before anything else runs.
     const message = await signedServiceMessage(encode(grantJob("github-app")), {
-      iss: "brain",
+      iss: "workflows",
       aud: "spend",
     });
     const result = await handleConnectorInvoke(message, storeEnv().env);
@@ -277,7 +277,7 @@ test("denies a forged token (signature does not verify)", async () => {
   const logs = captureLogs();
   try {
     const envelope = encode(grantJob("github-app"));
-    const token = await mintServiceToken(envelope, { iss: "brain", aud: "connectors" });
+    const token = await mintServiceToken(envelope, { iss: "workflows", aud: "connectors" });
     // Tamper the signature segment.
     const forged = encodeServiceMessage(envelope, `${token.slice(0, -4)}AAAA`);
     const result = await handleConnectorInvoke(forged, storeEnv().env);
@@ -290,7 +290,7 @@ test("denies a forged token (signature does not verify)", async () => {
 test("denies an operation the caller is not authorized for (Cedar)", async () => {
   const logs = captureLogs();
   try {
-    // The brain may grant/fetch/token the GitHub App connector, but is NOT granted
+    // The workflows worker may grant/fetch/token the GitHub App connector, but is NOT granted
     // connector.authorize — a begin_authorization is refused by Cedar before any
     // strategy or credential runs.
     const message = await signedServiceMessage(
@@ -301,7 +301,7 @@ test("denies an operation the caller is not authorized for (Cedar)", async () =>
         scopes: [],
         paramsJson: "{}",
       }),
-      { iss: "brain", aud: "connectors" },
+      { iss: "workflows", aud: "connectors" },
     );
     const result = await handleConnectorInvoke(message, storeEnv().env);
     assert.equal(result.status, 403);
@@ -317,7 +317,7 @@ test("denies an operation the caller is not authorized for (Cedar)", async () =>
 
 test("denies a grant for an unknown connector", async () => {
   const message = await signedServiceMessage(encode(grantJob("does-not-exist")), {
-    iss: "brain",
+    iss: "workflows",
     aud: "connectors",
   });
   const result = await handleConnectorInvoke(message, storeEnv().env);
@@ -342,7 +342,7 @@ test("rejects a handle presented by a service other than the one it was issued t
     };
     await kv.write(`grant:${handle}`, JSON.stringify(entry));
 
-    // The brain (a different, validly authenticated caller) presents it.
+    // The workflows worker (a different, validly authenticated caller) presents it.
     const message = await signedServiceMessage(
       encode({
         kind: "connector.invoke",
@@ -351,7 +351,7 @@ test("rejects a handle presented by a service other than the one it was issued t
         scopes: [],
         paramsJson: JSON.stringify({ request: { method: "GET", path: "/repos/o/r" } }),
       }),
-      { iss: "brain", aud: "connectors" },
+      { iss: "workflows", aud: "connectors" },
     );
     const result = await handleConnectorInvoke(message, env);
     assert.equal(result.status, 404);
@@ -370,7 +370,7 @@ test("fails closed at grant when the connector's secret does not resolve", async
   const { env } = storeEnv({ GITHUB_APP_ID: "123456" });
   try {
     const message = await signedServiceMessage(encode(grantJob("github-app", { installationId: "12345" })), {
-      iss: "brain",
+      iss: "workflows",
       aud: "connectors",
     });
     const result = await handleConnectorInvoke(message, env);
@@ -403,7 +403,7 @@ test("grant then authorizedFetch: the credential is injected server-side and nev
   const { env } = storeEnv({ GITHUB_APP_ID: "123456", GITHUB_APP_PRIVATE_KEY: PRIVATE_KEY });
   try {
     const grantMessage = await signedServiceMessage(encode(grantJob("github-app", { installationId: "12345" })), {
-      iss: "brain",
+      iss: "workflows",
       aud: "connectors",
     });
     const granted = await handleConnectorInvoke(grantMessage, env);
@@ -421,7 +421,7 @@ test("grant then authorizedFetch: the credential is injected server-side and nev
         scopes: [],
         paramsJson: JSON.stringify({ request: { method: "GET", path: "/repos/o/r" } }),
       }),
-      { iss: "brain", aud: "connectors" },
+      { iss: "workflows", aud: "connectors" },
     );
     const fetched = await handleConnectorInvoke(fetchMessage, env);
     assert.equal(fetched.status, 200);
@@ -441,7 +441,7 @@ test("grant then authorizedFetch: the credential is injected server-side and nev
     const audit = logs.lines.find((line) => line.message === "connector_use");
     assert.ok(audit);
     assert.equal(audit.connectorId, "github-app");
-    assert.equal(audit.callerPrincipal, "brain");
+    assert.equal(audit.callerPrincipal, "workflows");
     assert.equal(audit.grantId, handle);
   } finally {
     logs.restore();

@@ -4,8 +4,8 @@ export {};
 // tokens. Prints the public JWK (paste into packages/identity/keyring.ts) and
 // the private JWK (store as the worker's signing-key secret, never committed):
 //
-//   tsx scripts/generate-keys.ts brain
-//   wrangler secret put BRAIN_SIGNING_KEY -c workers/services/brain/wrangler.jsonc
+//   tsx scripts/generate-keys.ts workflows
+//   wrangler secret put WORKFLOWS_SIGNING_KEY -c workers/services/workflows/wrangler.jsonc
 //     (paste the printed private JWK JSON when prompted)
 //
 // The public/private keys are an Ed25519 pair; only the private JWK is a
@@ -17,12 +17,12 @@ declare const process: {
   env: Record<string, string | undefined>;
 };
 
-const WORKERS = ["gateway", "brain", "responder", "spend", "dev-proxy", "connectors"] as const;
+const WORKERS = ["gateway", "workflows", "responder", "spend", "dev-proxy", "connectors", "webhooks"] as const;
 type Worker = (typeof WORKERS)[number];
 
 const SECRET_NAMES: Record<Worker, string> = {
   gateway: "GATEWAY_SIGNING_KEY",
-  brain: "BRAIN_SIGNING_KEY",
+  workflows: "WORKFLOWS_SIGNING_KEY",
   responder: "RESPONDER_SIGNING_KEY",
   spend: "SPEND_SIGNING_KEY",
   "dev-proxy": "DEV_PROXY_SIGNING_KEY",
@@ -30,6 +30,9 @@ const SECRET_NAMES: Record<Worker, string> = {
   // entry lets an operator generate a keypair if the broker ever needs to sign
   // an outbound service hop (see packages/auth/principal.ts).
   connectors: "CONNECTORS_SIGNING_KEY",
+  // The webhook-ingress worker signs its webhook_verify hop into the broker and
+  // its enqueue hop to the workflows worker.
+  webhooks: "WEBHOOKS_SIGNING_KEY",
 };
 
 const worker = process.argv[2] as Worker | undefined;

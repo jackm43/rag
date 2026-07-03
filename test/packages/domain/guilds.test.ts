@@ -147,7 +147,7 @@ test("the DO enqueues MESSAGE_CREATE events when the allowlist is unset", async 
   assert.equal(queuedJobs.length, 1);
 });
 
-test("brain message.received resolution repeats the allowlist check", async () => {
+test("workflows message.received resolution repeats the allowlist check", async () => {
   const env = allowlistEnv();
 
   const job = await resolveGatewayMessage(

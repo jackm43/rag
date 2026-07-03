@@ -20,7 +20,7 @@ export const PUBLIC_KEYRING: Record<MachinePrincipal, JsonWebKey> = {
     crv: "Ed25519",
     x: "WLBRy5_x-U27lYp3QoCm3dg4NzmMAIBT8w6oODf7-Og",
   },
-  brain: {
+  workflows: {
     kty: "OKP",
     crv: "Ed25519",
     x: "CpovGn_wbuSw6KN94Cisarey69JrMAvJx55YtCpSBpE",
@@ -54,6 +54,14 @@ export const PUBLIC_KEYRING: Record<MachinePrincipal, JsonWebKey> = {
     kty: "OKP",
     crv: "Ed25519",
     x: "tlvX0YnwjSma94r5lPNsnwn6FwXTxJy8x6R2ph55mho",
+  },
+  // The webhook-ingress worker's public verifying key. Its private half lives
+  // in the WEBHOOKS_SIGNING_KEY secret on the webhooks worker, which signs its
+  // webhook_verify hop into the broker and its enqueue hop to the workflows worker.
+  webhooks: {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "hYMdAmVmhbs_L4wEZVJRUtp8stUdIPCliYyjA2zdbUY",
   },
 };
 

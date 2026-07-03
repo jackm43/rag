@@ -62,6 +62,10 @@
   //                              set as a secret to keep it out of the config)
   //   CONNECTORS_TOKEN_ENC_KEY — optional AES-GCM key (base64url 32 bytes) for
   //                              3LO token values-at-rest
+  //   GITHUB_WEBHOOK_SECRET    — the GitHub App's webhook signing secret
+  //                              (webhook_verify; never leaves the broker)
+  //   DISCORD_OAUTH_CLIENT_ID  — the Discord 3LO app's client id (discord-user)
+  //   DISCORD_OAUTH_CLIENT_SECRET — the Discord 3LO app's client secret
   // These can later be sourced from Cloudflare Secrets Store; worker secrets for
   // now (see CONNECTORS.md).
 }
