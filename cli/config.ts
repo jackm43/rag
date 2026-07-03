@@ -3,14 +3,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 
-// ragctl configuration + on-disk layout. Everything the CLI persists (the local
-// DPoP key, the cached Access token, the config file) lives under one home
-// directory so it is easy to find, back up, and delete. The home is, in order:
+// ragctl configuration + on-disk layout. Everything the CLI persists (the cached
+// Access token, the config file) lives under one home directory so it is easy to
+// find, back up, and delete. The home is, in order:
 //   1. $RAGCTL_HOME (explicit override)
 //   2. $XDG_CONFIG_HOME/ragctl
 //   3. ~/.config/ragctl
-// The directory is created 0700 and the secret-bearing files 0600 (see keys.ts /
-// access.ts), so no other local user can read the private key or token.
+// The directory is created 0700 and the secret-bearing token file 0600 (see
+// access.ts), so no other local user can read the cached Access token.
 
 // The deployed dev-proxy hostname (openapi.yaml `servers` / the worker route).
 export const DEFAULT_BASE_URL = "https://ragbot-dev.jsmunro.me";
@@ -26,7 +26,6 @@ export const ragctlHome = (): string => {
 };
 
 export const configPath = (): string => join(ragctlHome(), "config.json");
-export const keyPath = (): string => join(ragctlHome(), "dpop-key.json");
 export const tokenPath = (): string => join(ragctlHome(), "access-token.json");
 
 // Create the home directory (idempotent) with owner-only permissions.

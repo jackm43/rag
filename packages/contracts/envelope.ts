@@ -286,7 +286,7 @@ export class DevProxyCommandOption extends $.Struct {
 }
 /**
 * A command invocation proxied by the dev-proxy worker on behalf of a
-* Cloudflare Access + DPoP browser session. The gateway's DevProxy entrypoint
+* Cloudflare Access + Better Auth (Discord) browser session. The gateway's DevProxy entrypoint
 * reconstructs a synthetic Discord interaction from this and runs the SAME
 * command pre-flight (Cedar command.* + limits + bans) a real interaction
 * would. `command` is the slash-command name (e.g. "ask"); subjectUserId is

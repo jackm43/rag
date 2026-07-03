@@ -16,8 +16,8 @@ import { routeInteraction } from "./commands/router";
 // first half is the platform + the dev-proxy worker: a service binding is
 // invocable only by a worker configured with it, so this code is reachable only
 // from the dev-proxy, and the dev-proxy has already terminated the untrusted
-// browser (Cloudflare Access + DPoP) before it minted the token that arrives
-// here.
+// browser (Cloudflare Access + a Better Auth Discord session) before it minted
+// the token that arrives here.
 //
 // This function authorizes and dispatches in strict fail-closed order, reusing
 // the existing machinery at every step rather than reinventing it:
@@ -124,8 +124,9 @@ export const handleDevProxyCommand = async (
     logger.warn("devproxy_denied", {
       reason: "subject_not_allowed",
       command: job.command,
-      // The CF-Access subject the dev-proxy authenticated (token `sub`), for
-      // audit — not the requested Discord subject, which is untrusted here.
+      // The token `sub` the dev-proxy authenticated for — now the acting Discord
+      // id from the Better Auth session (was the CF-Access subject under the old
+      // DPoP flow). Logged for audit; the allowlist above is the trust check.
       session: received.context.subject,
     });
     return denied(403);

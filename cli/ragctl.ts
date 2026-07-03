@@ -8,16 +8,17 @@ import {
   readCachedToken,
   tokenIsExpired,
 } from "./access";
-import { configPath, keyPath, resolveConfig, tokenPath, type ConfigOverrides } from "./config";
+import { configPath, resolveConfig, tokenPath, type ConfigOverrides } from "./config";
 import { discover } from "./discover";
-import { generateKey, loadSigner, showKey } from "./keys";
 import { createDevProxyClient, type CommandRequest } from "../packages/devproxy-client/index";
 
 // ragctl — a local CLI for the ragbot dev-proxy. Runs on a laptop (Node, not
-// workerd) and drives the deployed dev-proxy: it manages a local DPoP keypair,
-// acquires a Cloudflare Access token via `cloudflared`, and issues typed
-// commands through packages/devproxy-client. See the README "Local development
-// with ragctl" section for the operator flow.
+// workerd) and drives the deployed dev-proxy: it acquires a Cloudflare Access
+// token via `cloudflared` and issues typed commands through
+// packages/devproxy-client. The dev-proxy now also requires a Better Auth
+// (Discord) session, which is established in the browser; a non-browser caller
+// must supply that session cookie via RAGCTL_SESSION_COOKIE (see `cmd` below).
+// See the README "Local development with ragctl" section for the operator flow.
 
 // --- tiny argv parser -------------------------------------------------------
 // Supports `--flag value`, `--flag=value`, repeated flags (collected), and bare
@@ -94,8 +95,6 @@ const HELP = `ragctl — local client for the ragbot dev-proxy
 Usage: ragctl <command> [options]
 
 Commands:
-  keys generate [--force]   Generate + persist a local DPoP ES256 keypair
-  keys show                 Show the public JWK + jkt thumbprint (never the private key)
   login [--refresh]         Cloudflare Access SSO via cloudflared; cache the token
                             (--refresh re-fetches without the browser login)
   whoami                    Decode the cached Access token's claims
@@ -109,33 +108,11 @@ Global options:
   --access-url <url>        Override the Cloudflare Access application URL
   -h, --help                Show this help
 
+A browser-established Better Auth (Discord) session is also required for \`cmd\`;
+supply it to a non-browser caller via RAGCTL_SESSION_COOKIE.
+
 Config precedence: flag > env (RAGCTL_BASE_URL / RAGCTL_ACCESS_URL) > config file > default.
 Files live under $RAGCTL_HOME or ${"${XDG_CONFIG_HOME:-~/.config}"}/ragctl.`;
-
-const runKeys = async (args: Args): Promise<number> => {
-  const sub = args.positionals[1];
-  if (sub === "generate") {
-    const result = await generateKey(has(args, "force"));
-    if (!result.created) {
-      out(`A DPoP key already exists at ${result.path} (jkt ${result.jkt}).`);
-      out("Re-run with --force to replace it (this rotates the jkt).");
-      return 1;
-    }
-    out(`Generated DPoP keypair at ${result.path}`);
-    out(`jkt: ${result.jkt}`);
-    return 0;
-  }
-  if (sub === "show") {
-    const info = showKey();
-    out(`path:      ${info.path}`);
-    out(`created:   ${info.createdAt}`);
-    out(`jkt:       ${info.jkt}`);
-    out(`publicJwk: ${JSON.stringify(info.publicJwk)}`);
-    return 0;
-  }
-  out("Usage: ragctl keys <generate|show>");
-  return 1;
-};
 
 const runLogin = (args: Args): number => {
   const { config } = resolveConfig(overridesFrom(args));
@@ -190,8 +167,8 @@ const runDiscover = (): number => {
 // worker never discloses which gate refused, so these are guidance, not claims.
 const STATUS_HINT: Record<number, string> = {
   400: "malformed command request (check the command name / options)",
-  401: "Access token or DPoP proof rejected — run `ragctl login` and `ragctl keys generate`",
-  403: "no acting subject configured server-side, or the subject is not allowed",
+  401: "Access token or Better Auth session rejected — run `ragctl login` and set RAGCTL_SESSION_COOKIE from a browser session",
+  403: "the acting Discord subject is not allowed by the gateway (DEV_PROXY_ALLOWED_SUBJECTS)",
   502: "upstream gateway error",
 };
 
@@ -224,7 +201,6 @@ const runCmd = async (args: Args): Promise<number> => {
   }
 
   const { config } = resolveConfig(overridesFrom(args));
-  const { signer } = await loadSigner();
 
   const cached = readCachedToken();
   if (!cached) {
@@ -233,10 +209,18 @@ const runCmd = async (args: Args): Promise<number> => {
     process.stderr.write("ragctl: cached Access token is expired — run `ragctl login` (sending anyway).\n");
   }
 
+  // The dev-proxy also requires a Better Auth (Discord) session. A browser sends
+  // its cookie automatically; a CLI caller must pass it via RAGCTL_SESSION_COOKIE
+  // (copy the `better-auth.session_token` cookie from a logged-in browser).
+  const sessionCookie = process.env.RAGCTL_SESSION_COOKIE;
+  if (!sessionCookie) {
+    process.stderr.write("ragctl: RAGCTL_SESSION_COOKIE is unset — the worker will deny without a Better Auth session (sending anyway).\n");
+  }
+
   const client = createDevProxyClient({
     baseUrl: config.baseUrl,
-    dpopProof: signer,
     ...(cached ? { accessToken: () => cached.token } : {}),
+    ...(sessionCookie ? { sessionCookie: () => sessionCookie } : {}),
   });
 
   const response = await client.command(request);
@@ -259,7 +243,6 @@ const runConfig = (args: Args): number => {
   out(`accessUrl:  ${config.accessUrl}  (${sources.accessUrl})`);
   out("");
   out(`config file: ${configPath()}`);
-  out(`dpop key:    ${keyPath()}`);
   out("precedence:  flag > env > config file > default");
   return 0;
 };
@@ -274,8 +257,6 @@ const main = async (): Promise<number> => {
   }
 
   switch (command) {
-    case "keys":
-      return runKeys(args);
     case "login":
       return runLogin(args);
     case "whoami":

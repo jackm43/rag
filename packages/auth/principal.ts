@@ -12,10 +12,11 @@
 
 // Machine principals: the workers/services of this application.
 //
-// `dev-proxy` is the development application that runs in production: a public
-// edge worker (workers/public/dev-proxy) that authenticates an untrusted
-// browser via Cloudflare Access + DPoP, then invokes the gateway's DevProxy
-// service-binding entrypoint carrying the authenticated session. It occupies
+// `dev-proxy` is the development/admin application that runs in production: a
+// public edge worker (workers/public/dev-proxy) that authenticates an untrusted
+// browser via Cloudflare Access + a Better Auth Discord session, then invokes the
+// gateway's DevProxy service-binding entrypoint carrying the authenticated
+// (Discord) subject. It occupies
 // the edge zone alongside the gateway and exchanges into it; it holds its own
 // Ed25519 signing key so its hops carry strong crypto identity, exactly like
 // the gateway/brain. See workers/public/dev-proxy/README section in README.md.
@@ -57,8 +58,9 @@ export const SERVICE_ZONE: Record<MachinePrincipal, TrustZone> = {
   responder: "application",
   spend: "application",
   // The dev-proxy is a public-facing worker like the gateway: it terminates an
-  // untrusted browser caller (CF Access + DPoP) and exchanges an on-behalf-of
-  // token into the gateway. Edge → edge exchange is authorized by Cedar.
+  // untrusted browser caller (CF Access + a Better Auth Discord session) and
+  // exchanges an on-behalf-of token into the gateway. Edge → edge exchange is
+  // authorized by Cedar.
   "dev-proxy": "edge",
 };
 
