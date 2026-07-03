@@ -14,11 +14,15 @@
 // command is authorized identically to a Discord-initiated one, AND is
 // additionally bounded by this app-level surface.
 //
-// Default surface: the same public commands a Discord user could run. The
-// admin/moderation commands (raghammer, ragunban, undorag) are deliberately
-// omitted — the dev tool is for exercising real read/AI paths, not moderating
-// through a browser. Widen this list to grant the dev app more surface.
-
+// Default surface: the public commands a Discord user could run that also round
+// trip synchronously. The dev-proxy runs commands synchronously and returns the
+// real result, so only commands whose result IS that response are proxiable:
+// inline commands (ragboard, ragspend, ragspendboard) and deferred-inline ones
+// (ask, rag). The async media generators (bicture, ragjam) deliver to Discord
+// out of band and cannot round trip here, so they are withheld rather than
+// silently accepted and lost. The admin/moderation commands (raghammer,
+// ragunban, undorag) are deliberately omitted — the dev tool exercises real
+// read/AI paths, not moderation through a browser.
 @id("devproxy-proxiable-commands")
 permit (
   principal == Machine::"dev-proxy",
@@ -28,5 +32,5 @@ permit (
 when
 {
   context has command &&
-  ["ask", "rag", "ragboard", "ragspend", "ragspendboard", "bicture", "ragjam"].contains(context.command)
+  ["ask", "rag", "ragboard", "ragspend", "ragspendboard"].contains(context.command)
 };

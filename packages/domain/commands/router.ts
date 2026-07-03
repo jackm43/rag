@@ -8,7 +8,7 @@ import {
   type DiscordInteraction,
   type Env,
 } from "../../contracts/types";
-import { executeCommand, type CommandSpec } from "./registry";
+import { executeCommand, type CommandExecution, type CommandSpec } from "./registry";
 import { commandSpecs } from "./specs";
 
 const registry: ReadonlyMap<string, CommandSpec> = new Map(
@@ -19,6 +19,7 @@ export const routeInteraction = async (
   interaction: DiscordInteraction,
   env: Env,
   ctx: ExecutionContext,
+  execution: CommandExecution = {},
 ): Promise<Response> => {
   if (interaction.type === PING) {
     return jsonResponse({ type: PING });
@@ -42,7 +43,7 @@ export const routeInteraction = async (
     const commandName = interaction.data?.name;
     const spec = commandName ? registry.get(commandName) : undefined;
     if (spec) {
-      return executeCommand(spec, interaction, env, ctx);
+      return executeCommand(spec, interaction, env, ctx, execution);
     }
 
     return jsonResponse({

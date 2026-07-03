@@ -73,11 +73,21 @@ const hasCredentials = (ctx: CommandContext): ctx is CredentialedCommandContext 
 // Cedar authorization (admin gate + raghammer ban) -> usage limits ->
 // dispatch (enqueue+defer, inline, or defer+run). Every command goes through
 // the same guards in the same order.
+// How the command was invoked. "discord" is the normal path (defer + edit the
+// interaction). "synchronous" is the dev-proxy path: there is no Discord
+// interaction to defer against, so deferred-inline commands run to completion
+// and their real result is returned in the response. Commands that can only
+// deliver asynchronously (enqueue) are not available synchronously — the
+// dev-proxy capability policy (devproxy.cedar) also withholds them, so this is
+// a defensive fallback, never the primary gate.
+export type CommandExecution = { synchronous?: boolean };
+
 export const executeCommand = async (
   spec: CommandSpec,
   interaction: DiscordInteraction,
   env: Env,
   executionCtx: ExecutionContext,
+  execution: CommandExecution = {},
 ): Promise<Response> => {
   const ctx = buildCommandContext(interaction);
 
@@ -87,7 +97,9 @@ export const executeCommand = async (
     }
   }
 
-  if (spec.kind !== "inline" && !hasCredentials(ctx)) {
+  // A synchronous invocation never defers, so it needs no interaction
+  // credentials; only the Discord path requires them to edit the response.
+  if (!execution.synchronous && spec.kind !== "inline" && !hasCredentials(ctx)) {
     if (spec.kind === "deferred-inline" && spec.onMissingCredentials) {
       return spec.onMissingCredentials(ctx, env);
     }
@@ -123,6 +135,21 @@ export const executeCommand = async (
 
   if (spec.kind === "inline") {
     return spec.run(ctx, env);
+  }
+
+  // Synchronous (dev-proxy) dispatch: run to completion and return the real
+  // result instead of deferring. deferred-inline runs need no credentials (see
+  // above); enqueue commands deliver asynchronously to Discord and cannot round
+  // trip here, so they are refused rather than silently enqueued and lost.
+  if (execution.synchronous) {
+    if (spec.kind === "deferred-inline") {
+      const result = await spec.run(ctx as CredentialedCommandContext, env);
+      const data = "data" in result ? result.data : result;
+      return jsonResponse({ type: CHANNEL_MESSAGE_WITH_SOURCE, data });
+    }
+    return inlineMessage(
+      `/${spec.name} delivers its result asynchronously to Discord and is not available over the dev proxy.`,
+    );
   }
 
   if (!hasCredentials(ctx)) {

@@ -119,12 +119,10 @@ const handleCommand = async (request: Request, env: Env): Promise<Response> => {
     subjectUsername: access.grant.identity.email ?? "dev-proxy",
     ...(env.DEV_PROXY_GUILD ? { guildId: env.DEV_PROXY_GUILD } : {}),
     ...(body.channelId ? { channelId: body.channelId } : {}),
-    // A synthetic Discord application id + interaction token so deferred/enqueue
-    // commands have credentials to carry; the async Discord edit targets the
-    // real app but a synthetic token, so AI/D1/spend all run for testing while
-    // the final Discord PATCH is a no-op. Inline commands round-trip fully.
-    ...(env.DISCORD_APPLICATION_ID ? { applicationId: env.DISCORD_APPLICATION_ID } : {}),
-    interactionToken: `devproxy:${crypto.randomUUID()}`,
+    // No interaction credentials: the gateway runs the command synchronously and
+    // returns the real result to this response, so there is no deferred Discord
+    // PATCH to carry a token for. Commands that can only deliver asynchronously
+    // (bicture, ragjam) are withheld by the dev-proxy capability policy.
     options: body.options ?? [],
   };
 

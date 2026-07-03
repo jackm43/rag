@@ -158,7 +158,12 @@ export const handleDevProxyCommand = async (
     job.options,
   );
   try {
-    const response = await routeInteraction(interaction, env, ctx);
+    // Synchronous execution: the dev-proxy has no Discord interaction to defer
+    // against, so deferred-inline commands run to completion and return their
+    // real result to the caller, and async-only (enqueue) commands are refused
+    // rather than silently lost. This is why no synthetic interaction token is
+    // needed or minted upstream.
+    const response = await routeInteraction(interaction, env, ctx, { synchronous: true });
     return toResult(response);
   } catch (error) {
     // Fail closed on any dispatch error: return a bare 500 rather than let the
