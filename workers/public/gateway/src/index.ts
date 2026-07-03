@@ -10,10 +10,9 @@ import type { Env } from "../../../../packages/contracts/types";
 import { DevProxy } from "./devproxy-entrypoint";
 import { DiscordGateway, getGatewayHealth, startGateway, stopGateway } from "./gateway";
 import { GATEWAY_MANIFEST } from "./manifest";
-import { ServiceRegistry } from "./registry";
 import { createGatewayRouter } from "./router";
 
-export { DevProxy, DiscordGateway, ServiceRegistry, extractBotMentionPrompt, handleGatewayMessageCreate };
+export { DevProxy, DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
 
 // The bearer-token guard (wired by the router from the spec's security
 // scheme) authenticates the operator; Cedar decides what the operator

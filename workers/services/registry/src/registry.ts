@@ -14,7 +14,8 @@ import type { Env } from "../../../../packages/contracts/types";
 // consumes the registry snapshot. Both RPC payloads are capnp bytes
 // (service.capnp): ServiceManifest in, ManifestSnapshot out — the same
 // generated contract layer as the queue envelopes. The registry lives in the
-// trusted zone: only workers configured with the binding can reach it.
+// trusted zone in its own worker so no routed, internet-facing worker owns it;
+// only workers configured with the binding can reach it.
 //
 // Position calculation happens on the consumer (packages/auth/manifest.ts,
 // manifestsToEntities): a service's CLIENTS are derived from the OTHER

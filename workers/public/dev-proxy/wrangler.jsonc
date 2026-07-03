@@ -56,11 +56,11 @@
         "name": "DPOP_REPLAY",
         "class_name": "DpopReplay"
       },
-      // Service registry hosted by the gateway worker (the parent application).
+      // Service registry hosted by the standalone ragbot-registry-worker.
       {
         "name": "SERVICE_REGISTRY",
         "class_name": "ServiceRegistry",
-        "script_name": "ragbot-worker"
+        "script_name": "ragbot-registry-worker"
       }
     ]
   },

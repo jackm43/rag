@@ -54,7 +54,8 @@
       },
       {
         "name": "SERVICE_REGISTRY",
-        "class_name": "ServiceRegistry"
+        "class_name": "ServiceRegistry",
+        "script_name": "ragbot-registry-worker"
       }
     ]
   },
@@ -63,12 +64,6 @@
       "tag": "v1",
       "new_classes": [
         "DiscordGateway"
-      ]
-    },
-    {
-      "tag": "v2",
-      "new_sqlite_classes": [
-        "ServiceRegistry"
       ]
     }
   ],
