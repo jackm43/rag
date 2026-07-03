@@ -17,7 +17,7 @@ declare const process: {
   env: Record<string, string | undefined>;
 };
 
-const WORKERS = ["gateway", "brain", "responder", "spend", "dev-proxy"] as const;
+const WORKERS = ["gateway", "brain", "responder", "spend", "dev-proxy", "connectors"] as const;
 type Worker = (typeof WORKERS)[number];
 
 const SECRET_NAMES: Record<Worker, string> = {
@@ -26,6 +26,10 @@ const SECRET_NAMES: Record<Worker, string> = {
   responder: "RESPONDER_SIGNING_KEY",
   spend: "SPEND_SIGNING_KEY",
   "dev-proxy": "DEV_PROXY_SIGNING_KEY",
+  // The credential broker is verify-only today and holds no signing secret; this
+  // entry lets an operator generate a keypair if the broker ever needs to sign
+  // an outbound service hop (see packages/auth/principal.ts).
+  connectors: "CONNECTORS_SIGNING_KEY",
 };
 
 const worker = process.argv[2] as Worker | undefined;

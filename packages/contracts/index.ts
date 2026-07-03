@@ -5,6 +5,7 @@ import type {
   AiJob,
   AiSpendJob,
   BictureJob,
+  ConnectorInvokeJob,
   DevProxyCommandJob,
   DevProxyCommandOption,
   MessageReceivedJob,
@@ -13,6 +14,7 @@ import type {
 } from "./types";
 import {
   ChatPayload,
+  ConnectorInvokePayload,
   DevProxyCommandPayload,
   EventEnvelope,
   EventEnvelope_Payload_Which,
@@ -22,6 +24,7 @@ import {
   isOptionalSnowflake,
   validateAiJob,
   validateAiSpendJob,
+  validateConnectorInvokeJob,
   validateDevProxyCommandJob,
   validateReplyJob,
 } from "./validate";
@@ -38,8 +41,14 @@ export {
 } from "./service-transport";
 
 export {
+  CONNECTOR_HANDLE_PATTERN,
+  CONNECTOR_ID_PATTERN,
   DEVPROXY_COMMAND_PATTERN,
   isSnowflake,
+  MAX_CONNECTOR_PARAMS_LENGTH,
+  MAX_CONNECTOR_SCOPE_LENGTH,
+  MAX_CONNECTOR_SCOPES,
+  MAX_CONNECTOR_SUBJECT_LENGTH,
   MAX_DEVPROXY_OPTION_NAME_LENGTH,
   MAX_DEVPROXY_OPTIONS,
   MAX_FREE_TEXT_LENGTH,
@@ -51,6 +60,7 @@ export {
   SNOWFLAKE_PATTERN,
   validateAiJob,
   validateAiSpendJob,
+  validateConnectorInvokeJob,
   validateDevProxyCommandJob,
   validateReplyJob,
 } from "./validate";
@@ -71,6 +81,11 @@ const SPEND_EVENT_TYPE = "spend";
 // contracts→auth import cycle, exactly like SPEND_EVENT_TYPE mirrors the
 // spend service operation.
 const DEVPROXY_COMMAND_TYPE = "devproxy.command";
+// The envelope `type` for a credential-broker operation. Mirrors
+// CONNECTOR_INVOKE_OPERATION in packages/auth/principal.ts (the broker's single
+// registered service operation) — kept as a literal here to avoid a
+// contracts→auth import cycle, like SPEND_EVENT_TYPE and DEVPROXY_COMMAND_TYPE.
+const CONNECTOR_INVOKE_TYPE = "connector.invoke";
 
 type ChatLikeKind = AiChatJob["kind"] | AiAskJob["kind"];
 
@@ -452,6 +467,59 @@ export const decodeDevProxyCommandEnvelope = (bytes: unknown): DevProxyCommandJo
       options: devProxyOptionsToArray(payload),
     });
     return validateDevProxyCommandJob(job) && envelope.type === DEVPROXY_COMMAND_TYPE ? job : null;
+  } catch {
+    return null;
+  }
+};
+
+export const encodeConnectorInvokeEnvelope = (
+  job: ConnectorInvokeJob,
+  options: EnvelopeOptions,
+): Uint8Array => {
+  if (!validateConnectorInvokeJob(job)) {
+    throw new Error("Invalid connector invocation for event envelope");
+  }
+  const message = new capnp.Message();
+  const envelope = initEnvelope(message, CONNECTOR_INVOKE_TYPE, options);
+  const payload = envelope.payload._initConnectorInvoke();
+  payload.operation = job.operation;
+  if (job.connectorId !== undefined) {
+    payload.connectorId = job.connectorId;
+  }
+  if (job.handle !== undefined) {
+    payload.handle = job.handle;
+  }
+  if (job.subject !== undefined) {
+    payload.subject = job.subject;
+  }
+  const scopeList = payload._initScopes(job.scopes.length);
+  job.scopes.forEach((scope, index) => scopeList.set(index, scope));
+  payload.paramsJson = job.paramsJson;
+  return new Uint8Array(message.toArrayBuffer());
+};
+
+const connectorInvokeFrom = (payload: ConnectorInvokePayload): ConnectorInvokeJob =>
+  compact({
+    kind: "connector.invoke",
+    operation: payload.operation,
+    connectorId: optionalText(payload.connectorId),
+    handle: optionalText(payload.handle),
+    subject: optionalText(payload.subject),
+    scopes: textListToArray(payload.scopes),
+    paramsJson: payload.paramsJson,
+  }) as ConnectorInvokeJob;
+
+export const decodeConnectorInvokeEnvelope = (bytes: unknown): ConnectorInvokeJob | null => {
+  const envelope = readEnvelope(bytes);
+  if (!envelope) {
+    return null;
+  }
+  try {
+    if (envelope.payload.which() !== EventEnvelope_Payload_Which.CONNECTOR_INVOKE) {
+      return null;
+    }
+    const job = connectorInvokeFrom(envelope.payload.connectorInvoke);
+    return validateConnectorInvokeJob(job) && envelope.type === CONNECTOR_INVOKE_TYPE ? job : null;
   } catch {
     return null;
   }

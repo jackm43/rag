@@ -138,6 +138,36 @@ export type DevProxyCommandJob = {
   options: DevProxyCommandOption[];
 };
 
+// The uniform operations the credential broker exposes. `grant` performs the
+// token exchange (returns an opaque handle, never a credential); `fetch` uses a
+// handle to have the broker make the outbound call; `token` extracts a real
+// short-lived token for the rare must-call-directly case; `introspect` returns a
+// handle's actor context (never a secret); `begin_authorization`/
+// `complete_authorization` are the 3LO seam.
+export type ConnectorOperation =
+  | "grant"
+  | "fetch"
+  | "token"
+  | "introspect"
+  | "begin_authorization"
+  | "complete_authorization";
+
+// One operation against the credential broker, decoded from a connector.invoke
+// EventEnvelope. `connectorId` is present on grant/authorization operations;
+// `handle` on the handle-bearing operations (fetch/token/introspect). Operation-
+// specific parameters ride as a JSON string in `paramsJson` (parsed and
+// validated by the broker, never trusted as-is) so a new connector kind needs no
+// wire-schema change.
+export type ConnectorInvokeJob = {
+  kind: "connector.invoke";
+  operation: ConnectorOperation;
+  connectorId?: string;
+  handle?: string;
+  subject?: string;
+  scopes: string[];
+  paramsJson: string;
+};
+
 export type ChannelMessageReplyJob = {
   kind: "reply.channel_message";
   channelId: string;
@@ -167,6 +197,58 @@ export type DevProxyResult = {
   status: number;
   contentType: string;
   body: string;
+};
+
+// The credential broker's fail-closed result surface. Every operation returns a
+// coarse HTTP-shaped `status` (200 ok, 401 unauthenticated, 403 forbidden, 404
+// unknown handle/connector, 502 upstream failure, 500 internal) and, on success,
+// exactly the one body field for the operation. A denial carries no detail — the
+// broker logs the reason internally and never discloses which gate refused.
+export type ConnectorGrantResult = {
+  // The opaque phantom-token handle. High-entropy, bound to the caller principal
+  // and subject; a leaked handle is useless to any other service.
+  handle: string;
+  connectorId: string;
+  expiresAt: number;
+};
+
+export type ConnectorFetchResult = {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+};
+
+export type ConnectorTokenResult = {
+  // A real short-lived provider token, returned ONLY for the must-call-directly
+  // escape hatch (connector.token). The preferred path is fetch, where the token
+  // never leaves the broker.
+  value: string;
+  tokenType: string;
+  expiresAt?: number;
+};
+
+export type ConnectorIntrospection = {
+  active: boolean;
+  connectorId: string;
+  callerPrincipal: string;
+  subject: string;
+  scopes: string[];
+  createdAt: number;
+  expiresAt: number;
+};
+
+export type ConnectorAuthorizationBegin = {
+  url: string;
+  state: string;
+};
+
+export type ConnectorResult = {
+  status: number;
+  grant?: ConnectorGrantResult;
+  fetch?: ConnectorFetchResult;
+  token?: ConnectorTokenResult;
+  introspection?: ConnectorIntrospection;
+  authorization?: ConnectorAuthorizationBegin;
 };
 
 // Service-hop queue body: capnp-encoded ServiceMessage bytes (service.capnp)
@@ -254,6 +336,40 @@ export type Env = Cloudflare.Env & {
   GATEWAY_DEVPROXY?: {
     invokeCommand: (message: ServiceMessageBytes) => Promise<DevProxyResult>;
   };
+  // The credential broker's service-binding entrypoint (workers/services/
+  // connectors). Bound only on the workers permitted to use a connector — no
+  // worker binds it in this task; a future caller (e.g. the brain) declares it.
+  // A service binding is invocable solely by a worker configured with it, so this
+  // RPC surface is reachable only from such a caller. Typed structurally so
+  // contracts does not import worker code (mirrors RESPONDER / GATEWAY_DEVPROXY).
+  CONNECTORS?: {
+    invoke: (message: ServiceMessageBytes) => Promise<ConnectorResult>;
+  };
+  // The broker's own grant/token store, a Durable Object it defines and binds
+  // (workers/services/connectors). Strongly consistent and persistent across
+  // isolates, so a handle minted in one isolate resolves in another. Holds grant
+  // entries (actor context + credential reference, never the secret) and, for
+  // 3LO, per-(connector, subject) OAuth tokens. Typed structurally, like
+  // SERVICE_REGISTRY.
+  CONNECTOR_STORE?: {
+    idFromName: (name: string) => DurableObjectId;
+    get: (id: DurableObjectId) => {
+      read: (key: string) => Promise<string | null>;
+      write: (key: string, value: string, ttlMs?: number) => Promise<void>;
+      remove: (key: string) => Promise<void>;
+    };
+  };
+  // GitHub App connector secrets (workers/services/connectors). GITHUB_APP_ID is
+  // the numeric App id (the JWT `iss`); GITHUB_APP_PRIVATE_KEY is the App's RSA
+  // private key PEM (PKCS#8 or PKCS#1). Provisioned via `wrangler secret put`;
+  // see CONNECTORS.md for the App-creation + installation steps.
+  GITHUB_APP_ID?: string;
+  GITHUB_APP_PRIVATE_KEY?: string;
+  // Optional application-level AES-GCM key (base64url of 32 bytes) for the 3LO
+  // OAuth token store's values-at-rest. Durable Object storage is already
+  // encrypted at rest by the platform; this adds envelope encryption for the
+  // stored user refresh/access tokens where an operator wants defence in depth.
+  CONNECTORS_TOKEN_ENC_KEY?: string;
   // The guild the dev-proxy's commands target. The acting Discord subject is no
   // longer an env default — it is the Discord id of the authenticated Better Auth
   // session (see workers/public/dev-proxy). The gateway independently enforces

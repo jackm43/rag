@@ -20,7 +20,30 @@
 // the edge zone alongside the gateway and exchanges into it; it holds its own
 // Ed25519 signing key so its hops carry strong crypto identity, exactly like
 // the gateway/brain. See workers/public/dev-proxy/README section in README.md.
-export type MachinePrincipal = "gateway" | "brain" | "responder" | "spend" | "dev-proxy";
+//
+// `connectors` is the credential broker (workers/services/connectors): the
+// single home for provider credentials (GitHub App keys, API keys, OAuth
+// grants). It is reachable ONLY over a service binding — no route — and it is a
+// VERIFY-ONLY receiver: it accepts on-behalf-of hops from the services allowed
+// to use a connector, but it does not itself sign outbound service tokens (its
+// egress is provider HTTP through a boundary client, not a service hop), so it
+// holds no signing key. See packages/connectors and CONNECTORS.md.
+export type MachinePrincipal =
+  | "gateway"
+  | "brain"
+  | "responder"
+  | "spend"
+  | "dev-proxy"
+  | "connectors";
+
+// The single service operation the connectors broker accepts over its service
+// binding. Every connector operation (fetch/token/authorize) is carried as one
+// `connector.invoke` envelope whose payload names the connector, the specific
+// operation, and its parameters; the receiving boundary refuses anything else
+// before Cedar or any decode runs (the registration gate). Which connector the
+// caller may touch, and for which operation, is gated separately by the
+// `connector.*` policies against the `Connector::<id>` resource.
+export const CONNECTOR_INVOKE_OPERATION = "connector.invoke";
 
 // The single service operation the gateway's DevProxy entrypoint accepts over
 // its service binding. A dev-proxy hop frames a DevProxyCommandPayload envelope
@@ -62,6 +85,9 @@ export const SERVICE_ZONE: Record<MachinePrincipal, TrustZone> = {
   // exchanges an on-behalf-of token into the gateway. Edge → edge exchange is
   // authorized by Cedar.
   "dev-proxy": "edge",
+  // The credential broker is an internal application-zone service like the
+  // brain: authorized callers exchange into it from the application zone.
+  connectors: "application",
 };
 
 // A service is a collection of registered operations. Each service accepts
@@ -91,6 +117,10 @@ export const SERVICE_OPERATIONS: Record<MachinePrincipal, readonly string[]> = {
   responder: ["reply.channel_message", "reply.interaction_edit"],
   spend: ["spend"],
   "dev-proxy": [],
+  // Every connector operation arrives as one `connector.invoke` envelope; the
+  // specific operation (fetch/token/authorize) rides in the payload and is
+  // gated per-connector by the `connector.*` policies, not at this layer.
+  connectors: [CONNECTOR_INVOKE_OPERATION],
 };
 
 // How a request crossed into the receiving service.
@@ -101,7 +131,8 @@ export const isMachinePrincipal = (value: unknown): value is MachinePrincipal =>
   value === "brain" ||
   value === "responder" ||
   value === "spend" ||
-  value === "dev-proxy";
+  value === "dev-proxy" ||
+  value === "connectors";
 
 export const isTrustZone = (value: unknown): value is TrustZone =>
   value === "untrusted" || value === "edge" || value === "application" || value === "trusted";

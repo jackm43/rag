@@ -56,6 +56,15 @@ export const SIGNING_KEY_JWKS: Record<MachinePrincipal, JsonWebKey> = {
     x: "v60E6h2mWbtpW9KMMQdUhSOXVWjrJEzK6WDz1aaIfWU",
     d: "-JfMRkDnjb6MUpOzQGNYPWFCeQoGFOfgzT-mPsVmav4",
   },
+  // The credential broker never signs in production (verify-only receiver); this
+  // private half exists only so the test suite can mint a broker-issued token
+  // when exercising the keyring exhaustively.
+  connectors: {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "tlvX0YnwjSma94r5lPNsnwn6FwXTxJy8x6R2ph55mho",
+    d: "2TruP-IMZ-FIxM-KN94LNWNtITPBAHVTKwPPZpL2FEo",
+  },
 };
 
 export type ServiceHopSpec = {

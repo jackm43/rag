@@ -362,6 +362,75 @@ export class DevProxyCommandPayload extends $.Struct {
   }
   toString(): string { return "DevProxyCommandPayload_" + super.toString(); }
 }
+/**
+* A single operation against the credential broker (workers/services/connectors).
+* The uniform phantom-token model: `grant` exchanges the caller's authenticated
+* identity for an opaque handle (the real credential is prepared server-side and
+* never returned); `fetch`/`token`/`introspect` present that handle to use the
+* credential without ever receiving it. `operation` names which; `connectorId`
+* is set on `grant`/`begin_authorization`/`complete_authorization`; `handle` is
+* set on the handle-bearing operations. Operation-specific parameters (the
+* request for fetch, the code/state for a 3LO completion, installationId for a
+* github_app grant) ride as JSON in `paramsJson` so a new connector kind needs
+* no schema change — exactly as the identity token rides as an opaque JWS Text.
+*
+*/
+export class ConnectorInvokePayload extends $.Struct {
+  static readonly _capnp = {
+    displayName: "ConnectorInvokePayload",
+    id: "cb1e798561d75b89",
+    size: new $.ObjectSize(0, 6),
+  };
+  get operation(): string {
+    return $.utils.getText(0, this);
+  }
+  set operation(value: string) {
+    $.utils.setText(0, value, this);
+  }
+  get connectorId(): string {
+    return $.utils.getText(1, this);
+  }
+  set connectorId(value: string) {
+    $.utils.setText(1, value, this);
+  }
+  get handle(): string {
+    return $.utils.getText(2, this);
+  }
+  set handle(value: string) {
+    $.utils.setText(2, value, this);
+  }
+  get subject(): string {
+    return $.utils.getText(3, this);
+  }
+  set subject(value: string) {
+    $.utils.setText(3, value, this);
+  }
+  _adoptScopes(value: $.Orphan<$.List<string>>): void {
+    $.utils.adopt(value, $.utils.getPointer(4, this));
+  }
+  _disownScopes(): $.Orphan<$.List<string>> {
+    return $.utils.disown(this.scopes);
+  }
+  get scopes(): $.List<string> {
+    return $.utils.getList(4, $.TextList, this);
+  }
+  _hasScopes(): boolean {
+    return !$.utils.isNull($.utils.getPointer(4, this));
+  }
+  _initScopes(length: number): $.List<string> {
+    return $.utils.initList(4, $.TextList, length, this);
+  }
+  set scopes(value: $.List<string>) {
+    $.utils.copyFrom(value, $.utils.getPointer(4, this));
+  }
+  get paramsJson(): string {
+    return $.utils.getText(5, this);
+  }
+  set paramsJson(value: string) {
+    $.utils.setText(5, value, this);
+  }
+  toString(): string { return "ConnectorInvokePayload_" + super.toString(); }
+}
 export class EventEnvelope_Actor extends $.Struct {
   static readonly _capnp = {
     displayName: "actor",
@@ -393,7 +462,8 @@ export const EventEnvelope_Payload_Which = {
   REPLY_CHANNEL_MESSAGE: 7,
   REPLY_INTERACTION_EDIT: 8,
   MESSAGE_RECEIVED: 9,
-  DEVPROXY_COMMAND: 10
+  DEVPROXY_COMMAND: 10,
+  CONNECTOR_INVOKE: 11
 } as const;
 export type EventEnvelope_Payload_Which = (typeof EventEnvelope_Payload_Which)[keyof typeof EventEnvelope_Payload_Which];
 export class EventEnvelope_Payload extends $.Struct {
@@ -408,6 +478,7 @@ export class EventEnvelope_Payload extends $.Struct {
   static readonly REPLY_INTERACTION_EDIT = EventEnvelope_Payload_Which.REPLY_INTERACTION_EDIT;
   static readonly MESSAGE_RECEIVED = EventEnvelope_Payload_Which.MESSAGE_RECEIVED;
   static readonly DEVPROXY_COMMAND = EventEnvelope_Payload_Which.DEVPROXY_COMMAND;
+  static readonly CONNECTOR_INVOKE = EventEnvelope_Payload_Which.CONNECTOR_INVOKE;
   static readonly _capnp = {
     displayName: "payload",
     id: "a636c8f1ec42d04d",
@@ -686,6 +757,31 @@ export class EventEnvelope_Payload extends $.Struct {
   }
   set devproxyCommand(value: DevProxyCommandPayload) {
     $.utils.setUint16(2, 10, this);
+    $.utils.copyFrom(value, $.utils.getPointer(7, this));
+  }
+  _adoptConnectorInvoke(value: $.Orphan<ConnectorInvokePayload>): void {
+    $.utils.setUint16(2, 11, this);
+    $.utils.adopt(value, $.utils.getPointer(7, this));
+  }
+  _disownConnectorInvoke(): $.Orphan<ConnectorInvokePayload> {
+    return $.utils.disown(this.connectorInvoke);
+  }
+  get connectorInvoke(): ConnectorInvokePayload {
+    $.utils.testWhich("connectorInvoke", $.utils.getUint16(2, this), 11, this);
+    return $.utils.getStruct(7, ConnectorInvokePayload, this);
+  }
+  _hasConnectorInvoke(): boolean {
+    return !$.utils.isNull($.utils.getPointer(7, this));
+  }
+  _initConnectorInvoke(): ConnectorInvokePayload {
+    $.utils.setUint16(2, 11, this);
+    return $.utils.initStructAt(7, ConnectorInvokePayload, this);
+  }
+  get _isConnectorInvoke(): boolean {
+    return $.utils.getUint16(2, this) === 11;
+  }
+  set connectorInvoke(value: ConnectorInvokePayload) {
+    $.utils.setUint16(2, 11, this);
     $.utils.copyFrom(value, $.utils.getPointer(7, this));
   }
   toString(): string { return "EventEnvelope_Payload_" + super.toString(); }

@@ -43,6 +43,18 @@ export const PUBLIC_KEYRING: Record<MachinePrincipal, JsonWebKey> = {
     crv: "Ed25519",
     x: "v60E6h2mWbtpW9KMMQdUhSOXVWjrJEzK6WDz1aaIfWU",
   },
+  // The credential broker's verifying key. The broker is a VERIFY-ONLY receiver
+  // — it never signs an outbound service hop (its egress is provider HTTP, not a
+  // service call) — so this key's private half is not held anywhere in
+  // production and this entry is present only to keep the keyring exhaustive
+  // over MachinePrincipal. If the broker ever needs to call another service, a
+  // real CONNECTORS_SIGNING_KEY secret would be provisioned and this key used to
+  // verify its hops.
+  connectors: {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "tlvX0YnwjSma94r5lPNsnwn6FwXTxJy8x6R2ph55mho",
+  },
 };
 
 // Imported CryptoKeys are cached per isolate: import is async and pure, and the

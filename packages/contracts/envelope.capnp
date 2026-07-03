@@ -79,6 +79,25 @@ struct DevProxyCommandPayload {
   options @7 :List(DevProxyCommandOption);
 }
 
+struct ConnectorInvokePayload {
+  # A single operation against the credential broker (workers/services/connectors).
+  # The uniform phantom-token model: `grant` exchanges the caller's authenticated
+  # identity for an opaque handle (the real credential is prepared server-side and
+  # never returned); `fetch`/`token`/`introspect` present that handle to use the
+  # credential without ever receiving it. `operation` names which; `connectorId`
+  # is set on `grant`/`begin_authorization`/`complete_authorization`; `handle` is
+  # set on the handle-bearing operations. Operation-specific parameters (the
+  # request for fetch, the code/state for a 3LO completion, installationId for a
+  # github_app grant) ride as JSON in `paramsJson` so a new connector kind needs
+  # no schema change — exactly as the identity token rides as an opaque JWS Text.
+  operation @0 :Text;
+  connectorId @1 :Text;
+  handle @2 :Text;
+  subject @3 :Text;
+  scopes @4 :List(Text);
+  paramsJson @5 :Text;
+}
+
 struct EventEnvelope {
   v @0 :UInt16;
   type @1 :Text;
@@ -102,5 +121,6 @@ struct EventEnvelope {
     replyInteractionEdit @16 :InteractionEditPayload;
     messageReceived @17 :MessageReceivedPayload;
     devproxyCommand @18 :DevProxyCommandPayload;
+    connectorInvoke @19 :ConnectorInvokePayload;
   }
 }

@@ -4,7 +4,10 @@ export type TrustZone =
   | "egress-discord"
   | "egress-ai-gateway"
   | "egress-cloudflare-api"
-  | "egress-media";
+  | "egress-media"
+  // The credential broker's egress to a connector's configured provider host.
+  // One boundary client per connector, host-allowlisted to that provider only.
+  | "egress-connector";
 
 export type BoundaryCredential = {
   header: string;
