@@ -28,13 +28,12 @@
     }
   ],
   "vars": {
-    "DISCORD_APPLICATION_ID": "1496842508251172895"
-    // Set these as vars (not secret — the team domain is public, the AUD tag is
-    // an identifier, and the base URL / guild are not credentials) before deploy:
-    //   "CF_ACCESS_TEAM_DOMAIN": "<team>.cloudflareaccess.com"
-    //   "CF_ACCESS_AUD": "<access application AUD tag>"
-    //   "BETTER_AUTH_URL": "https://ragbot-dev.jsmunro.me"
-    //   "DEV_PROXY_GUILD": "<guild id commands target>"
+    "DISCORD_APPLICATION_ID": "1496842508251172895",
+    "CF_ACCESS_TEAM_DOMAIN": "jsmunro.cloudflareaccess.com",
+    "BETTER_AUTH_URL": "https://ragbot-dev.jsmunro.me",
+    "DEV_PROXY_GUILD": "457689460096630794"
+    // CF_ACCESS_AUD is set as a secret after the Access application is created
+    // (its AUD tag). Until then the Access guard fails closed (401 for all).
     // Secret (never commit) — set with `wrangler secret put <NAME>`:
     //   DEV_PROXY_SIGNING_KEY   (private JWK from scripts/generate-keys.ts dev-proxy)
     //   DISCORD_CLIENT_ID       (Discord OAuth application client id)
