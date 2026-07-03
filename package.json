@@ -16,6 +16,7 @@
     "contracts:build": "capnp-es packages/contracts/envelope.capnp packages/contracts/service.capnp -ots",
     "routes:build": "tsx scripts/generate-gateway-routes.ts",
     "devproxy:types": "openapi-typescript workers/public/dev-proxy/openapi.yaml -o packages/devproxy-client/api-types.ts",
+    "ragctl": "tsx cli/ragctl.ts",
     "register:commands": "tsx scripts/register-commands.ts",
     "config:push": "tsx scripts/push-config.ts",
     "backfill:spend": "tsx scripts/backfill-spend.ts",

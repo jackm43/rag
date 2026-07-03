@@ -20,6 +20,7 @@
     "workers/**/*.ts",
     "packages/**/*.ts",
     "scripts/**/*.ts",
+    "cli/**/*.ts",
     "vitest.config.ts"
   ]
 }
