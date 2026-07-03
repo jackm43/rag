@@ -1,6 +1,7 @@
 import type { Env } from "../contracts/types";
 import type { MachinePrincipal } from "../auth/principal";
 import type { BoundaryFetch } from "../boundaries/outbound/boundary-client";
+import type { SecretRef } from "../secrets";
 import type { AccessTokenCache } from "./cache";
 import type { GrantStore, OAuthTokenStore } from "./store";
 
@@ -25,10 +26,14 @@ export type ConnectorConfig = {
   // Cedar resource id: authorization is against `Connector::<cedarResource>`.
   // Defaults to `id`; a shared resource lets several connectors reuse one grant.
   cedarResource: string;
-  // Name of the env var / secret holding this connector's secret material:
-  // the API key (api_key), the OAuth client secret (oauth2_*), or the App
-  // private-key PEM (github_app, via GITHUB_APP_PRIVATE_KEY).
-  secretBinding: string;
+  // A {provider, ref} reference to this connector's secret material: the API key
+  // (api_key), the OAuth client secret (oauth2_*), or the App private-key PEM
+  // (github_app). The strategy resolves it through the secrets-provider module
+  // (packages/secrets) — secretsProvider(env, ref.provider).get(ref.ref) — so the
+  // credential can live in a worker secret (wrangler-env), Cloudflare Secrets
+  // Store, HashiCorp Vault, or 1Password without a code change. Resolution fails
+  // closed: an unresolved reference denies the connector op.
+  secret: SecretRef;
   // api_key: which header to inject and an optional scheme prefix.
   //   { header: "authorization", scheme: "Bearer" } -> "Authorization: Bearer <key>"
   //   { header: "x-api-key" }                        -> "x-api-key: <key>"
@@ -38,8 +43,9 @@ export type ConnectorConfig = {
   // oauth2_authorization_code (3LO): the authorization endpoint + OAuth client id.
   authorizationUrl?: string;
   clientId?: string;
-  // github_app: env var holding the numeric App id (defaults to GITHUB_APP_ID).
-  appIdBinding?: string;
+  // github_app: a {provider, ref} reference to the numeric App id (the JWT
+  // `iss`). Defaults to {provider:"wrangler-env", ref:"GITHUB_APP_ID"}.
+  appId?: SecretRef;
   // Default scopes for a grant that does not name any (client_credentials / 3LO).
   defaultScopes?: string[];
   // Headers always added to an authorizedFetch (e.g. GitHub's Accept).
@@ -100,6 +106,20 @@ export type ConnectorStrategy = {
   token: (ctx: StrategyContext) => Promise<ResolvedToken>;
   beginAuthorization?: (ctx: StrategyContext) => Promise<ConnectorAuthorizationBegin>;
   completeAuthorization?: (ctx: StrategyContext) => Promise<void>;
+};
+
+// A provider is ONE cohesive file (providers/<name>.ts) implementing ALL of a
+// provider's supported flows behind the strategy interface. It declares which
+// `kinds` it supports and contributes one strategy per kind; the strategy table
+// (strategy.ts) is derived from what the registered providers declare. Providers
+// resolve credentials and talk to their provider host ONLY — they never touch
+// the identity token, Cedar, or the grant store (that is the broker infra).
+export type ConnectorProvider = {
+  // The provider name, matching the file (e.g. "github", "oauth2", "api-key").
+  name: string;
+  // Every kind this provider implements; must equal the kinds of `strategies`.
+  kinds: readonly ConnectorKind[];
+  strategies: readonly ConnectorStrategy[];
 };
 
 // A grant entry: the actor context captured at grant time plus a reference to

@@ -5,8 +5,8 @@
 export { handleConnectorInvoke } from "./handler";
 export { connectorsClient } from "./client";
 export { CONNECTOR_REGISTRY, lookupConnector } from "./registry";
-export { strategyFor } from "./strategy";
-export { importAppPrivateKey, mintAppJwt, APP_JWT_TTL_SECONDS } from "./github-jwt";
+export { strategyFor, PROVIDERS } from "./strategy";
+export { importAppPrivateKey, mintAppJwt, APP_JWT_TTL_SECONDS } from "./providers/github";
 export {
   createGrantStore,
   createOAuthTokenStore,
@@ -23,6 +23,7 @@ export {
   ConnectorError,
   type ConnectorConfig,
   type ConnectorKind,
+  type ConnectorProvider,
   type ConnectorStrategy,
   type GrantEntry,
   type StrategyContext,

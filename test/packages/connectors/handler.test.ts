@@ -193,6 +193,30 @@ test("rejects a handle presented by a service other than the one it was issued t
   }
 });
 
+test("fails closed at grant when the connector's secret does not resolve", async () => {
+  const logs = captureLogs();
+  // The App id resolves (a plain var) but the private key is unprovisioned, so the
+  // secrets-provider gate returns null and the strategy's resolveSecret denies
+  // (500) BEFORE any App JWT is minted or installation token requested. A grant is
+  // only ever issued when a use could actually succeed.
+  const { env } = storeEnv({ GITHUB_APP_ID: "123456" });
+  try {
+    const message = await signedServiceMessage(encode(grantJob("github-app", { installationId: "12345" })), {
+      iss: "brain",
+      aud: "connectors",
+    });
+    const result = await handleConnectorInvoke(message, env);
+    assert.equal(result.status, 500);
+    assert.ok(
+      logs.lines.some(
+        (line) => line.message === "connector_denied" && String(line.reason).startsWith("secret_unresolved"),
+      ),
+    );
+  } finally {
+    logs.restore();
+  }
+});
+
 test("grant then authorizedFetch: the credential is injected server-side and never returned", async () => {
   const logs = captureLogs();
   const expiresAt = new Date(Date.now() + 3_600_000).toISOString();

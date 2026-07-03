@@ -1,21 +1,34 @@
-import { apiKeyStrategy } from "./strategies/api-key";
-import { githubAppStrategy } from "./strategies/github-app";
-import { oauth2AuthorizationCodeStrategy } from "./strategies/oauth2-authorization-code";
-import { oauth2ClientCredentialsStrategy } from "./strategies/oauth2-client-credentials";
-import { ConnectorError, type ConnectorKind, type ConnectorStrategy } from "./types";
+import { apiKeyProvider } from "./providers/api-key";
+import { githubProvider } from "./providers/github";
+import { oauth2Provider } from "./providers/oauth2";
+import {
+  ConnectorError,
+  type ConnectorKind,
+  type ConnectorProvider,
+  type ConnectorStrategy,
+} from "./types";
 
-// The strategy table, keyed by kind. Adding a genuinely new authentication shape
-// is a new entry here; adding a provider that fits an existing shape is only a
-// registry config entry (see registry.ts) — no code.
-const STRATEGIES: Record<ConnectorKind, ConnectorStrategy> = {
-  api_key: apiKeyStrategy,
-  oauth2_client_credentials: oauth2ClientCredentialsStrategy,
-  oauth2_authorization_code: oauth2AuthorizationCodeStrategy,
-  github_app: githubAppStrategy,
-};
+// The registered providers. A provider is ONE cohesive file
+// (providers/<name>.ts) implementing all of that provider's supported flows;
+// adding a provider is a file there plus an entry here. The strategy table below
+// is DERIVED from what each provider declares it supports — a provider that fits
+// an existing authentication shape (kind) needs no change here at all, only a
+// registry config entry (registry.ts).
+export const PROVIDERS: readonly ConnectorProvider[] = [apiKeyProvider, githubProvider, oauth2Provider];
+
+// kind -> strategy, built by unfolding each provider's declared strategies.
+const STRATEGIES: ReadonlyMap<ConnectorKind, ConnectorStrategy> = (() => {
+  const table = new Map<ConnectorKind, ConnectorStrategy>();
+  for (const provider of PROVIDERS) {
+    for (const strategy of provider.strategies) {
+      table.set(strategy.kind, strategy);
+    }
+  }
+  return table;
+})();
 
 export const strategyFor = (kind: ConnectorKind): ConnectorStrategy => {
-  const strategy = STRATEGIES[kind];
+  const strategy = STRATEGIES.get(kind);
   if (!strategy) {
     throw new ConnectorError(500, `no_strategy_for_kind:${kind}`);
   }
