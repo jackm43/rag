@@ -1,8 +1,30 @@
 # Design: centralise service-to-service tokens through the broker (STS)
 
-**Status: proposed — for review before any implementation.** No live changes until approved.
-Decision recorded (design-first). This unifies the inter-service auth pattern with the
-credential-broker pattern so there is ONE token-issuing choke point.
+## DECISION (resolved): do NOT centralise signing — keep per-worker signing
+
+After weighing it, per-worker Ed25519 signing is kept for service-to-service
+AUTHENTICATION; the broker is NOT made the central token issuer. Rationale:
+- **Blast radius:** a compromised worker leaks only its own hops; one central STS
+  key would let a broker compromise forge every hop. Distributed keys win.
+- **Availability:** per-worker signing keeps the broker off the hot path; central
+  issuance makes it a hard dependency on every hop.
+- **The "single pattern" goal is already met at the AUTHORIZATION layer:** Cedar is
+  the one authorizer for every service hop (`service.invoke`) AND every connector op
+  (`connector.*`). Every hop is authenticated by a signed identity-context token
+  (caller `iss` + subject `sub` + `act` chain) and authorized by that one engine.
+- The broker remains the central authority for EXTERNAL provider credentials
+  (connectors) — where centralisation genuinely helps (secrets never spread).
+
+Adopted from the review instead: **built-in key rotation for the per-worker keys**
+(primary + previous public key per principal, dual-accept window, rotation runbook) —
+the "rotation built-in" instinct applied without collapsing to a single key.
+
+The STS design below is retained for the record / future reconsideration; it is NOT
+being implemented.
+
+---
+
+**Status: NOT ADOPTED (see decision above).** Retained for the record.
 
 ## Today (decentralised)
 
