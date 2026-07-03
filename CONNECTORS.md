@@ -219,6 +219,93 @@ Every use emits `connector_use` at info level with the complete actor chain:
 
 ---
 
+## The admin surface (managing connectors + secrets)
+
+Alongside the credential-facing ops, the broker exposes a **management surface**
+for an operator: list connectors, describe one, set/rotate a connector's secret,
+and list the secrets backends. It runs the SAME fail-closed pipeline — verified
+identity token → Cedar → audit — and **no management op ever returns a secret
+value**.
+
+These ops ride the same `connector.invoke` envelope (new `operation` values:
+`admin_list`, `admin_describe`, `admin_set_secret`, `admin_providers`) and are
+gated by distinct Cedar actions against `Connector::<id>` (a `Connector::"*"`
+sentinel for the broker-wide list/providers):
+
+- `connector.admin.list` — list connectors / list secrets backends.
+- `connector.admin.read` — describe one connector.
+- `connector.admin.write` — set/re-point one connector's secret.
+
+The **only admin caller is the dev-proxy** (the admin app). It holds no
+`connector.grant/fetch/token` permit, so it can manage connectors but never use a
+credential. `connectorsClient` exposes `listConnectors` / `describeConnector` /
+`setConnectorSecret` / `getSecretsProviders`.
+
+### Persisting a secret change
+
+The registry (`registry.ts`) is immutable code, so `setConnectorSecret` cannot
+mutate a registry entry. Instead it persists a `{provider, ref}` **override** in
+the broker's config store (a `ConnectorConfigStore` over the same
+`CONNECTOR_STORE` DO), holding a **reference, never a value**. Every
+credential-resolving path (grant/fetch/token/authorize) **overlays** the override
+on the registry entry, so the change takes effect and survives.
+
+### Per-backend set-secret capability matrix
+
+`setConnectorSecret({connectorId, provider, ref?, value?})` surfaces each
+backend's runtime write capability **honestly — it never fakes success**:
+
+| backend | with a `value` | with `ref` only |
+|---|---|---|
+| `hashicorp-vault` | **`written`** — writes the value (KV v2), re-points the connector | `referenced` (or `provision_required` if it does not resolve yet) |
+| `onepassword` | **`written`** — writes the value (Connect item patch), re-points | `referenced` / `provision_required` |
+| `cloudflare-secret-store` | **`provision_required`** — re-points, but the write is NOT possible at runtime; `detail` names the exact secret to provision via the CF control plane | `referenced` / `provision_required` |
+| `wrangler-env` | **`rejected`** — deploy-time only; `detail` says to `wrangler secret put` and redeploy. Nothing persisted | `referenced` / `provision_required` |
+
+The secret `value` flows **inward only** (caller → broker → backend); it is never
+returned and never logged (the audit line carries the `{provider, ref}` locator
+and the coarse outcome only).
+
+### The `/api/connectors/*` HTTP API (on the dev-proxy)
+
+The dev-proxy exposes the admin surface as an HTTP API + UI behind its layered
+auth (CF Access perimeter → Better Auth Discord session bound to that Access
+identity → an on-behalf-of identity token minted for the acting Discord admin →
+the `CONNECTORS` binding), exactly as `/api/command` drives the gateway. See
+`workers/public/dev-proxy/openapi.yaml`.
+
+| method + path | op | notes |
+|---|---|---|
+| `GET /api/connectors` | `admin_list` | connectors + secret status (no values) |
+| `GET /api/connectors/{id}` | `admin_describe` | one connector's config + status |
+| `PUT /api/connectors/{id}/secret` | `admin_set_secret` | body `{provider, ref?, value?}` (zod); value write-only. Outcome → HTTP: `written`/`referenced` = 200, `provision_required` = 202, `rejected` = 409 |
+| `GET /api/secrets/providers` | `admin_providers` | backends + `{writable, configured}` |
+
+Reserved (documented, returning **501** so the contract is stable ahead of the
+grant/installations/callback work): `POST /api/connectors/{id}/grant`,
+`GET /api/connectors/{id}/installations`, `GET|POST /api/connectors/{id}/callback`.
+
+**URL conventions.** A connector's authorization **callback** is
+`https://ragbot-dev.jsmunro.me/api/connectors/{id}/callback` (the dev-proxy, the
+admin app). A connector's inbound **webhook** is
+`https://ragbot.jsmunro.me/webhooks/{id}` (the public gateway) — webhook ingress
+itself is a later task; only the URL convention is fixed here.
+
+### Binding + deploying the admin surface (operator)
+
+1. Deploy `ragbot-connectors-worker` (the broker) first — the `CONNECTORS`
+   binding target must exist.
+2. The dev-proxy binds it (`services`: `ragbot-connectors-worker`, entrypoint
+   `Connectors`) — already in `workers/public/dev-proxy/wrangler.jsonc`. The
+   `dev-proxy → connectors` Cedar permits (`services.cedar` +
+   `connectors.cedar`) and the `devProxyToConnectors` client already exist.
+3. Deploy the dev-proxy (its `DEV_PROXY_SIGNING_KEY` already signs the gateway
+   hop; the same key signs the broker hop — no new secret).
+4. To make Vault / 1Password writes work, provision the backend env on the
+   **broker** worker (`VAULT_ADDR`+`VAULT_TOKEN` / `OP_CONNECT_HOST`+
+   `OP_CONNECT_TOKEN`); `getSecretsProviders` then reports them
+   `writable: true, configured: true`.
+
 ## How to add a new connector
 
 Adding a provider that fits an existing kind is a **config entry** in
@@ -365,14 +452,21 @@ the strategy resolves it with `secretsProvider(env, ref.provider).get(ref.ref)`
 export type SecretRef = { provider: string; ref: string };
 export type SecretsProvider = {
   get: (ref: string) => Promise<string | null>;      // fail closed: absent → null
-  set?: (ref: string, value: string) => Promise<void>; // optional; the future UI
+  set?: (ref: string, value: string) => Promise<void>; // runtime write (admin UI)
+  configured?: () => boolean;                          // has its env/binding?
 };
 ```
 
 `get` returning `null` (absent, unreachable, non-2xx, bad reference) is the
 **secret-resolution gate**: the strategy denies the connector op rather than
-surfacing a half-resolved credential. `set` is optional — a read-only backend
-omits it (only `hashicorp-vault` implements it today, a KV v2 write).
+surfacing a half-resolved credential. `set` is optional — its **presence IS the
+runtime write-capability** the admin surface reports (§ "The admin surface"
+below): `hashicorp-vault` (KV v2 write) and `onepassword` (Connect item patch)
+implement it; `cloudflare-secret-store` and `wrangler-env` omit it (their writes
+are control-plane / deploy-time). `configured()` reports whether the backend has
+the env/binding it needs; absent means always-configured (the `wrangler-env`
+default). `describeSecretsProviders(env)` maps the four backends to
+`{name, writable, configured}` for the admin surface.
 
 ### The four backends
 
@@ -383,8 +477,8 @@ back to `wrangler-env` (the safe default). The `ref` locator differs per backend
 |---|---|---|---|
 | `wrangler-env` | env binding name (`"GITHUB_APP_PRIVATE_KEY"`) | `env[ref]` | today's behaviour, the **default** |
 | `cloudflare-secret-store` | Secrets Store secret name | `env.SECRETS_STORE.get(ref)` | centralizes rotation + account access control |
-| `hashicorp-vault` | `"<mount>/<path>#<field>"` (KV v2) | `GET {VAULT_ADDR}/v1/<mount>/data/<path>` via a boundary client (host-allowlisted to `VAULT_ADDR`), `X-Vault-Token: VAULT_TOKEN` | KV v2; supports `set` (write) |
-| `onepassword` | `"op://<vault>/<item>/<field>"` | 1Password **Connect** REST API via a boundary client (host-allowlisted to `OP_CONNECT_HOST`), `Bearer OP_CONNECT_TOKEN` | see the spike below |
+| `hashicorp-vault` | `"<mount>/<path>#<field>"` (KV v2) | `GET {VAULT_ADDR}/v1/<mount>/data/<path>` via a boundary client (host-allowlisted to `VAULT_ADDR`), `X-Vault-Token: VAULT_TOKEN` | KV v2; **runtime-writable** (`set` = KV v2 write) |
+| `onepassword` | `"op://<vault>/<item>/<field>"` | 1Password **Connect** REST API via a boundary client (host-allowlisted to `OP_CONNECT_HOST`), `Bearer OP_CONNECT_TOKEN` | **runtime-writable** (`set` = Connect item patch: replace the field or add a CONCEALED one; the vault/item must already exist). See the spike below |
 
 The two HTTP backends egress only through a host-allowlisted boundary client
 (`egress-vault` / `egress-onepassword` trust zones), so a secrets backend gets
