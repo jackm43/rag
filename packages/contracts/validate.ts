@@ -1,4 +1,4 @@
-import type { AiJob, AiSpendJob, ReplyJob } from "./types";
+import type { AiJob, AiSpendJob, DevProxyCommandJob, DevProxyCommandOption, ReplyJob } from "./types";
 import { isRecord } from "./validation";
 
 // Value constraints the Cap'n Proto schema cannot express. Applied at encode
@@ -8,6 +8,11 @@ export const MAX_FREE_TEXT_LENGTH = 4000;
 export const MAX_USERNAME_LENGTH = 100;
 export const MAX_INTERACTION_TOKEN_LENGTH = 2000;
 export const MAX_SPEND_EVENT_ID_LENGTH = 128;
+// A dev-proxy command names a slash command (lowercase identifier) and carries
+// at most Discord's per-command option count, each a short name + capped value.
+export const DEVPROXY_COMMAND_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
+export const MAX_DEVPROXY_OPTIONS = 25;
+export const MAX_DEVPROXY_OPTION_NAME_LENGTH = 32;
 // Raw model text crossing the outbox before the responder applies the final
 // Discord length policy. Queue messages are capped at 128 KiB, so keep this
 // far below that even at four bytes per character.
@@ -147,3 +152,28 @@ export const validateAiSpendJob = (value: unknown): value is AiSpendJob =>
   isString(value.spendEventId) &&
   value.spendEventId.length > 0 &&
   value.spendEventId.length <= MAX_SPEND_EVENT_ID_LENGTH;
+
+const isDevProxyOption = (value: unknown): value is DevProxyCommandOption =>
+  isRecord(value) &&
+  isString(value.name) &&
+  value.name.length > 0 &&
+  value.name.length <= MAX_DEVPROXY_OPTION_NAME_LENGTH &&
+  isCappedText(value.value);
+
+const isDevProxyOptionList = (value: unknown): value is DevProxyCommandOption[] =>
+  Array.isArray(value) && value.length <= MAX_DEVPROXY_OPTIONS && value.every(isDevProxyOption);
+
+export const validateDevProxyCommandJob = (value: unknown): value is DevProxyCommandJob =>
+  isRecord(value) &&
+  value.kind === "devproxy.command" &&
+  isString(value.command) &&
+  DEVPROXY_COMMAND_PATTERN.test(value.command) &&
+  // The acting Discord subject is mandatory and must be a real snowflake; the
+  // gateway further constrains it to DEV_PROXY_ALLOWED_SUBJECTS.
+  isSnowflake(value.subjectUserId) &&
+  isOptionalUsername(value.subjectUsername) &&
+  isOptionalSnowflake(value.guildId) &&
+  isOptionalSnowflake(value.channelId) &&
+  isOptionalSnowflake(value.applicationId) &&
+  (value.interactionToken === undefined || isInteractionToken(value.interactionToken)) &&
+  isDevProxyOptionList(value.options);

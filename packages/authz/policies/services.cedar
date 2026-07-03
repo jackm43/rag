@@ -75,6 +75,17 @@ permit (
   resource == Service::"spend"
 );
 
+// The dev-proxy edge worker invokes the gateway's DevProxy entrypoint. The
+// receiving boundary's registration gate independently constrains this to the
+// gateway's one registered service operation (devproxy.command); which command
+// the payload then names is gated separately by devproxy.cedar.
+@id("invoke-devproxy-to-gateway")
+permit (
+  principal == Machine::"dev-proxy",
+  action == Action::"service.invoke",
+  resource == Service::"gateway"
+);
+
 @id("exchange-gateway-to-brain")
 permit (
   principal == Machine::"gateway",
@@ -98,3 +109,14 @@ permit (
   resource == Service::"spend"
 )
 when { context.fromZone == "application" && context.toZone == "application" };
+
+// The dev-proxy exchanges an on-behalf-of token from its own edge zone into
+// the gateway's edge zone (an intra-edge hop, unlike the edge→application
+// gateway→brain hop).
+@id("exchange-devproxy-to-gateway")
+permit (
+  principal == Machine::"dev-proxy",
+  action == Action::"service.exchange",
+  resource == Service::"gateway"
+)
+when { context.fromZone == "edge" && context.toZone == "edge" };

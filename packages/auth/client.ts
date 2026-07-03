@@ -35,8 +35,26 @@ export type ServiceCall =
       subject: Subject;
     };
 
+// Session-binding claims carried into the minted token for a dev-proxy edge
+// hop; omitted on every service-to-service hop.
+export type HopSession = {
+  dpopJkt?: string;
+  sid?: string;
+};
+
 export type ServiceClient = {
   call: (request: ServiceCall) => Promise<void>;
+  // Run the hop's exchange authorization and mint the on-behalf-of token,
+  // returning the wrapped ServiceMessage bytes — WITHOUT choosing a transport.
+  // For a request/response service-binding RPC (the dev-proxy → gateway
+  // DevProxy entrypoint) where the caller performs the invocation itself and
+  // needs the returned value. Fails closed exactly like call(): an
+  // unauthorized hop or missing signing material throws a logged denial.
+  prepare: (
+    envelope: Uint8Array,
+    subject: Subject,
+    session?: HopSession,
+  ) => Promise<ServiceMessageBytes>;
 };
 
 export type ServiceClientConfig = {
@@ -87,7 +105,11 @@ export const createServiceClient = (config: ServiceClientConfig): ServiceClient 
     return new Error(`Service call denied for ${config.self} -> ${config.target}: ${reason}`);
   };
 
-  const mintToken = async (envelope: Uint8Array, subject: Subject): Promise<string | null> => {
+  const mintToken = async (
+    envelope: Uint8Array,
+    subject: Subject,
+    session?: HopSession,
+  ): Promise<string | null> => {
     const key = config.signingKey ? await config.signingKey() : null;
     if (!key) {
       return null;
@@ -99,20 +121,40 @@ export const createServiceClient = (config: ServiceClientConfig): ServiceClient 
       act: subject.delegates,
       trustZone: fromZone,
       envelopeBytes: envelope,
+      dpopJkt: session?.dpopJkt,
+      sid: session?.sid,
     });
     return mint(key, context);
   };
 
+  // Shared credential gate for every transport: authorize the hop's zone
+  // exchange (once) and mint the envelope-bound token, or throw a logged
+  // denial. Both call() and prepare() go through it so authorization is never
+  // skippable regardless of how the hop is transported.
+  const authorizeAndMint = async (
+    envelope: Uint8Array,
+    subject: Subject,
+    transport: Transport,
+    session?: HopSession,
+  ): Promise<string> => {
+    const denial = await constructionDenial();
+    if (denial) {
+      throw denyCall(transport, denial);
+    }
+    const token = await mintToken(envelope, subject, session);
+    if (token === null) {
+      throw denyCall(transport, "signing_key_unavailable");
+    }
+    return token;
+  };
+
   return {
+    prepare: async (envelope, subject, session) => {
+      const token = await authorizeAndMint(envelope, subject, "binding", session);
+      return wrapServiceMessage(envelope, token);
+    },
     call: async (request) => {
-      const denial = await constructionDenial();
-      if (denial) {
-        throw denyCall(request.transport, denial);
-      }
-      const token = await mintToken(request.envelope, request.subject);
-      if (token === null) {
-        throw denyCall(request.transport, "signing_key_unavailable");
-      }
+      const token = await authorizeAndMint(request.envelope, request.subject, request.transport);
       if (request.transport === "queue") {
         await request.queue.send(
           wrapServiceMessage(request.envelope, token),
@@ -128,7 +170,7 @@ export const createServiceClient = (config: ServiceClientConfig): ServiceClient 
   };
 };
 
-type SigningSecret = "GATEWAY_SIGNING_KEY" | "BRAIN_SIGNING_KEY";
+type SigningSecret = "GATEWAY_SIGNING_KEY" | "BRAIN_SIGNING_KEY" | "DEV_PROXY_SIGNING_KEY";
 
 // Import a private signing key from its secret (private JWK JSON). Absent or
 // unparseable keys resolve to null so the client fails closed with a logged
@@ -156,6 +198,10 @@ export type ServiceClients = {
   gatewayToBrain: ServiceClient;
   brainToResponder: ServiceClient;
   brainToSpend: ServiceClient;
+  // Dev-proxy → gateway (edge → edge), the development application's hop into
+  // the gateway's DevProxy entrypoint. Only workers/public/dev-proxy holds
+  // DEV_PROXY_SIGNING_KEY, so only it can construct a usable client.
+  devProxyToGateway: ServiceClient;
 };
 
 const buildClients = (env: Env): ServiceClients => {
@@ -167,12 +213,16 @@ const buildClients = (env: Env): ServiceClients => {
   const brainKey = env.BRAIN_SIGNING_KEY
     ? memo(() => loadSigningKey(env, "BRAIN_SIGNING_KEY"))
     : null;
+  const devProxyKey = env.DEV_PROXY_SIGNING_KEY
+    ? memo(() => loadSigningKey(env, "DEV_PROXY_SIGNING_KEY"))
+    : null;
   const entities = () => registryEntities(env);
 
   return {
     gatewayToBrain: createServiceClient({ self: "gateway", target: "brain", signingKey: gatewayKey, entities }),
     brainToResponder: createServiceClient({ self: "brain", target: "responder", signingKey: brainKey, entities }),
     brainToSpend: createServiceClient({ self: "brain", target: "spend", signingKey: brainKey, entities }),
+    devProxyToGateway: createServiceClient({ self: "dev-proxy", target: "gateway", signingKey: devProxyKey, entities }),
   };
 };
 

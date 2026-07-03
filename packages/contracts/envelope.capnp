@@ -55,6 +55,30 @@ struct InteractionEditPayload {
   content @2 :Text;
 }
 
+struct DevProxyCommandOption {
+  # One slash-command option as a name/value pair. Values are carried as Text;
+  # the command layer coerces them exactly as it does Discord option values.
+  name @0 :Text;
+  value @1 :Text;
+}
+
+struct DevProxyCommandPayload {
+  # A command invocation proxied by the dev-proxy worker on behalf of a
+  # Cloudflare Access + DPoP browser session. The gateway's DevProxy entrypoint
+  # reconstructs a synthetic Discord interaction from this and runs the SAME
+  # command pre-flight (Cedar command.* + limits + bans) a real interaction
+  # would. `command` is the slash-command name (e.g. "ask"); subjectUserId is
+  # the Discord user the command is authorized as.
+  command @0 :Text;
+  guildId @1 :Text;
+  channelId @2 :Text;
+  subjectUserId @3 :Text;
+  subjectUsername @4 :Text;
+  applicationId @5 :Text;
+  interactionToken @6 :Text;
+  options @7 :List(DevProxyCommandOption);
+}
+
 struct EventEnvelope {
   v @0 :UInt16;
   type @1 :Text;
@@ -77,5 +101,6 @@ struct EventEnvelope {
     replyChannelMessage @15 :ChannelMessagePayload;
     replyInteractionEdit @16 :InteractionEditPayload;
     messageReceived @17 :MessageReceivedPayload;
+    devproxyCommand @18 :DevProxyCommandPayload;
   }
 }

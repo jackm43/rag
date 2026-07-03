@@ -5,17 +5,26 @@ import type {
   AiJob,
   AiSpendJob,
   BictureJob,
+  DevProxyCommandJob,
+  DevProxyCommandOption,
   MessageReceivedJob,
   RagjamJob,
   ReplyJob,
 } from "./types";
 import {
   ChatPayload,
+  DevProxyCommandPayload,
   EventEnvelope,
   EventEnvelope_Payload_Which,
 } from "./envelope";
 import { asFramedBytes } from "./framing";
-import { isOptionalSnowflake, validateAiJob, validateAiSpendJob, validateReplyJob } from "./validate";
+import {
+  isOptionalSnowflake,
+  validateAiJob,
+  validateAiSpendJob,
+  validateDevProxyCommandJob,
+  validateReplyJob,
+} from "./validate";
 
 export {
   decodeManifestSnapshot,
@@ -29,7 +38,10 @@ export {
 } from "./service-transport";
 
 export {
+  DEVPROXY_COMMAND_PATTERN,
   isSnowflake,
+  MAX_DEVPROXY_OPTION_NAME_LENGTH,
+  MAX_DEVPROXY_OPTIONS,
   MAX_FREE_TEXT_LENGTH,
   MAX_INTERACTION_TOKEN_LENGTH,
   MAX_MENTION_IDS,
@@ -39,6 +51,7 @@ export {
   SNOWFLAKE_PATTERN,
   validateAiJob,
   validateAiSpendJob,
+  validateDevProxyCommandJob,
   validateReplyJob,
 } from "./validate";
 
@@ -52,6 +65,12 @@ export type EnvelopeOptions = {
 };
 
 const SPEND_EVENT_TYPE = "spend";
+// The envelope `type` for a proxied dev-proxy command. Mirrors
+// DEVPROXY_COMMAND_OPERATION in packages/auth/principal.ts (the gateway's
+// registered service operation) — kept as a literal here to avoid a
+// contracts→auth import cycle, exactly like SPEND_EVENT_TYPE mirrors the
+// spend service operation.
+const DEVPROXY_COMMAND_TYPE = "devproxy.command";
 
 type ChatLikeKind = AiChatJob["kind"] | AiAskJob["kind"];
 
@@ -364,6 +383,75 @@ export const decodeReplyJobEnvelope = (bytes: unknown): ReplyJob | null => {
   try {
     const job = replyJobFrom(envelope);
     return job && validateReplyJob(job) && envelope.type === job.kind ? job : null;
+  } catch {
+    return null;
+  }
+};
+
+export const encodeDevProxyCommandEnvelope = (
+  job: DevProxyCommandJob,
+  options: EnvelopeOptions,
+): Uint8Array => {
+  if (!validateDevProxyCommandJob(job)) {
+    throw new Error("Invalid dev-proxy command for event envelope");
+  }
+  const message = new capnp.Message();
+  const envelope = initEnvelope(message, DEVPROXY_COMMAND_TYPE, options);
+  const payload = envelope.payload._initDevproxyCommand();
+  payload.command = job.command;
+  payload.subjectUserId = job.subjectUserId;
+  if (job.subjectUsername !== undefined) {
+    payload.subjectUsername = job.subjectUsername;
+  }
+  if (job.guildId !== undefined) {
+    payload.guildId = job.guildId;
+  }
+  if (job.channelId !== undefined) {
+    payload.channelId = job.channelId;
+  }
+  if (job.applicationId !== undefined) {
+    payload.applicationId = job.applicationId;
+  }
+  if (job.interactionToken !== undefined) {
+    payload.interactionToken = job.interactionToken;
+  }
+  const optionList = payload._initOptions(job.options.length);
+  job.options.forEach((option, index) => {
+    const entry = optionList.get(index);
+    entry.name = option.name;
+    entry.value = option.value;
+  });
+  return new Uint8Array(message.toArrayBuffer());
+};
+
+const devProxyOptionsToArray = (payload: DevProxyCommandPayload): DevProxyCommandOption[] =>
+  Array.from({ length: payload.options.length }, (_, index) => {
+    const entry = payload.options.get(index);
+    return { name: entry.name, value: entry.value };
+  });
+
+export const decodeDevProxyCommandEnvelope = (bytes: unknown): DevProxyCommandJob | null => {
+  const envelope = readEnvelope(bytes);
+  if (!envelope) {
+    return null;
+  }
+  try {
+    if (envelope.payload.which() !== EventEnvelope_Payload_Which.DEVPROXY_COMMAND) {
+      return null;
+    }
+    const payload = envelope.payload.devproxyCommand;
+    const job: DevProxyCommandJob = compact({
+      kind: "devproxy.command",
+      command: payload.command,
+      subjectUserId: payload.subjectUserId,
+      subjectUsername: optionalText(payload.subjectUsername),
+      guildId: optionalText(payload.guildId),
+      channelId: optionalText(payload.channelId),
+      applicationId: optionalText(payload.applicationId),
+      interactionToken: optionalText(payload.interactionToken),
+      options: devProxyOptionsToArray(payload),
+    });
+    return validateDevProxyCommandJob(job) && envelope.type === DEVPROXY_COMMAND_TYPE ? job : null;
   } catch {
     return null;
   }

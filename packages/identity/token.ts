@@ -59,6 +59,20 @@ export type IdentityContext = {
   jti: string;
   // base64url(SHA-256(envelope bytes)) — binds the token to one payload.
   envelopeSha256: string;
+  // Optional session-binding claims, set only by the dev-proxy edge worker
+  // when it mints an on-behalf-of token for a Cloudflare Access + DPoP browser
+  // session. Absent on every service-to-service hop, so existing minters and
+  // receivers are unaffected.
+  //
+  // - dpopJkt: RFC 9449 JWK SHA-256 thumbprint (base64url) of the browser's
+  //   DPoP public key, confirmed by the dev-proxy against the presented proof.
+  //   It travels with the token so the receiver can attribute (and, if it
+  //   chose to, re-check) the sender-constrained session that authorized the
+  //   call. The DPoP proof itself is verified at the dev-proxy ingress; it is
+  //   NOT forwarded, because the service hop is bound to a different htu.
+  // - sid: opaque dev-proxy session id, for audit correlation only.
+  dpopJkt?: string;
+  sid?: string;
 };
 
 export type PublicKeyResolver = (
@@ -150,6 +164,9 @@ export const buildIdentityContext = async (params: {
   act?: MachinePrincipal[];
   now?: number;
   ttlSeconds?: number;
+  // Session-binding claims for the dev-proxy edge hop; omitted elsewhere.
+  dpopJkt?: string;
+  sid?: string;
 }): Promise<IdentityContext> => {
   const iat = Math.floor((params.now ?? Date.now()) / 1000);
   return {
@@ -162,6 +179,8 @@ export const buildIdentityContext = async (params: {
     exp: iat + (params.ttlSeconds ?? IDENTITY_CONTEXT_TTL_SECONDS),
     jti: crypto.randomUUID(),
     envelopeSha256: await envelopeSha256(params.envelopeBytes),
+    ...(params.dpopJkt !== undefined ? { dpopJkt: params.dpopJkt } : {}),
+    ...(params.sid !== undefined ? { sid: params.sid } : {}),
   };
 };
 
@@ -196,7 +215,11 @@ const asContext = (value: unknown): IdentityContext | null => {
     typeof candidate.iat !== "number" ||
     typeof candidate.exp !== "number" ||
     typeof candidate.jti !== "string" ||
-    typeof candidate.envelopeSha256 !== "string"
+    typeof candidate.envelopeSha256 !== "string" ||
+    // Optional session-binding claims, but when present they must be strings —
+    // a non-string is a malformed token, not a hop without a session.
+    (candidate.dpopJkt !== undefined && typeof candidate.dpopJkt !== "string") ||
+    (candidate.sid !== undefined && typeof candidate.sid !== "string")
   ) {
     return null;
   }

@@ -118,6 +118,26 @@ export type AiSpendJob = {
   spendEventId: string;
 };
 
+export type DevProxyCommandOption = { name: string; value: string };
+
+// A slash-command invocation proxied by the dev-proxy worker. Encoded as a
+// devproxy.command EventEnvelope and carried over the gateway's DevProxy
+// service binding; the gateway rebuilds a synthetic Discord interaction from it
+// and runs the ordinary command pre-flight. subjectUserId is the Discord user
+// the command is authorized as (validated against DEV_PROXY_ALLOWED_SUBJECTS at
+// the gateway before it is trusted).
+export type DevProxyCommandJob = {
+  kind: "devproxy.command";
+  command: string;
+  subjectUserId: string;
+  subjectUsername?: string;
+  guildId?: string;
+  channelId?: string;
+  applicationId?: string;
+  interactionToken?: string;
+  options: DevProxyCommandOption[];
+};
+
 export type ChannelMessageReplyJob = {
   kind: "reply.channel_message";
   channelId: string;
@@ -137,6 +157,16 @@ export type ResponderAttachment = {
   name: string;
   contentType: string;
   data: ArrayBuffer;
+};
+
+// The result the gateway's DevProxy service-binding entrypoint returns to the
+// dev-proxy worker: an HTTP-shaped triple the dev-proxy relays to the browser
+// verbatim. It carries no internal detail on a denial (fail closed to a bare
+// status), so the service boundary never leaks why a call was refused.
+export type DevProxyResult = {
+  status: number;
+  contentType: string;
+  body: string;
 };
 
 // Service-hop queue body: capnp-encoded ServiceMessage bytes (service.capnp)
@@ -215,6 +245,15 @@ export type Env = Cloudflare.Env & {
       snapshot: () => Promise<Uint8Array>;
     };
   };
+  // Gateway DevProxy service-binding entrypoint, bound on the dev-proxy worker
+  // ONLY (workers/public/dev-proxy). A service binding can be invoked solely by
+  // a worker configured with it, so this RPC surface is reachable only from the
+  // dev-proxy — the platform guarantee that gates the dev application's
+  // strong-identity hop into the gateway. Typed structurally so contracts does
+  // not import worker code (mirrors RESPONDER / SERVICE_REGISTRY).
+  GATEWAY_DEVPROXY?: {
+    invokeCommand: (message: ServiceMessageBytes) => Promise<DevProxyResult>;
+  };
   CLOUDFLARE_API_TOKEN?: string;
   CF_AIG_GATEWAY_ID?: string;
   GATEWAY_CONTROL_TOKEN?: string;
@@ -227,6 +266,24 @@ export type Env = Cloudflare.Env & {
   // public keys from the committed keyring, not these.
   GATEWAY_SIGNING_KEY?: string;
   BRAIN_SIGNING_KEY?: string;
+  // The dev-proxy worker's Ed25519 signing key (private JWK JSON). Held only by
+  // workers/public/dev-proxy, which mints the on-behalf-of identity-context
+  // token for each browser session's command hop into the gateway.
+  DEV_PROXY_SIGNING_KEY?: string;
+  // Dev-proxy ingress configuration (workers/public/dev-proxy). All are read
+  // via env so nothing about the deployment's Access team or audience is baked
+  // into code. See workers/public/dev-proxy/README notes and README.md.
+  //   CF_ACCESS_TEAM_DOMAIN — e.g. "myteam.cloudflareaccess.com"; its
+  //     /cdn-cgi/access/certs JWKS verifies the Access application token.
+  //   CF_ACCESS_AUD — the Access application AUD tag (audience) the token must
+  //     carry; a token minted for another Access app is refused.
+  //   DEV_PROXY_ALLOWED_SUBJECTS — comma-separated Discord user ids the proxy
+  //     may act as. A command whose acting subject is absent from this set is
+  //     refused (fail closed): empty/unset denies all, so the proxy cannot be
+  //     used to impersonate an arbitrary Discord user.
+  CF_ACCESS_TEAM_DOMAIN?: string;
+  CF_ACCESS_AUD?: string;
+  DEV_PROXY_ALLOWED_SUBJECTS?: string;
   // Workers KV holding the AI prompt/config files, bound on the brain worker
   // only (the sole runtime AI consumer). loadConfig reads it with a bundled
   // fallback, so it is optional — a fresh namespace or KV outage still works.

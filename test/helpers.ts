@@ -50,6 +50,12 @@ export const SIGNING_KEY_JWKS: Record<MachinePrincipal, JsonWebKey> = {
     x: "RHa6T_vqdx5v_bttgMzenwtdLII_Ud6_aP5CB6h7BSk",
     d: "uJn1_O-H6bTLEUvYzqSHupb9veb9BM_36Z_pKLjNXyY",
   },
+  "dev-proxy": {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "v60E6h2mWbtpW9KMMQdUhSOXVWjrJEzK6WDz1aaIfWU",
+    d: "-JfMRkDnjb6MUpOzQGNYPWFCeQoGFOfgzT-mPsVmav4",
+  },
 };
 
 export type ServiceHopSpec = {

@@ -259,6 +259,109 @@ export class InteractionEditPayload extends $.Struct {
   }
   toString(): string { return "InteractionEditPayload_" + super.toString(); }
 }
+/**
+* One slash-command option as a name/value pair. Values are carried as Text;
+* the command layer coerces them exactly as it does Discord option values.
+*
+*/
+export class DevProxyCommandOption extends $.Struct {
+  static readonly _capnp = {
+    displayName: "DevProxyCommandOption",
+    id: "8039fbbed6348728",
+    size: new $.ObjectSize(0, 2),
+  };
+  get name(): string {
+    return $.utils.getText(0, this);
+  }
+  set name(value: string) {
+    $.utils.setText(0, value, this);
+  }
+  get value(): string {
+    return $.utils.getText(1, this);
+  }
+  set value(value: string) {
+    $.utils.setText(1, value, this);
+  }
+  toString(): string { return "DevProxyCommandOption_" + super.toString(); }
+}
+/**
+* A command invocation proxied by the dev-proxy worker on behalf of a
+* Cloudflare Access + DPoP browser session. The gateway's DevProxy entrypoint
+* reconstructs a synthetic Discord interaction from this and runs the SAME
+* command pre-flight (Cedar command.* + limits + bans) a real interaction
+* would. `command` is the slash-command name (e.g. "ask"); subjectUserId is
+* the Discord user the command is authorized as.
+*
+*/
+export class DevProxyCommandPayload extends $.Struct {
+  static readonly _capnp = {
+    displayName: "DevProxyCommandPayload",
+    id: "f26c75595c0b9716",
+    size: new $.ObjectSize(0, 8),
+  };
+  static _Options: $.ListCtor<DevProxyCommandOption>;
+  get command(): string {
+    return $.utils.getText(0, this);
+  }
+  set command(value: string) {
+    $.utils.setText(0, value, this);
+  }
+  get guildId(): string {
+    return $.utils.getText(1, this);
+  }
+  set guildId(value: string) {
+    $.utils.setText(1, value, this);
+  }
+  get channelId(): string {
+    return $.utils.getText(2, this);
+  }
+  set channelId(value: string) {
+    $.utils.setText(2, value, this);
+  }
+  get subjectUserId(): string {
+    return $.utils.getText(3, this);
+  }
+  set subjectUserId(value: string) {
+    $.utils.setText(3, value, this);
+  }
+  get subjectUsername(): string {
+    return $.utils.getText(4, this);
+  }
+  set subjectUsername(value: string) {
+    $.utils.setText(4, value, this);
+  }
+  get applicationId(): string {
+    return $.utils.getText(5, this);
+  }
+  set applicationId(value: string) {
+    $.utils.setText(5, value, this);
+  }
+  get interactionToken(): string {
+    return $.utils.getText(6, this);
+  }
+  set interactionToken(value: string) {
+    $.utils.setText(6, value, this);
+  }
+  _adoptOptions(value: $.Orphan<$.List<DevProxyCommandOption>>): void {
+    $.utils.adopt(value, $.utils.getPointer(7, this));
+  }
+  _disownOptions(): $.Orphan<$.List<DevProxyCommandOption>> {
+    return $.utils.disown(this.options);
+  }
+  get options(): $.List<DevProxyCommandOption> {
+    return $.utils.getList(7, DevProxyCommandPayload._Options, this);
+  }
+  _hasOptions(): boolean {
+    return !$.utils.isNull($.utils.getPointer(7, this));
+  }
+  _initOptions(length: number): $.List<DevProxyCommandOption> {
+    return $.utils.initList(7, DevProxyCommandPayload._Options, length, this);
+  }
+  set options(value: $.List<DevProxyCommandOption>) {
+    $.utils.copyFrom(value, $.utils.getPointer(7, this));
+  }
+  toString(): string { return "DevProxyCommandPayload_" + super.toString(); }
+}
 export class EventEnvelope_Actor extends $.Struct {
   static readonly _capnp = {
     displayName: "actor",
@@ -289,7 +392,8 @@ export const EventEnvelope_Payload_Which = {
   BICTURE: 6,
   REPLY_CHANNEL_MESSAGE: 7,
   REPLY_INTERACTION_EDIT: 8,
-  MESSAGE_RECEIVED: 9
+  MESSAGE_RECEIVED: 9,
+  DEVPROXY_COMMAND: 10
 } as const;
 export type EventEnvelope_Payload_Which = (typeof EventEnvelope_Payload_Which)[keyof typeof EventEnvelope_Payload_Which];
 export class EventEnvelope_Payload extends $.Struct {
@@ -303,6 +407,7 @@ export class EventEnvelope_Payload extends $.Struct {
   static readonly REPLY_CHANNEL_MESSAGE = EventEnvelope_Payload_Which.REPLY_CHANNEL_MESSAGE;
   static readonly REPLY_INTERACTION_EDIT = EventEnvelope_Payload_Which.REPLY_INTERACTION_EDIT;
   static readonly MESSAGE_RECEIVED = EventEnvelope_Payload_Which.MESSAGE_RECEIVED;
+  static readonly DEVPROXY_COMMAND = EventEnvelope_Payload_Which.DEVPROXY_COMMAND;
   static readonly _capnp = {
     displayName: "payload",
     id: "a636c8f1ec42d04d",
@@ -558,6 +663,31 @@ export class EventEnvelope_Payload extends $.Struct {
     $.utils.setUint16(2, 9, this);
     $.utils.copyFrom(value, $.utils.getPointer(7, this));
   }
+  _adoptDevproxyCommand(value: $.Orphan<DevProxyCommandPayload>): void {
+    $.utils.setUint16(2, 10, this);
+    $.utils.adopt(value, $.utils.getPointer(7, this));
+  }
+  _disownDevproxyCommand(): $.Orphan<DevProxyCommandPayload> {
+    return $.utils.disown(this.devproxyCommand);
+  }
+  get devproxyCommand(): DevProxyCommandPayload {
+    $.utils.testWhich("devproxyCommand", $.utils.getUint16(2, this), 10, this);
+    return $.utils.getStruct(7, DevProxyCommandPayload, this);
+  }
+  _hasDevproxyCommand(): boolean {
+    return !$.utils.isNull($.utils.getPointer(7, this));
+  }
+  _initDevproxyCommand(): DevProxyCommandPayload {
+    $.utils.setUint16(2, 10, this);
+    return $.utils.initStructAt(7, DevProxyCommandPayload, this);
+  }
+  get _isDevproxyCommand(): boolean {
+    return $.utils.getUint16(2, this) === 10;
+  }
+  set devproxyCommand(value: DevProxyCommandPayload) {
+    $.utils.setUint16(2, 10, this);
+    $.utils.copyFrom(value, $.utils.getPointer(7, this));
+  }
   toString(): string { return "EventEnvelope_Payload_" + super.toString(); }
   which(): EventEnvelope_Payload_Which {
     return $.utils.getUint16(2, this) as EventEnvelope_Payload_Which;
@@ -619,3 +749,4 @@ export class EventEnvelope extends $.Struct {
   }
   toString(): string { return "EventEnvelope_" + super.toString(); }
 }
+DevProxyCommandPayload._Options = $.CompositeList(DevProxyCommandOption);

@@ -15,6 +15,13 @@ export type RequestContext = {
   // Trust zone the token was minted from.
   zone: TrustZone;
   transport: Transport;
+  // Session-binding claims present only on a dev-proxy edge hop (the token was
+  // minted for a Cloudflare Access + DPoP browser session). Absent on every
+  // service-to-service hop. dpopJkt is the RFC 9449 thumbprint of the browser
+  // key that sender-constrained the session; sid is an opaque session id for
+  // audit correlation.
+  dpopJkt?: string;
+  sid?: string;
 };
 
 // A received, verified, authorized, and decoded service request.

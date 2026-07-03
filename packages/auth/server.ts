@@ -121,6 +121,8 @@ export const createServiceServer = (config: ServiceServerConfig): ServiceServer 
             target: config.self,
             zone: result.context.trustZone,
             transport,
+            ...(result.context.dpopJkt !== undefined ? { dpopJkt: result.context.dpopJkt } : {}),
+            ...(result.context.sid !== undefined ? { sid: result.context.sid } : {}),
           };
           return { context, payload };
         },

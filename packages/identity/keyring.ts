@@ -35,6 +35,14 @@ export const PUBLIC_KEYRING: Record<MachinePrincipal, JsonWebKey> = {
     crv: "Ed25519",
     x: "RHa6T_vqdx5v_bttgMzenwtdLII_Ud6_aP5CB6h7BSk",
   },
+  // The dev-proxy worker's public verifying key. Its private half lives in the
+  // DEV_PROXY_SIGNING_KEY secret on workers/public/dev-proxy; the gateway's
+  // DevProxy entrypoint resolves this key to verify dev-proxy hops.
+  "dev-proxy": {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "v60E6h2mWbtpW9KMMQdUhSOXVWjrJEzK6WDz1aaIfWU",
+  },
 };
 
 // Imported CryptoKeys are cached per isolate: import is async and pure, and the

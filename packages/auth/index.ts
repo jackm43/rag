@@ -17,6 +17,7 @@ export type { RequestContext, ServiceRequest } from "./context";
 export {
   createServiceClient,
   serviceClients,
+  type HopSession,
   type ServiceCall,
   type ServiceClient,
   type ServiceClientConfig,

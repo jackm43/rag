@@ -11,7 +11,23 @@
 // - Target (`aud`): the service a request is addressed to.
 
 // Machine principals: the workers/services of this application.
-export type MachinePrincipal = "gateway" | "brain" | "responder" | "spend";
+//
+// `dev-proxy` is the development application that runs in production: a public
+// edge worker (workers/public/dev-proxy) that authenticates an untrusted
+// browser via Cloudflare Access + DPoP, then invokes the gateway's DevProxy
+// service-binding entrypoint carrying the authenticated session. It occupies
+// the edge zone alongside the gateway and exchanges into it; it holds its own
+// Ed25519 signing key so its hops carry strong crypto identity, exactly like
+// the gateway/brain. See workers/public/dev-proxy/README section in README.md.
+export type MachinePrincipal = "gateway" | "brain" | "responder" | "spend" | "dev-proxy";
+
+// The single service operation the gateway's DevProxy entrypoint accepts over
+// its service binding. A dev-proxy hop frames a DevProxyCommandPayload envelope
+// whose `type` is this string; the receiving boundary refuses anything else
+// before Cedar or any decode runs (the registration gate). The specific command
+// to run rides inside the decoded payload and is gated separately by the
+// `devproxy.invoke` policy, then by the ordinary per-command `command.*` policy.
+export const DEVPROXY_COMMAND_OPERATION = "devproxy.command";
 
 // The subject used for flows with no human behind them (e.g. spend
 // reconciliation kicked off by the brain itself).
@@ -40,6 +56,10 @@ export const SERVICE_ZONE: Record<MachinePrincipal, TrustZone> = {
   brain: "application",
   responder: "application",
   spend: "application",
+  // The dev-proxy is a public-facing worker like the gateway: it terminates an
+  // untrusted browser caller (CF Access + DPoP) and exchanges an on-behalf-of
+  // token into the gateway. Edge → edge exchange is authorized by Cedar.
+  "dev-proxy": "edge",
 };
 
 // A service is a collection of registered operations. Each service accepts
@@ -47,11 +67,16 @@ export const SERVICE_ZONE: Record<MachinePrincipal, TrustZone> = {
 // else; the receiving boundary refuses any operation absent from its own set
 // before Cedar or any payload decode runs. This is the single source of truth
 // the per-service manifests declare from, so the registration a service
-// advertises and the operations its boundary enforces cannot drift. The
-// gateway is a public edge ingress with no service-boundary surface, so it
-// accepts none.
+// advertises and the operations its boundary enforces cannot drift.
+//
+// The gateway's public HTTP surface (openapi.yaml) is NOT a service-boundary
+// operation and is not listed here; the gateway's single registered service
+// operation is the DevProxy entrypoint's `devproxy.command`, the sole hop the
+// gateway accepts over a service binding (from the dev-proxy worker). The
+// dev-proxy itself exposes no service boundary — its ingress is public HTTP —
+// so it registers none.
 export const SERVICE_OPERATIONS: Record<MachinePrincipal, readonly string[]> = {
-  gateway: [],
+  gateway: [DEVPROXY_COMMAND_OPERATION],
   brain: [
     "thread_start",
     "thread_reply",
@@ -63,13 +88,18 @@ export const SERVICE_OPERATIONS: Record<MachinePrincipal, readonly string[]> = {
   ],
   responder: ["reply.channel_message", "reply.interaction_edit"],
   spend: ["spend"],
+  "dev-proxy": [],
 };
 
 // How a request crossed into the receiving service.
 export type Transport = "queue" | "binding" | "http";
 
 export const isMachinePrincipal = (value: unknown): value is MachinePrincipal =>
-  value === "gateway" || value === "brain" || value === "responder" || value === "spend";
+  value === "gateway" ||
+  value === "brain" ||
+  value === "responder" ||
+  value === "spend" ||
+  value === "dev-proxy";
 
 export const isTrustZone = (value: unknown): value is TrustZone =>
   value === "untrusted" || value === "edge" || value === "application" || value === "trusted";
