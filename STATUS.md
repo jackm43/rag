@@ -1,7 +1,8 @@
 # Project Status & Design
 
-Branch: `feature/security-architecture`.
-Working tree clean. `npm run check` clean, 218 tests passing (24 files).
+Branch: `feature/security-architecture` (60 commits ahead of `main`).
+Working tree clean. `npm run check` clean, 218 tests passing (24 files). All five workers
+(gateway, dev-proxy, brain, responder, spend) build under `wrangler deploy --dry-run`.
 
 This document is the running state of the security + architecture rework started from
 `RECOMMENDATIONS.md`. It records what is built, what remains, the design decisions taken
