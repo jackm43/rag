@@ -12,8 +12,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The dev-proxy single-page UI
-         * @description Serves the self-contained page that generates the browser's DPoP keypair and issues commands. Behind Cloudflare Access; no DPoP required (the page is what mints the key).
+         * The dev-proxy single-page admin UI
+         * @description Serves the self-contained page with a "Sign in with Discord" button and the command form. Behind Cloudflare Access; the page drives Better Auth's login endpoints and posts commands with the session cookie.
          */
         get: operations["devProxyPage"];
         put?: never;
@@ -35,7 +35,7 @@ export interface paths {
         put?: never;
         /**
          * Proxy a slash command through the gateway
-         * @description Runs a command through the production gateway → brain path, authorized as the configured Discord subject. Requires a valid Access token AND a DPoP proof bound to POST + this URL. The response is the gateway's command result relayed verbatim.
+         * @description Runs a command through the production gateway → brain path, authorized as the authenticated Discord user. Requires BOTH a valid Access token AND a Better Auth session that is bound to the same Access identity. The response is the gateway's command result relayed verbatim.
          */
         post: operations["devProxyCommand"];
         delete?: never;
@@ -121,14 +121,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Missing/invalid Access token or DPoP proof (incl. replay). */
+            /** @description Missing/invalid Access token, or no valid Better Auth session, or a session presented under a different Access identity than it was bound to (cross-identity replay). */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description No acting subject configured, or subject not allowed. */
+            /** @description The acting Discord subject is not allowed by the gateway. */
             403: {
                 headers: {
                     [name: string]: unknown;

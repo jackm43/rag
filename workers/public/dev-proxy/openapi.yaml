@@ -1,26 +1,29 @@
 openapi: 3.1.0
 info:
-  title: ragbot dev proxy
+  title: ragbot admin (dev-proxy)
   description: >
-    Public HTTP surface of the ragbot dev-proxy worker — the development
-    application that runs in production. Every request crosses two untrusted→edge
-    gates: a Cloudflare Access application token (verified against the team JWKS)
-    and a per-request DPoP proof (sender-constrained, replay-protected). The
+    Public HTTP surface of the ragbot dev-proxy worker — the human-facing admin
+    application that runs in production. Auth is layered: every request first
+    crosses a Cloudflare Access application token (verified against the team
+    JWKS), and command requests additionally require a Better Auth session
+    (Discord OAuth login) whose Discord account id becomes the acting subject.
+    Login, session, and the Discord OAuth callback are served by Better Auth
+    under /api/auth/* (also behind Access; not individually specified here). The
     worker then mints an on-behalf-of identity-context token and invokes the
     gateway's DevProxy service binding (Cap'n Proto over the binding — not
     exposed here). Any path not listed returns 404.
-  version: 1.0.0
+  version: 2.0.0
 servers:
   - url: https://ragbot-dev.jsmunro.me
 paths:
   /:
     get:
       operationId: devProxyPage
-      summary: The dev-proxy single-page UI
+      summary: The dev-proxy single-page admin UI
       description: >
-        Serves the self-contained page that generates the browser's DPoP keypair
-        and issues commands. Behind Cloudflare Access; no DPoP required (the page
-        is what mints the key).
+        Serves the self-contained page with a "Sign in with Discord" button and
+        the command form. Behind Cloudflare Access; the page drives Better Auth's
+        login endpoints and posts commands with the session cookie.
       responses:
         "200":
           description: HTML page.
@@ -33,13 +36,13 @@ paths:
       operationId: devProxyCommand
       summary: Proxy a slash command through the gateway
       description: >
-        Runs a command through the production gateway → brain path, authorized
-        as the configured Discord subject. Requires a valid Access token AND a
-        DPoP proof bound to POST + this URL. The response is the gateway's
-        command result relayed verbatim.
+        Runs a command through the production gateway → brain path, authorized as
+        the authenticated Discord user. Requires BOTH a valid Access token AND a
+        Better Auth session that is bound to the same Access identity. The
+        response is the gateway's command result relayed verbatim.
       security:
         - cfAccess: []
-          dpop: []
+          betterAuthSession: []
       requestBody:
         required: true
         content:
@@ -57,9 +60,12 @@ paths:
         "400":
           description: Malformed command request body.
         "401":
-          description: Missing/invalid Access token or DPoP proof (incl. replay).
+          description: >
+            Missing/invalid Access token, or no valid Better Auth session, or a
+            session presented under a different Access identity than it was bound
+            to (cross-identity replay).
         "403":
-          description: No acting subject configured, or subject not allowed.
+          description: The acting Discord subject is not allowed by the gateway.
         "502":
           description: Upstream gateway error.
 components:
@@ -72,16 +78,18 @@ components:
         Cloudflare Access application token (RS256/ES256), verified against the
         team's /cdn-cgi/access/certs JWKS for iss (team domain), aud (Access
         application AUD tag), and exp/nbf. Also accepted as the CF_Authorization
-        cookie that Access sets on browser navigations.
-    dpop:
+        cookie that Access sets on browser navigations. The perimeter gate on
+        every request.
+    betterAuthSession:
       type: apiKey
-      in: header
-      name: DPoP
+      in: cookie
+      name: better-auth.session_token
       description: >
-        RFC 9449 DPoP proof JWS (ES256) signed by the browser's P-256 key,
-        binding htm (POST) and htu (this URL) with a unique jti and iat. The jti
-        is single-use (replay-protected via a Durable Object) and the key's JWK
-        thumbprint (jkt) sender-constrains the session.
+        Better Auth session cookie, set after the Discord OAuth login completes
+        (/api/auth/*). The session's linked Discord account id is the acting
+        subject the gateway command runs as. The session is bound at creation to
+        the Cloudflare Access identity that created it, so it cannot be replayed
+        under a different Access identity.
   schemas:
     CommandOption:
       type: object

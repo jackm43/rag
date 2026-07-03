@@ -340,7 +340,7 @@ wrangler secret put BRAIN_SIGNING_KEY   -c workers/services/brain/wrangler.jsonc
 
 Only the gateway (origin mint), brain (downstream re-mint), and dev-proxy (origin mint for browser sessions) sign; the responder and spend workers are leaves that only verify against the committed keyring. To rotate a key, deploy the new private key to the secret and update the public JWK in `keyring.ts`.
 
-The dev-proxy token additionally carries two optional session-binding claims, `dpopJkt` (the RFC 7638 thumbprint of the browser's DPoP key) and `sid` (an audit session id). They are present only on the dev-proxy edge hop and absent on every service-to-service hop, so the verifier and existing minters are unchanged.
+The identity-context token supports two optional session-binding claims, `dpopJkt` and `sid`, present only on an edge hop and absent on every service-to-service hop, so the verifier and existing minters are unchanged. The dev-proxy hop no longer populates them — the session is bound to the Cloudflare Access identity in the `ragbot-auth` store (see [Dev proxy](#dev-proxy-admin-application-that-runs-in-production)), not by a per-request proof.
 
 ## Workers, Trust Zones, and Secrets
 
@@ -350,7 +350,7 @@ The dev-proxy token additionally carries two optional session-binding claims, `d
 | `ragbot-brain-worker` | `workers/services/brain/wrangler.jsonc` | `ai-jobs` consumer: **read Discord + AI + D1**. Resolves raw `message.received` events (thread lookup, mention/role resolution, usage limits) in-process, reads thread history, replied-to messages, and bot roles over Discord REST, and creates `/ask`-style threads; every message/edit it produces leaves via the outbox queue or the responder RPC binding, never directly | `CF_AIG_TOKEN` (belongs to brain **only** — remove it from `ragbot-worker` with `wrangler secret delete CF_AIG_TOKEN`), `DISCORD_BOT_TOKEN` (honestly required: Discord *reads* need the bot token too, so the brain keeps it even though writes go through the responder), `BRAIN_SIGNING_KEY` (re-mints on-behalf-of identity-context tokens for the responder and spend hops) |
 | `ragbot-responder-worker` | `workers/services/responder/wrangler.jsonc` | **Write Discord** — the single egress choke point. No public route. Consumes `discord-outbox` for text replies and exposes the `Responder` RPC entrypoint for media-bearing interaction edits. The only place `sanitizeAiText`, the message length cap, and `allowed_mentions: { parse: [] }` run on AI output before it reaches Discord | `DISCORD_BOT_TOKEN` |
 | `ragbot-spend-worker` | `workers/services/spend/wrangler.jsonc` | `ai-spend-jobs` consumer: AI Gateway log reconciliation | `CLOUDFLARE_API_TOKEN` (scoped to AI Gateway read) |
-| `ragbot-dev-proxy-worker` | `workers/public/dev-proxy/wrangler.jsonc` | Public **development app that runs in prod**: behind Cloudflare Access, verifies Access JWT + per-request DPoP proof, then invokes the gateway's `DevProxy` service binding as the `dev-proxy` machine principal. Hosts the `DpopReplay` DO. No dev environment, no dev data — see [Dev proxy](#dev-proxy-development-application-that-runs-in-production) | `DEV_PROXY_SIGNING_KEY` (mints the on-behalf-of token for each browser session) |
+| `ragbot-dev-proxy-worker` | `workers/public/dev-proxy/wrangler.jsonc` | Public **admin app that runs in prod**: behind Cloudflare Access, with Better Auth (Discord OAuth) app identity on a standalone `ragbot-auth` D1; resolves the acting Discord subject from the session, then invokes the gateway's `DevProxy` service binding as the `dev-proxy` machine principal. No dev environment, no dev data — see [Dev proxy](#dev-proxy-admin-application-that-runs-in-production) | `DEV_PROXY_SIGNING_KEY`, `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET`, `BETTER_AUTH_SECRET` |
 
 Set a secret on a specific worker with `wrangler secret put NAME -c workers/services/brain/wrangler.jsonc` (or the matching config file).
 
@@ -368,11 +368,17 @@ The `DiscordGateway` Durable Object treats `MESSAGE_CREATE` as a second untruste
 
 **Deliberate deviation from RECOMMENDATIONS.md section 1:** the DO stays hosted in the main worker rather than moving to a dedicated listener worker — moving a Durable Object class between scripts requires a risky transfer migration. Documented here as a possible future step instead.
 
-## Dev proxy (development application that runs in production)
+## Dev proxy (admin application that runs in production)
 
-The `ragbot-dev-proxy-worker` (`workers/public/dev-proxy`) lets a developer exercise the **real** gateway → brain command path against **real** data with no separate dev environment, dev client, or dev data. It is a public edge worker whose ingress is gated twice before it will mint anything, and whose hop into the gateway is authorized identically to a Discord-initiated command — plus two extra app-level gates.
+The `ragbot-dev-proxy-worker` (`workers/public/dev-proxy`) is the human-facing **admin application** for ragbot: it lets an operator exercise the **real** gateway → brain command path (and, over time, other sensitive service surfaces) against **real** data with no separate dev environment, dev client, or dev data. It is a public edge worker with a **layered auth model**, and its hop into the gateway is authorized identically to a Discord-initiated command — plus two extra app-level gates.
 
 **Why this shape.** The gateway's existing ingresses are HTTP guards (Discord Ed25519 signature, operator control token). Rather than bolt a third public HTTP surface onto the gateway, the dev-proxy is a *separate* worker that reaches the gateway over a **service binding** — a hop invocable only by a worker configured with it, so the gateway's `DevProxy` entrypoint is reachable only from the dev-proxy and never from the public internet. The dev-proxy is a first-class `dev-proxy` machine principal (edge zone) with its own Ed25519 signing key, so its hop carries the same cryptographic identity as the gateway/brain hops.
+
+**The layered auth model** (outer gate to inner):
+
+1. **Cloudflare Access — the perimeter.** The whole worker sits behind an Access application; the worker cryptographically verifies the Access JWT on **every** request (including the login endpoints), so nothing behind Access is reachable without a verified team identity.
+2. **Better Auth with Discord OAuth — the app identity**, running *behind* Access. The operator signs in with Discord; the logged-in user's **Discord account id becomes the acting subject** the gateway command runs as. Better Auth is authN only — **Cedar remains the authZ engine**. Login/session/callback are served by Better Auth under `/api/auth/*`, backed by a standalone `ragbot-auth` D1 database.
+3. **Session ↔ Access binding.** Each Better Auth session is bound at creation to the Access identity that made it (the verified Access `sub` is stamped onto the session row, `session.accessSub`). The command gate refuses a session presented under any *other* Access identity, so a leaked session cookie cannot be replayed cross-identity by another team member.
 
 **Request flow and its fail-closed gates:**
 
@@ -381,20 +387,21 @@ Browser (untrusted)
   │  Cloudflare Access (org SSO) in front of the whole worker
   ▼
 dev-proxy worker (edge)
-  1. cf-access guard — verify the Access JWT (RS256/ES256) against the team JWKS:
-     iss (team domain), aud (Access application AUD tag), exp/nbf. Fails closed if
+  1. cf-access guard (perimeter, EVERY request) — verify the Access JWT
+     (RS256/ES256) against the team JWKS: iss, aud, exp/nbf. Fails closed if
      CF_ACCESS_TEAM_DOMAIN / CF_ACCESS_AUD unset.
-  2. DPoP — verify a fresh proof (ES256) the browser signs per request: htm/htu
-     binding, iat window, and single-use jti (replay-checked in the DpopReplay DO).
-     The proof's key thumbprint (jkt) sender-constrains the session.
-  3. mint on-behalf-of token: sub = the Access user, carrying dpopJkt + sid, bound
-     to the Cap'n Proto devproxy.command envelope; call the gateway DevProxy binding
+  2. Better Auth session — POST /api/command requires a valid session with a
+     linked Discord account whose bound accessSub equals THIS request's Access
+     sub (else 401). The acting subject is the session's Discord account id.
+  3. mint on-behalf-of token: sub = the acting Discord id, bound to the Cap'n
+     Proto devproxy.command envelope; call the gateway DevProxy binding
   ▼
 gateway DevProxy entrypoint (edge)
   4. createServiceServer verification — Ed25519 signature, aud=gateway, iss=dev-proxy,
      exp, envelope-hash binding; registration gate (only devproxy.command); Cedar
      service.invoke for the dev-proxy app.
-  5. acting Discord subject must be in DEV_PROXY_ALLOWED_SUBJECTS (unset denies all).
+  5. acting Discord subject must be in DEV_PROXY_ALLOWED_SUBJECTS (unset denies all) —
+     defense in depth, independent of who passed Access/Discord upstream.
   6. Cedar devproxy.invoke — the app-level capability surface (which commands the dev
      app may proxy at all; devproxy.cedar grants the public commands, withholds admin).
   7. the ORDINARY command pre-flight (routeInteraction → executeCommand): guild
@@ -404,44 +411,49 @@ gateway DevProxy entrypoint (edge)
 
 Any failure returns a bare status and never discloses which gate refused. Inline commands (`/ragboard`, `/ragspend`, …) round-trip their result to the browser. Enqueue/AI commands (`/ask`, `/bicture`, `/ragjam`) run the full authorized path and enqueue to the brain; because there is no real Discord interaction, the final Discord edit targets the real application id with a synthetic interaction token (a no-op at Discord), so the AI/D1/spend work runs and is observable while the browser sees the deferred acknowledgement.
 
-**Why DPoP replay uses a Durable Object, not KV.** Replay protection needs an atomic check-and-record. The `DpopReplay` DO is single-threaded per instance, so `seenBefore` reads and writes without a race and with no eventual-consistency / write-visibility window in which a replayed proof could slip through (KV's read-after-write is not immediate across the edge). A single named instance serializes all checks; shard by jkt if volume ever grows. Entries expire lazily via an alarm.
+**Why Better Auth on D1.** Better Auth runs on workerd (verified under `@cloudflare/vitest-pool-workers`) and natively detects a Cloudflare D1 binding — passing the `AUTH_DB` binding directly uses its built-in D1 dialect, so there is no extra Kysely dependency. The schema is applied out-of-band as a committed D1 migration (`workers/public/dev-proxy/migrations`); Better Auth never introspects at runtime (D1 forbids the `sqlite_master` reads its migrator needs). The auth database is kept **separate** from the gateway's `ragbot` operational DB so login/session state never mingles with product data. The Discord OAuth access/refresh tokens live server-side in `AUTH_DB` and are never sent to the browser — the browser only holds an opaque session cookie.
 
-**Contracts.** The public ingress is described by `workers/public/dev-proxy/openapi.yaml` (OpenAPI 3.1 with `cfAccess` + `dpop` security schemes) and validated at runtime with zod; the generated types (`packages/devproxy-client/api-types.ts`, `npm run devproxy:types`) are committed and the worker's zod schema `satisfies` them so ingress and client cannot drift. The service-binding payload is Cap'n Proto (`DevProxyCommandPayload` in `envelope.capnp`), reusing the same generated contract layer as the queue hops. `packages/devproxy-client` is a dumb typed client for `ragctl`: it owns no key material or Access token (both come from `dpopProof` / `accessToken` middleware hooks), and `createDpopSigner` builds the proof hook from a WebCrypto P-256 key pair.
+**Contracts.** The public ingress is described by `workers/public/dev-proxy/openapi.yaml` (OpenAPI 3.1 with `cfAccess` + `betterAuthSession` security schemes) and validated at runtime with zod; the generated types (`packages/devproxy-client/api-types.ts`, `npm run devproxy:types`) are committed and the worker's zod schema `satisfies` them so ingress and client cannot drift. The service-binding payload is Cap'n Proto (`DevProxyCommandPayload` in `envelope.capnp`), reusing the same generated contract layer as the queue hops. `packages/devproxy-client` is a dumb typed client: it owns no credentials — the caller supplies the Access token and/or session cookie through hooks.
 
-**Bootstrap.** Generate the signing key and put an Access application in front of the hostname:
+**Bootstrap.** Generate the signing key, register the Discord OAuth app, apply the auth schema, and put an Access application in front of the hostname:
 
 ```sh
 tsx scripts/generate-keys.ts dev-proxy
 # commit the printed public JWK to keyring.ts (already done for the current key), then:
 wrangler secret put DEV_PROXY_SIGNING_KEY -c workers/public/dev-proxy/wrangler.jsonc
+
+# Discord OAuth app credentials + Better Auth secrets (secrets, never committed):
+wrangler secret put DISCORD_CLIENT_ID     -c workers/public/dev-proxy/wrangler.jsonc
+wrangler secret put DISCORD_CLIENT_SECRET -c workers/public/dev-proxy/wrangler.jsonc
+wrangler secret put BETTER_AUTH_SECRET    -c workers/public/dev-proxy/wrangler.jsonc   # random 32+ bytes
+
+# apply the Better Auth schema to the standalone ragbot-auth D1 database:
+wrangler d1 migrations apply ragbot-auth -c workers/public/dev-proxy/wrangler.jsonc --remote
 ```
 
-Set `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`, `DEV_PROXY_SUBJECT`, and `DEV_PROXY_GUILD` as vars on the dev-proxy worker, and add the matching `DEV_PROXY_ALLOWED_SUBJECTS` var on the **gateway** worker so it will act as that subject. Deploy the gateway before the dev-proxy so the `DevProxy` binding target exists.
+In the **Discord developer portal**, add the OAuth2 redirect URI `https://ragbot-dev.jsmunro.me/api/auth/callback/discord`. Set `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`, `BETTER_AUTH_URL` (`https://ragbot-dev.jsmunro.me`), and `DEV_PROXY_GUILD` as vars on the dev-proxy worker, and keep the `DEV_PROXY_ALLOWED_SUBJECTS` var (the allowlist of Discord ids the proxy may act as) on the **gateway** worker. `DEV_PROXY_SUBJECT` is no longer used — the subject comes from the Discord session. Deploy the gateway before the dev-proxy so the `DevProxy` binding target exists.
 
-### Local development with `ragctl`
+### Local access with `ragctl`
 
-`ragctl` (`cli/ragctl.ts`, run via `npm run ragctl -- <args>`) is the laptop client for the dev-proxy. It runs on Node (not workerd) and does everything the single-page UI does — mint a per-request DPoP proof and attach a Cloudflare Access token — but from the command line, so you can drive the **real** gateway → brain path from a terminal. It is a thin wrapper over `packages/devproxy-client`: the client owns no secrets, and `ragctl` supplies the DPoP proof and Access token through its middleware hooks.
-
-**One-time setup, then the everyday flow:**
+`ragctl` (`cli/ragctl.ts`, run via `npm run ragctl -- <args>`) is a laptop helper for the dev-proxy. It runs on Node (not workerd) and acquires a Cloudflare Access token via `cloudflared`, then issues typed commands through `packages/devproxy-client`. Because the dev-proxy now also requires a Better Auth (Discord) session — established in the browser — a CLI caller must supply that session cookie via `RAGCTL_SESSION_COOKIE` (copy the `better-auth.session_token` cookie from a logged-in browser); the browser UI is the primary interface.
 
 ```sh
-npm run ragctl -- keys generate     # local DPoP ES256 (P-256) keypair
 npm run ragctl -- login             # Cloudflare Access SSO via cloudflared
+export RAGCTL_SESSION_COOKIE="better-auth.session_token=…"   # from a logged-in browser
 npm run ragctl -- cmd ragboard      # run a command through the dev-proxy
 npm run ragctl -- cmd ask --opt prompt="what is a rag?"
 ```
 
-**Commands.** `keys generate [--force]` / `keys show` (public JWK + jkt only — the private key is never printed); `login [--refresh]` (browser SSO via `cloudflared`; `--refresh` re-fetches the token without re-authenticating) and `whoami` (decodes the cached token's claims); `discover` (lists the dev-proxy operations straight from `workers/public/dev-proxy/openapi.yaml`, so it works offline and never drifts from the typed client); `cmd <name> [--opt k=v …] [--channel <id>] [--json]` (the typed call); and `config` (shows the resolved config and where each value came from). Requires `cloudflared` on `PATH` for `login` (macOS: `brew install cloudflared`).
+**Commands.** `login [--refresh]` (browser SSO via `cloudflared`; `--refresh` re-fetches the token without re-authenticating) and `whoami` (decodes the cached token's claims); `discover` (lists the dev-proxy operations straight from `workers/public/dev-proxy/openapi.yaml`, so it works offline and never drifts from the typed client); `cmd <name> [--opt k=v …] [--channel <id>] [--json]` (the typed call); and `config` (shows the resolved config and where each value came from). Requires `cloudflared` on `PATH` for `login` (macOS: `brew install cloudflared`).
 
 **Where secrets live and how they're protected.** Everything `ragctl` persists lives under one home directory — `$RAGCTL_HOME`, else `$XDG_CONFIG_HOME/ragctl`, else `~/.config/ragctl` — created `0700`:
 
-- `dpop-key.json` (`0600`) — the DPoP keypair as a JWK. The private half never leaves this file: it is never printed by any command, and when loaded for signing it is imported **non-extractable** so it cannot be re-exported from the running process. Overwriting it (`keys generate --force`) rotates the jkt.
 - `access-token.json` (`0600`) — the Cloudflare Access application JWT as returned by `cloudflared`, cached with its expiry. `ragctl` never mints or verifies it (the worker re-verifies every call); `whoami` only decodes it for display.
 - `config.json` — optional `{ "baseUrl", "accessUrl" }` overrides.
 
 The home defaults outside the repo; a repo-local `.ragctl/` is also gitignored in case `RAGCTL_HOME` is pointed inside the tree.
 
-**Config precedence** is flag > env (`RAGCTL_BASE_URL`, `RAGCTL_ACCESS_URL`) > `config.json` > default (`https://ragbot-dev.jsmunro.me`). `accessUrl` (the Access application `cloudflared` authenticates against) defaults to `baseUrl`. The acting Discord subject is **not** a `ragctl` setting: it is server-side config (`DEV_PROXY_SUBJECT` + the gateway allowlist), never caller-supplied.
+**Config precedence** is flag > env (`RAGCTL_BASE_URL`, `RAGCTL_ACCESS_URL`) > `config.json` > default (`https://ragbot-dev.jsmunro.me`). `accessUrl` (the Access application `cloudflared` authenticates against) defaults to `baseUrl`. The acting Discord subject is **not** a `ragctl` setting: it is the authenticated Discord session, bounded by the gateway allowlist, never caller-supplied.
 
 ## Local and Deploy Commands
 

@@ -12,9 +12,10 @@ and `README.md` for operator-facing setup.
 > **Working preference:** ordinary work is done **without adding tests** (per
 > instruction). The existing tests stay green as a regression floor; new commits
 > should not remove or weaken them, but need not add new ones unless asked.
-> **Exception:** the dev-proxy's security-critical cryptographic verifiers (CF
-> Access JWT verify, DPoP proof verify + replay) added 19 focused unit tests
-> (199 → 218) — a test is the only way to prove those gates fail closed.
+> **Exception:** the dev-proxy's security-critical CF Access JWT verifier has
+> focused unit tests — a test is the only way to prove that gate fails closed.
+> (The dev-proxy's DPoP proof/replay verifiers and their ~10 tests were removed
+> when DPoP was dropped in favour of a Better Auth Discord session; see below.)
 
 ---
 
@@ -70,7 +71,7 @@ DiscordGateway DO (in gateway worker): websocket → validate → encode → enq
 - All outbound HTTP goes through host-allowlisted, credential-injecting boundary clients; token-bearing paths are redacted from logs.
 - Authorization is centralized in Cedar policies (admins, bans, operator control, service hops) — no scattered `isAdmin` / ban checks; the service-registry snapshot feeds Cedar as dynamic entities with static bootstrap permits as the fail-closed fallback.
 - Abuse controls are attacker-focused: per-user burst limit (flood detection) + **global** daily $ budget backstop; guild allowlist fail-closed at both ingresses; bans cover AI commands.
-- The dev-proxy (development app that runs in prod) reaches ragbot only over a service binding to the gateway's `DevProxy` entrypoint — never a public hop. A browser request crosses CF Access (JWT verified against the team JWKS) and DPoP (sender-constrained, replay-protected per-request proof; strongly-consistent DO replay cache) before the dev-proxy mints an on-behalf-of token; the gateway then authorizes the app (`service.invoke`), the capability surface (`devproxy.invoke`), the acting subject (allowlist), and the per-user command (`command.*` + ban + limits) — identically to a Discord-initiated command. All three crypto verifiers (Access JWT, DPoP, identity token) fail closed and are unit-tested.
+- The dev-proxy (admin app that runs in prod) reaches ragbot only over a service binding to the gateway's `DevProxy` entrypoint — never a public hop. A browser request crosses CF Access (JWT verified against the team JWKS, the perimeter) and then a Better Auth Discord session (the acting subject = the session's Discord account id; the session is bound at creation to the Access identity, so it cannot be replayed cross-identity) before the dev-proxy mints an on-behalf-of token; the gateway then authorizes the app (`service.invoke`), the capability surface (`devproxy.invoke`), the acting subject (allowlist), and the per-user command (`command.*` + ban + limits) — identically to a Discord-initiated command. Better Auth is authN only; Cedar stays authZ. Both remaining crypto verifiers (Access JWT, identity token) fail closed and are unit-tested.
 
 ---
 
@@ -107,25 +108,24 @@ refusing unregistered `(service, operation)` pairs at the contract layer.
 
 ### Task 9 — OpenAPI spec + generated types for the public surface ✅ *(landed)*
 **Landed:** `workers/public/gateway/openapi.yaml` for the gateway routes; and now
-`workers/public/dev-proxy/openapi.yaml` (OpenAPI 3.1) with `cfAccess` + `dpop`
-`securitySchemes`, `openapi-typescript`-generated types committed to
+`workers/public/dev-proxy/openapi.yaml` (OpenAPI 3.1) with `cfAccess` + `betterAuthSession`
+`securitySchemes` (updated when DPoP was dropped for a Better Auth session),
+`openapi-typescript`-generated types committed to
 `packages/devproxy-client/api-types.ts` (`npm run devproxy:types`, a devDependency), the
 worker's zod ingress `satisfies` the generated `CommandRequest`, and a typed app-client
-(`packages/devproxy-client`) with `dpopProof`/`accessToken` middleware hooks + a WebCrypto
-`createDpopSigner`, ready for `ragctl`. Convention held: **proto (capnp) service↔service,
-OpenAPI/zod public/app-facing.**
+(`packages/devproxy-client`) with `accessToken`/`sessionCookie` middleware hooks. Convention
+held: **proto (capnp) service↔service, OpenAPI/zod public/app-facing.**
 
-### Task 13 — `ragbot-dev-proxy` ✅ *(landed)*
-A development application that runs in prod, so there is never a separate dev client/data:
+### Task 13 — `ragbot-dev-proxy` ✅ *(landed; auth reworked under Task 15)*
+An admin application that runs in prod, so there is never a separate dev client/data:
 - `workers/public/dev-proxy` — public edge worker. **CF Access JWT** verified against the
-  team JWKS (RS256/ES256; `packages/boundaries/inbound/cf-access.ts`); **DPoP** per-request
-  proof verified (ES256, htm/htu/iat, `jkt` binding) with `jti` replay in the strongly-
-  consistent `DpopReplay` Durable Object (chosen over KV for atomic check-and-record);
-  minimal self-contained UI that generates the browser keypair and signs proofs.
-- Mints an Ed25519 identity-context token (`sub` = the Access user; `dpopJkt` + `sid`
-  session claims) bound to a `DevProxyCommandPayload` capnp envelope, and invokes the
-  gateway's `DevProxy` **service-binding** entrypoint (never a public hop) as the new
-  `dev-proxy` machine principal.
+  team JWKS (RS256/ES256; `packages/boundaries/inbound/cf-access.ts`) is the perimeter on
+  every request; **Better Auth (Discord OAuth)** runs behind it for app identity (see Task
+  15 for the DPoP → Better Auth rework); minimal self-contained UI with a "Sign in with
+  Discord" button and the command form.
+- Mints an Ed25519 identity-context token (`sub` = the acting Discord id from the session)
+  bound to a `DevProxyCommandPayload` capnp envelope, and invokes the gateway's `DevProxy`
+  **service-binding** entrypoint (never a public hop) as the `dev-proxy` machine principal.
 - The gateway authorizes fail-closed in order: `createServiceServer` token verify + Cedar
   `service.invoke` (the app) → `DEV_PROXY_ALLOWED_SUBJECTS` acting-subject allowlist → Cedar
   `devproxy.invoke` (capability surface) → the ordinary command pre-flight (per-user
@@ -133,26 +133,20 @@ A development application that runs in prod, so there is never a separate dev cl
   plus the two app-level gates.
 - OpenAPI/zod at ingress, capnp on the binding, reusing the generated contract layer.
 
-### Task 14 — `ragctl` local CLI ✅ *(landed)*
+### Task 14 — `ragctl` local CLI ✅ *(landed; DPoP removed under Task 15)*
 Node/tsx CLI (`cli/ragctl.ts`, `npm run ragctl -- …`) that wraps `packages/devproxy-client`
 to drive the deployed dev-proxy from a laptop:
-- **Local DPoP key** (`keys generate`/`show`): an ES256 (P-256) keypair persisted as a `0600`
-  JWK under a `0700` home (`$RAGCTL_HOME` → `$XDG_CONFIG_HOME/ragctl` → `~/.config/ragctl`).
-  The private half is never printed and is imported non-extractable when loaded; `loadSigner`
-  wires it into `createDpopSigner`, and jkt is computed with the worker's own `ecThumbprint`.
 - **Access token** (`login`/`whoami`): shells out to `cloudflared access login`/`token`,
   caches the application JWT (`0600`) with its expiry, and feeds it to the client's
   `accessToken` hook as `Cf-Access-Jwt-Assertion`; never mints or verifies it.
+- **Better Auth session**: the dev-proxy now also requires a Discord session (established in
+  the browser); a CLI caller supplies it via `RAGCTL_SESSION_COOKIE`, fed to the client's
+  `sessionCookie` hook. The browser UI is the primary interface.
 - **Discovery + typed calls** (`discover`/`cmd`): `discover` lists operations from the
   committed `openapi.yaml` (offline, in lockstep with the generated types); `cmd` builds a
-  `CommandRequest`, attaches a fresh DPoP proof + the token, and surfaces the fail-closed
-  status honestly (non-2xx → non-zero exit). `config` shows the resolved config + precedence
-  (flag > env > file > default).
-- Verified locally: `keys`/`config`/`discover`/`whoami` run under tsx; generated proofs pass
-  the worker's real `verifyDpopProof` (jkt match, replay + htm binding enforced); and `cmd`
-  sends the correct headers/body to a mock speaking the worker verifier. `login` + live `cmd`
-  need the deployed dev-proxy + `cloudflared`. No new deps (reuses the repo's `yaml`); no new
-  tests (local dev tool).
+  `CommandRequest`, attaches the token + session cookie, and surfaces the fail-closed status
+  honestly (non-2xx → non-zero exit). `config` shows the resolved config + precedence
+  (flag > env > file > default). The local DPoP-key commands (`keys …`) were removed with DPoP.
 
 ### Deferred idea (captured, not scheduled)
 - **Generated app-client servers (middleware) for frontend integrations** — per the user's
@@ -204,21 +198,24 @@ to drive the deployed dev-proxy from a laptop:
   a synthetic `DiscordInteraction` and calls `routeInteraction` → `executeCommand`, so per-user
   Cedar `command.*` + raghammer ban + usage limits run exactly as for Discord. Two extra
   app-level gates sit in front: the acting-subject allowlist and `devproxy.invoke`.
-- **DPoP replay uses a Durable Object, not KV.** Replay protection needs an atomic
-  check-and-record; a single-threaded DO gives that with no eventual-consistency window (KV's
-  read-after-write is not immediate across the edge). `DpopReplay` is a single named instance
-  with lazy alarm-based expiry; shard by `jkt` if volume grows. The store fails closed (treats
-  every proof as seen) if the binding is absent.
-- **Acting Discord subject is config, not caller-supplied trust.** The dev-proxy sets
-  `subjectUserId` from `DEV_PROXY_SUBJECT`, and the gateway independently enforces
-  `DEV_PROXY_ALLOWED_SUBJECTS` (unset ⇒ deny all), so a browser that passes Access still cannot
-  make the proxy act as an arbitrary Discord user. The identity token's `sub` remains the
-  Access-verified user (audit truth); the acting Discord id rides in the hash-bound payload.
-- **DPoP proof is per-request, not a weaker cookie session.** Each command re-presents a fresh
-  sender-constrained, single-use proof (stronger than a jkt-bound cookie that skips re-proofing).
-  The token carries `dpopJkt` + a jkt-derived `sid` for correlation. **Scoped simplification:**
-  the browser key is in-memory (non-extractable) for the tab's lifetime; persisting it to
-  IndexedDB for a durable jkt-bound session is a documented future hardening.
+- **App identity is Better Auth (Discord OAuth) behind Access, not DPoP** *(Task 15)*. The
+  perimeter (CF Access) answers "a team member?"; Better Auth answers "which Discord user?".
+  The logged-in user's Discord account id is the acting subject. Better Auth is authN only —
+  Cedar stays authZ. It runs on workerd with its native D1 adapter (the `AUTH_DB` binding is
+  passed directly), on a standalone `ragbot-auth` database so login/session state never mingles
+  with product data. DPoP (and its `DpopReplay` DO) was removed entirely.
+- **Acting Discord subject comes from the session, bounded by the gateway allowlist.** The
+  dev-proxy sets `subjectUserId` to the authenticated session's Discord account id (never a
+  caller input, no longer a static `DEV_PROXY_SUBJECT`), and the gateway independently enforces
+  `DEV_PROXY_ALLOWED_SUBJECTS` (unset ⇒ deny all) as defense in depth. The identity token's
+  `sub` is now that acting Discord id (audit truth), hash-bound to the payload.
+- **The session is bound to the CF Access identity that created it** (session ↔ perimeter
+  binding). At session creation the verified Access `sub` is stamped onto the session row
+  (`session.accessSub`, via a Better Auth `databaseHooks.session.create.before` hook that
+  re-verifies the Access JWT); the command gate requires `session.accessSub` to equal the
+  request's live Access `sub`, so a leaked session cookie cannot be replayed by another
+  Access-authenticated team member. (A DO to isolate the Discord tokens was considered and
+  declined — the tokens live server-side in `AUTH_DB` and never reach the browser.)
 - **Enqueue/AI commands via dev-proxy** run the full authorized path and enqueue to the brain,
   but there is no real Discord interaction, so the async Discord edit uses the real application
   id with a synthetic interaction token (a no-op at Discord). AI/D1/spend all execute and are
@@ -240,18 +237,18 @@ These are new since `main` and are **not** automated. See README for exact comma
 - [ ] `wrangler d1 migrations apply` (0001). Keep the insert shim until columns are verified.
 - [ ] Deploy order matters: responder before brain (brain's service binding target must exist). `npm run deploy` / `deploy.sh` handle this.
 
-### Dev-proxy (new subsystem — optional, deploy only when using it)
+### Dev-proxy (admin app — optional, deploy only when using it)
 
 - [ ] `wrangler secret put DEV_PROXY_SIGNING_KEY` (dev-proxy) — generate with `scripts/generate-keys.ts dev-proxy`; the public half is already committed to the keyring.
-- [ ] Put a **Cloudflare Access application** in front of `ragbot-dev.jsmunro.me`; set `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD` vars on the dev-proxy worker.
-- [ ] Set `DEV_PROXY_SUBJECT` (acting Discord id) + `DEV_PROXY_GUILD` vars on the dev-proxy worker; set the matching `DEV_PROXY_ALLOWED_SUBJECTS` var on the **gateway** worker.
-- [ ] Deploy the gateway before the dev-proxy (the `DevProxy` binding target must exist). The `DpopReplay` DO ships with the dev-proxy config (migration `v1`).
+- [ ] Register a **Discord OAuth application**; add redirect URI `https://ragbot-dev.jsmunro.me/api/auth/callback/discord`; `wrangler secret put DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, and `BETTER_AUTH_SECRET` (random 32+ bytes) on the dev-proxy worker.
+- [ ] Apply the Better Auth schema: `wrangler d1 migrations apply ragbot-auth -c workers/public/dev-proxy/wrangler.jsonc --remote`.
+- [ ] Put a **Cloudflare Access application** in front of `ragbot-dev.jsmunro.me`; set `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`, `BETTER_AUTH_URL` (`https://ragbot-dev.jsmunro.me`), and `DEV_PROXY_GUILD` vars on the dev-proxy worker. `DEV_PROXY_SUBJECT` is no longer used.
+- [ ] Keep the `DEV_PROXY_ALLOWED_SUBJECTS` allowlist var on the **gateway** worker (defense in depth). Deploy the gateway before the dev-proxy (the `DevProxy` binding target must exist).
 
 ---
 
 ## Suggested next session order
 
-1. **Task 14** (`ragctl`) — now unblocked: wrap `packages/devproxy-client` (`createDevProxyClient` + `createDpopSigner`) in a CLI with local keypair storage and `cloudflared` Access token acquisition.
-2. **Task 12 remainder** — per-operation Cedar enforcement across all hops (the manifests carry `operations`; the dev-proxy hop already gates on the `devproxy.command` operation end to end).
-3. **Dev-proxy hardening** — persist the browser DPoP key to IndexedDB for a durable jkt-bound session; consider a real interaction bridge so async AI-command results are observable in-browser.
+1. **Task 12 remainder** — per-operation Cedar enforcement across all hops (the manifests carry `operations`; the dev-proxy hop already gates on the `devproxy.command` operation end to end).
+2. **Dev-proxy hardening** — consider a real interaction bridge so async AI-command results are observable in-browser; broaden the admin surface (other sensitive service operations) as the app grows.
 4. Revisit the deferred "generated app-client servers" idea.
