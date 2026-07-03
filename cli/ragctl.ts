@@ -1,7 +1,15 @@
 #!/usr/bin/env -S npx tsx
 import process from "node:process";
 
-import { configPath, keyPath, resolveConfig, type ConfigOverrides } from "./config";
+import {
+  decodeClaims,
+  fetchToken,
+  login,
+  readCachedToken,
+  tokenIsExpired,
+} from "./access";
+import { configPath, keyPath, resolveConfig, tokenPath, type ConfigOverrides } from "./config";
+import { discover } from "./discover";
 import { generateKey, showKey } from "./keys";
 
 // ragctl — a local CLI for the ragbot dev-proxy. Runs on a laptop (Node, not
@@ -82,6 +90,10 @@ Usage: ragctl <command> [options]
 Commands:
   keys generate [--force]   Generate + persist a local DPoP ES256 keypair
   keys show                 Show the public JWK + jkt thumbprint (never the private key)
+  login [--refresh]         Cloudflare Access SSO via cloudflared; cache the token
+                            (--refresh re-fetches without the browser login)
+  whoami                    Decode the cached Access token's claims
+  discover                  List the dev-proxy operations from the OpenAPI spec
   config                    Show resolved config and where each value came from
 
 Global options:
@@ -117,6 +129,55 @@ const runKeys = async (args: Args): Promise<number> => {
   return 1;
 };
 
+const runLogin = (args: Args): number => {
+  const { config } = resolveConfig(overridesFrom(args));
+  const cached = has(args, "refresh") ? fetchToken(config.accessUrl) : login(config.accessUrl);
+  const claims = decodeClaims(cached.token);
+  out(`Cached Access token for ${cached.appUrl}`);
+  out(`subject: ${claims.sub ?? "(none)"}${claims.email ? ` <${claims.email}>` : ""}`);
+  if (cached.exp !== null) {
+    out(`expires: ${new Date(cached.exp * 1000).toISOString()}`);
+  }
+  out(`token cached at ${tokenPath()}`);
+  return 0;
+};
+
+const runWhoami = (): number => {
+  const cached = readCachedToken();
+  if (!cached) {
+    out("No cached Access token — run `ragctl login` first.");
+    return 1;
+  }
+  const claims = decodeClaims(cached.token);
+  out(`app:     ${cached.appUrl}`);
+  out(`subject: ${claims.sub ?? "(none)"}`);
+  out(`email:   ${claims.email ?? "(none)"}`);
+  out(`issuer:  ${claims.iss ?? "(none)"}`);
+  out(`audience: ${JSON.stringify(claims.aud ?? null)}`);
+  if (cached.exp !== null) {
+    const expired = tokenIsExpired(cached);
+    out(`expires: ${new Date(cached.exp * 1000).toISOString()}${expired ? " (EXPIRED — run `ragctl login`)" : ""}`);
+  }
+  return 0;
+};
+
+const runDiscover = (): number => {
+  const { serverUrl, operations } = discover();
+  if (serverUrl) {
+    out(`server: ${serverUrl}`);
+    out("");
+  }
+  for (const operation of operations) {
+    const id = operation.operationId ? ` [${operation.operationId}]` : "";
+    const security = operation.security.length > 0 ? ` (auth: ${operation.security.join(" + ")})` : "";
+    out(`${operation.method} ${operation.path}${id}${security}`);
+    if (operation.summary) {
+      out(`  ${operation.summary}`);
+    }
+  }
+  return 0;
+};
+
 const runConfig = (args: Args): number => {
   const { config, sources } = resolveConfig(overridesFrom(args));
   out(`baseUrl:    ${config.baseUrl}  (${sources.baseUrl})`);
@@ -140,6 +201,12 @@ const main = async (): Promise<number> => {
   switch (command) {
     case "keys":
       return runKeys(args);
+    case "login":
+      return runLogin(args);
+    case "whoami":
+      return runWhoami();
+    case "discover":
+      return runDiscover();
     case "config":
       return runConfig(args);
     default:
