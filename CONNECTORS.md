@@ -78,8 +78,10 @@ every use is a natural audit point capturing all the actors.
 
 A connector is a declarative config entry keyed by `kind` (see
 `packages/connectors/registry.ts` and `ConnectorConfig` in
-`packages/connectors/types.ts`). Each kind is one **strategy**
-(`packages/connectors/strategies/*`) that resolves the real credential:
+`packages/connectors/types.ts`). Each kind is one **strategy**, and each
+strategy lives in the provider file that owns it
+(`packages/connectors/providers/*` — see "Package layout" below). A strategy
+resolves the real credential:
 
 | kind | secret held | grant prepares | fetch injects | getAccessToken |
 |---|---|---|---|---|
@@ -91,6 +93,39 @@ A connector is a declarative config entry keyed by `kind` (see
 3LO additionally exposes `beginAuthorization` / `completeAuthorization`. The
 strategy + storage seam for 3LO is fully defined, but no 3LO provider is wired
 in this task (Discord is a follow-up); the abstraction supports it cleanly.
+
+---
+
+## Package layout
+
+The broker is split into **generic infra** (top level) and **provider files**
+(`providers/`), so the identity/Cedar/grant machinery is clearly apart from the
+per-provider credential code:
+
+```
+packages/connectors/
+  handler.ts      generic infra: the fail-closed invoke pipeline (verify → Cedar
+                  service.invoke → Cedar connector.* → handle binding → resolve →
+                  egress → audit). Calls into providers; owns identity + Cedar.
+  registry.ts     the declarative CONNECTOR_REGISTRY (pure config, {provider,ref})
+  strategy.ts     the kind → strategy table, DERIVED from the registered providers
+  store.ts        grant store + 3LO OAuth token store (over the ConnectorStore DO)
+  cache.ts        per-isolate access-token cache
+  client.ts       the caller-side connectorsClient helper
+  types.ts        ConnectorConfig / ConnectorStrategy / ConnectorProvider / …
+  providers/
+    github.ts     github_app: App-JWT crypto + installation exchange + inject
+    oauth2.ts     oauth2_client_credentials + oauth2_authorization_code (both flows)
+    api-key.ts    api_key
+    shared.ts     provider-support helpers (secret resolution, OAuth POST helpers)
+```
+
+A **provider** is ONE cohesive file implementing ALL of that provider's supported
+flows behind the strategy interface. It exports a `ConnectorProvider`
+(`{ name, kinds, strategies }`); `strategy.ts` unfolds the registered providers
+into the `kind → strategy` table. Providers resolve credentials and talk to their
+provider host **only** — they never touch the identity token, Cedar, or the grant
+store (that is the broker infra).
 
 ---
 
@@ -187,9 +222,14 @@ Every use emits `connector_use` at info level with the complete actor chain:
 ## How to add a new connector
 
 Adding a provider that fits an existing kind is a **config entry** in
-`packages/connectors/registry.ts` plus a **Cedar permit** in
-`packages/authz/policies/connectors.cedar`. Only a genuinely new authentication
-shape needs a new strategy.
+`packages/connectors/registry.ts` (with a `{provider, ref}` secret reference)
+plus a **Cedar permit** in `packages/authz/policies/connectors.cedar`. Only a
+genuinely new authentication shape needs a new **provider file**
+(`providers/<name>.ts`) contributing a strategy for that new kind.
+
+The full checklist for a new connector: a `providers/<name>.ts` (only if the
+authentication shape is new) + a registry entry + a `{provider, ref}` secret
+reference + a Cedar permit.
 
 ### Example: an API-key connector
 
@@ -201,7 +241,8 @@ shape needs a new strategy.
      kind: "api_key",
      host: "api.example.com",            // the ONLY host this connector may reach
      cedarResource: "example-api",
-     secretBinding: "EXAMPLE_API_KEY",   // env/secret holding the key
+     // {provider, ref}: which secrets backend holds the key, and its locator.
+     secret: { provider: "wrangler-env", ref: "EXAMPLE_API_KEY" },
      headerTemplate: { header: "authorization", scheme: "Bearer" },
    }
    ```
@@ -235,7 +276,7 @@ broker.
      cedarResource: "example-2lo",
      tokenUrl: "https://auth.example.com/oauth/token",
      clientId: "example-client-id",
-     secretBinding: "EXAMPLE_CLIENT_SECRET",
+     secret: { provider: "wrangler-env", ref: "EXAMPLE_CLIENT_SECRET" },
      defaultScopes: ["read"],
    }
    ```
@@ -309,12 +350,74 @@ The `github-app` connector is wired and tested. To make it live:
    });
    ```
 
-### Secrets storage — upgrade path
+---
 
-Secrets are worker secrets today (`wrangler secret put`). They can later be
-sourced from **Cloudflare Secrets Store** (a `secrets_store_secrets` binding),
-which centralizes rotation and access control. The strategies read secrets by
-binding *name* (`secretBinding` / `appIdBinding`), so moving to Secrets Store is
-a binding change, not a code change. The 3LO OAuth token store additionally
-supports application-level AES-GCM at rest via `CONNECTORS_TOKEN_ENC_KEY` (on top
-of the Durable Object's platform at-rest encryption).
+## The secrets-provider abstraction
+
+The broker resolves **every** provider credential through a pluggable
+secrets-provider module (`packages/secrets`), so where a secret physically lives
+is a config choice, not a code path. A connector's registry entry carries a
+`{provider, ref}` **secret reference** instead of a hardcoded env binding name;
+the strategy resolves it with `secretsProvider(env, ref.provider).get(ref.ref)`
+(via the `resolveSecret` helper, which turns a `null` into a fail-closed 500).
+
+```ts
+export type SecretRef = { provider: string; ref: string };
+export type SecretsProvider = {
+  get: (ref: string) => Promise<string | null>;      // fail closed: absent → null
+  set?: (ref: string, value: string) => Promise<void>; // optional; the future UI
+};
+```
+
+`get` returning `null` (absent, unreachable, non-2xx, bad reference) is the
+**secret-resolution gate**: the strategy denies the connector op rather than
+surfacing a half-resolved credential. `set` is optional — a read-only backend
+omits it (only `hashicorp-vault` implements it today, a KV v2 write).
+
+### The four backends
+
+`secretsProvider(env, name)` selects a backend by name; an unknown name falls
+back to `wrangler-env` (the safe default). The `ref` locator differs per backend:
+
+| provider | `ref` shape | reads from | notes |
+|---|---|---|---|
+| `wrangler-env` | env binding name (`"GITHUB_APP_PRIVATE_KEY"`) | `env[ref]` | today's behaviour, the **default** |
+| `cloudflare-secret-store` | Secrets Store secret name | `env.SECRETS_STORE.get(ref)` | centralizes rotation + account access control |
+| `hashicorp-vault` | `"<mount>/<path>#<field>"` (KV v2) | `GET {VAULT_ADDR}/v1/<mount>/data/<path>` via a boundary client (host-allowlisted to `VAULT_ADDR`), `X-Vault-Token: VAULT_TOKEN` | KV v2; supports `set` (write) |
+| `onepassword` | `"op://<vault>/<item>/<field>"` | 1Password **Connect** REST API via a boundary client (host-allowlisted to `OP_CONNECT_HOST`), `Bearer OP_CONNECT_TOKEN` | see the spike below |
+
+The two HTTP backends egress only through a host-allowlisted boundary client
+(`egress-vault` / `egress-onepassword` trust zones), so a secrets backend gets
+the same egress controls as a connector's provider host. The default `github-app`
+connector uses `{provider:"wrangler-env", ref:"GITHUB_APP_PRIVATE_KEY"}` (and
+`GITHUB_APP_ID` for the App id), so moving to Secrets Store / Vault / 1Password is
+a `provider` change on the registry entry — no code change.
+
+### The 1Password spike: SDK vs Connect
+
+**Finding: the official 1Password JavaScript SDK (`@1password/sdk`) does NOT run
+on workerd.** Its core (`@1password/sdk-core`) is a `wasm_bindgen` build whose
+Node entrypoint loads a ~10 MB WASM module **synchronously from disk at module
+load**:
+
+```js
+// node_modules/@1password/sdk-core/nodejs/core.js
+const path = require('path').join(__dirname, 'core_bg.wasm');
+const bytes = require('fs').readFileSync(path);
+const wasmModule = new WebAssembly.Module(bytes);   // sync compile of 10 MB
+```
+
+workerd has no filesystem (`fs.readFileSync` / `__dirname` do not resolve to a
+real file), Workers require WASM as a **bundled import**, not runtime-read bytes,
+and a synchronous 10 MB `WebAssembly.Module` compile outside startup is
+disallowed. The package ships only a `nodejs/` build and its README states it
+"currently supports `Node.JS`". So the `onepassword` provider is implemented
+against **1Password Connect** (the supported HTTP API for non-Node runtimes)
+through a boundary client, resolving `op://vault/item/field` references by walking
+Connect's REST surface (vault name → id, item title → id, then the item's fields).
+
+### 3LO token store at rest
+
+The 3LO OAuth token store additionally supports application-level AES-GCM at rest
+via `CONNECTORS_TOKEN_ENC_KEY` (on top of the Durable Object's platform at-rest
+encryption).
