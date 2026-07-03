@@ -198,6 +198,10 @@ export type ServiceClients = {
   gatewayToBrain: ServiceClient;
   brainToResponder: ServiceClient;
   brainToSpend: ServiceClient;
+  // Brain -> credential broker. The intended first caller of the connectors
+  // worker; no worker binds CONNECTORS yet, so this client is constructed but
+  // unused until a caller wires it (the broker's authn+authz still gate it).
+  brainToConnectors: ServiceClient;
   // Dev-proxy → gateway (edge → edge), the development application's hop into
   // the gateway's DevProxy entrypoint. Only workers/public/dev-proxy holds
   // DEV_PROXY_SIGNING_KEY, so only it can construct a usable client.
@@ -222,6 +226,7 @@ const buildClients = (env: Env): ServiceClients => {
     gatewayToBrain: createServiceClient({ self: "gateway", target: "brain", signingKey: gatewayKey, entities }),
     brainToResponder: createServiceClient({ self: "brain", target: "responder", signingKey: brainKey, entities }),
     brainToSpend: createServiceClient({ self: "brain", target: "spend", signingKey: brainKey, entities }),
+    brainToConnectors: createServiceClient({ self: "brain", target: "connectors", signingKey: brainKey, entities }),
     devProxyToGateway: createServiceClient({ self: "dev-proxy", target: "gateway", signingKey: devProxyKey, entities }),
   };
 };

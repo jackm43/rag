@@ -75,6 +75,15 @@ permit (
   resource == Service::"spend"
 );
 
+// The brain invokes the credential broker (a connector.invoke hop). The broker
+// independently gates which connector the brain may touch via connectors.cedar.
+@id("invoke-brain-to-connectors")
+permit (
+  principal == Machine::"brain",
+  action == Action::"service.invoke",
+  resource == Service::"connectors"
+);
+
 // The dev-proxy edge worker invokes the gateway's DevProxy entrypoint. The
 // receiving boundary's registration gate independently constrains this to the
 // gateway's one registered service operation (devproxy.command); which command
@@ -107,6 +116,14 @@ permit (
   principal == Machine::"brain",
   action == Action::"service.exchange",
   resource == Service::"spend"
+)
+when { context.fromZone == "application" && context.toZone == "application" };
+
+@id("exchange-brain-to-connectors")
+permit (
+  principal == Machine::"brain",
+  action == Action::"service.exchange",
+  resource == Service::"connectors"
 )
 when { context.fromZone == "application" && context.toZone == "application" };
 

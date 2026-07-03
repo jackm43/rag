@@ -15,6 +15,7 @@ import cedarWasmModule from "../../node_modules/@cedar-policy/cedar-wasm/web/ced
 import type { EntityJson } from "@cedar-policy/cedar-wasm/web";
 import { staticEntities } from "./entities";
 import commandPolicies from "./policies/commands.cedar";
+import connectorPolicies from "./policies/connectors.cedar";
 import devproxyPolicies from "./policies/devproxy.cedar";
 import operatorPolicies from "./policies/operator.cedar";
 import servicePolicies from "./policies/services.cedar";
@@ -33,7 +34,7 @@ export type Principal = {
 };
 
 export type Resource = {
-  type: "Guild" | "Gateway" | "Service" | "DevProxy";
+  type: "Guild" | "Gateway" | "Service" | "DevProxy" | "Connector";
   id: string;
 };
 
@@ -82,7 +83,9 @@ const ensureEngine = () => {
   initSync({ module: cedarWasmModule });
   const parsed = preparsePolicySet(POLICY_SET_ID, {
     staticPolicies: namedPolicies(
-      [commandPolicies, devproxyPolicies, operatorPolicies, servicePolicies].join("\n\n"),
+      [commandPolicies, connectorPolicies, devproxyPolicies, operatorPolicies, servicePolicies].join(
+        "\n\n",
+      ),
     ),
   });
   if (parsed.type === "failure") {
