@@ -35,6 +35,11 @@ const DIRECT_MESSAGES_INTENT = 1 << 12;
 const MESSAGE_CONTENT_INTENT = 1 << 15;
 const GATEWAY_INTENTS = GUILD_MESSAGES_INTENT | DIRECT_MESSAGES_INTENT | MESSAGE_CONTENT_INTENT;
 const GATEWAY_ENABLED_KEY = "gatewayEnabled";
+// Set only by an explicit operator stop(). ensureConnected() (called by the
+// cron trigger and opportunistically on interactions) refuses to reconnect
+// while this is set, so automatic wake-ups can never resurrect a deliberate
+// kill switch. A manual start() clears it.
+const GATEWAY_STOPPED_KEY = "gatewayStopped";
 const GATEWAY_WATCHDOG_INTERVAL_MS = 60_000;
 
 const isGatewayPayload = (value: unknown): value is DiscordGatewayPayload =>
@@ -63,6 +68,12 @@ export const startGateway = async (env: Env) => gatewayStub(env).start();
 export const stopGateway = async (env: Env) => gatewayStub(env).stop();
 
 export const getGatewayHealth = async (env: Env) => gatewayStub(env).health();
+
+// Idempotently ensure the gateway websocket is up. Called by the worker's cron
+// trigger and opportunistically on each interaction, so the connection
+// self-establishes after a deploy and self-heals without any manual
+// /gateway/start. A no-op while the operator has explicitly stopped it.
+export const ensureGatewayConnected = async (env: Env) => gatewayStub(env).ensureConnected();
 
 export class DiscordGateway extends DurableObject<Env> {
   private webSocket: WebSocket | null = null;
@@ -95,6 +106,20 @@ export class DiscordGateway extends DurableObject<Env> {
   }
 
   async start() {
+    // A manual start clears any operator stop so automatic wake-ups resume.
+    await this.ctx.storage.delete(GATEWAY_STOPPED_KEY);
+    await this.enableGateway();
+    this.connectGateway();
+    return { ok: true };
+  }
+
+  // Auto-connect entrypoint for the cron trigger and interaction webhook. Unless
+  // the operator has explicitly stopped the gateway, enable and connect
+  // (both idempotent: connectGateway() returns early when already open).
+  async ensureConnected() {
+    if ((await this.ctx.storage.get<boolean>(GATEWAY_STOPPED_KEY)) === true) {
+      return { ok: false, stopped: true };
+    }
     await this.enableGateway();
     this.connectGateway();
     return { ok: true };
@@ -106,6 +131,9 @@ export class DiscordGateway extends DurableObject<Env> {
   // so even a racing alarm cannot resurrect a stopped gateway.
   async stop() {
     await this.ctx.storage.delete(GATEWAY_ENABLED_KEY);
+    // Mark an explicit operator stop so the cron/interaction ensureConnected()
+    // cannot bring it back up until a manual start().
+    await this.ctx.storage.put(GATEWAY_STOPPED_KEY, true);
     await this.ctx.storage.deleteAlarm();
 
     if (this.reconnectTimer !== undefined) {

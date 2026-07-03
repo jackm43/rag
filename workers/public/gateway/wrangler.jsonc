@@ -75,5 +75,13 @@
         "queue": "ai-jobs"
       }
     ]
+  },
+  // Wakes the DiscordGateway DO every minute to ensure the Discord websocket is
+  // connected (self-starts after a deploy, self-heals), so no manual
+  // /gateway/start is needed. ensureConnected() no-ops after an operator stop().
+  "triggers": {
+    "crons": [
+      "* * * * *"
+    ]
   }
 }

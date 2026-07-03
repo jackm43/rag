@@ -8,7 +8,13 @@ import {
 } from "../../../../packages/domain/mention";
 import type { Env } from "../../../../packages/contracts/types";
 import { DevProxy } from "./devproxy-entrypoint";
-import { DiscordGateway, getGatewayHealth, startGateway, stopGateway } from "./gateway";
+import {
+  DiscordGateway,
+  ensureGatewayConnected,
+  getGatewayHealth,
+  startGateway,
+  stopGateway,
+} from "./gateway";
 import { GATEWAY_MANIFEST } from "./manifest";
 import { createGatewayRouter } from "./router";
 
@@ -39,9 +45,24 @@ const router = createGatewayRouter({
     operatorForbidden("gateway.health") ?? Response.json(await getGatewayHealth(env)),
 });
 
+const DISCORD_INTERACTIONS_PATH = "/discord";
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     ctx.waitUntil(ensureRegistered(env, GATEWAY_MANIFEST));
+    // Opportunistic wake-up (B): an incoming interaction webhook arrives over
+    // HTTP independently of the gateway websocket, so use it to ensure the
+    // socket is up. This brings the connection back the instant a command is
+    // used after a deploy, without waiting for the cron tick.
+    if (request.method === "POST" && new URL(request.url).pathname === DISCORD_INTERACTIONS_PATH) {
+      ctx.waitUntil(ensureGatewayConnected(env));
+    }
     return router.handle(request, env, ctx);
+  },
+  // Cron trigger (A): the platform wakes the gateway on a schedule so the
+  // websocket self-establishes after any deploy and self-heals, with no manual
+  // /gateway/start. ensureConnected() is a no-op if the operator stopped it.
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(ensureGatewayConnected(env));
   },
 };
