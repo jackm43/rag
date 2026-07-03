@@ -20,13 +20,23 @@ export const DEV_PROXY_PAGE = `<!doctype html>
 <style>
   body { font: 15px/1.5 system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
   h1 { font-size: 1.2rem; }
+  h2 { font-size: 1.05rem; margin-top: 2rem; }
   label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }
-  input, textarea, button { font: inherit; width: 100%; box-sizing: border-box; padding: 0.5rem; }
+  input, textarea, button, select { font: inherit; width: 100%; box-sizing: border-box; padding: 0.5rem; }
   button { margin-top: 1rem; cursor: pointer; }
   button.link { width: auto; background: none; border: none; color: #2563eb; padding: 0; text-decoration: underline; }
   pre { background: #f4f4f5; padding: 1rem; overflow-x: auto; white-space: pre-wrap; }
   .muted { color: #71717a; font-size: 0.85rem; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .conn { border: 1px solid #e4e4e7; border-radius: 6px; padding: 0.75rem 1rem 1rem; margin: 0.75rem 0; }
+  .conn label { margin-top: 0.5rem; }
+  .badge { font-size: 0.75rem; padding: 0.1rem 0.4rem; border-radius: 4px; }
+  .badge.ok { background: #dcfce7; color: #166534; }
+  .badge.no { background: #fee2e2; color: #991b1b; }
+  .result { margin-top: 0.5rem; }
+  .result.ok { color: #166534; }
+  .result.warn { color: #92400e; }
+  .result.err { color: #991b1b; }
   #app { display: none; }
 </style>
 </head>
@@ -58,6 +68,11 @@ export const DEV_PROXY_PAGE = `<!doctype html>
 
   <label>Result</label>
   <pre id="out">—</pre>
+
+  <h2>Connectors</h2>
+  <p class="muted">Manage the credential broker's connectors and their secrets. Secret values are write-only — they are sent to the broker and never displayed here. A backend that cannot be written at runtime is disabled for value entry.</p>
+  <p id="connStatus" class="muted">Loading connectors…</p>
+  <div id="connectors"></div>
 </div>
 
 <script>
@@ -71,6 +86,7 @@ export const DEV_PROXY_PAGE = `<!doctype html>
         $("who").textContent = data.user.name || data.user.email || data.user.id;
         $("auth").style.display = "none";
         $("app").style.display = "block";
+        loadConnectors();
         return;
       }
     } catch (e) { /* fall through to signed-out UI */ }
@@ -128,6 +144,133 @@ export const DEV_PROXY_PAGE = `<!doctype html>
     } catch (e) {
       out.textContent = "Request failed: " + e;
     }
+  }
+
+  // --- Connectors admin surface ---------------------------------------------
+  // Lists the broker's connectors and their secret status, and offers a per-
+  // connector form to choose a secrets backend and write/rotate or re-point the
+  // secret. Secret values are WRITE-ONLY: sent with credentials:"include" and
+  // never displayed. Non-writable backends are disabled for value entry.
+  var providersCache = [];
+
+  function el(tag, attrs, text) {
+    var node = document.createElement(tag);
+    if (attrs) { Object.keys(attrs).forEach(function (k) { node.setAttribute(k, attrs[k]); }); }
+    if (text !== undefined) { node.textContent = text; }
+    return node;
+  }
+
+  async function loadProviders() {
+    try {
+      var res = await fetch("/api/secrets/providers", { credentials: "include" });
+      if (!res.ok) { return []; }
+      var data = await res.json();
+      return (data && data.providers) || [];
+    } catch (e) { return []; }
+  }
+
+  async function loadConnectors() {
+    var status = $("connStatus");
+    var host = $("connectors");
+    host.innerHTML = "";
+    status.textContent = "Loading connectors…";
+    providersCache = await loadProviders();
+    try {
+      var res = await fetch("/api/connectors", { credentials: "include" });
+      if (!res.ok) { status.textContent = "Could not load connectors (HTTP " + res.status + ")."; return; }
+      var data = await res.json();
+      var connectors = (data && data.connectors) || [];
+      if (!connectors.length) { status.textContent = "No connectors configured."; return; }
+      status.textContent = "";
+      connectors.forEach(function (c) { host.appendChild(renderConnector(c)); });
+    } catch (e) { status.textContent = "Failed to load connectors: " + e; }
+  }
+
+  function renderConnector(c) {
+    var box = el("div", { "class": "conn" });
+
+    var head = el("div", { "class": "row" });
+    head.appendChild(el("strong", null, c.id));
+    head.appendChild(el("span", { "class": "muted" }, c.kind + " · " + c.host));
+    box.appendChild(head);
+
+    var badge = el("span", { "class": "badge " + (c.secretConfigured ? "ok" : "no") }, c.secretConfigured ? "secret configured" : "no secret");
+    var statusLine = el("div", { "class": "muted" });
+    statusLine.appendChild(badge);
+    statusLine.appendChild(document.createTextNode(" via " + c.secretProvider + " · flows: " + (c.flows || []).join(", ")));
+    box.appendChild(statusLine);
+
+    box.appendChild(el("label", null, "Secrets provider"));
+    var select = el("select");
+    providersCache.forEach(function (p) {
+      var suffix = (p.writable ? "" : " (read-only at runtime)") + (p.configured ? "" : " (unconfigured)");
+      var opt = el("option", { value: p.name }, p.name + suffix);
+      if (p.name === c.secretProvider) { opt.setAttribute("selected", "selected"); }
+      select.appendChild(opt);
+    });
+    box.appendChild(select);
+
+    box.appendChild(el("label", null, "Reference / locator"));
+    var ref = el("input", { placeholder: "e.g. secret/ragbot#GITHUB_APP_PRIVATE_KEY" });
+    box.appendChild(ref);
+
+    box.appendChild(el("label", null, "Secret value (optional — blank to only re-point)"));
+    var val = el("input", { type: "password", placeholder: "write-only; never displayed" });
+    box.appendChild(val);
+
+    var save = el("button", null, "Save secret");
+    box.appendChild(save);
+
+    var result = el("div", { "class": "result muted" });
+    box.appendChild(result);
+
+    function updateWritability() {
+      var p = providersCache.filter(function (x) { return x.name === select.value; })[0];
+      var writable = p && p.writable;
+      val.disabled = !writable;
+      val.placeholder = writable ? "write-only; never displayed" : "not writable at runtime — provision out of band";
+    }
+    select.addEventListener("change", updateWritability);
+    updateWritability();
+
+    save.addEventListener("click", async function () {
+      result.className = "result muted";
+      result.textContent = "Saving…";
+      var body = { provider: select.value };
+      var r = ref.value.trim();
+      if (r) { body.ref = r; }
+      if (!val.disabled && val.value) { body.value = val.value; }
+      if (!body.ref && !body.value) { result.className = "result err"; result.textContent = "Enter a reference or a value."; return; }
+      if (body.value && !body.ref) { result.className = "result err"; result.textContent = "A value needs a reference to write to."; return; }
+      try {
+        var res = await fetch("/api/connectors/" + encodeURIComponent(c.id) + "/secret", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+          credentials: "include"
+        });
+        val.value = ""; // never keep the value around, whatever the outcome
+        var data = null;
+        try { data = await res.json(); } catch (e) { /* non-JSON error */ }
+        var secret = data && data.secret;
+        if (secret) {
+          var cls = (secret.status === "written" || secret.status === "referenced") ? "ok"
+            : (secret.status === "provision_required" ? "warn" : "err");
+          result.className = "result " + cls;
+          result.textContent = secret.status + (secret.detail ? " — " + secret.detail : "");
+          badge.className = "badge " + (secret.secretConfigured ? "ok" : "no");
+          badge.textContent = secret.secretConfigured ? "secret configured" : "no secret";
+        } else {
+          result.className = "result err";
+          result.textContent = "HTTP " + res.status + ((data && data.error) ? " — " + data.error : "");
+        }
+      } catch (e) {
+        result.className = "result err";
+        result.textContent = "Request failed: " + e;
+      }
+    });
+
+    return box;
   }
 
   $("signin").addEventListener("click", signIn);
