@@ -6,6 +6,7 @@ import { verifyDpopProof, type DpopReplayStore } from "../../../../packages/boun
 import { encodeDevProxyCommandEnvelope } from "../../../../packages/contracts";
 import type { DevProxyCommandJob, Env } from "../../../../packages/contracts/types";
 import { errorMessage, logger } from "../../../../packages/logger";
+import type { components } from "../../../../packages/devproxy-client/api-types";
 import { DpopReplay } from "./dpop-replay";
 import { DEV_PROXY_MANIFEST } from "./manifest";
 import { DEV_PROXY_PAGE } from "./page";
@@ -97,7 +98,10 @@ const handleCommand = async (request: Request, env: Env): Promise<Response> => {
 
   let body: z.infer<typeof CommandRequest>;
   try {
-    body = CommandRequest.parse(await request.json());
+    // `satisfies` is a compile-time link: the zod-parsed shape must conform to
+    // the OpenAPI CommandRequest contract (openapi.yaml → api-types.ts) that the
+    // generated app-client promises, so ingress and client cannot drift.
+    body = CommandRequest.parse(await request.json()) satisfies components["schemas"]["CommandRequest"];
   } catch {
     return json(400, { error: "invalid_request" });
   }

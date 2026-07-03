@@ -1,0 +1,117 @@
+openapi: 3.1.0
+info:
+  title: ragbot dev proxy
+  description: >
+    Public HTTP surface of the ragbot dev-proxy worker — the development
+    application that runs in production. Every request crosses two untrusted→edge
+    gates: a Cloudflare Access application token (verified against the team JWKS)
+    and a per-request DPoP proof (sender-constrained, replay-protected). The
+    worker then mints an on-behalf-of identity-context token and invokes the
+    gateway's DevProxy service binding (Cap'n Proto over the binding — not
+    exposed here). Any path not listed returns 404.
+  version: 1.0.0
+servers:
+  - url: https://ragbot-dev.jsmunro.me
+paths:
+  /:
+    get:
+      operationId: devProxyPage
+      summary: The dev-proxy single-page UI
+      description: >
+        Serves the self-contained page that generates the browser's DPoP keypair
+        and issues commands. Behind Cloudflare Access; no DPoP required (the page
+        is what mints the key).
+      responses:
+        "200":
+          description: HTML page.
+          content:
+            text/html:
+              schema:
+                type: string
+  /api/command:
+    post:
+      operationId: devProxyCommand
+      summary: Proxy a slash command through the gateway
+      description: >
+        Runs a command through the production gateway → brain path, authorized
+        as the configured Discord subject. Requires a valid Access token AND a
+        DPoP proof bound to POST + this URL. The response is the gateway's
+        command result relayed verbatim.
+      security:
+        - cfAccess: []
+          dpop: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommandRequest"
+      responses:
+        "200":
+          description: Command result (a Discord interaction response payload).
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Malformed command request body.
+        "401":
+          description: Missing/invalid Access token or DPoP proof (incl. replay).
+        "403":
+          description: No acting subject configured, or subject not allowed.
+        "502":
+          description: Upstream gateway error.
+components:
+  securitySchemes:
+    cfAccess:
+      type: apiKey
+      in: header
+      name: Cf-Access-Jwt-Assertion
+      description: >
+        Cloudflare Access application token (RS256/ES256), verified against the
+        team's /cdn-cgi/access/certs JWKS for iss (team domain), aud (Access
+        application AUD tag), and exp/nbf. Also accepted as the CF_Authorization
+        cookie that Access sets on browser navigations.
+    dpop:
+      type: apiKey
+      in: header
+      name: DPoP
+      description: >
+        RFC 9449 DPoP proof JWS (ES256) signed by the browser's P-256 key,
+        binding htm (POST) and htu (this URL) with a unique jti and iat. The jti
+        is single-use (replay-protected via a Durable Object) and the key's JWK
+        thumbprint (jkt) sender-constrains the session.
+  schemas:
+    CommandOption:
+      type: object
+      required:
+        - name
+        - value
+      properties:
+        name:
+          type: string
+          maxLength: 32
+          description: Slash-command option name.
+        value:
+          type: string
+          maxLength: 4000
+          description: Option value (coerced by the command layer as a Discord option).
+    CommandRequest:
+      type: object
+      required:
+        - command
+      properties:
+        command:
+          type: string
+          pattern: "^[a-z][a-z0-9_]{0,31}$"
+          description: Slash-command name (e.g. ask, rag, ragboard).
+        channelId:
+          type: string
+          pattern: "^\\d{17,20}$"
+          description: Optional Discord channel id the command targets.
+        options:
+          type: array
+          maxItems: 25
+          items:
+            $ref: "#/components/schemas/CommandOption"
