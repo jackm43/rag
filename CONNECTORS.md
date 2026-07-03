@@ -288,8 +288,11 @@ grant/installations/callback work): `POST /api/connectors/{id}/grant`,
 **URL conventions.** A connector's authorization **callback** is
 `https://ragbot-dev.jsmunro.me/api/connectors/{id}/callback` (the dev-proxy, the
 admin app). A connector's inbound **webhook** is
-`https://ragbot.jsmunro.me/webhooks/{id}` (the public gateway) — webhook ingress
-itself is a later task; only the URL convention is fixed here.
+`https://webhooks.jsmunro.me/{provider}/{id}` — a dedicated, centralised
+webhook-ingress worker (own subdomain, own edge identity), where `{provider}`
+selects the signature scheme (e.g. `/github/{id}`, `/stripe/{id}`) and `{id}` is
+the connector slug. Webhook ingress itself is a later task (see `TODO.md`); only
+the URL convention is fixed here.
 
 ### Binding + deploying the admin surface (operator)
 
