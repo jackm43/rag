@@ -68,6 +68,230 @@ paths:
           description: The acting Discord subject is not allowed by the gateway.
         "502":
           description: Upstream gateway error.
+  /api/connectors:
+    get:
+      operationId: listConnectors
+      summary: List the connectors and their secret status
+      description: >
+        The connectors admin surface. Behind the SAME layered auth as
+        /api/command (Access verified + a Better Auth session bound to that
+        Access identity). The dev-proxy mints an on-behalf-of identity token (the
+        acting Discord admin) and invokes the connectors broker's Connectors
+        service binding with the connector.admin.list op. NEVER returns a secret
+        value — only whether each connector's referenced secret currently
+        resolves, and which backend it resolves through.
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      responses:
+        "200":
+          description: The connectors and their (secret-free) status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connectors:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ConnectorSummary"
+        "401":
+          description: Missing/invalid Access token or no valid session.
+        "403":
+          description: The dev-proxy is not authorized for connector.admin.list.
+        "502":
+          description: Broker error.
+  /api/connectors/{id}:
+    get:
+      operationId: describeConnector
+      summary: Describe one connector's config and status
+      description: >
+        One connector's configuration + status (connector.admin.read). No secret
+        value; the secret is described only by its {provider, ref} reference and
+        whether it resolves.
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      parameters:
+        - $ref: "#/components/parameters/ConnectorId"
+      responses:
+        "200":
+          description: The connector detail (secret-free).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connector:
+                    $ref: "#/components/schemas/ConnectorDetail"
+        "401":
+          description: Missing/invalid Access token or no valid session.
+        "403":
+          description: The dev-proxy is not authorized for connector.admin.read.
+        "404":
+          description: Unknown connector.
+        "502":
+          description: Broker error.
+  /api/connectors/{id}/secret:
+    put:
+      operationId: setConnectorSecret
+      summary: Set or re-point a connector's secret
+      description: >
+        Write or re-point a connector's secret (connector.admin.write). The
+        secret `value` flows INWARD only — to the broker, then the backend — and
+        is NEVER returned. The outcome depends on the backend's runtime write
+        capability: `written` (hashicorp-vault, onepassword), `provision_required`
+        (cloudflare-secret-store — re-pointed but must be provisioned via the CF
+        control plane; returned as 202), or `rejected` (wrangler-env with a value
+        is deploy-time only; returned as 409). No outcome is faked.
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      parameters:
+        - $ref: "#/components/parameters/ConnectorId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetConnectorSecretRequest"
+      responses:
+        "200":
+          description: Secret written (`written`) or connector re-pointed (`referenced`).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret:
+                    $ref: "#/components/schemas/SetConnectorSecretResult"
+        "202":
+          description: >
+            Connector re-pointed, but the backend cannot be written at runtime —
+            provision the secret out-of-band (`provision_required`).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret:
+                    $ref: "#/components/schemas/SetConnectorSecretResult"
+        "400":
+          description: Malformed body (unknown provider, or a value with no ref).
+        "401":
+          description: Missing/invalid Access token or no valid session.
+        "403":
+          description: The dev-proxy is not authorized for connector.admin.write.
+        "404":
+          description: Unknown connector.
+        "409":
+          description: >
+            The operation was refused (e.g. a value for a deploy-time-only
+            backend); `secret.detail` says why. Nothing was persisted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret:
+                    $ref: "#/components/schemas/SetConnectorSecretResult"
+    post:
+      operationId: connectorGrant
+      summary: "Reserved: issue an admin-initiated grant (not yet implemented)"
+      description: >
+        Reserved so the contract is stable while grant wiring lands later.
+        Returns 501 today.
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      parameters:
+        - $ref: "#/components/parameters/ConnectorId"
+      responses:
+        "501":
+          description: Not implemented yet (reserved path).
+  /api/connectors/{id}/grant:
+    post:
+      operationId: connectorGrantReserved
+      summary: "Reserved: admin grant (not yet implemented)"
+      description: Reserved path; returns 501 today.
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      parameters:
+        - $ref: "#/components/parameters/ConnectorId"
+      responses:
+        "501":
+          description: Not implemented yet (reserved path).
+  /api/connectors/{id}/installations:
+    get:
+      operationId: connectorInstallations
+      summary: "Reserved: list a connector's installations (not yet implemented)"
+      description: Reserved path; returns 501 today.
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      parameters:
+        - $ref: "#/components/parameters/ConnectorId"
+      responses:
+        "501":
+          description: Not implemented yet (reserved path).
+  /api/connectors/{id}/callback:
+    get:
+      operationId: connectorCallbackGet
+      summary: "Reserved: OAuth/app callback (not yet implemented)"
+      description: >
+        Reserved for a connector's authorization callback
+        (ragbot-dev.jsmunro.me/api/connectors/{id}/callback). Returns 501 today.
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      parameters:
+        - $ref: "#/components/parameters/ConnectorId"
+      responses:
+        "501":
+          description: Not implemented yet (reserved path).
+    post:
+      operationId: connectorCallbackPost
+      summary: "Reserved: OAuth/app callback (not yet implemented)"
+      description: Reserved path; returns 501 today.
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      parameters:
+        - $ref: "#/components/parameters/ConnectorId"
+      responses:
+        "501":
+          description: Not implemented yet (reserved path).
+  /api/secrets/providers:
+    get:
+      operationId: getSecretsProviders
+      summary: List the secrets backends and their runtime write capability
+      description: >
+        The secrets backends (connector.admin.list): for each, whether it is
+        runtime-`writable` (the admin surface may write a value) and whether it is
+        `configured` on the broker. The UI disables value entry for non-writable
+        backends. Never returns a secret value.
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      responses:
+        "200":
+          description: The secrets backends and their capability.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SecretsProviderStatus"
+        "401":
+          description: Missing/invalid Access token or no valid session.
+        "403":
+          description: The dev-proxy is not authorized for connector.admin.list.
+        "502":
+          description: Broker error.
 components:
   securitySchemes:
     cfAccess:
@@ -90,6 +314,15 @@ components:
         subject the gateway command runs as. The session is bound at creation to
         the Cloudflare Access identity that created it, so it cannot be replayed
         under a different Access identity.
+  parameters:
+    ConnectorId:
+      name: id
+      in: path
+      required: true
+      description: The connector's stable slug id.
+      schema:
+        type: string
+        pattern: "^[a-z][a-z0-9-]{0,63}$"
   schemas:
     CommandOption:
       type: object
@@ -123,3 +356,128 @@ components:
           maxItems: 25
           items:
             $ref: "#/components/schemas/CommandOption"
+    ConnectorSummary:
+      type: object
+      description: A connector's config-level facts + secret status. No secret value.
+      required:
+        - id
+        - kind
+        - host
+        - flows
+        - secretConfigured
+        - secretProvider
+      properties:
+        id:
+          type: string
+          description: The connector's stable slug id.
+        kind:
+          type: string
+          description: The connector kind (e.g. github_app, api_key, oauth2_*).
+        host:
+          type: string
+          description: The single provider host this connector may reach.
+        flows:
+          type: array
+          items:
+            type: string
+          description: The operations the kind supports (grant/fetch/token/authorize).
+        secretConfigured:
+          type: boolean
+          description: Whether the connector's referenced secret currently resolves.
+        secretProvider:
+          type: string
+          description: The backend the secret resolves through (registry default or override).
+    ConnectorDetail:
+      allOf:
+        - $ref: "#/components/schemas/ConnectorSummary"
+        - type: object
+          required:
+            - cedarResource
+            - secretRef
+            - secretOverridden
+          properties:
+            cedarResource:
+              type: string
+              description: The Cedar resource id authorization is against.
+            secretRef:
+              type: string
+              description: The secret's backend locator (a reference, never a value).
+            secretOverridden:
+              type: boolean
+              description: Whether an admin has re-pointed the secret away from the registry default.
+    SecretsProviderStatus:
+      type: object
+      required:
+        - name
+        - writable
+        - configured
+      properties:
+        name:
+          type: string
+          description: The backend name (wrangler-env / cloudflare-secret-store / hashicorp-vault / onepassword).
+        writable:
+          type: boolean
+          description: Whether the backend supports a runtime secret write (set).
+        configured:
+          type: boolean
+          description: Whether the backend has the env/binding it needs on the broker.
+    SetConnectorSecretRequest:
+      type: object
+      required:
+        - provider
+      properties:
+        provider:
+          type: string
+          enum:
+            - wrangler-env
+            - cloudflare-secret-store
+            - hashicorp-vault
+            - onepassword
+          description: The secrets backend to point the connector at.
+        ref:
+          type: string
+          maxLength: 512
+          description: >
+            The backend locator (env binding name / Secrets Store name / Vault
+            "<mount>/<path>#<field>" / "op://vault/item/field"). Required when a
+            value is supplied.
+        value:
+          type: string
+          maxLength: 65536
+          description: >
+            The secret material. Flows INWARD only (to the broker, then the
+            backend); never returned. Omit to only re-point the connector at an
+            already-provisioned ref.
+    SetConnectorSecretResult:
+      type: object
+      description: The outcome of a set-secret op. Never contains the secret value.
+      required:
+        - status
+        - connectorId
+        - provider
+        - ref
+        - secretConfigured
+      properties:
+        status:
+          type: string
+          enum:
+            - written
+            - referenced
+            - provision_required
+            - rejected
+          description: >
+            written (value written at runtime), referenced (re-pointed to an
+            existing ref), provision_required (re-pointed but must be provisioned
+            out-of-band), rejected (refused; nothing persisted).
+        connectorId:
+          type: string
+        provider:
+          type: string
+        ref:
+          type: string
+        secretConfigured:
+          type: boolean
+          description: Whether the connector's secret now resolves through the chosen reference.
+        detail:
+          type: string
+          description: A human-readable operator message (never the secret value).

@@ -44,6 +44,154 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/connectors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the connectors and their secret status
+         * @description The connectors admin surface. Behind the SAME layered auth as /api/command (Access verified + a Better Auth session bound to that Access identity). The dev-proxy mints an on-behalf-of identity token (the acting Discord admin) and invokes the connectors broker's Connectors service binding with the connector.admin.list op. NEVER returns a secret value — only whether each connector's referenced secret currently resolves, and which backend it resolves through.
+         */
+        get: operations["listConnectors"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connectors/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Describe one connector's config and status
+         * @description One connector's configuration + status (connector.admin.read). No secret value; the secret is described only by its {provider, ref} reference and whether it resolves.
+         */
+        get: operations["describeConnector"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connectors/{id}/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set or re-point a connector's secret
+         * @description Write or re-point a connector's secret (connector.admin.write). The secret `value` flows INWARD only — to the broker, then the backend — and is NEVER returned. The outcome depends on the backend's runtime write capability: `written` (hashicorp-vault, onepassword), `provision_required` (cloudflare-secret-store — re-pointed but must be provisioned via the CF control plane; returned as 202), or `rejected` (wrangler-env with a value is deploy-time only; returned as 409). No outcome is faked.
+         */
+        put: operations["setConnectorSecret"];
+        /**
+         * Reserved: issue an admin-initiated grant (not yet implemented)
+         * @description Reserved so the contract is stable while grant wiring lands later. Returns 501 today.
+         */
+        post: operations["connectorGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connectors/{id}/grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reserved: admin grant (not yet implemented)
+         * @description Reserved path; returns 501 today.
+         */
+        post: operations["connectorGrantReserved"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connectors/{id}/installations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reserved: list a connector's installations (not yet implemented)
+         * @description Reserved path; returns 501 today.
+         */
+        get: operations["connectorInstallations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connectors/{id}/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reserved: OAuth/app callback (not yet implemented)
+         * @description Reserved for a connector's authorization callback (ragbot-dev.jsmunro.me/api/connectors/{id}/callback). Returns 501 today.
+         */
+        get: operations["connectorCallbackGet"];
+        put?: never;
+        /**
+         * Reserved: OAuth/app callback (not yet implemented)
+         * @description Reserved path; returns 501 today.
+         */
+        post: operations["connectorCallbackPost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/secrets/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the secrets backends and their runtime write capability
+         * @description The secrets backends (connector.admin.list): for each, whether it is runtime-`writable` (the admin surface may write a value) and whether it is `configured` on the broker. The UI disables value entry for non-writable backends. Never returns a secret value.
+         */
+        get: operations["getSecretsProviders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -61,9 +209,69 @@ export interface components {
             channelId?: string;
             options?: components["schemas"]["CommandOption"][];
         };
+        /** @description A connector's config-level facts + secret status. No secret value. */
+        ConnectorSummary: {
+            /** @description The connector's stable slug id. */
+            id: string;
+            /** @description The connector kind (e.g. github_app, api_key, oauth2_*). */
+            kind: string;
+            /** @description The single provider host this connector may reach. */
+            host: string;
+            /** @description The operations the kind supports (grant/fetch/token/authorize). */
+            flows: string[];
+            /** @description Whether the connector's referenced secret currently resolves. */
+            secretConfigured: boolean;
+            /** @description The backend the secret resolves through (registry default or override). */
+            secretProvider: string;
+        };
+        ConnectorDetail: components["schemas"]["ConnectorSummary"] & {
+            /** @description The Cedar resource id authorization is against. */
+            cedarResource: string;
+            /** @description The secret's backend locator (a reference, never a value). */
+            secretRef: string;
+            /** @description Whether an admin has re-pointed the secret away from the registry default. */
+            secretOverridden: boolean;
+        };
+        SecretsProviderStatus: {
+            /** @description The backend name (wrangler-env / cloudflare-secret-store / hashicorp-vault / onepassword). */
+            name: string;
+            /** @description Whether the backend supports a runtime secret write (set). */
+            writable: boolean;
+            /** @description Whether the backend has the env/binding it needs on the broker. */
+            configured: boolean;
+        };
+        SetConnectorSecretRequest: {
+            /**
+             * @description The secrets backend to point the connector at.
+             * @enum {string}
+             */
+            provider: "wrangler-env" | "cloudflare-secret-store" | "hashicorp-vault" | "onepassword";
+            /** @description The backend locator (env binding name / Secrets Store name / Vault "<mount>/<path>#<field>" / "op://vault/item/field"). Required when a value is supplied. */
+            ref?: string;
+            /** @description The secret material. Flows INWARD only (to the broker, then the backend); never returned. Omit to only re-point the connector at an already-provisioned ref. */
+            value?: string;
+        };
+        /** @description The outcome of a set-secret op. Never contains the secret value. */
+        SetConnectorSecretResult: {
+            /**
+             * @description written (value written at runtime), referenced (re-pointed to an existing ref), provision_required (re-pointed but must be provisioned out-of-band), rejected (refused; nothing persisted).
+             * @enum {string}
+             */
+            status: "written" | "referenced" | "provision_required" | "rejected";
+            connectorId: string;
+            provider: string;
+            ref: string;
+            /** @description Whether the connector's secret now resolves through the chosen reference. */
+            secretConfigured: boolean;
+            /** @description A human-readable operator message (never the secret value). */
+            detail?: string;
+        };
     };
     responses: never;
-    parameters: never;
+    parameters: {
+        /** @description The connector's stable slug id. */
+        ConnectorId: string;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -136,6 +344,329 @@ export interface operations {
                 content?: never;
             };
             /** @description Upstream gateway error. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listConnectors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connectors and their (secret-free) status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        connectors?: components["schemas"]["ConnectorSummary"][];
+                    };
+                };
+            };
+            /** @description Missing/invalid Access token or no valid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The dev-proxy is not authorized for connector.admin.list. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Broker error. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    describeConnector: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connector's stable slug id. */
+                id: components["parameters"]["ConnectorId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connector detail (secret-free). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        connector?: components["schemas"]["ConnectorDetail"];
+                    };
+                };
+            };
+            /** @description Missing/invalid Access token or no valid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The dev-proxy is not authorized for connector.admin.read. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown connector. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Broker error. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    setConnectorSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connector's stable slug id. */
+                id: components["parameters"]["ConnectorId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetConnectorSecretRequest"];
+            };
+        };
+        responses: {
+            /** @description Secret written (`written`) or connector re-pointed (`referenced`). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        secret?: components["schemas"]["SetConnectorSecretResult"];
+                    };
+                };
+            };
+            /** @description Connector re-pointed, but the backend cannot be written at runtime — provision the secret out-of-band (`provision_required`). */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        secret?: components["schemas"]["SetConnectorSecretResult"];
+                    };
+                };
+            };
+            /** @description Malformed body (unknown provider, or a value with no ref). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing/invalid Access token or no valid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The dev-proxy is not authorized for connector.admin.write. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown connector. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The operation was refused (e.g. a value for a deploy-time-only backend); `secret.detail` says why. Nothing was persisted. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        secret?: components["schemas"]["SetConnectorSecretResult"];
+                    };
+                };
+            };
+        };
+    };
+    connectorGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connector's stable slug id. */
+                id: components["parameters"]["ConnectorId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Not implemented yet (reserved path). */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    connectorGrantReserved: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connector's stable slug id. */
+                id: components["parameters"]["ConnectorId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Not implemented yet (reserved path). */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    connectorInstallations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connector's stable slug id. */
+                id: components["parameters"]["ConnectorId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Not implemented yet (reserved path). */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    connectorCallbackGet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connector's stable slug id. */
+                id: components["parameters"]["ConnectorId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Not implemented yet (reserved path). */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    connectorCallbackPost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connector's stable slug id. */
+                id: components["parameters"]["ConnectorId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Not implemented yet (reserved path). */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getSecretsProviders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The secrets backends and their capability. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        providers?: components["schemas"]["SecretsProviderStatus"][];
+                    };
+                };
+            };
+            /** @description Missing/invalid Access token or no valid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The dev-proxy is not authorized for connector.admin.list. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Broker error. */
             502: {
                 headers: {
                     [name: string]: unknown;

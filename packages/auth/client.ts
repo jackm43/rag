@@ -206,6 +206,10 @@ export type ServiceClients = {
   // the gateway's DevProxy entrypoint. Only workers/public/dev-proxy holds
   // DEV_PROXY_SIGNING_KEY, so only it can construct a usable client.
   devProxyToGateway: ServiceClient;
+  // Dev-proxy → connectors broker (edge → application), the admin surface's hop
+  // for the connector.admin.* management ops. Same DEV_PROXY_SIGNING_KEY; the
+  // broker gates which admin op via connectors.cedar.
+  devProxyToConnectors: ServiceClient;
 };
 
 const buildClients = (env: Env): ServiceClients => {
@@ -228,6 +232,7 @@ const buildClients = (env: Env): ServiceClients => {
     brainToSpend: createServiceClient({ self: "brain", target: "spend", signingKey: brainKey, entities }),
     brainToConnectors: createServiceClient({ self: "brain", target: "connectors", signingKey: brainKey, entities }),
     devProxyToGateway: createServiceClient({ self: "dev-proxy", target: "gateway", signingKey: devProxyKey, entities }),
+    devProxyToConnectors: createServiceClient({ self: "dev-proxy", target: "connectors", signingKey: devProxyKey, entities }),
   };
 };
 

@@ -76,14 +76,22 @@
       }
     ]
   },
-  // The dev-proxy's only egress: the gateway's DevProxy service-binding
-  // entrypoint. A service binding is invocable solely by a worker configured
-  // with it, so this hop is reachable only from here.
+  // The dev-proxy's egress, both service-binding hops (never a public route):
+  //   - the gateway's DevProxy entrypoint (the command surface), and
+  //   - the connectors broker's Connectors entrypoint (the admin surface, for
+  //     the connector.admin.* management ops behind /api/connectors/*).
+  // A service binding is invocable solely by a worker configured with it, so
+  // these hops are reachable only from here.
   "services": [
     {
       "binding": "GATEWAY_DEVPROXY",
       "service": "ragbot-worker",
       "entrypoint": "DevProxy"
+    },
+    {
+      "binding": "CONNECTORS",
+      "service": "ragbot-connectors-worker",
+      "entrypoint": "Connectors"
     }
   ]
 }

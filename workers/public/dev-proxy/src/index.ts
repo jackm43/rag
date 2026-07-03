@@ -2,11 +2,12 @@ import { z } from "zod";
 
 import { ensureRegistered, serviceClients } from "../../../../packages/auth";
 import { cloudflareAccessGuard } from "../../../../packages/boundaries/inbound/cf-access";
+import { connectorsClient } from "../../../../packages/connectors";
 import { encodeDevProxyCommandEnvelope } from "../../../../packages/contracts";
-import type { DevProxyCommandJob, Env } from "../../../../packages/contracts/types";
+import type { ConnectorResult, DevProxyCommandJob, Env } from "../../../../packages/contracts/types";
 import { errorMessage, logger } from "../../../../packages/logger";
 import type { components } from "../../../../packages/devproxy-client/api-types";
-import { AuthUnconfiguredError, createAuth, resolveDiscordSubject } from "./auth";
+import { AuthUnconfiguredError, createAuth, resolveDiscordSubject, type ResolvedSubject } from "./auth";
 import { DEV_PROXY_MANIFEST } from "./manifest";
 import { DEV_PROXY_PAGE } from "./page";
 
@@ -47,29 +48,60 @@ const CommandRequest = z.object({
     .optional(),
 });
 
+// A connector id path parameter: the same slug shape the broker validates.
+const CONNECTOR_ID = /^[a-z][a-z0-9-]{0,63}$/;
+
+// Set / re-point a connector's secret. `provider` names the backend; `ref` is
+// its locator; `value`, when present, is the secret material — it flows INWARD
+// only (to the broker, then the backend) and is never returned. A value with no
+// ref is refused (nowhere to write it); at least one of ref/value is required.
+const SetConnectorSecretRequest = z
+  .object({
+    provider: z.enum([
+      "wrangler-env",
+      "cloudflare-secret-store",
+      "hashicorp-vault",
+      "onepassword",
+    ]),
+    ref: z.string().min(1).max(512).optional(),
+    value: z.string().min(1).max(65536).optional(),
+  })
+  .refine((body) => body.ref !== undefined || body.value !== undefined, {
+    message: "ref or value is required",
+  })
+  .refine((body) => !(body.value !== undefined && body.ref === undefined), {
+    message: "ref is required when a value is supplied",
+  });
+
 const json = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" },
   });
 
-// Gate 2 + command dispatch. The perimeter (Access) has already been verified by
-// the caller and its subject is passed in, so the acting session can be checked
-// against the exact Access identity of THIS request.
-const handleCommand = async (request: Request, env: Env, accessSub: string): Promise<Response> => {
+// Gate 2, shared by every authenticated endpoint (the command surface and the
+// connectors admin surface). The perimeter (Access) has already been verified by
+// the fetch handler and its subject is passed in; this resolves the Better Auth
+// Discord session and binds it to THIS request's Access identity. Returns the
+// acting subject, or a fail-closed Response (500 misconfigured / 401) that the
+// caller returns verbatim. Factored out so the admin endpoints authenticate
+// IDENTICALLY to /api/command — one gate, no drift.
+type Gate2 = { subject: ResolvedSubject } | { error: Response };
+
+const authenticateSession = async (request: Request, env: Env, accessSub: string): Promise<Gate2> => {
   let auth: ReturnType<typeof createAuth>;
   try {
     auth = createAuth(env);
   } catch (error) {
     if (error instanceof AuthUnconfiguredError) {
       logger.error("dev_proxy_auth_unconfigured", { error: errorMessage(error) });
-      return json(500, { error: "misconfigured" });
+      return { error: json(500, { error: "misconfigured" }) };
     }
     throw error;
   }
 
-  // Gate 2: a valid Better Auth session with a linked Discord account, bound to
-  // this request's Access identity. Any of: no session, no Discord link, or an
+  // A valid Better Auth session with a linked Discord account, bound to this
+  // request's Access identity. Any of: no session, no Discord link, or an
   // Access-subject mismatch is a fail-closed 401.
   const subject = await resolveDiscordSubject(auth, request.headers);
   if (!subject) {
@@ -80,7 +112,7 @@ const handleCommand = async (request: Request, env: Env, accessSub: string): Pro
       outcome: "denied",
       reason: "no_session",
     });
-    return json(401, { error: "unauthorized" });
+    return { error: json(401, { error: "unauthorized" }) };
   }
   if (subject.accessSub !== accessSub) {
     // The session was created under a different Access identity than the one
@@ -92,8 +124,18 @@ const handleCommand = async (request: Request, env: Env, accessSub: string): Pro
       outcome: "denied",
       reason: "access_binding_mismatch",
     });
-    return json(401, { error: "unauthorized" });
+    return { error: json(401, { error: "unauthorized" }) };
   }
+  return { subject };
+};
+
+// Command dispatch, behind the shared Gate 2.
+const handleCommand = async (request: Request, env: Env, accessSub: string): Promise<Response> => {
+  const gate = await authenticateSession(request, env, accessSub);
+  if ("error" in gate) {
+    return gate.error;
+  }
+  const subject = gate.subject;
 
   let body: z.infer<typeof CommandRequest>;
   try {
@@ -150,6 +192,113 @@ const handleCommand = async (request: Request, env: Env, accessSub: string): Pro
   }
 };
 
+// Map the broker's coarse fail-closed status to an HTTP status for the browser.
+// Anything that is not a client-shaped denial the broker states (400/401/403/404)
+// is relayed as a 502 upstream error — the broker never discloses why it refused.
+const brokerHttpStatus = (status: number): number =>
+  status === 200 || status === 400 || status === 401 || status === 403 || status === 404 ? status : 502;
+
+// Relay a successful broker admin result (or its denial). `pick` selects the
+// secret-free body to return; a non-200 broker status becomes a bare error.
+const relay = (result: ConnectorResult, pick: (result: ConnectorResult) => unknown): Response =>
+  result.status === 200 ? json(200, pick(result)) : json(brokerHttpStatus(result.status), { error: "broker_error" });
+
+// set-secret is a broker-status-200 op whose outcome rides in secret.status; map
+// that outcome to an HTTP status (a runtime write = 200, an out-of-band
+// provisioning still required = 202, a refused op = 409). Never leaks the value —
+// the broker never returns it and neither do we.
+const SET_SECRET_HTTP: Record<string, number> = {
+  written: 200,
+  referenced: 200,
+  provision_required: 202,
+  rejected: 409,
+};
+
+const relaySetSecret = (result: ConnectorResult): Response => {
+  if (result.status !== 200 || !result.secret) {
+    return json(brokerHttpStatus(result.status), { error: "broker_error" });
+  }
+  return json(SET_SECRET_HTTP[result.secret.status] ?? 200, { secret: result.secret });
+};
+
+// The connectors ADMIN surface (/api/connectors/*, /api/secrets/providers),
+// behind the SAME layered auth as /api/command (Access verified by the fetch
+// handler, then the shared Gate 2 session + Access-binding check). Each endpoint
+// mints an on-behalf-of identity token (sub = the acting Discord admin) and
+// invokes the connectors broker over the CONNECTORS binding, exactly like
+// /api/command drives the gateway. Secret values flow inward only; no response
+// ever carries one.
+const handleConnectorsApi = async (
+  request: Request,
+  env: Env,
+  accessSub: string,
+  url: URL,
+): Promise<Response> => {
+  const gate = await authenticateSession(request, env, accessSub);
+  if ("error" in gate) {
+    return gate.error;
+  }
+  if (!env.CONNECTORS) {
+    logger.error("connectors_binding_missing", {});
+    return json(500, { error: "misconfigured" });
+  }
+  // The on-behalf-of hop: sub is the acting Discord admin (the session subject),
+  // exactly as /api/command mints for the gateway.
+  const client = connectorsClient(env, serviceClients(env).devProxyToConnectors, {
+    sub: gate.subject.discordId,
+  });
+  const { pathname } = url;
+  const method = request.method;
+
+  if (method === "GET" && pathname === "/api/secrets/providers") {
+    return relay(await client.getSecretsProviders(), (result) => ({ providers: result.providers ?? [] }));
+  }
+  if (method === "GET" && pathname === "/api/connectors") {
+    return relay(await client.listConnectors(), (result) => ({ connectors: result.connectors ?? [] }));
+  }
+
+  // /api/connectors/{id} and its sub-resources.
+  const match = pathname.match(/^\/api\/connectors\/([^/]+)(\/[a-z]+)?$/);
+  if (match) {
+    const id = decodeURIComponent(match[1]);
+    if (!CONNECTOR_ID.test(id)) {
+      return json(400, { error: "invalid_connector_id" });
+    }
+    const sub = match[2];
+
+    if (!sub && method === "GET") {
+      return relay(await client.describeConnector(id), (result) => ({ connector: result.connector }));
+    }
+    if (sub === "/secret" && method === "PUT") {
+      let body: z.infer<typeof SetConnectorSecretRequest>;
+      try {
+        // `satisfies` links the zod shape to the OpenAPI contract (api-types),
+        // so ingress and the documented schema cannot drift.
+        body = SetConnectorSecretRequest.parse(
+          await request.json(),
+        ) satisfies components["schemas"]["SetConnectorSecretRequest"];
+      } catch {
+        return json(400, { error: "invalid_request" });
+      }
+      return relaySetSecret(await client.setConnectorSecret(id, body));
+    }
+
+    // Reserved: documented in openapi.yaml but not yet implemented, so the
+    // contract is stable while grant/installations/callback wiring lands later.
+    if (sub === "/grant" && method === "POST") {
+      return json(501, { error: "not_implemented" });
+    }
+    if (sub === "/installations" && method === "GET") {
+      return json(501, { error: "not_implemented" });
+    }
+    if (sub === "/callback" && (method === "GET" || method === "POST")) {
+      return json(501, { error: "not_implemented" });
+    }
+  }
+
+  return json(404, { error: "not_found" });
+};
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     ctx.waitUntil(ensureRegistered(env, DEV_PROXY_MANIFEST));
@@ -188,6 +337,11 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/api/command") {
       return handleCommand(request, env, access.grant.identity.sub);
+    }
+
+    // The connectors admin surface, behind the same layered auth as /api/command.
+    if (url.pathname === "/api/connectors" || url.pathname.startsWith("/api/connectors/") || url.pathname === "/api/secrets/providers") {
+      return handleConnectorsApi(request, env, access.grant.identity.sub, url);
     }
 
     return new Response("Not found", { status: 404 });
