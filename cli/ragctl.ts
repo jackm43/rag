@@ -10,7 +10,8 @@ import {
 } from "./access";
 import { configPath, keyPath, resolveConfig, tokenPath, type ConfigOverrides } from "./config";
 import { discover } from "./discover";
-import { generateKey, showKey } from "./keys";
+import { generateKey, loadSigner, showKey } from "./keys";
+import { createDevProxyClient, type CommandRequest } from "../packages/devproxy-client/index";
 
 // ragctl — a local CLI for the ragbot dev-proxy. Runs on a laptop (Node, not
 // workerd) and drives the deployed dev-proxy: it manages a local DPoP keypair,
@@ -63,7 +64,12 @@ const flag = (args: Args, name: string): string | undefined => {
   return list && list.length > 0 ? list[list.length - 1] : undefined;
 };
 
+const all = (args: Args, name: string): string[] => args.flags.get(name) ?? [];
+
 const has = (args: Args, name: string): boolean => args.flags.has(name);
+
+// The command-name shape the dev-proxy enforces (openapi.yaml / worker zod).
+const COMMAND_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
 
 // Global flags that override config regardless of subcommand.
 const overridesFrom = (args: Args): ConfigOverrides => {
@@ -94,6 +100,8 @@ Commands:
                             (--refresh re-fetches without the browser login)
   whoami                    Decode the cached Access token's claims
   discover                  List the dev-proxy operations from the OpenAPI spec
+  cmd <name> [--opt k=v ...] [--channel <id>] [--json]
+                            Run a slash command through the dev-proxy (typed call)
   config                    Show resolved config and where each value came from
 
 Global options:
@@ -178,6 +186,73 @@ const runDiscover = (): number => {
   return 0;
 };
 
+// Human-readable hints for the fail-closed statuses the worker returns. The
+// worker never discloses which gate refused, so these are guidance, not claims.
+const STATUS_HINT: Record<number, string> = {
+  400: "malformed command request (check the command name / options)",
+  401: "Access token or DPoP proof rejected — run `ragctl login` and `ragctl keys generate`",
+  403: "no acting subject configured server-side, or the subject is not allowed",
+  502: "upstream gateway error",
+};
+
+const runCmd = async (args: Args): Promise<number> => {
+  const command = args.positionals[1];
+  if (!command) {
+    out("Usage: ragctl cmd <name> [--opt name=value ...] [--channel <id>] [--json]");
+    return 1;
+  }
+  if (!COMMAND_PATTERN.test(command)) {
+    out(`Invalid command name "${command}" — must match ${COMMAND_PATTERN}`);
+    return 1;
+  }
+
+  const options = all(args, "opt").map((entry) => {
+    const eq = entry.indexOf("=");
+    if (eq <= 0) {
+      throw new Error(`--opt expects name=value, got "${entry}"`);
+    }
+    return { name: entry.slice(0, eq), value: entry.slice(eq + 1) };
+  });
+
+  const request: CommandRequest = { command };
+  const channelId = flag(args, "channel");
+  if (channelId !== undefined) {
+    request.channelId = channelId;
+  }
+  if (options.length > 0) {
+    request.options = options;
+  }
+
+  const { config } = resolveConfig(overridesFrom(args));
+  const { signer } = await loadSigner();
+
+  const cached = readCachedToken();
+  if (!cached) {
+    process.stderr.write("ragctl: no cached Access token — run `ragctl login` (sending anyway; the worker will deny).\n");
+  } else if (tokenIsExpired(cached)) {
+    process.stderr.write("ragctl: cached Access token is expired — run `ragctl login` (sending anyway).\n");
+  }
+
+  const client = createDevProxyClient({
+    baseUrl: config.baseUrl,
+    dpopProof: signer,
+    ...(cached ? { accessToken: () => cached.token } : {}),
+  });
+
+  const response = await client.command(request);
+  if (has(args, "json")) {
+    out(JSON.stringify({ status: response.status, body: response.body }, null, 2));
+  } else {
+    out(`HTTP ${response.status}`);
+    const hint = STATUS_HINT[response.status];
+    if (hint) {
+      out(`(${hint})`);
+    }
+    out(typeof response.body === "string" ? response.body : JSON.stringify(response.body, null, 2));
+  }
+  return response.status >= 200 && response.status < 300 ? 0 : 1;
+};
+
 const runConfig = (args: Args): number => {
   const { config, sources } = resolveConfig(overridesFrom(args));
   out(`baseUrl:    ${config.baseUrl}  (${sources.baseUrl})`);
@@ -207,6 +282,8 @@ const main = async (): Promise<number> => {
       return runWhoami();
     case "discover":
       return runDiscover();
+    case "cmd":
+      return runCmd(args);
     case "config":
       return runConfig(args);
     default:
