@@ -112,7 +112,10 @@ test("a token from an unexpected issuer is denied", async () => {
 test("a tampered signature is denied", async () => {
   const { token, resolver, bytes } = await gatewayToBrain();
   const [header, payload, signature] = token.split(".");
-  const flipped = `${signature.slice(0, -2)}${signature.slice(-2) === "AA" ? "AB" : "AA"}`;
+  // Flip the FIRST signature character so a full high-order bit group of byte 0
+  // changes; tampering the last base64url char can touch only non-significant
+  // trailing bits and decode to the same 64-byte signature (a flaky no-op).
+  const flipped = `${signature[0] === "A" ? "B" : "A"}${signature.slice(1)}`;
   const result = await verify(resolver, `${header}.${payload}.${flipped}`, {
     expectedAud: "brain",
     expectedIssuers: ["gateway"],
