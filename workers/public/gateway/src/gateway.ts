@@ -72,8 +72,14 @@ export const getGatewayHealth = async (env: Env) => gatewayStub(env).health();
 // Idempotently ensure the gateway websocket is up. Called by the worker's cron
 // trigger and opportunistically on each interaction, so the connection
 // self-establishes after a deploy and self-heals without any manual
-// /gateway/start. A no-op while the operator has explicitly stopped it.
-export const ensureGatewayConnected = async (env: Env) => gatewayStub(env).ensureConnected();
+// /gateway/start. A no-op while the operator has explicitly stopped it, or when
+// the DO binding is absent (e.g. unit tests with a mock env).
+export const ensureGatewayConnected = async (env: Env) => {
+  if (!env.DISCORD_GATEWAY) {
+    return { ok: false as const };
+  }
+  return gatewayStub(env).ensureConnected();
+};
 
 export class DiscordGateway extends DurableObject<Env> {
   private webSocket: WebSocket | null = null;
