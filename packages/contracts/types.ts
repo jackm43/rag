@@ -270,6 +270,10 @@ export type Env = Cloudflare.Env & {
   CLOUDFLARE_API_TOKEN?: string;
   CF_AIG_GATEWAY_ID?: string;
   GATEWAY_CONTROL_TOKEN?: string;
+  // Production verifying keyring: JSON map of machine principal -> public JWK.
+  // Overrides the committed default keyring in packages/identity/keyring.ts.
+  // Public keys are not secret, so this is a plain var, not a secret.
+  SERVICE_PUBLIC_KEYS?: string;
   ALLOWED_GUILD_IDS?: string;
   AI_BURST_LIMIT_PER_MINUTE?: string;
   AI_GLOBAL_DAILY_BUDGET_USD?: string;

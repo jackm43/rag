@@ -1,6 +1,6 @@
 import { authorizeAndForward } from "../authz/forward";
 import { peekEnvelopeOperation } from "../contracts";
-import { keyringResolver, verify, type PublicKeyResolver } from "../identity";
+import { resolverFromEnv, verify, type PublicKeyResolver } from "../identity";
 import type { Env } from "../contracts/types";
 import type { RequestContext, ServiceRequest } from "./context";
 import { logServiceDenial, parseServiceMessage } from "./message";
@@ -65,7 +65,7 @@ export const createServiceServer = (config: ServiceServerConfig): ServiceServer 
       }
       const envelope = parsed.envelope;
 
-      const result = await verify(config.resolver ?? keyringResolver, parsed.idToken, {
+      const result = await verify(config.resolver ?? resolverFromEnv(config.env), parsed.idToken, {
         expectedAud: config.self,
         expectedIssuers: config.expectedIssuers,
         envelopeBytes: envelope,

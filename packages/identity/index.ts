@@ -13,4 +13,4 @@ export {
   type VerifyOptions,
   type VerifyResult,
 } from "./token";
-export { keyringResolver, PUBLIC_KEYRING } from "./keyring";
+export { keyringResolver, resolverFromEnv, PUBLIC_KEYRING } from "./keyring";

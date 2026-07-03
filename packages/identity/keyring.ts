@@ -64,3 +64,44 @@ export const keyringResolver: PublicKeyResolver = async (iss) => {
   keyCache.set(iss, key);
   return key;
 };
+
+// The committed PUBLIC_KEYRING above is the development/default keyring — its
+// private halves live in test/helpers.ts so the suite can sign and verify
+// against it. PRODUCTION supplies the real public keys (whose private halves are
+// in per-worker signing-key secrets, never the repo) as a JSON map via the
+// SERVICE_PUBLIC_KEYS var — public keys are not secret. A verifier prefers the
+// env keyring and falls back to the committed default, so a token signed by a
+// real private key only verifies where the matching real public key is
+// configured; a missing/garbled var fails closed to the committed keys (a
+// key mismatch is a denial, never a bypass).
+export type ServicePublicKeysEnv = { SERVICE_PUBLIC_KEYS?: string };
+
+const parseEnvKeyring = (raw: string | undefined): Record<string, JsonWebKey> => {
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, JsonWebKey>) : {};
+  } catch {
+    return {};
+  }
+};
+
+export const resolverFromEnv = (env?: ServicePublicKeysEnv): PublicKeyResolver => {
+  const override = parseEnvKeyring(env?.SERVICE_PUBLIC_KEYS);
+  const cache = new Map<string, CryptoKey>();
+  return async (iss) => {
+    const cached = cache.get(iss);
+    if (cached) {
+      return cached;
+    }
+    const jwk = override[iss] ?? PUBLIC_KEYRING[iss as MachinePrincipal];
+    if (!jwk) {
+      return null;
+    }
+    const key = await importVerifyingKey(jwk);
+    cache.set(iss, key);
+    return key;
+  };
+};

@@ -49,14 +49,24 @@ export CLOUDFLARE_ACCOUNT_ID=314e7e015b5f4429c4e2da1e6ec93271
 **Already in 1Password** (`op://Services/ragbot/<field>`): `ApplicationId`,
 `PublicKey`, `bot_token`, `CF_AIG_TOKEN`, `clientid`, `client_secret`.
 
-**Missing — must be created during deploy:**
-- `GATEWAY_CONTROL_TOKEN` — generate `openssl rand -hex 32`; store in 1P and set as a secret.
+**Minted and stored in 1Password (`op://Services/ragbot/<field>`) ✅:**
+- `GATEWAY_CONTROL_TOKEN` (`openssl rand -hex 32`).
 - `GATEWAY_SIGNING_KEY`, `BRAIN_SIGNING_KEY`, `DEV_PROXY_SIGNING_KEY` — Ed25519
-  private JWKs from `tsx scripts/generate-keys.ts <worker>`. **Each regenerates a
-  keypair**, so the printed *public* JWK must replace that worker's entry in
-  `packages/identity/keyring.ts` and be committed, and the *private* JWK set as
-  the secret. (The keyring currently holds public keys whose private halves were
-  not retained, so regenerate all three signers together.)
+  private JWKs. Their **public** halves (not secret) are supplied to verifiers via
+  the `SERVICE_PUBLIC_KEYS` var (below); the committed keyring stays the test
+  default. Only signers hold a private key: gateway, brain, dev-proxy.
+
+**`SERVICE_PUBLIC_KEYS`** — set this var on every VERIFIER worker (gateway, brain,
+responder, spend). Public keys, safe to commit/expose:
+```json
+{"gateway":{"kty":"OKP","crv":"Ed25519","x":"pjPnmzDg8sFiw95aT29EnVQjYmmItFaKY7M7rX03q30"},"brain":{"kty":"OKP","crv":"Ed25519","x":"CUSIFz4uUSxN3d3JaQ6sBT6W_I6hfwqciJ4yoKKQ41M"},"dev-proxy":{"kty":"OKP","crv":"Ed25519","x":"-bcFIFR-aRiAU0T9zHQAifPkR15dWOTGNiiUCy5y33U"}}
+```
+
+**Config vars to set:** `ALLOWED_GUILD_IDS` = `457689460096630794` (gateway+brain);
+`DEV_PROXY_GUILD` = `457689460096630794` (dev-proxy); `DEV_PROXY_SUBJECT` +
+gateway `DEV_PROXY_ALLOWED_SUBJECTS` = **the operator's Discord user id** (still
+needed); dev-proxy `CF_ACCESS_TEAM_DOMAIN` = `jsmunro.cloudflareaccess.com`,
+`CF_ACCESS_AUD` = the Access app AUD tag (from the Access step).
 
 **Per-worker secret matrix** (`wrangler secret put <NAME> -c <config>`, value on stdin):
 
