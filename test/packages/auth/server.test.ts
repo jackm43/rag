@@ -3,8 +3,10 @@ import { assert, test } from "vitest";
 import { createServiceServer } from "../../../packages/auth/server.ts";
 import { serviceClients } from "../../../packages/auth/client.ts";
 import {
+  decodeAiSpendJobEnvelope,
   decodeReplyJobEnvelope,
   decodeServiceMessage,
+  encodeAiSpendJobEnvelope,
   encodeReplyJobEnvelope,
   encodeServiceMessage,
 } from "../../../packages/contracts/index.ts";
@@ -103,7 +105,9 @@ test("receive denies an invalid envelope even under a valid token", async () => 
     assert.equal(invalid, null);
     const denial = warnings.lines.find((line) => line.message === "service_denied");
     assert.ok(denial);
-    assert.equal(denial.reason, "envelope_invalid");
+    // Malformed bytes carry no readable operation, so the registration gate
+    // refuses them before any decode runs.
+    assert.equal(denial.reason, "operation_unregistered");
   } finally {
     warnings.restore();
   }
@@ -147,12 +151,14 @@ test("receive denies a token addressed to another service", async () => {
 test("the forwarding authorizer drops a verified hop that policy does not permit", async () => {
   const warnings = captureWarnings();
   try {
-    // gateway -> spend verifies cryptographically (real key, correct aud) but
-    // no service.invoke policy permits the pair, so the request exits at the
-    // authorizer.
+    // gateway -> spend verifies cryptographically (real key, correct aud) and
+    // carries a registered spend operation, so it clears the registration
+    // gate — but no service.invoke policy permits the pair, so the request
+    // exits at the authorizer.
     const server = createServiceServer({ self: "spend", expectedIssuers: ["gateway", "brain"] });
-    const message = await signedServiceMessage(replyEnvelope(), { iss: "gateway", aud: "spend" });
-    const denied = await server.receive(message, decodeReplyJobEnvelope);
+    const envelope = encodeAiSpendJobEnvelope({ spendEventId: "event-1" }, { source: "worker" });
+    const message = await signedServiceMessage(envelope, { iss: "gateway", aud: "spend" });
+    const denied = await server.receive(message, decodeAiSpendJobEnvelope);
     assert.equal(denied, null);
     const denial = warnings.lines.find((line) => line.message === "service_denied");
     assert.ok(denial);

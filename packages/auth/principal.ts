@@ -42,6 +42,29 @@ export const SERVICE_ZONE: Record<MachinePrincipal, TrustZone> = {
   spend: "application",
 };
 
+// A service is a collection of registered operations. Each service accepts
+// exactly the envelope kinds (EventEnvelope `type`) listed here and nothing
+// else; the receiving boundary refuses any operation absent from its own set
+// before Cedar or any payload decode runs. This is the single source of truth
+// the per-service manifests declare from, so the registration a service
+// advertises and the operations its boundary enforces cannot drift. The
+// gateway is a public edge ingress with no service-boundary surface, so it
+// accepts none.
+export const SERVICE_OPERATIONS: Record<MachinePrincipal, readonly string[]> = {
+  gateway: [],
+  brain: [
+    "thread_start",
+    "thread_reply",
+    "channel_reply",
+    "ask",
+    "ragjam",
+    "bicture",
+    "message.received",
+  ],
+  responder: ["reply.channel_message", "reply.interaction_edit"],
+  spend: ["spend"],
+};
+
 // How a request crossed into the receiving service.
 export type Transport = "queue" | "binding" | "http";
 

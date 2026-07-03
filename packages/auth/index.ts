@@ -4,6 +4,7 @@
 // implemented behind this surface.
 export {
   isMachinePrincipal,
+  SERVICE_OPERATIONS,
   SERVICE_ZONE,
   SYSTEM_SUBJECT,
   type MachinePrincipal,

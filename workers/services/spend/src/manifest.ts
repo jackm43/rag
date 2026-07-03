@@ -1,11 +1,14 @@
-import { SERVICE_ZONE } from "../../../../packages/auth/principal";
+import { SERVICE_OPERATIONS, SERVICE_ZONE } from "../../../../packages/auth/principal";
 import type { ServiceManifest } from "../../../../packages/auth/manifest";
 
 // The spend service's position: an application service reconciling AI spend
-// events; accepts spend jobs and exchanges into nothing.
+// events; accepts the spend job and exchanges into nothing. Its registered
+// operations are declared from the shared registry so the manifest and the
+// boundary enforce the same set. (The wire operation is the "spend" envelope
+// kind emitted by encodeAiSpendJobEnvelope, not "spend.reconcile".)
 export const SPEND_MANIFEST: ServiceManifest = {
   service: "spend",
   zone: SERVICE_ZONE.spend,
   targets: [],
-  operations: ["spend.reconcile"],
+  operations: [...SERVICE_OPERATIONS.spend],
 };

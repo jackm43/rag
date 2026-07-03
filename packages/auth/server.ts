@@ -1,18 +1,21 @@
 import { authorizeAndForward } from "../authz/forward";
+import { peekEnvelopeOperation } from "../contracts";
 import { keyringResolver, verify, type PublicKeyResolver } from "../identity";
 import type { Env } from "../contracts/types";
 import type { RequestContext, ServiceRequest } from "./context";
 import { logServiceDenial, parseServiceMessage } from "./message";
-import { SERVICE_ZONE, type MachinePrincipal, type Transport } from "./principal";
+import { SERVICE_OPERATIONS, SERVICE_ZONE, type MachinePrincipal, type Transport } from "./principal";
 import { registryEntities } from "./registry";
 
 // Receiving side of the service boundary. One pipeline for every transport:
 //   1. extract envelope + token from the received body
 //   2. verify the identity token (signature, iss in expected, aud == self,
 //      exp/iat window, envelope-hash binding) — a cryptographic gate
-//   3. forwarding authorizer: Cedar service.invoke with the VERIFIED issuer
+//   3. registration gate: read the envelope's operation without trusting the
+//      payload and refuse any operation this service has not registered
+//   4. forwarding authorizer: Cedar service.invoke with the VERIFIED issuer
 //      as the principal either forwards into decode or the request exits
-//   4. decode + value-validate the envelope (contracts)
+//   5. decode + value-validate the envelope (contracts)
 // Any failure logs the shared service_denied shape and returns null; nothing
 // reaches domain code, and the message is acked/dropped by the caller. On
 // success the handler receives the full verified RequestContext (subject and
@@ -23,6 +26,10 @@ export type ServiceServerConfig = {
   self: MachinePrincipal;
   // Services whose tokens this boundary will accept.
   expectedIssuers: readonly MachinePrincipal[];
+  // The operations this service registers; absent, its own set from the
+  // shared registry (SERVICE_OPERATIONS[self]) — the same set its manifest
+  // declares from, so registration and enforcement cannot drift.
+  operations?: readonly string[];
   // For the registry entity snapshot; absent, static policies decide.
   env?: Env;
   resolver?: PublicKeyResolver;
@@ -39,6 +46,7 @@ export type ServiceServer = {
 
 export const createServiceServer = (config: ServiceServerConfig): ServiceServer => {
   const zone = SERVICE_ZONE[config.self];
+  const registeredOperations = config.operations ?? SERVICE_OPERATIONS[config.self];
   const deny = (transport: Transport, identity: MachinePrincipal | "unknown", reason: string) =>
     logServiceDenial({ identity, zone, transport }, reason);
 
@@ -72,6 +80,19 @@ export const createServiceServer = (config: ServiceServerConfig): ServiceServer 
       // principal Cedar decides on; the subject and delegation chain ride in
       // the verified context for downstream attribution.
       const source = result.context.iss;
+
+      // Registration gate: a service is a collection of registered operations,
+      // so read the envelope's operation from the framed bytes — cheaply, and
+      // without trusting the payload — and refuse anything this service has
+      // not registered before the authorizer or any decode runs. An issuer
+      // allowed to invoke the service still cannot send an operation kind the
+      // service does not accept.
+      const operation = peekEnvelopeOperation(envelope);
+      if (operation === null || !registeredOperations.includes(operation)) {
+        deny(transport, source, "operation_unregistered");
+        return null;
+      }
+
       const entities = config.env ? await registryEntities(config.env) : [];
       return authorizeAndForward(
         {

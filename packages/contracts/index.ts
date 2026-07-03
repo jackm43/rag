@@ -305,6 +305,20 @@ const aiJobFrom = (envelope: EventEnvelope): unknown => {
   }
 };
 
+// Read an envelope's operation — its `type` discriminator — from the framed
+// bytes without decoding or trusting the payload union. The receiving service
+// boundary checks this against its registered operation set before Cedar and
+// before any payload decode, so an unregistered operation never reaches the
+// authorizer or domain code. Returns null when the bytes are not a sanely
+// framed envelope of the current version, or carry no type.
+export const peekEnvelopeOperation = (bytes: unknown): string | null => {
+  const envelope = readEnvelope(bytes);
+  if (!envelope) {
+    return null;
+  }
+  return envelope.type.length > 0 ? envelope.type : null;
+};
+
 export const decodeAiJobEnvelope = (bytes: unknown): AiJob | null => {
   const envelope = readEnvelope(bytes);
   if (!envelope) {
