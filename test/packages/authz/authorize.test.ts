@@ -70,10 +70,15 @@ test("the operator may drive the gateway control routes and nothing else", () =>
   );
 });
 
-const invokeRequest = (sender: string, receiver: string): AuthorizationRequest => ({
+const invokeRequest = (
+  sender: string,
+  receiver: string,
+  operation?: string,
+): AuthorizationRequest => ({
   principal: { type: "Machine", id: sender },
   action: "service.invoke",
   resource: { type: "Service", id: receiver },
+  ...(operation ? { context: { operation } } : {}),
 });
 
 const exchangeRequest = (
@@ -125,6 +130,7 @@ const registrySnapshot = (): EntityJson[] => [
     attrs: {
       zone: "application",
       clients: [{ __entity: { type: "Machine", id: "gateway" } }],
+      operations: ["spend"],
     },
     parents: [],
   },
@@ -132,12 +138,13 @@ const registrySnapshot = (): EntityJson[] => [
 
 test("registry entities extend the static policy to registered hops", () => {
   // gateway -> spend is not a bootstrap hop, so it is denied statically...
-  assert.isFalse(authorize(invokeRequest("gateway", "spend")).allowed);
+  assert.isFalse(authorize(invokeRequest("gateway", "spend", "spend")).allowed);
   assert.isFalse(authorize(exchangeRequest("gateway", "spend", "edge", "application")).allowed);
 
-  // ...but a registered manifest pair authorizes it through the attribute rules.
+  // ...but a registered manifest pair authorizes it through the attribute
+  // rules, for an operation the receiver registers.
   const entities = registrySnapshot();
-  assert.isTrue(authorize(invokeRequest("gateway", "spend"), entities).allowed);
+  assert.isTrue(authorize(invokeRequest("gateway", "spend", "spend"), entities).allowed);
   assert.isTrue(authorize(exchangeRequest("gateway", "spend", "edge", "application"), entities).allowed);
 
   // The registered zones still bind: a mismatched transition is denied.

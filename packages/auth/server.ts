@@ -99,6 +99,10 @@ export const createServiceServer = (config: ServiceServerConfig): ServiceServer 
           principal: { type: "Machine", id: source },
           action: "service.invoke",
           resource: { type: "Service", id: config.self },
+          // The operation rides in context so the registered-hop policy can
+          // permit only the operations the receiving service registers, not
+          // merely the service-level pairing.
+          context: { operation },
         },
         {
           entities,

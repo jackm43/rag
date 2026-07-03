@@ -35,8 +35,11 @@ const entityRef = (type: "Machine" | "Service", id: string) => ({
 
 // The registry as Cedar entities: for each registered service, a Machine
 // principal entity (zone, targets, operations) and a Service resource entity
-// (zone, clients derived from the OTHER manifests' targets). Pure so the
-// position calculation is testable outside the Durable Object.
+// (zone, clients derived from the OTHER manifests' targets, and the
+// operations it accepts). The Service carries operations so the invoke policy
+// can authorize the specific operation against the receiver's registered set,
+// not just the service-level pairing. Pure so the position calculation is
+// testable outside the Durable Object.
 export const manifestsToEntities = (manifests: ServiceManifest[]): EntityJson[] => {
   const entities: EntityJson[] = [];
   for (const manifest of manifests) {
@@ -58,6 +61,7 @@ export const manifestsToEntities = (manifests: ServiceManifest[]): EntityJson[] 
         attrs: {
           zone: manifest.zone,
           clients,
+          operations: manifest.operations,
         },
         parents: [],
       },

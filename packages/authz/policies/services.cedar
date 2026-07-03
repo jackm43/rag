@@ -14,6 +14,11 @@
 // fallback for when the registry is empty or unreachable (fail closed to
 // these exact permits, never open).
 
+// A registered hop is permitted only for an operation the receiver registers:
+// the sender must target the service, the service must list the sender as a
+// client, and the invoked operation (carried in context) must be one the
+// service accepts. An issuer sending an operation the receiver does not
+// register is denied here as well as at the boundary's registration gate.
 @id("invoke-registered")
 permit (
   principal is Machine,
@@ -25,7 +30,10 @@ when
   principal has targets &&
   principal.targets.contains(resource) &&
   resource has clients &&
-  resource.clients.contains(principal)
+  resource.clients.contains(principal) &&
+  context has operation &&
+  resource has operations &&
+  resource.operations.contains(context.operation)
 };
 
 @id("exchange-registered")
