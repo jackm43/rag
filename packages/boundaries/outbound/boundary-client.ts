@@ -7,7 +7,12 @@ export type TrustZone =
   | "egress-media"
   // The credential broker's egress to a connector's configured provider host.
   // One boundary client per connector, host-allowlisted to that provider only.
-  | "egress-connector";
+  | "egress-connector"
+  // The secrets module's egress to a remote secrets backend, host-allowlisted to
+  // exactly that backend: HashiCorp Vault (egress-vault) and 1Password Connect
+  // (egress-onepassword). See packages/secrets/providers/*.
+  | "egress-vault"
+  | "egress-onepassword";
 
 export type BoundaryCredential = {
   header: string;

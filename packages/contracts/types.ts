@@ -370,6 +370,31 @@ export type Env = Cloudflare.Env & {
   // encrypted at rest by the platform; this adds envelope encryption for the
   // stored user refresh/access tokens where an operator wants defence in depth.
   CONNECTORS_TOKEN_ENC_KEY?: string;
+  // Pluggable secrets backends for the credential broker (packages/secrets). A
+  // connector's registry entry names one of these via a {provider, ref}; the
+  // default provider is "wrangler-env" (the worker-secret vars above), so these
+  // are only bound when an operator points a connector at a remote backend.
+  //
+  //   SECRETS_STORE — a Cloudflare Secrets Store binding. Structurally typed as
+  //     an async get(name) so contracts does not depend on the platform type;
+  //     the cloudflare-secret-store provider reads a secret by name through it.
+  SECRETS_STORE?: {
+    get: (name: string) => Promise<string | null>;
+  };
+  //   VAULT_ADDR / VAULT_TOKEN / VAULT_NAMESPACE — HashiCorp Vault. The
+  //     hashicorp-vault provider reads via the KV v2 HTTP API through a boundary
+  //     client host-allowlisted to VAULT_ADDR's host, authenticating with
+  //     VAULT_TOKEN (and VAULT_NAMESPACE for Vault Enterprise/HCP, when set).
+  VAULT_ADDR?: string;
+  VAULT_TOKEN?: string;
+  VAULT_NAMESPACE?: string;
+  //   OP_CONNECT_HOST / OP_CONNECT_TOKEN — 1Password Connect. The onepassword
+  //     provider resolves op://vault/item/field references via the Connect REST
+  //     API through a boundary client host-allowlisted to OP_CONNECT_HOST. (The
+  //     official 1Password SDK is Node-only and does not run on workerd — see
+  //     CONNECTORS.md — so the broker uses Connect's HTTP API instead.)
+  OP_CONNECT_HOST?: string;
+  OP_CONNECT_TOKEN?: string;
   // The guild the dev-proxy's commands target. The acting Discord subject is no
   // longer an env default — it is the Discord id of the authenticated Better Auth
   // session (see workers/public/dev-proxy). The gateway independently enforces
