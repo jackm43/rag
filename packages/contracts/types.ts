@@ -254,18 +254,11 @@ export type Env = Cloudflare.Env & {
   GATEWAY_DEVPROXY?: {
     invokeCommand: (message: ServiceMessageBytes) => Promise<DevProxyResult>;
   };
-  // DPoP jti replay-cache Durable Object, bound on the dev-proxy worker only.
-  // Strongly consistent (single-threaded) so the check-and-record is atomic.
-  DPOP_REPLAY?: {
-    idFromName: (name: string) => DurableObjectId;
-    get: (id: DurableObjectId) => {
-      seenBefore: (jti: string, ttlSeconds: number) => Promise<boolean>;
-    };
-  };
-  // The Discord user the dev-proxy acts as, and the guild its commands target.
-  // The gateway independently enforces DEV_PROXY_ALLOWED_SUBJECTS, so this is a
-  // convenience default, not a trust boundary.
-  DEV_PROXY_SUBJECT?: string;
+  // The guild the dev-proxy's commands target. The acting Discord subject is no
+  // longer an env default — it is the Discord id of the authenticated Better Auth
+  // session (see workers/public/dev-proxy). The gateway independently enforces
+  // DEV_PROXY_ALLOWED_SUBJECTS, so guild is a convenience default, not a trust
+  // boundary.
   DEV_PROXY_GUILD?: string;
   CLOUDFLARE_API_TOKEN?: string;
   CF_AIG_GATEWAY_ID?: string;
@@ -305,6 +298,23 @@ export type Env = Cloudflare.Env & {
   // only (the sole runtime AI consumer). loadConfig reads it with a bundled
   // fallback, so it is optional — a fresh namespace or KV outage still works.
   AI_CONFIG?: KVNamespace;
+  // Dev-proxy application-identity layer (workers/public/dev-proxy). Better Auth
+  // with Discord OAuth runs BEHIND Cloudflare Access: Access is the perimeter,
+  // Better Auth resolves which Discord user is acting, and that Discord id
+  // becomes the command's subject. Better Auth is authN only; Cedar stays authZ.
+  //   AUTH_DB — the standalone `ragbot-auth` D1 database holding Better Auth's
+  //     user/session/account/verification tables (kept apart from the gateway's
+  //     operational DB). Passed to Better Auth directly (native D1 adapter).
+  //   DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET — the Discord OAuth application
+  //     credentials (secret, provisioned via `wrangler secret put`).
+  //   BETTER_AUTH_SECRET — session/cookie signing secret (secret).
+  //   BETTER_AUTH_URL — the public origin Access fronts (https://ragbot-dev…),
+  //     from which Better Auth derives its OAuth callback and cookie domain.
+  AUTH_DB?: D1Database;
+  DISCORD_CLIENT_ID?: string;
+  DISCORD_CLIENT_SECRET?: string;
+  BETTER_AUTH_SECRET?: string;
+  BETTER_AUTH_URL?: string;
 };
 
 export const DISCORD_API_BASE_URL = "https://discord.com/api/v10";

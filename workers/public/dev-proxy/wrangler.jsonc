@@ -29,18 +29,35 @@
   ],
   "vars": {
     "DISCORD_APPLICATION_ID": "1496842508251172895"
-    // Set these as vars (not secret — the team domain is public and the AUD tag
-    // is an identifier, not a credential) before deploy:
+    // Set these as vars (not secret — the team domain is public, the AUD tag is
+    // an identifier, and the base URL / guild are not credentials) before deploy:
     //   "CF_ACCESS_TEAM_DOMAIN": "<team>.cloudflareaccess.com"
     //   "CF_ACCESS_AUD": "<access application AUD tag>"
-    //   "DEV_PROXY_SUBJECT": "<the Discord user id the proxy acts as>"
+    //   "BETTER_AUTH_URL": "https://ragbot-dev.jsmunro.me"
     //   "DEV_PROXY_GUILD": "<guild id commands target>"
-    // Secret (never commit):
-    //   wrangler secret put DEV_PROXY_SIGNING_KEY   (private JWK from generate-keys.ts dev-proxy)
-    // On the GATEWAY worker, add the matching allowlist so the gateway will act
-    // as this subject:
-    //   "DEV_PROXY_ALLOWED_SUBJECTS": "<the same Discord user id>"
+    // Secret (never commit) — set with `wrangler secret put <NAME>`:
+    //   DEV_PROXY_SIGNING_KEY   (private JWK from scripts/generate-keys.ts dev-proxy)
+    //   DISCORD_CLIENT_ID       (Discord OAuth application client id)
+    //   DISCORD_CLIENT_SECRET   (Discord OAuth application client secret)
+    //   BETTER_AUTH_SECRET      (random 32+ byte secret; signs sessions/cookies)
+    // The acting Discord subject is now the authenticated Better Auth session, not
+    // an env default. On the GATEWAY worker keep the allowlist of Discord ids the
+    // proxy may act as (defense in depth):
+    //   "DEV_PROXY_ALLOWED_SUBJECTS": "<comma-separated Discord user ids>"
   },
+  // Better Auth's application-identity store (Discord OAuth login behind
+  // Access). A standalone D1 database, separate from the gateway's `ragbot`
+  // operational DB, so login/session state never mingles with product data.
+  // Apply its schema before deploy:
+  //   wrangler d1 migrations apply ragbot-auth -c workers/public/dev-proxy/wrangler.jsonc --remote
+  "d1_databases": [
+    {
+      "binding": "AUTH_DB",
+      "database_name": "ragbot-auth",
+      "database_id": "2768451b-39c6-4e8f-ada6-13c8beb2012e",
+      "migrations_dir": "migrations"
+    }
+  ],
   "observability": {
     "logs": {
       "enabled": true,
@@ -52,10 +69,6 @@
   },
   "durable_objects": {
     "bindings": [
-      {
-        "name": "DPOP_REPLAY",
-        "class_name": "DpopReplay"
-      },
       // Service registry hosted by the standalone ragbot-registry-worker.
       {
         "name": "SERVICE_REGISTRY",
@@ -64,14 +77,6 @@
       }
     ]
   },
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": [
-        "DpopReplay"
-      ]
-    }
-  ],
   // The dev-proxy's only egress: the gateway's DevProxy service-binding
   // entrypoint. A service binding is invocable solely by a worker configured
   // with it, so this hop is reachable only from here.
