@@ -62,6 +62,7 @@ DiscordGateway DO (in gateway worker): websocket → validate → encode → enq
 - `packages/discord` — Discord REST module (built on the outbound boundary client).
 - `packages/domain` — business logic: command registry + specs, conversation/thread building, consumer processors, limits, bans, guild allowlist, DLQ handlers, responder output policy.
 - `packages/logger` — structured logging + trimmed error detail.
+- `packages/connectors` — the **credential broker** abstraction: connector strategies (`api_key`, `oauth2_client_credentials`, `oauth2_authorization_code` 3LO seam, `github_app` reference impl), the declarative connector registry, the DO-backed grant + encrypted 3LO token stores, the per-isolate access-token cache, and `handleConnectorInvoke` (the authn+authz gate). Hosted by `ragbot-connectors-worker` (`workers/services/connectors`) — no route/queue, reachable only over the `CONNECTORS` service binding. Uniform **phantom-token** model: `grant` exchanges a caller's verified identity for an opaque, caller-bound handle; `authorizedFetch`/`getAccessToken`/`introspect` present the handle and the real provider credential never leaves the broker. Every op is authenticated (identity token) + Cedar-authorized (`connector.*` on `Connector::<id>`) and audit-logged with the full actor chain. See **`CONNECTORS.md`**. No caller binds it yet; the brain is the intended first caller (`brainToConnectors` client + Cedar permits already exist).
 
 ### Security properties now true in code
 
