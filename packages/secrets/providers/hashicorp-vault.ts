@@ -107,5 +107,6 @@ export const hashicorpVaultProvider = (env: Env): SecretsProvider => {
         throw new Error(`vault_set_status:${response.status}`);
       }
     },
+    configured: () => Boolean(address && token),
   };
 };

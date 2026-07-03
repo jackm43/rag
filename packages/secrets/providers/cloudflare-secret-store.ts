@@ -25,4 +25,8 @@ export const cloudflareSecretStoreProvider = (env: Env): SecretsProvider => ({
       return null;
     }
   },
+  // The read binding is present, but there is no runtime `set` (see above): the
+  // admin surface reports this backend as non-writable and tells the operator the
+  // exact secret name to provision through the Cloudflare control plane.
+  configured: () => Boolean(env.SECRETS_STORE),
 });

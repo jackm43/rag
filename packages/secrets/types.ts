@@ -22,9 +22,14 @@ export type SecretRef = {
 // A pluggable secrets backend. `get` resolves a reference to its plaintext
 // value, or null when it is absent/unreachable — providers FAIL CLOSED so a
 // missing or broken backend denies the connector op rather than surfacing a
-// half-resolved credential. `set` is optional (the future secrets-management
-// UI); a read-only backend omits it.
+// half-resolved credential. `set` is optional: a backend that can only be
+// written out-of-band (deploy-time worker secrets, control-plane Secrets Store)
+// omits it, and the presence of `set` IS the runtime write-capability the admin
+// surface reports. `configured` reports whether the backend has the env it needs
+// to operate at all (address + token, a binding); absent means "always
+// configured" (the wrangler-env default, which is just `env`).
 export type SecretsProvider = {
   get: (ref: string) => Promise<string | null>;
   set?: (ref: string, value: string) => Promise<void>;
+  configured?: () => boolean;
 };

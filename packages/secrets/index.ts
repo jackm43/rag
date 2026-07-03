@@ -13,6 +13,35 @@ import type { SecretRef, SecretsProvider } from "./types";
 
 export type { SecretRef, SecretsProvider } from "./types";
 
+// The four backends, in the order the admin surface lists them. This is the
+// single source of truth for "which backends exist"; describeSecretsProviders
+// maps each to its runtime capability.
+export const SECRETS_PROVIDER_NAMES = [
+  "wrangler-env",
+  "cloudflare-secret-store",
+  "hashicorp-vault",
+  "onepassword",
+] as const;
+
+// A backend's runtime capability, for the connectors admin surface (never a
+// secret value). `writable` is whether the backend supports a runtime `set` (it
+// exposes the `set` method); `configured` is whether it has the env/binding it
+// needs to operate at all. The UI disables a non-writable backend for value
+// entry and warns when one is unconfigured.
+export type SecretsProviderInfo = { name: string; writable: boolean; configured: boolean };
+
+export const describeSecretsProviders = (env: Env): SecretsProviderInfo[] =>
+  SECRETS_PROVIDER_NAMES.map((name) => {
+    const provider = secretsProvider(env, name);
+    return {
+      name,
+      writable: typeof provider.set === "function",
+      // Absent `configured` means "always configured" — the wrangler-env default,
+      // which is just `env` and needs no address/token/binding.
+      configured: provider.configured ? provider.configured() : true,
+    };
+  });
+
 // Select a secrets backend by name. An unknown name falls back to wrangler-env
 // (today's behaviour) so a connector with no explicit backend keeps reading
 // worker secrets — the safe default, not a failure.

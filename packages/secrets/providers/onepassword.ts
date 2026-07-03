@@ -20,8 +20,17 @@ import type { SecretsProvider } from "../types";
 // Connect has no single "resolve op:// reference" endpoint, so this walks its
 // REST surface: vault name -> vault id, item title -> item id, then the item's
 // fields, matched by field label or id. op:// references use names/titles.
+//
+// `set` writes a value back through the same walk: it resolves the vault + item
+// (both must already exist — a runtime write cannot conjure a vault/item), finds
+// the field by label/id, and applies a JSON Patch to that item (replace the
+// field's value when it exists, add a CONCEALED field when it does not). This is
+// a real runtime write, so the admin surface reports 1Password as writable.
 
 const OP_TIMEOUT_MS = 10_000;
+
+type OpField = { id?: string; label?: string; value?: unknown };
+type OpItem = { id?: string; fields?: OpField[] };
 
 type ParsedRef = { vault: string; item: string; field: string };
 
@@ -81,6 +90,27 @@ export const onepasswordProvider = (env: Env): SecretsProvider => {
       ? (list[0] as { id: string }).id
       : null;
 
+  // Walk vault name -> vault id and item title -> item id. Returns null when
+  // either cannot be resolved (fail closed for get; a write throws on null).
+  const resolveItem = async (
+    client: { fetch: BoundaryFetch; base: string },
+    parsed: ParsedRef,
+  ): Promise<{ vaultId: string; itemId: string } | null> => {
+    const vaultId = firstId(
+      await jsonGet(client.fetch, filtered(client.base, "/v1/vaults", "name", parsed.vault)),
+    );
+    if (!vaultId) {
+      return null;
+    }
+    const itemId = firstId(
+      await jsonGet(
+        client.fetch,
+        filtered(client.base, `/v1/vaults/${vaultId}/items`, "title", parsed.item),
+      ),
+    );
+    return itemId ? { vaultId, itemId } : null;
+  };
+
   return {
     get: async (ref) => {
       const client = boundary();
@@ -89,24 +119,14 @@ export const onepasswordProvider = (env: Env): SecretsProvider => {
         return null;
       }
       try {
-        const vaultId = firstId(
-          await jsonGet(client.fetch, filtered(client.base, "/v1/vaults", "name", parsed.vault)),
-        );
-        if (!vaultId) {
+        const resolved = await resolveItem(client, parsed);
+        if (!resolved) {
           return null;
         }
-        const itemId = firstId(
-          await jsonGet(
-            client.fetch,
-            filtered(client.base, `/v1/vaults/${vaultId}/items`, "title", parsed.item),
-          ),
-        );
-        if (!itemId) {
-          return null;
-        }
-        const item = (await jsonGet(client.fetch, `${client.base}/v1/vaults/${vaultId}/items/${itemId}`)) as {
-          fields?: Array<{ id?: string; label?: string; value?: unknown }>;
-        } | null;
+        const item = (await jsonGet(
+          client.fetch,
+          `${client.base}/v1/vaults/${resolved.vaultId}/items/${resolved.itemId}`,
+        )) as OpItem | null;
         const match = item?.fields?.find((f) => f.label === parsed.field || f.id === parsed.field);
         return typeof match?.value === "string" && match.value.length > 0 ? match.value : null;
       } catch (error) {
@@ -114,5 +134,43 @@ export const onepasswordProvider = (env: Env): SecretsProvider => {
         return null;
       }
     },
+    set: async (ref, value) => {
+      const client = boundary();
+      const parsed = parseRef(ref);
+      if (!client || !parsed) {
+        throw new Error("onepassword_set_misconfigured");
+      }
+      const resolved = await resolveItem(client, parsed);
+      if (!resolved) {
+        // The vault/item must already exist; a runtime write does not create them.
+        throw new Error("onepassword_set_item_unresolved");
+      }
+      const item = (await jsonGet(
+        client.fetch,
+        `${client.base}/v1/vaults/${resolved.vaultId}/items/${resolved.itemId}`,
+      )) as OpItem | null;
+      const existing = item?.fields?.find((f) => f.label === parsed.field || f.id === parsed.field);
+      // A JSON Patch on the item: replace the field's value when it exists, else
+      // append a new CONCEALED field carrying the label the op:// ref names.
+      const patch = existing?.id
+        ? [{ op: "replace", path: `/fields/${existing.id}/value`, value }]
+        : [{ op: "add", path: "/fields/-", value: { label: parsed.field, type: "CONCEALED", value } }];
+      const response = await client.fetch(
+        `${client.base}/v1/vaults/${resolved.vaultId}/items/${resolved.itemId}`,
+        {
+          method: "PATCH",
+          headers: {
+            authorization: `Bearer ${token as string}`,
+            accept: "application/json",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(patch),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(`onepassword_set_status:${response.status}`);
+      }
+    },
+    configured: () => Boolean(host && token),
   };
 };

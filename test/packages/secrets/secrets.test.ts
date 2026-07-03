@@ -1,6 +1,10 @@
 import { assert, test } from "vitest";
 
-import { resolveSecretRef, secretsProvider } from "../../../packages/secrets/index.ts";
+import {
+  describeSecretsProviders,
+  resolveSecretRef,
+  secretsProvider,
+} from "../../../packages/secrets/index.ts";
 
 // The secrets-provider module is the gate through which the broker resolves every
 // credential. These tests prove two things: the factory selects the right backend
@@ -131,4 +135,113 @@ test("onepassword resolves an op:// reference via Connect, and fails closed", as
   } finally {
     missingField.restore();
   }
+});
+
+test("onepassword set writes the value back through Connect (replace vs add)", async () => {
+  const env = {
+    OP_CONNECT_HOST: "https://connect.example.com",
+    OP_CONNECT_TOKEN: "op-token",
+  } as never;
+
+  // An existing field is patched by id with a `replace` op; the value is never
+  // echoed back to the caller (set resolves void).
+  const replace = captureFetch((url, init) => {
+    if (url.includes("/v1/vaults?")) {
+      return new Response(JSON.stringify([{ id: "vault-id", name: "Services" }]), { status: 200 });
+    }
+    if (url.includes("/items?")) {
+      return new Response(JSON.stringify([{ id: "item-id", title: "ragbot" }]), { status: 200 });
+    }
+    if (init?.method === "PATCH") {
+      return new Response(JSON.stringify({ id: "item-id" }), { status: 200 });
+    }
+    return new Response(
+      JSON.stringify({ id: "item-id", fields: [{ id: "f1", label: "KEY", value: "old" }] }),
+      { status: 200 },
+    );
+  });
+  try {
+    await secretsProvider(env, "onepassword").set?.("op://Services/ragbot/KEY", "new-secret");
+    const patch = replace.calls.find((call) => call.init?.method === "PATCH");
+    assert.ok(patch);
+    const body = JSON.parse(String(patch.init?.body)) as Array<{ op: string; path: string }>;
+    assert.equal(body[0].op, "replace");
+    assert.equal(body[0].path, "/fields/f1/value");
+  } finally {
+    replace.restore();
+  }
+
+  // An absent field is appended with an `add` op carrying the ref's label.
+  const add = captureFetch((url, init) => {
+    if (url.includes("/v1/vaults?")) {
+      return new Response(JSON.stringify([{ id: "vault-id" }]), { status: 200 });
+    }
+    if (url.includes("/items?")) {
+      return new Response(JSON.stringify([{ id: "item-id" }]), { status: 200 });
+    }
+    if (init?.method === "PATCH") {
+      return new Response(JSON.stringify({ id: "item-id" }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ id: "item-id", fields: [] }), { status: 200 });
+  });
+  try {
+    await secretsProvider(env, "onepassword").set?.("op://Services/ragbot/NEW", "v");
+    const patch = add.calls.find((call) => call.init?.method === "PATCH");
+    const body = JSON.parse(String(patch?.init?.body)) as Array<{ op: string; value: { label: string } }>;
+    assert.equal(body[0].op, "add");
+    assert.equal(body[0].value.label, "NEW");
+  } finally {
+    add.restore();
+  }
+
+  // A vault/item that cannot be resolved throws — a runtime write does not
+  // create the item, and it must not silently no-op.
+  const unresolved = captureFetch(() => new Response(JSON.stringify([]), { status: 200 }));
+  try {
+    await secretsProvider(env, "onepassword")
+      .set?.("op://Nope/Nope/KEY", "v")
+      .then(
+        () => assert.fail("expected a throw for an unresolved item"),
+        () => undefined,
+      );
+  } finally {
+    unresolved.restore();
+  }
+});
+
+test("describeSecretsProviders reports per-backend runtime write capability", async () => {
+  // Nothing configured: wrangler-env is always available (the default); the
+  // remote/binding backends report unconfigured. Writability is a static
+  // property of the backend, independent of whether it is configured.
+  const bare = describeSecretsProviders({} as never);
+  const byName = Object.fromEntries(bare.map((info) => [info.name, info]));
+  assert.deepEqual(byName["wrangler-env"], {
+    name: "wrangler-env",
+    writable: false,
+    configured: true,
+  });
+  assert.equal(byName["cloudflare-secret-store"].writable, false);
+  assert.equal(byName["cloudflare-secret-store"].configured, false);
+  assert.equal(byName["hashicorp-vault"].writable, true);
+  assert.equal(byName["hashicorp-vault"].configured, false);
+  assert.equal(byName["onepassword"].writable, true);
+  assert.equal(byName["onepassword"].configured, false);
+
+  // Configured Vault + 1Password report configured:true and writable:true.
+  const configured = describeSecretsProviders({
+    VAULT_ADDR: "https://vault.example.com",
+    VAULT_TOKEN: "s.token",
+    OP_CONNECT_HOST: "https://connect.example.com",
+    OP_CONNECT_TOKEN: "op-token",
+    SECRETS_STORE: { get: async () => null },
+  } as never);
+  const cfg = Object.fromEntries(configured.map((info) => [info.name, info]));
+  assert.equal(cfg["hashicorp-vault"].configured, true);
+  assert.equal(cfg["onepassword"].configured, true);
+  // The Secrets Store binding is present but remains non-writable at runtime.
+  assert.deepEqual(cfg["cloudflare-secret-store"], {
+    name: "cloudflare-secret-store",
+    writable: false,
+    configured: true,
+  });
 });
