@@ -303,7 +303,7 @@ Only the gateway speaks HTTP, and its surface is **constructed from the spec**: 
 
 All allow/deny decisions are centralised in `packages/authz` and evaluated by [Cedar](https://www.cedarpolicy.com/) (`@cedar-policy/cedar-wasm`, compiled at deploy time via wrangler's CompiledWasm rule and instantiated once per isolate). Principals follow RFC naming: `Human` (Discord users) and `Machine` (services and the operator control plane).
 
-- **Policies** live in `packages/authz/policies/*.cedar` (`commands.cedar` for the slash-command surface incl. the admin gate and raghammer-ban forbid, `operator.cedar` for the `/gateway/*` control plane, `services.cedar` for worker-to-worker hops). `services.cedar` carries two actions: `service.invoke` (evaluated at receive time on the verified issuer) and `service.exchange` (evaluated on first use of a service client with the hop's `{fromZone, toZone}` context, so an unauthorized hop yields a fail-closed client). Each policy carries an `@id` annotation that denial diagnostics surface as the reason.
+- **Policies** live in `packages/authz/policies/*.cedar` (`commands.cedar` for the slash-command surface incl. the admin gate and raghammer-ban forbid, `operator.cedar` for the `/gateway/*` control plane, `services.cedar` for worker-to-worker hops, `devproxy.cedar` for the dev-proxy capability surface). `services.cedar` carries two actions: `service.invoke` (evaluated at receive time on the verified issuer) and `service.exchange` (evaluated on first use of a service client with the hop's `{fromZone, toZone}` context, so an unauthorized hop yields a fail-closed client). `devproxy.cedar` carries `devproxy.invoke` (evaluated with the `dev-proxy` machine principal against a `DevProxy` resource with the command in context) — the app-level surface bounding which commands the dev application may proxy, independent of the ordinary per-user `command.*` gate that then runs. Each policy carries an `@id` annotation that denial diagnostics surface as the reason.
 - **Registry-driven policy**: services register a manifest (zone, targets, operations) with the `ServiceRegistry` Durable Object on startup; the registry snapshot is merged into the Cedar entity store, and the `invoke-registered` / `exchange-registered` attribute rules authorize registered pairs. The static per-hop permits in `services.cedar` remain as the bootstrap fallback when the registry is empty or unreachable (fail closed to those permits, never open).
 - **Forwarding authorizer**: `authorizeAndForward` (`packages/authz/forward.ts`) puts authorization structurally on the request path — either the request is authorized and forwarded, or it exits with a logged denial; there is no boolean for a caller to ignore.
 - **To add an admin**, add the Discord user id to `RAG_ADMIN_USER_IDS` in `packages/authz/entities.ts` — membership of the `Group::"rag-admins"` entity is data, not policy.
@@ -338,7 +338,9 @@ wrangler secret put GATEWAY_SIGNING_KEY -c workers/public/gateway/wrangler.jsonc
 wrangler secret put BRAIN_SIGNING_KEY   -c workers/services/brain/wrangler.jsonc
 ```
 
-Only the gateway (origin mint) and brain (downstream re-mint) sign; the responder and spend workers are leaves that only verify against the committed keyring. To rotate a key, deploy the new private key to the secret and update the public JWK in `keyring.ts`.
+Only the gateway (origin mint), brain (downstream re-mint), and dev-proxy (origin mint for browser sessions) sign; the responder and spend workers are leaves that only verify against the committed keyring. To rotate a key, deploy the new private key to the secret and update the public JWK in `keyring.ts`.
+
+The dev-proxy token additionally carries two optional session-binding claims, `dpopJkt` (the RFC 7638 thumbprint of the browser's DPoP key) and `sid` (an audit session id). They are present only on the dev-proxy edge hop and absent on every service-to-service hop, so the verifier and existing minters are unchanged.
 
 ## Workers, Trust Zones, and Secrets
 
@@ -348,6 +350,7 @@ Only the gateway (origin mint) and brain (downstream re-mint) sign; the responde
 | `ragbot-brain-worker` | `workers/services/brain/wrangler.jsonc` | `ai-jobs` consumer: **read Discord + AI + D1**. Resolves raw `message.received` events (thread lookup, mention/role resolution, usage limits) in-process, reads thread history, replied-to messages, and bot roles over Discord REST, and creates `/ask`-style threads; every message/edit it produces leaves via the outbox queue or the responder RPC binding, never directly | `CF_AIG_TOKEN` (belongs to brain **only** — remove it from `ragbot-worker` with `wrangler secret delete CF_AIG_TOKEN`), `DISCORD_BOT_TOKEN` (honestly required: Discord *reads* need the bot token too, so the brain keeps it even though writes go through the responder), `BRAIN_SIGNING_KEY` (re-mints on-behalf-of identity-context tokens for the responder and spend hops) |
 | `ragbot-responder-worker` | `workers/services/responder/wrangler.jsonc` | **Write Discord** — the single egress choke point. No public route. Consumes `discord-outbox` for text replies and exposes the `Responder` RPC entrypoint for media-bearing interaction edits. The only place `sanitizeAiText`, the message length cap, and `allowed_mentions: { parse: [] }` run on AI output before it reaches Discord | `DISCORD_BOT_TOKEN` |
 | `ragbot-spend-worker` | `workers/services/spend/wrangler.jsonc` | `ai-spend-jobs` consumer: AI Gateway log reconciliation | `CLOUDFLARE_API_TOKEN` (scoped to AI Gateway read) |
+| `ragbot-dev-proxy-worker` | `workers/public/dev-proxy/wrangler.jsonc` | Public **development app that runs in prod**: behind Cloudflare Access, verifies Access JWT + per-request DPoP proof, then invokes the gateway's `DevProxy` service binding as the `dev-proxy` machine principal. Hosts the `DpopReplay` DO. No dev environment, no dev data — see [Dev proxy](#dev-proxy-development-application-that-runs-in-production) | `DEV_PROXY_SIGNING_KEY` (mints the on-behalf-of token for each browser session) |
 
 Set a secret on a specific worker with `wrangler secret put NAME -c workers/services/brain/wrangler.jsonc` (or the matching config file).
 
@@ -364,6 +367,56 @@ Set a secret on a specific worker with `wrangler secret put NAME -c workers/serv
 The `DiscordGateway` Durable Object treats `MESSAGE_CREATE` as a second untrusted ingress: it validates the payload shape, encodes a `message.received` envelope (ids, length-capped content, author, mentions, mention roles, reply metadata), and enqueues it — nothing else. Because thread tracking lives in D1 and the DO deliberately has no D1 or REST access, it cannot know locally whether a non-mention message belongs to a tracked thread, so every non-bot message with a non-empty stripped prompt is enqueued and the brain filters. That trades queue volume for isolation, which is fine for a single small guild. The brain then does the thread lookup, bot-role fetch, mention resolution, and rate/budget checks, and processes the resolved reply in the same invocation (no re-enqueue); denial notices leave via the outbox.
 
 **Deliberate deviation from RECOMMENDATIONS.md section 1:** the DO stays hosted in the main worker rather than moving to a dedicated listener worker — moving a Durable Object class between scripts requires a risky transfer migration. Documented here as a possible future step instead.
+
+## Dev proxy (development application that runs in production)
+
+The `ragbot-dev-proxy-worker` (`workers/public/dev-proxy`) lets a developer exercise the **real** gateway → brain command path against **real** data with no separate dev environment, dev client, or dev data. It is a public edge worker whose ingress is gated twice before it will mint anything, and whose hop into the gateway is authorized identically to a Discord-initiated command — plus two extra app-level gates.
+
+**Why this shape.** The gateway's existing ingresses are HTTP guards (Discord Ed25519 signature, operator control token). Rather than bolt a third public HTTP surface onto the gateway, the dev-proxy is a *separate* worker that reaches the gateway over a **service binding** — a hop invocable only by a worker configured with it, so the gateway's `DevProxy` entrypoint is reachable only from the dev-proxy and never from the public internet. The dev-proxy is a first-class `dev-proxy` machine principal (edge zone) with its own Ed25519 signing key, so its hop carries the same cryptographic identity as the gateway/brain hops.
+
+**Request flow and its fail-closed gates:**
+
+```
+Browser (untrusted)
+  │  Cloudflare Access (org SSO) in front of the whole worker
+  ▼
+dev-proxy worker (edge)
+  1. cf-access guard — verify the Access JWT (RS256/ES256) against the team JWKS:
+     iss (team domain), aud (Access application AUD tag), exp/nbf. Fails closed if
+     CF_ACCESS_TEAM_DOMAIN / CF_ACCESS_AUD unset.
+  2. DPoP — verify a fresh proof (ES256) the browser signs per request: htm/htu
+     binding, iat window, and single-use jti (replay-checked in the DpopReplay DO).
+     The proof's key thumbprint (jkt) sender-constrains the session.
+  3. mint on-behalf-of token: sub = the Access user, carrying dpopJkt + sid, bound
+     to the Cap'n Proto devproxy.command envelope; call the gateway DevProxy binding
+  ▼
+gateway DevProxy entrypoint (edge)
+  4. createServiceServer verification — Ed25519 signature, aud=gateway, iss=dev-proxy,
+     exp, envelope-hash binding; registration gate (only devproxy.command); Cedar
+     service.invoke for the dev-proxy app.
+  5. acting Discord subject must be in DEV_PROXY_ALLOWED_SUBJECTS (unset denies all).
+  6. Cedar devproxy.invoke — the app-level capability surface (which commands the dev
+     app may proxy at all; devproxy.cedar grants the public commands, withholds admin).
+  7. the ORDINARY command pre-flight (routeInteraction → executeCommand): guild
+     allowlist, per-user Cedar command.*, raghammer ban, usage limits — identical to a
+     Discord-initiated command.
+```
+
+Any failure returns a bare status and never discloses which gate refused. Inline commands (`/ragboard`, `/ragspend`, …) round-trip their result to the browser. Enqueue/AI commands (`/ask`, `/bicture`, `/ragjam`) run the full authorized path and enqueue to the brain; because there is no real Discord interaction, the final Discord edit targets the real application id with a synthetic interaction token (a no-op at Discord), so the AI/D1/spend work runs and is observable while the browser sees the deferred acknowledgement.
+
+**Why DPoP replay uses a Durable Object, not KV.** Replay protection needs an atomic check-and-record. The `DpopReplay` DO is single-threaded per instance, so `seenBefore` reads and writes without a race and with no eventual-consistency / write-visibility window in which a replayed proof could slip through (KV's read-after-write is not immediate across the edge). A single named instance serializes all checks; shard by jkt if volume ever grows. Entries expire lazily via an alarm.
+
+**Contracts.** The public ingress is described by `workers/public/dev-proxy/openapi.yaml` (OpenAPI 3.1 with `cfAccess` + `dpop` security schemes) and validated at runtime with zod; the generated types (`packages/devproxy-client/api-types.ts`, `npm run devproxy:types`) are committed and the worker's zod schema `satisfies` them so ingress and client cannot drift. The service-binding payload is Cap'n Proto (`DevProxyCommandPayload` in `envelope.capnp`), reusing the same generated contract layer as the queue hops. `packages/devproxy-client` is a dumb typed client for `ragctl`: it owns no key material or Access token (both come from `dpopProof` / `accessToken` middleware hooks), and `createDpopSigner` builds the proof hook from a WebCrypto P-256 key pair.
+
+**Bootstrap.** Generate the signing key and put an Access application in front of the hostname:
+
+```sh
+tsx scripts/generate-keys.ts dev-proxy
+# commit the printed public JWK to keyring.ts (already done for the current key), then:
+wrangler secret put DEV_PROXY_SIGNING_KEY -c workers/public/dev-proxy/wrangler.jsonc
+```
+
+Set `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`, `DEV_PROXY_SUBJECT`, and `DEV_PROXY_GUILD` as vars on the dev-proxy worker, and add the matching `DEV_PROXY_ALLOWED_SUBJECTS` var on the **gateway** worker so it will act as that subject. Deploy the gateway before the dev-proxy so the `DevProxy` binding target exists.
 
 ## Local and Deploy Commands
 
