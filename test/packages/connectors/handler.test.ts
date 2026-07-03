@@ -88,6 +88,174 @@ const grantJob = (connectorId: string, params: Record<string, unknown> = {}): Co
   paramsJson: JSON.stringify(params),
 });
 
+const adminJob = (
+  operation: ConnectorInvokeJob["operation"],
+  extra: Partial<ConnectorInvokeJob> = {},
+): ConnectorInvokeJob => ({
+  kind: "connector.invoke",
+  operation,
+  scopes: [],
+  paramsJson: "",
+  ...extra,
+});
+
+// The connectors ADMIN surface. The dev-proxy is the only admin caller; the
+// invariant is the same as every other broker op — authenticated + Cedar-gated
+// (connector.admin.*) + audit-logged — and NO management op ever returns a secret
+// value. These tests prove the gate fails closed and the per-backend set-secret
+// write-capability differences are surfaced honestly (never faking success).
+
+test("admin_list: the dev-proxy admin caller lists connectors and their status, never secrets", async () => {
+  const logs = captureLogs();
+  try {
+    const message = await signedServiceMessage(encode(adminJob("admin_list")), {
+      iss: "dev-proxy",
+      aud: "connectors",
+    });
+    const result = await handleConnectorInvoke(message, storeEnv().env);
+    assert.equal(result.status, 200);
+    const connectors = result.connectors ?? [];
+    const github = connectors.find((c) => c.id === "github-app");
+    assert.ok(github);
+    assert.equal(github.secretProvider, "wrangler-env");
+    // Its secret is unprovisioned in this env, so status is a boolean, not a value.
+    assert.equal(github.secretConfigured, false);
+    assert.include(github.flows, "fetch");
+    // The admin op is audited with the actor chain.
+    assert.ok(logs.lines.some((line) => line.message === "connector_admin" && line.operation === "admin_list"));
+  } finally {
+    logs.restore();
+  }
+});
+
+test("admin ops fail closed: the brain (a credential caller, not an admin) is denied", async () => {
+  const logs = captureLogs();
+  try {
+    // The brain is a valid broker caller for connector.grant/fetch/token, but it
+    // holds NO connector.admin.* permit — an admin op is refused by Cedar.
+    const message = await signedServiceMessage(encode(adminJob("admin_list")), {
+      iss: "brain",
+      aud: "connectors",
+    });
+    const result = await handleConnectorInvoke(message, storeEnv().env);
+    assert.equal(result.status, 403);
+    assert.ok(logs.lines.some((line) => line.reason === "not_authorized"));
+  } finally {
+    logs.restore();
+  }
+});
+
+test("admin_providers: reports each backend's runtime write capability (no values)", async () => {
+  const { env } = storeEnv({ VAULT_ADDR: "https://vault.example.com", VAULT_TOKEN: "s.token" });
+  const message = await signedServiceMessage(encode(adminJob("admin_providers")), {
+    iss: "dev-proxy",
+    aud: "connectors",
+  });
+  const result = await handleConnectorInvoke(message, env);
+  assert.equal(result.status, 200);
+  const byName = Object.fromEntries((result.providers ?? []).map((p) => [p.name, p]));
+  assert.equal(byName["wrangler-env"].writable, false);
+  assert.equal(byName["cloudflare-secret-store"].writable, false);
+  assert.equal(byName["hashicorp-vault"].writable, true);
+  assert.equal(byName["hashicorp-vault"].configured, true);
+  assert.equal(byName["onepassword"].writable, true);
+});
+
+test("set-secret: wrangler-env with a value is rejected (deploy-time only), nothing persisted", async () => {
+  const { env } = storeEnv();
+  const message = await signedServiceMessage(
+    encode(
+      adminJob("admin_set_secret", {
+        connectorId: "github-app",
+        paramsJson: JSON.stringify({
+          provider: "wrangler-env",
+          ref: "GITHUB_APP_PRIVATE_KEY",
+          value: "super-secret-pem",
+        }),
+      }),
+    ),
+    { iss: "dev-proxy", aud: "connectors" },
+  );
+  const result = await handleConnectorInvoke(message, env);
+  assert.equal(result.status, 200);
+  assert.equal(result.secret?.status, "rejected");
+  // The value never appears in the response.
+  assert.notInclude(JSON.stringify(result), "super-secret-pem");
+
+  // Nothing was persisted: a describe shows no override.
+  const describe = await signedServiceMessage(
+    encode(adminJob("admin_describe", { connectorId: "github-app" })),
+    { iss: "dev-proxy", aud: "connectors" },
+  );
+  const described = await handleConnectorInvoke(describe, env);
+  assert.equal(described.connector?.secretOverridden, false);
+});
+
+test("set-secret: cloudflare-secret-store with a value re-points but requires out-of-band provisioning", async () => {
+  const { env } = storeEnv();
+  const message = await signedServiceMessage(
+    encode(
+      adminJob("admin_set_secret", {
+        connectorId: "github-app",
+        paramsJson: JSON.stringify({ provider: "cloudflare-secret-store", ref: "GH_APP_KEY", value: "x" }),
+      }),
+    ),
+    { iss: "dev-proxy", aud: "connectors" },
+  );
+  const result = await handleConnectorInvoke(message, env);
+  assert.equal(result.status, 200);
+  // Not faked as success: the write cannot happen at runtime.
+  assert.equal(result.secret?.status, "provision_required");
+  assert.include(result.secret?.detail ?? "", "GH_APP_KEY");
+});
+
+test("set-secret: hashicorp-vault writes the value at runtime and the connector re-points to it", async () => {
+  const { env } = storeEnv({ VAULT_ADDR: "https://vault.example.com", VAULT_TOKEN: "s.token" });
+  const vault = captureFetch((url, init) => {
+    // The KV v2 write (POST) succeeds; the read-back (GET) returns the value so
+    // the broker can report secretConfigured without ever returning it.
+    if (init?.method === "POST") {
+      return new Response(JSON.stringify({}), { status: 200 });
+    }
+    return new Response(
+      JSON.stringify({ data: { data: { GITHUB_APP_PRIVATE_KEY: "vault-stored-pem" } } }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  });
+  try {
+    const message = await signedServiceMessage(
+      encode(
+        adminJob("admin_set_secret", {
+          connectorId: "github-app",
+          paramsJson: JSON.stringify({
+            provider: "hashicorp-vault",
+            ref: "secret/ragbot#GITHUB_APP_PRIVATE_KEY",
+            value: "vault-stored-pem",
+          }),
+        }),
+      ),
+      { iss: "dev-proxy", aud: "connectors" },
+    );
+    const result = await handleConnectorInvoke(message, env);
+    assert.equal(result.status, 200);
+    assert.equal(result.secret?.status, "written");
+    assert.equal(result.secret?.secretConfigured, true);
+    // The value flowed inward only — it is never echoed back.
+    assert.notInclude(JSON.stringify(result), "vault-stored-pem");
+
+    // The override survives: a describe now shows the connector pointed at Vault.
+    const describe = await signedServiceMessage(
+      encode(adminJob("admin_describe", { connectorId: "github-app" })),
+      { iss: "dev-proxy", aud: "connectors" },
+    );
+    const described = await handleConnectorInvoke(describe, env);
+    assert.equal(described.connector?.secretProvider, "hashicorp-vault");
+    assert.equal(described.connector?.secretOverridden, true);
+  } finally {
+    vault.restore();
+  }
+});
+
 test("denies an unauthenticated call — a token not addressed to the broker", async () => {
   const logs = captureLogs();
   try {

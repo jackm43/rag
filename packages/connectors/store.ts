@@ -1,4 +1,5 @@
 import { errorMessage, logger } from "../logger";
+import type { SecretRef } from "../secrets";
 import type { GrantEntry } from "./types";
 
 // Persistence for the broker. Two stores sit on one strongly-consistent,
@@ -93,6 +94,7 @@ export const durableObjectKeyValueStore = (binding: ConnectorStoreBinding): KeyV
 
 const GRANT_PREFIX = "grant:";
 const OAUTH_PREFIX = "oauth:";
+const CONFIG_PREFIX = "config:";
 
 export type GrantStore = {
   put: (entry: GrantEntry) => Promise<void>;
@@ -124,6 +126,44 @@ export const createGrantStore = (kv: KeyValueStore, now: () => number = Date.now
   },
   remove: async (handle) => {
     await kv.remove(`${GRANT_PREFIX}${handle}`);
+  },
+});
+
+// The connector CONFIG store: an admin-set override of a connector's secret
+// reference, keyed by connectorId. The registry (registry.ts) is immutable code,
+// so setConnectorSecret cannot mutate the registry entry — instead it persists a
+// {provider, ref} override here, and the broker overlays it on the registry
+// entry when resolving a credential (so the change survives and takes effect).
+// It holds a REFERENCE only, never a secret value — the value (when the backend
+// is runtime-writable) lives in the secrets backend, exactly like every other
+// connector secret. An absent override means the registry default stands.
+export type ConnectorConfigStore = {
+  getSecretRef: (connectorId: string) => Promise<SecretRef | null>;
+  setSecretRef: (connectorId: string, ref: SecretRef) => Promise<void>;
+};
+
+const isSecretRef = (value: unknown): value is SecretRef =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof (value as SecretRef).provider === "string" &&
+  typeof (value as SecretRef).ref === "string";
+
+export const createConnectorConfigStore = (kv: KeyValueStore): ConnectorConfigStore => ({
+  getSecretRef: async (connectorId) => {
+    const raw = await kv.read(`${CONFIG_PREFIX}${connectorId}`);
+    if (!raw) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return isSecretRef(parsed) ? { provider: parsed.provider, ref: parsed.ref } : null;
+    } catch (error) {
+      logger.warn("connector_config_decode_failed", { connectorId, error: errorMessage(error) });
+      return null;
+    }
+  },
+  setSecretRef: async (connectorId, ref) => {
+    await kv.write(`${CONFIG_PREFIX}${connectorId}`, JSON.stringify({ provider: ref.provider, ref: ref.ref }));
   },
 });
 

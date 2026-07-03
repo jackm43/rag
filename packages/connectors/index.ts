@@ -8,11 +8,13 @@ export { CONNECTOR_REGISTRY, lookupConnector } from "./registry";
 export { strategyFor, PROVIDERS } from "./strategy";
 export { importAppPrivateKey, mintAppJwt, APP_JWT_TTL_SECONDS } from "./providers/github";
 export {
+  createConnectorConfigStore,
   createGrantStore,
   createOAuthTokenStore,
   createInMemoryKeyValueStore,
   durableObjectKeyValueStore,
   generateHandle,
+  type ConnectorConfigStore,
   type GrantStore,
   type KeyValueStore,
   type OAuthTokenStore,

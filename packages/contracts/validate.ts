@@ -45,6 +45,10 @@ const CONNECTOR_OPERATIONS: readonly ConnectorOperation[] = [
   "introspect",
   "begin_authorization",
   "complete_authorization",
+  "admin_list",
+  "admin_describe",
+  "admin_set_secret",
+  "admin_providers",
 ];
 
 const isString = (value: unknown): value is string => typeof value === "string";
@@ -207,7 +211,14 @@ export const validateConnectorInvokeJob = (value: unknown): value is ConnectorIn
   const operation = value.operation as ConnectorOperation;
   const usesHandle =
     operation === "fetch" || operation === "token" || operation === "introspect";
-  // A handle operation must carry a handle; a grant/authorization operation must
+  // Broker-wide admin ops (list every connector, list the secrets backends) name
+  // no single connector and bear no handle. They must carry neither locator.
+  const brokerWide = operation === "admin_list" || operation === "admin_providers";
+  if (brokerWide) {
+    return value.connectorId === undefined && value.handle === undefined;
+  }
+  // A handle operation must carry a handle; every other operation (grant,
+  // authorization, and the per-connector admin ops describe/set_secret) must
   // carry the connector it targets. Fail closed on the wrong locator.
   return usesHandle
     ? isString(value.handle) && value.connectorId === undefined

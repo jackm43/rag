@@ -73,4 +73,29 @@ export const connectorsClient = (env: Env, client: ServiceClient, subject: Subje
       connectorId,
       paramsJson: JSON.stringify(params),
     }),
+
+  // Management (admin) surface. These NEVER touch a grant/handle and NEVER
+  // return a secret value; each is separately Cedar-gated (connector.admin.*) at
+  // the broker. Used by the admin app (the dev-proxy), not the credential caller.
+  listConnectors: () =>
+    build(env, client, subject, { operation: "admin_list" as ConnectorOperation, paramsJson: "" }),
+  describeConnector: (connectorId: string) =>
+    build(env, client, subject, {
+      operation: "admin_describe" as ConnectorOperation,
+      connectorId,
+      paramsJson: "",
+    }),
+  // The secret value flows inward only (into paramsJson -> the broker -> the
+  // backend); it is never returned. `ref` is the backend locator.
+  setConnectorSecret: (
+    connectorId: string,
+    secret: { provider: string; ref?: string; value?: string },
+  ) =>
+    build(env, client, subject, {
+      operation: "admin_set_secret" as ConnectorOperation,
+      connectorId,
+      paramsJson: JSON.stringify(secret),
+    }),
+  getSecretsProviders: () =>
+    build(env, client, subject, { operation: "admin_providers" as ConnectorOperation, paramsJson: "" }),
 });

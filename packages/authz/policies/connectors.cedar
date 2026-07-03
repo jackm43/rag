@@ -40,3 +40,32 @@ permit (
   action == Action::"connector.token",
   resource == Connector::"github-app"
 );
+
+// The connectors ADMIN surface: management operations, distinct from the
+// credential-facing connector.grant/fetch/token above. The dev-proxy (the admin
+// application, authenticated by CF Access + a Better Auth Discord session and
+// carrying its verified machine identity token into the broker) is the only
+// admin caller. These actions NEVER return a secret value.
+//
+//   - connector.admin.list  — list connectors / list secrets backends (broker-
+//                             wide, against the Connector::"*" sentinel).
+//   - connector.admin.read  — describe one connector's config + status.
+//   - connector.admin.write — write / re-point one connector's secret.
+//
+// The dev-proxy holds NO connector.grant/fetch/token permit, so the admin caller
+// can manage connectors but can never use a credential. Broker-wide list/
+// providers are permitted only against the "*" sentinel (which CONNECTOR_ID_PATTERN
+// forbids as a real id), so this does not widen per-connector access.
+@id("devproxy-connector-admin-broker")
+permit (
+  principal == Machine::"dev-proxy",
+  action == Action::"connector.admin.list",
+  resource == Connector::"*"
+);
+
+@id("devproxy-connector-admin-manage")
+permit (
+  principal == Machine::"dev-proxy",
+  action in [Action::"connector.admin.read", Action::"connector.admin.write"],
+  resource is Connector
+);

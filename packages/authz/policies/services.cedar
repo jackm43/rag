@@ -95,6 +95,18 @@ permit (
   resource == Service::"gateway"
 );
 
+// The dev-proxy is ALSO the connectors admin caller: it invokes the broker's one
+// registered service operation (connector.invoke), carrying a connector.admin.*
+// management op. The broker independently gates which admin op via connectors.cedar
+// (dev-proxy holds no connector.grant/fetch/token permit). This is the second
+// caller of the broker after the brain.
+@id("invoke-devproxy-to-connectors")
+permit (
+  principal == Machine::"dev-proxy",
+  action == Action::"service.invoke",
+  resource == Service::"connectors"
+);
+
 @id("exchange-gateway-to-brain")
 permit (
   principal == Machine::"gateway",
@@ -137,3 +149,13 @@ permit (
   resource == Service::"gateway"
 )
 when { context.fromZone == "edge" && context.toZone == "edge" };
+
+// The dev-proxy exchanges into the connectors broker for the admin surface —
+// an edge→application hop, like the gateway→brain crossing.
+@id("exchange-devproxy-to-connectors")
+permit (
+  principal == Machine::"dev-proxy",
+  action == Action::"service.exchange",
+  resource == Service::"connectors"
+)
+when { context.fromZone == "edge" && context.toZone == "application" };

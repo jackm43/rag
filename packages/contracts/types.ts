@@ -150,7 +150,20 @@ export type ConnectorOperation =
   | "token"
   | "introspect"
   | "begin_authorization"
-  | "complete_authorization";
+  | "complete_authorization"
+  // Management operations for the admin surface (the dev-proxy). These NEVER
+  // touch a grant/handle and NEVER return a secret value; each is Cedar-gated by
+  // a `connector.admin.*` action and audit-logged like every other broker op.
+  //   admin_list      — list every connector + its secret status (no values)
+  //   admin_describe  — one connector's config + status (connectorId; no values)
+  //   admin_set_secret — write/point a connector's secret (connectorId; params
+  //                      carry {provider, ref?, value?}); the value flows inward
+  //                      only and is never echoed back
+  //   admin_providers — the secrets backends + their runtime write capability
+  | "admin_list"
+  | "admin_describe"
+  | "admin_set_secret"
+  | "admin_providers";
 
 // One operation against the credential broker, decoded from a connector.invoke
 // EventEnvelope. `connectorId` is present on grant/authorization operations;
@@ -242,6 +255,64 @@ export type ConnectorAuthorizationBegin = {
   state: string;
 };
 
+// Admin (management) result bodies. None ever carries a secret value — a
+// connector's secret is described only by its {provider, ref} reference and a
+// boolean "does it currently resolve". The set-secret outcome is a status
+// string, not a claim of success: a backend that cannot be written at runtime
+// (cloudflare-secret-store) returns `provision_required` with the exact ref to
+// set out-of-band, and a deploy-time backend (wrangler-env) with a value is
+// `rejected` — neither fakes success.
+export type ConnectorSummary = {
+  id: string;
+  kind: string;
+  host: string;
+  // The operations the connector's kind supports (e.g. fetch/token; 3LO adds
+  // authorize). Derived from the strategy, so the UI need not know kinds.
+  flows: string[];
+  // Whether the connector's currently-referenced secret resolves. Never the value.
+  secretConfigured: boolean;
+  // The backend the secret is (now) resolved through: the registry default or an
+  // admin-set override.
+  secretProvider: string;
+};
+
+export type ConnectorDetail = ConnectorSummary & {
+  cedarResource: string;
+  // The full {provider, ref} the secret is resolved through (a locator, never a
+  // value). Reflects an admin override when one has been set.
+  secretRef: string;
+  // Whether an admin has re-pointed this connector's secret away from the
+  // registry default (an override is persisted in the broker's config store).
+  secretOverridden: boolean;
+};
+
+export type SecretsProviderStatus = {
+  name: string;
+  writable: boolean;
+  configured: boolean;
+};
+
+export type SetConnectorSecretResult = {
+  // written           — the value was written to the backend at runtime and the
+  //                      connector re-pointed at {provider, ref}.
+  // referenced        — the connector was re-pointed at an existing {provider,
+  //                      ref} (no value supplied); the secret must already live
+  //                      there.
+  // provision_required — the connector was re-pointed, but the backend cannot be
+  //                      written at runtime; `detail` states the exact ref to
+  //                      provision out-of-band.
+  // rejected          — the operation was refused (e.g. a value for a deploy-time
+  //                      backend); `detail` says why. No mapping was persisted.
+  status: "written" | "referenced" | "provision_required" | "rejected";
+  connectorId: string;
+  provider: string;
+  ref: string;
+  // Whether the connector's secret now resolves through the chosen reference.
+  secretConfigured: boolean;
+  // A human-readable operator message (never contains the secret value).
+  detail?: string;
+};
+
 export type ConnectorResult = {
   status: number;
   grant?: ConnectorGrantResult;
@@ -249,6 +320,11 @@ export type ConnectorResult = {
   token?: ConnectorTokenResult;
   introspection?: ConnectorIntrospection;
   authorization?: ConnectorAuthorizationBegin;
+  // Admin (management) result bodies — one per admin operation.
+  connectors?: ConnectorSummary[];
+  connector?: ConnectorDetail;
+  providers?: SecretsProviderStatus[];
+  secret?: SetConnectorSecretResult;
 };
 
 // Service-hop queue body: capnp-encoded ServiceMessage bytes (service.capnp)
