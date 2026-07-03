@@ -51,7 +51,7 @@ test("/ask is denied for a raghammer-banned user before deferring", async () => 
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
@@ -86,7 +86,7 @@ test("/bicture does not enqueue a job for a raghammer-banned user", async () => 
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
@@ -122,7 +122,7 @@ test("/ragjam is denied for a raghammer-banned user", async () => {
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {

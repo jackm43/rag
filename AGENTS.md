@@ -12,12 +12,23 @@ This project expects these environment variables:
 ## Current Runtime Shape
 
 - Cloudflare Worker entrypoints:
-  - `workers/public/gateway/src/index.ts` Discord routing, gateway controls, and AI response queue consumer
-  - `workers/services/spend/src/index.ts` AI spend aggregation queue consumer
+  - `workers/public/gateway/src/index.ts` Discord routing, gateway controls (edge zone)
+  - `workers/services/brain/src/index.ts` AI job queue consumer (application zone)
+  - `workers/services/responder/src/index.ts` Discord write egress: outbox consumer + `Responder` RPC entrypoint (application zone)
+  - `workers/services/spend/src/index.ts` AI spend aggregation queue consumer (application zone)
+- Trust zones: Untrusted (public) -> Edge (gateway) -> Applications (brain, responder, spend) -> Trusted (service registry, signing roots)
 - Modules:
+  - `packages/auth` centralised auth service client library: RFC-named identity vocabulary (`MachinePrincipal`, `Subject`, delegation chain, `Target`, `TrustZone`), `serviceClients(env)`/`createServiceClient` factory (Cedar exchange check, signing keys, token minting, transport, denial logging), `createServiceServer` receive pipeline yielding `ServiceRequest` (verified `RequestContext` + payload), service manifests and registry client
+  - `packages/contracts/service.capnp` transport-layer contract for the service boundary: `ServiceMessage` (queue hop body: envelope bytes + JWS token), `ServiceManifest`/`ManifestSnapshot` (registry RPC payloads); generated code via `npm run contracts:build`. The identity token itself stays a JWS (RFC 7515), carried as Text
+  - `packages/authz` Cedar engine: `authorize()` (`Human`/`Machine` principals, static + registry entities), `authorizeAndForward` forwarding authorizer, policies in `packages/authz/policies/*.cedar` (`commands`, `operator`, `services`)
+  - `packages/identity` Ed25519 identity-context tokens (RFC 8693-style mint/verify), committed public keyring
+  - `packages/boundaries/inbound` untrusted-zone ingress guards (Discord signature, operator bearer token)
+  - `packages/boundaries/outbound` egress boundary clients (host allowlists, credentials, timeouts)
   - `packages/domain/http.ts` Discord signature verification, JSON responses, constant-time compare
   - `packages/discord/index.ts` Discord REST helpers
   - `workers/public/gateway/src/gateway.ts` `DiscordGateway` Durable Object (`DISCORD_GATEWAY` binding)
+  - `workers/public/gateway/src/registry.ts` `ServiceRegistry` Durable Object (`SERVICE_REGISTRY` binding on every worker); workers register manifests on startup and the Cedar authorizer consumes the entity snapshot
+  - `workers/public/gateway/openapi.yaml` OpenAPI spec for the gateway's public routes — the source of truth the gateway router is CONSTRUCTED from: `npm run routes:build` generates `src/routes.ts`, and `src/router.ts` wires paths, methods, security schemes (ingress guards) and operationId handlers from it. Only the gateway speaks HTTP; everything else is worker RPC/queues carrying Cap'n Proto
   - `packages/domain/mention.ts` mention handling, thread tracking, AI title generation, and AI queue consumer (thread conversation context)
   - `packages/domain/commands/ask.ts` `/ask` thread creation, normal AI response handling, and web-search research mode
   - `packages/domain/commands/ragspend.ts` `/ragspend` personal AI spend lookup and `/ragspendboard` spend leaderboard

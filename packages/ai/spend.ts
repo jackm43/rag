@@ -1,10 +1,7 @@
 import { decodeAiSpendJobEnvelope, encodeAiSpendJobEnvelope } from "../contracts";
 import { errorMessage, logger } from "../logger";
 import { boundaryClients } from "../boundaries/outbound/clients";
-import { peerDeliveryAuthorize } from "../authz/peer";
-import { peerLinks } from "../boundaries/peer/links";
-import { peerReceive } from "../boundaries/peer/queue";
-import { SYSTEM_SUBJECT } from "../identity";
+import { createServiceServer, serviceClients, SYSTEM_SUBJECT } from "../auth";
 import type { Env } from "../contracts/types";
 import { isRecord } from "../contracts/validation";
 
@@ -77,12 +74,13 @@ export const recordAiSpendEvent = async (env: Env, input: SpendEventInput) => {
       // Spend reconciliation is a brain-originated flow: it re-mints an
       // on-behalf-of token for the original requester when known, else the
       // user-less "system" subject.
-      await peerLinks(env).brainToSpend.send(
-        env.SPEND_JOBS,
-        encodeAiSpendJobEnvelope({ spendEventId: sourceId }, { source: "worker" }),
-        { sub: input.requesterUserId ?? SYSTEM_SUBJECT },
-        { delaySeconds: 120 },
-      );
+      await serviceClients(env).brainToSpend.call({
+        transport: "queue",
+        queue: env.SPEND_JOBS,
+        envelope: encodeAiSpendJobEnvelope({ spendEventId: sourceId }, { source: "worker" }),
+        subject: { sub: input.requesterUserId ?? SYSTEM_SUBJECT },
+        delaySeconds: 120,
+      });
     }
   } catch (error) {
     logger.warn("ai_spend_event_record_failed", { error: errorMessage(error), kind: input.kind, model: input.model });
@@ -156,15 +154,13 @@ const findGatewayLogCostMicros = async (env: Env, sourceId: string) => {
 };
 
 export const processSpendQueueMessage = async (message: Message<unknown>, env: Env) => {
-  const job = await peerReceive(message.body, decodeAiSpendJobEnvelope, {
-    self: "spend",
-    expectedIssuers: ["brain"],
-    authorize: peerDeliveryAuthorize("spend"),
-  });
-  if (!job) {
+  const server = createServiceServer({ self: "spend", expectedIssuers: ["brain"], env });
+  const received = await server.receive(message.body, decodeAiSpendJobEnvelope);
+  if (!received) {
     message.ack();
     return;
   }
+  const job = received.payload;
 
   const event = await env.DB.prepare(
     "SELECT source_id, kind, requester_user_id, requester_username, model, prompt_tokens, completion_tokens, total_tokens, unit_count, estimated_cost_micros, status FROM rag_ai_spend_events WHERE source_id = ?",

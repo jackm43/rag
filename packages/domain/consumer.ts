@@ -16,8 +16,7 @@ import { sendChannelReply } from "./outbox";
 import { finalizeAiReplyText } from "./responder";
 import { recordAiThread } from "./threads";
 import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "../ai/tracked-ai";
-import { peerDeliveryAuthorize } from "../authz/peer";
-import { peerReceive } from "../boundaries/peer/queue";
+import { createServiceServer } from "../auth";
 import { decodeAiJobEnvelope } from "../contracts";
 import {
   type AiAskJob,
@@ -267,21 +266,18 @@ const jobProcessors: AiJobProcessors = {
 
 export const processAiQueueMessage = async (message: Message<unknown>, env: Env) => {
   const startedAt = Date.now();
-  const decoded = await peerReceive(message.body, decodeAiJobEnvelope, {
-    self: "brain",
-    expectedIssuers: ["gateway"],
-    authorize: peerDeliveryAuthorize("brain"),
-  });
-  if (!decoded) {
+  const server = createServiceServer({ self: "brain", expectedIssuers: ["gateway"], env });
+  const received = await server.receive(message.body, decodeAiJobEnvelope);
+  if (!received) {
     message.ack();
     return;
   }
 
-  const process = jobProcessors[decoded.kind] as (
+  const process = jobProcessors[received.payload.kind] as (
     job: AiJob,
     env: Env,
     startedAt: number,
   ) => Promise<void>;
-  await process(decoded, env, startedAt);
+  await process(received.payload, env, startedAt);
   message.ack();
 };

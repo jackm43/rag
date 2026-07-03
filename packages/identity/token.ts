@@ -1,4 +1,4 @@
-// Signed identity-context tokens for peer hops.
+// Signed identity-context tokens for service hops.
 //
 // Cloudflare service bindings and queues are in-process, isolate-to-isolate
 // calls inside a single account: the *transport* identity ("which worker is
@@ -21,36 +21,37 @@
 // is preferred over ES256 for smaller keys/signatures and misuse-resistant,
 // deterministic signing.
 
-export type WorkerIdentity = "gateway" | "brain" | "responder" | "spend";
-
-// The user-less principal used for flows with no Discord user behind them
-// (e.g. spend reconciliation kicked off by the brain itself).
-export const SYSTEM_SUBJECT = "system";
+import {
+  isMachinePrincipal,
+  type MachinePrincipal,
+  type TrustZone,
+} from "../auth/principal";
 
 export const IDENTITY_TOKEN_TYP = "ragbot-idctx+jws";
 
-// Short-lived by design: a peer hop is processed within seconds, so a 60s
+// Short-lived by design: a service hop is processed within seconds, so a 60s
 // window bounds replay even before the envelope-hash binding is considered.
 export const IDENTITY_CONTEXT_TTL_SECONDS = 60;
 
 // Small allowance for clock differences between isolates.
 const DEFAULT_CLOCK_SKEW_SECONDS = 5;
 
-// The on-behalf-of identity context carried alongside each peer envelope.
-// Modelled on RFC 8693 (OAuth token exchange): `sub` is the principal the
-// request acts for, `act` is the actor chain of workers that have handled it.
+// The on-behalf-of identity context carried alongside each service envelope.
+// Modelled on RFC 8693 (OAuth token exchange): `sub` is the subject the
+// request acts for, `act` is the delegation chain of machine principals that
+// have handled it.
 export type IdentityContext = {
   // Discord user id, or SYSTEM_SUBJECT for user-less flows.
   sub: string;
-  // Actor chain, oldest first, each entry a worker identity the request has
-  // traversed. RFC 8693 §4.1 style, flattened to an array.
-  act: WorkerIdentity[];
-  // Minting worker (also the JWS `kid`).
-  iss: WorkerIdentity;
-  // Target worker the token is addressed to.
-  aud: WorkerIdentity;
+  // Delegation chain, oldest first, each entry a machine principal the
+  // request has traversed. RFC 8693 §4.1 style, flattened to an array.
+  act: MachinePrincipal[];
+  // Minting service (also the JWS `kid`).
+  iss: MachinePrincipal;
+  // Target service the token is addressed to.
+  aud: MachinePrincipal;
   // Trust zone the token was minted from.
-  trustZone: string;
+  trustZone: TrustZone;
   // Issued-at / expiry, seconds since epoch.
   iat: number;
   exp: number;
@@ -75,8 +76,8 @@ export type VerifyFailureReason =
   | "envelope_mismatch";
 
 export type VerifyOptions = {
-  expectedAud: WorkerIdentity;
-  expectedIssuers: readonly WorkerIdentity[];
+  expectedAud: MachinePrincipal;
+  expectedIssuers: readonly MachinePrincipal[];
   envelopeBytes: Uint8Array;
   // Seconds since epoch; defaults to the wall clock. Injected in tests.
   now?: number;
@@ -137,16 +138,16 @@ export const importSigningKey = (jwk: JsonWebKey): Promise<CryptoKey> =>
 export const importVerifyingKey = (jwk: JsonWebKey): Promise<CryptoKey> =>
   crypto.subtle.importKey("jwk", jwk, ED25519, false, ["verify"]);
 
-// Assemble a fresh context for a hop: appends the issuer to the inbound actor
-// chain, stamps iat/exp/jti, and binds the envelope hash.
+// Assemble a fresh context for a hop: appends the issuer to the inbound
+// delegation chain, stamps iat/exp/jti, and binds the envelope hash.
 export const buildIdentityContext = async (params: {
-  iss: WorkerIdentity;
-  aud: WorkerIdentity;
+  iss: MachinePrincipal;
+  aud: MachinePrincipal;
   sub: string;
-  trustZone: string;
+  trustZone: TrustZone;
   envelopeBytes: Uint8Array;
-  // Prior actor chain (the inbound context's `act`); empty at ingress.
-  act?: WorkerIdentity[];
+  // Prior delegation chain (the inbound context's `act`); empty at ingress.
+  act?: MachinePrincipal[];
   now?: number;
   ttlSeconds?: number;
 }): Promise<IdentityContext> => {
@@ -180,9 +181,6 @@ export const mint = async (
   return `${signingInput}.${b64urlFromBytes(new Uint8Array(signature))}`;
 };
 
-const isWorkerIdentity = (value: unknown): value is WorkerIdentity =>
-  value === "gateway" || value === "brain" || value === "responder" || value === "spend";
-
 const asContext = (value: unknown): IdentityContext | null => {
   if (typeof value !== "object" || value === null) {
     return null;
@@ -191,9 +189,9 @@ const asContext = (value: unknown): IdentityContext | null => {
   if (
     typeof candidate.sub !== "string" ||
     !Array.isArray(candidate.act) ||
-    !candidate.act.every(isWorkerIdentity) ||
-    !isWorkerIdentity(candidate.iss) ||
-    !isWorkerIdentity(candidate.aud) ||
+    !candidate.act.every(isMachinePrincipal) ||
+    !isMachinePrincipal(candidate.iss) ||
+    !isMachinePrincipal(candidate.aud) ||
     typeof candidate.trustZone !== "string" ||
     typeof candidate.iat !== "number" ||
     typeof candidate.exp !== "number" ||

@@ -28,6 +28,16 @@
       "migrations_dir": "../../../migrations"
     }
   ],
+  // Service registry hosted by the gateway worker (the parent application).
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SERVICE_REGISTRY",
+        "class_name": "ServiceRegistry",
+        "script_name": "ragbot-worker"
+      }
+    ]
+  },
   "observability": {
     "logs": {
       "enabled": true,

@@ -1,13 +1,21 @@
 import nacl from "tweetnacl";
 
-import { encodeAiJobEnvelope, type EnvelopeOptions } from "../packages/contracts";
-import type { AiJob, PeerQueueMessage } from "../packages/contracts/types";
+import {
+  decodeServiceMessage,
+  encodeAiJobEnvelope,
+  encodeServiceMessage,
+  type EnvelopeOptions,
+} from "../packages/contracts";
+import type { AiJob, ServiceMessageBytes } from "../packages/contracts/types";
+import {
+  SERVICE_ZONE,
+  SYSTEM_SUBJECT,
+  type MachinePrincipal,
+} from "../packages/auth/principal";
 import {
   buildIdentityContext,
   importSigningKey,
   mint,
-  SYSTEM_SUBJECT,
-  type WorkerIdentity,
 } from "../packages/identity";
 
 const encoder = new TextEncoder();
@@ -17,7 +25,7 @@ const encoder = new TextEncoder();
 // test. In production these live in per-worker secrets, never the repo — these
 // are test fixtures only. (No `alg` field: workerd's importKey rejects
 // alg:"Ed25519" on an OKP JWK.)
-export const SIGNING_KEY_JWKS: Record<WorkerIdentity, JsonWebKey> = {
+export const SIGNING_KEY_JWKS: Record<MachinePrincipal, JsonWebKey> = {
   gateway: {
     kty: "OKP",
     crv: "Ed25519",
@@ -44,51 +52,60 @@ export const SIGNING_KEY_JWKS: Record<WorkerIdentity, JsonWebKey> = {
   },
 };
 
-export type PeerHopSpec = {
-  iss: WorkerIdentity;
-  aud: WorkerIdentity;
+export type ServiceHopSpec = {
+  iss: MachinePrincipal;
+  aud: MachinePrincipal;
   sub?: string;
-  act?: WorkerIdentity[];
+  act?: MachinePrincipal[];
 };
 
-// Mint a peer identity-context token bound to the given envelope bytes.
-export const mintPeerToken = async (envelope: Uint8Array, hop: PeerHopSpec): Promise<string> => {
+// Mint a service identity-context token bound to the given envelope bytes.
+export const mintServiceToken = async (
+  envelope: Uint8Array,
+  hop: ServiceHopSpec,
+): Promise<string> => {
   const key = await importSigningKey(SIGNING_KEY_JWKS[hop.iss]);
   const context = await buildIdentityContext({
     iss: hop.iss,
     aud: hop.aud,
     sub: hop.sub ?? SYSTEM_SUBJECT,
     act: hop.act,
-    trustZone: hop.iss,
+    trustZone: SERVICE_ZONE[hop.iss],
     envelopeBytes: envelope,
   });
   return mint(key, context);
 };
 
-// Wrap an envelope as the peer queue message that consumers now expect.
-export const signedPeerMessage = async (
+// Wrap an envelope as the capnp ServiceMessage bytes that consumers expect.
+export const signedServiceMessage = async (
   envelope: Uint8Array,
-  hop: PeerHopSpec,
-): Promise<PeerQueueMessage> => ({ envelope, idToken: await mintPeerToken(envelope, hop) });
+  hop: ServiceHopSpec,
+): Promise<ServiceMessageBytes> =>
+  encodeServiceMessage(envelope, await mintServiceToken(envelope, hop));
 
 const subjectOf = (job: AiJob): string => {
   const candidate = job as { requesterUserId?: string; authorId?: string };
   return candidate.requesterUserId ?? candidate.authorId ?? SYSTEM_SUBJECT;
 };
 
-// Encode an AI job and wrap it as a gateway->brain peer message, the shape the
-// brain consumer receives in production.
-export const gatewayAiJob = (job: AiJob, options: EnvelopeOptions): Promise<PeerQueueMessage> =>
-  signedPeerMessage(encodeAiJobEnvelope(job, options), {
+// Encode an AI job and wrap it as a gateway->brain service message, the shape
+// the brain consumer receives in production.
+export const gatewayAiJob = (job: AiJob, options: EnvelopeOptions): Promise<ServiceMessageBytes> =>
+  signedServiceMessage(encodeAiJobEnvelope(job, options), {
     iss: "gateway",
     aud: "brain",
     sub: subjectOf(job),
   });
 
-// Extract the envelope bytes from a captured peer message (what a producer
+// Extract the envelope bytes from a captured service message (what a producer
 // handed the queue), for decoding in assertions.
-export const sentEnvelope = (sent: unknown): Uint8Array =>
-  (sent as PeerQueueMessage).envelope;
+export const sentEnvelope = (sent: unknown): Uint8Array => {
+  const wire = decodeServiceMessage(sent);
+  if (!wire) {
+    throw new Error("Captured queue body is not a capnp ServiceMessage");
+  }
+  return wire.envelope;
+};
 
 export const createSignedRequest = (
   payload: unknown,

@@ -23,7 +23,7 @@ test("GET / returns 404", async () => {
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
   const request = new Request("https://example.com/", { method: "GET" });
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 404);
   assert.equal(await response.text(), "Not found");
@@ -34,7 +34,7 @@ test("old root interaction route returns 404", async () => {
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
   const request = createSignedRequest({ type: 1 }, keyPair.secretKey, "/");
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 404);
   assert.equal(await response.text(), "Not found");
@@ -45,7 +45,7 @@ test("non-POST methods on the interaction route return 405", async () => {
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
   const request = new Request("https://example.com/discord", { method: "PUT" });
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 405);
   assert.equal(response.headers.get("allow"), "POST");
@@ -58,7 +58,7 @@ test("invalid Discord signature returns 401", async () => {
   const env = createEnv(Buffer.from(validPair.publicKey).toString("hex"));
   const request = createSignedRequest({ type: 1 }, mismatchedPair.secretKey);
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 401);
   assert.equal(await response.text(), "Bad request signature");
@@ -70,7 +70,7 @@ test("stale Discord interaction timestamps return 401", async () => {
   const staleTimestamp = String(Math.floor(Date.now() / 1000) - 301);
   const request = createSignedRequest({ type: 1 }, keyPair.secretKey, "/discord", staleTimestamp);
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 401);
   assert.equal(await response.text(), "Bad request signature");
@@ -82,7 +82,7 @@ test("future Discord interaction timestamps return 401", async () => {
   const futureTimestamp = String(Math.floor(Date.now() / 1000) + 301);
   const request = createSignedRequest({ type: 1 }, keyPair.secretKey, "/discord", futureTimestamp);
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 401);
   assert.equal(await response.text(), "Bad request signature");
@@ -93,7 +93,7 @@ test("non-numeric Discord interaction timestamps return 401", async () => {
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
   const request = createSignedRequest({ type: 1 }, keyPair.secretKey, "/discord", "not-a-time");
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 401);
   assert.equal(await response.text(), "Bad request signature");
@@ -104,7 +104,7 @@ test("signed malformed Discord interaction returns 401", async () => {
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
   const request = createSignedRequest({ token: "interaction-token" }, keyPair.secretKey);
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 401);
   assert.equal(await response.text(), "Bad request signature");
@@ -120,7 +120,7 @@ test("missing Discord signature headers return 401", async () => {
       body: JSON.stringify({ type: 1 }),
     }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
 
   assert.equal(response.status, 401);
@@ -132,7 +132,7 @@ test("bare Discord interaction POST returns 401", async () => {
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
   const request = new Request("https://example.com/discord", { method: "POST" });
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 401);
   assert.equal(await response.text(), "Bad request signature");
@@ -150,7 +150,7 @@ test("malformed signature header returns 401 without throwing", async () => {
     body: "{}",
   });
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 401);
 });
@@ -160,7 +160,7 @@ test("PING interaction returns Discord pong payload", async () => {
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
   const request = createSignedRequest({ type: 1 }, keyPair.secretKey);
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { type: 1 });
@@ -178,7 +178,7 @@ test("unknown command returns unknown command message", async () => {
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
@@ -206,7 +206,7 @@ test("worker rejects /gateway/start without control token auth", async () => {
   const wrongMethod = await worker.fetch(
     new Request("https://example.com/gateway/start", { method: "GET" }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(wrongMethod.status, 405);
   assert.equal(wrongMethod.headers.get("allow"), "POST");
@@ -215,7 +215,7 @@ test("worker rejects /gateway/start without control token auth", async () => {
   const unauthorized = await worker.fetch(
     new Request("https://example.com/gateway/start", { method: "POST" }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(unauthorized.status, 401);
   assert.equal(startCalls, 0);
@@ -226,7 +226,7 @@ test("worker rejects /gateway/start without control token auth", async () => {
       headers: { authorization: "Bearer bot-token" },
     }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(botToken.status, 401);
   assert.equal(startCalls, 0);
@@ -237,7 +237,7 @@ test("worker rejects /gateway/start without control token auth", async () => {
       headers: { authorization: "Bearer control-token" },
     }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(authorized.status, 200);
   assert.deepEqual(await authorized.json(), { ok: true });
@@ -263,7 +263,7 @@ test("worker rejects /gateway/stop without control token auth", async () => {
   const wrongMethod = await worker.fetch(
     new Request("https://example.com/gateway/stop", { method: "GET" }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(wrongMethod.status, 405);
   assert.equal(wrongMethod.headers.get("allow"), "POST");
@@ -272,7 +272,7 @@ test("worker rejects /gateway/stop without control token auth", async () => {
   const unauthorized = await worker.fetch(
     new Request("https://example.com/gateway/stop", { method: "POST" }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(unauthorized.status, 401);
   assert.equal(stopCalls, 0);
@@ -283,7 +283,7 @@ test("worker rejects /gateway/stop without control token auth", async () => {
       headers: { authorization: "Bearer bot-token" },
     }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(botToken.status, 401);
   assert.equal(stopCalls, 0);
@@ -294,7 +294,7 @@ test("worker rejects /gateway/stop without control token auth", async () => {
       headers: { authorization: "Bearer control-token" },
     }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(authorized.status, 200);
   assert.deepEqual(await authorized.json(), { ok: true });
@@ -326,7 +326,7 @@ test("worker rejects gateway control requests when the control token is not conf
       headers: { authorization: "Bearer control-token" },
     }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(start.status, 401);
 
@@ -336,7 +336,7 @@ test("worker rejects gateway control requests when the control token is not conf
       headers: { authorization: "Bearer control-token" },
     }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(health.status, 401);
   assert.equal(gatewayCalls, 0);
@@ -364,7 +364,7 @@ test("worker rejects /gateway/health without control token auth", async () => {
       headers: { authorization: "Bearer control-token" },
     }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(wrongMethod.status, 405);
   assert.equal(wrongMethod.headers.get("allow"), "GET");
@@ -373,7 +373,7 @@ test("worker rejects /gateway/health without control token auth", async () => {
   const unauthorized = await worker.fetch(
     new Request("https://example.com/gateway/health", { method: "GET" }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(unauthorized.status, 401);
   assert.equal(healthCalls, 0);
@@ -384,7 +384,7 @@ test("worker rejects /gateway/health without control token auth", async () => {
       headers: { authorization: "Bearer bot-token" },
     }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(botToken.status, 401);
   assert.equal(healthCalls, 0);
@@ -395,7 +395,7 @@ test("worker rejects /gateway/health without control token auth", async () => {
       headers: { authorization: "Bearer control-token" },
     }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(authorized.status, 200);
   assert.deepEqual(await authorized.json(), { connected: false, resumable: false });
@@ -425,21 +425,21 @@ test("worker fails closed for unconfigured public paths", async () => {
   const unknownGet = await worker.fetch(
     new Request("https://example.com/anything", { method: "GET" }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(unknownGet.status, 404);
 
   const unknownPost = await worker.fetch(
     createSignedRequest({ type: 1 }, keyPair.secretKey, "/anything"),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(unknownPost.status, 404);
 
   const oauth = await worker.fetch(
     new Request("https://example.com/oauth/config", { method: "GET" }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(oauth.status, 404);
 
@@ -449,7 +449,7 @@ test("worker fails closed for unconfigured public paths", async () => {
       headers: { authorization: "Bearer anything" },
     }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(admin.status, 404);
 
@@ -463,7 +463,7 @@ test("worker fails closed for unconfigured public paths", async () => {
     const response = await worker.fetch(
       new Request(`https://example.com${path}`, { method: "GET" }),
       env,
-      {} as never,
+      { waitUntil: () => undefined } as never,
     );
     assert.equal(response.status, 404, path);
     assert.equal(await response.text(), "Not found", path);
@@ -472,7 +472,7 @@ test("worker fails closed for unconfigured public paths", async () => {
   const unknownGatewayWithoutAuth = await worker.fetch(
     new Request("https://example.com/gateway/unknown", { method: "POST" }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(unknownGatewayWithoutAuth.status, 404);
 
@@ -482,7 +482,7 @@ test("worker fails closed for unconfigured public paths", async () => {
       headers: { authorization: "Bearer bot-token" },
     }),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
   assert.equal(unknownGateway.status, 404);
   assert.equal(gatewayFetchCalls, 0);

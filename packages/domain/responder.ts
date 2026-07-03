@@ -1,7 +1,5 @@
 import { sanitizeAiText } from "../ai/ai";
-import { peerDeliveryAuthorize } from "../authz/peer";
-import { receiveResponderInteractionEdit } from "../boundaries/peer/binding";
-import { peerReceive } from "../boundaries/peer/queue";
+import { createServiceServer } from "../auth";
 import { decodeReplyJobEnvelope } from "../contracts";
 import { editOriginalInteractionResponse, postChannelMessage } from "../discord";
 import { errorMessage, logger } from "../logger";
@@ -75,6 +73,16 @@ const applyInteractionEdit = async (
   );
 };
 
+const responderServer = (env: Env) =>
+  createServiceServer({ self: "responder", expectedIssuers: ["brain"], env });
+
+// Only interaction edits may arrive over the binding transport; a verified
+// envelope of any other kind is the wrong operation for this entrypoint.
+const decodeInteractionEdit = (bytes: Uint8Array): InteractionEditReplyJob | null => {
+  const job = decodeReplyJobEnvelope(bytes);
+  return job?.kind === "reply.interaction_edit" ? job : null;
+};
+
 // Binding RPC entrypoint: verify the identity-context token that rode as a
 // sibling RPC argument (aud must be the responder, envelope hash must match),
 // run Cedar, then apply the media edit.
@@ -84,29 +92,27 @@ export const deliverInteractionEdit = async (
   idToken: string,
   attachment: ResponderAttachment | null = null,
 ) => {
-  const job = await receiveResponderInteractionEdit(envelopeBytes, idToken, {
-    expectedIssuers: ["brain"],
-    authorize: peerDeliveryAuthorize("responder"),
-  });
-  if (!job) {
+  const received = await responderServer(env).receive(
+    { envelope: envelopeBytes, idToken },
+    decodeInteractionEdit,
+    "binding",
+  );
+  if (!received) {
     throw new Error("Invalid interaction edit envelope");
   }
 
-  await applyInteractionEdit(env, job, attachment);
+  await applyInteractionEdit(env, received.payload, attachment);
 };
 
 const isRetryableDiscordStatus = (status: number) => status === 429 || status >= 500;
 
 export const processOutboxMessage = async (message: Message<unknown>, env: Env) => {
-  const job = await peerReceive(message.body, decodeReplyJobEnvelope, {
-    self: "responder",
-    expectedIssuers: ["brain"],
-    authorize: peerDeliveryAuthorize("responder"),
-  });
-  if (!job) {
+  const received = await responderServer(env).receive(message.body, decodeReplyJobEnvelope);
+  if (!received) {
     message.ack();
     return;
   }
+  const job = received.payload;
 
   try {
     if (job.kind === "reply.channel_message") {

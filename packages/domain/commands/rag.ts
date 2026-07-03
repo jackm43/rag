@@ -24,7 +24,7 @@ export const runRagCommand = async (
   // actual decision once D1 has answered.
   const activeBan = await activeRagBanForUser(env, invoker.id, new Date());
   const decision = authorize({
-    principal: { type: "User", id: invoker.id },
+    principal: { type: "Human", id: invoker.id },
     action: "command.rag",
     resource: { type: "Guild", id: ctx.guildId ?? "unknown" },
     context: { banned: activeBan !== null },

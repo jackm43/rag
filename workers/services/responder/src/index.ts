@@ -1,11 +1,13 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 
+import { ensureRegistered } from "../../../../packages/auth";
 import {
   deliverInteractionEdit,
   processOutboxMessage,
 } from "../../../../packages/domain/responder";
 import { processOutboxDlqMessage } from "../../../../packages/domain/dlq";
 import type { Env, ResponderAttachment } from "../../../../packages/contracts/types";
+import { RESPONDER_MANIFEST } from "./manifest";
 
 // Service-binding RPC entrypoint for media-bearing interaction edits. Queue
 // messages are capped at 128 KiB, so image/audio attachments are handed over
@@ -18,12 +20,16 @@ export class Responder extends WorkerEntrypoint<Env> {
     attachment: ResponderAttachment,
     idToken: string,
   ) {
+    await ensureRegistered(this.env, RESPONDER_MANIFEST);
     await deliverInteractionEdit(this.env, envelope, idToken, attachment);
   }
 }
 
 export default {
   async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
+    // Memoised per isolate and never rejects; a no-op after the first batch.
+    await ensureRegistered(env, RESPONDER_MANIFEST);
+
     if (batch.queue === "discord-outbox-dlq") {
       for (const message of batch.messages) {
         processOutboxDlqMessage(message);

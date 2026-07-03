@@ -47,11 +47,11 @@ DiscordGateway DO (in gateway worker): websocket → validate → encode → enq
 ### Packages (shared, no build step, relative imports)
 
 - `packages/contracts` — Cap'n Proto event envelope + generated code (`npm run contracts:build`), value-constraint validation (snowflake regex, length caps), typed encode/decode. Also holds `types.ts`/`validation.ts`.
-- `packages/boundaries/{inbound,outbound,peer}` — the trust-boundary taxonomy:
-  - **inbound** — `InboundGuard` objects (Discord Ed25519 signature guard, operator control-token guard) yielding typed principals or typed denials.
+- `packages/auth` — the **centralised auth service client library**: RFC-named identity vocabulary (`MachinePrincipal`, `Subject`, delegation chain, `Target`, trust zones untrusted→edge→application→trusted), `serviceClients(env)`/`createServiceClient` factory (Cedar exchange check, signing keys, token minting, transport selection, denial logging), `createServiceServer` receive pipeline yielding `ServiceRequest` (verified `RequestContext` + payload), service manifests + registry client.
+- `packages/boundaries/{inbound,outbound}` — the edge boundaries:
+  - **inbound** — `InboundGuard` objects (Discord Ed25519 signature guard, operator control-token guard) yielding typed principals or typed denials at the untrusted→edge crossing.
   - **outbound** — per-identity egress HTTP clients (host allowlist, credential injection, timeout, size cap, path-redaction for token-bearing identities).
-  - **peer** — worker↔worker hops (queue + binding RPC), identity-token mint/verify, Cedar authorize seam.
-- `packages/authz` — **Cedar** policy engine (`@cedar-policy/cedar-wasm`), `.cedar` policy files, admin-group entity data, `authorize({principal, action, resource, context})`.
+- `packages/authz` — **Cedar** policy engine (`@cedar-policy/cedar-wasm`), `.cedar` policy files, admin-group entity data, `authorize({principal, action, resource, context}, dynamicEntities)` with `Human`/`Machine` principals, `authorizeAndForward` forwarding authorizer.
 - `packages/identity` — signed **identity-context tokens** (Ed25519 JWS): mint/verify, per-worker keypairs, committed public keyring, `scripts/generate-keys.ts`.
 - `packages/ai` — model clients, tracked completions (spend recording), ask-mode heuristic, config loader (KV-backed with bundled fallback), `ai-config/` prompt files.
 - `packages/discord` — Discord REST module (built on the outbound boundary client).
@@ -62,9 +62,9 @@ DiscordGateway DO (in gateway worker): websocket → validate → encode → enq
 
 - Public entrypoint holds no AI credential; each worker holds only the secrets for its job.
 - Every worker↔worker hop carries a short-lived (~60s) Ed25519-signed identity token bound to a hash of the message bytes; receivers verify signature/issuer/audience/expiry/payload-hash **before** Cedar authorization, which runs **before** any handler.
-- Trust-zone transitions re-mint on-behalf-of the original `sub` (RFC 8693-style actor chain); unauthorized peer-client construction fails closed at build time.
+- Every service hop re-mints on-behalf-of the original `sub` (RFC 8693-style delegation chain); an unauthorized or key-less service client fails closed on first use.
 - All outbound HTTP goes through host-allowlisted, credential-injecting boundary clients; token-bearing paths are redacted from logs.
-- Authorization is centralized in Cedar policies (admins, bans, operator control, peer hops) — no scattered `isAdmin` / ban checks.
+- Authorization is centralized in Cedar policies (admins, bans, operator control, service hops) — no scattered `isAdmin` / ban checks; the service-registry snapshot feeds Cedar as dynamic entities with static bootstrap permits as the fail-closed fallback.
 - Abuse controls are attacker-focused: per-user burst limit (flood detection) + **global** daily $ budget backstop; guild allowlist fail-closed at both ingresses; bans cover AI commands.
 
 ---
@@ -80,35 +80,33 @@ DiscordGateway DO (in gateway worker): websocket → validate → encode → enq
 7. ✅ **Hardening tail** — attacker-focused limits, guild allowlist, ban coverage for AI, D1 migrations, DLQ consumers, `/gateway/stop`, embed suppression for uncited URLs, trimmed error logs, logged failed interaction edits, removed prod `preview_database_id`.
 8. ✅ **Boundary HTTP client** — per-identity egress policy; all outbound HTTP migrated onto it.
 10. ✅ **Repo restructure** — `workers/` by layer + `packages/`; thin entrypoints; declarative command-spec registry.
-11. ✅ **Cedar authz** — policy engine package; `authorize()` at command pre-flight, operator control, and peer boundaries; `admins.ts` replaced by policy data.
-15. ✅ **Boundary taxonomy** — `net/` reorganized into inbound/outbound/peer with uniform `{identity, trustZone, policy, context}`; webhook path-redaction leak fixed.
+11. ✅ **Cedar authz** — policy engine package; `authorize()` at command pre-flight, operator control, and service boundaries; `admins.ts` replaced by policy data.
+15. ✅ **Boundary taxonomy** — `net/` reorganized into inbound/outbound/service layers with a uniform denial shape; webhook path-redaction leak fixed.
 16. ✅ **Prompts to KV** — `AI_CONFIG` KV binding on brain with bundled fallback; `config:push` deploy step.
-17. ✅ **Identity-context token exchange** — Ed25519 signed tokens minted at ingress, re-minted on-behalf-of at each hop, verified before Cedar; construction-time authorization; bindings documented as the platform-guaranteed transport-identity (mTLS-equivalent) layer.
+17. ✅ **Identity-context token exchange** — Ed25519 signed tokens minted at ingress, re-minted on-behalf-of at each hop, verified before Cedar; fail-closed client authorization; bindings documented as the platform-guaranteed transport-identity (mTLS-equivalent) layer.
+18. ✅ **RFC auth architecture** — identity naming standardised on RFC terms (`Human`/`Machine` principals, Subject/Delegate/Target, `service.invoke`/`service.exchange`); trust zones remodeled to untrusted→edge→application→trusted; `packages/auth` centralised service client/server library (replaces `packages/boundaries/peer`); `ServiceRegistry` Durable Object with per-worker manifests feeding Cedar dynamic entities + `authorizeAndForward` forwarding authorizer; `openapi.yaml` for the gateway public surface.
+19. ✅ **Contract-defined transport + spec-constructed gateway** — service-boundary transport types moved to capnp (`service.capnp`: `ServiceMessage` queue body, `ServiceManifest`/`ManifestSnapshot` registry RPC payloads) with generated code and total decoders (legacy object wrapper tolerated for in-flight messages); the gateway router is constructed from `openapi.yaml` via a generated route table (`npm run routes:build`) mapping paths/methods/security schemes to guards and operationId handlers, failing construction on unimplemented operations. In-process vocabulary (`Principal`, `RequestContext`, zones) deliberately stays TS, and the identity token stays RFC 7515 JWS.
 
 ---
 
 ## Remaining work (not started / interrupted)
 
-### Task 12 — Service manifests + generated clients/servers *(interrupted; reverted to pending)*
-**Goal (refined per user):** a service = a collection of registered operations (RPCs), each
-with its own request/response types **co-located with the owning service**; `packages/contracts`
-becomes the higher-level layer that enforces the service registry (only registered operations
-are invokable) rather than enumerating every payload. Generate, from the manifests:
-- typed **clients** (`createServiceClient(service, transport)` uniform factory → per-service typed facades over the peer boundary), and
-- **server dispatchers** that verify identity token → confirm the operation is registered for that service → run Cedar authz for the op's action → validate the typed request → call the hand-written handler. Unregistered/unauthorized ops never reach a handler.
+### Task 12 — Service manifests + generated clients/servers *(partially landed via task 18)*
+**Landed:** per-service manifests (`workers/*/src/manifest.ts`), runtime service registration
+(`ServiceRegistry` DO + `ensureRegistered`), the uniform `createServiceClient`/`serviceClients`
+factory and `createServiceServer` dispatcher (verify token → forwarding authorizer → decode →
+handler), and registry-driven Cedar policy (`invoke-registered`/`exchange-registered`).
+**Remaining:** per-operation enforcement — the manifests carry `operations` but Cedar does not
+yet evaluate per envelope kind; co-locating request types / splitting the `.capnp` per service;
+refusing unregistered `(service, operation)` pairs at the contract layer.
 
-Planned as 4 commits: (1) per-service operation manifests, (2) co-locate request types /
-split the `.capnp` per service, (3) generate typed clients + server dispatchers (textual
-codegen **or** a manifest-driven runtime achieving the same type-safety + single interface —
-either acceptable), (4) make the contract refuse unregistered `(service, operation)` pairs.
-This underpins the dev-proxy work, so it should land first.
-
-### Task 9 — OpenAPI spec + generated types for the public surface *(pending)*
-`openapi.yaml` covering the gateway public routes **and** the future dev-proxy API, with
-`securitySchemes` for the control-token bearer, Discord signature headers, and CF Access
-JWT + DPoP. `openapi-typescript`-generated types plus a typed app-client wrapper (token/DPoP
-middleware hooks) consumed by the dev-proxy web UI and `ragctl`. Convention: **proto (capnp)
-for service↔service, OpenAPI/zod for public/app-facing surfaces.**
+### Task 9 — OpenAPI spec + generated types for the public surface *(partially landed via task 18)*
+**Landed:** `workers/public/gateway/openapi.yaml` covering the gateway public routes with
+`securitySchemes` for the control-token bearer and Discord signature headers.
+**Remaining:** the future dev-proxy API + CF Access JWT + DPoP schemes,
+`openapi-typescript`-generated types, and the typed app-client wrapper consumed by the
+dev-proxy web UI and `ragctl`. Convention: **proto (capnp) for service↔service, OpenAPI/zod
+for public/app-facing surfaces.**
 
 ### Task 13 — `ragbot-dev-proxy` *(pending, depends on 12 + 9)*
 A "development application that runs in prod" so there is never a separate dev client/data:
@@ -140,7 +138,7 @@ the dev-proxy API from a laptop.
   Cloudflare service bindings (in-process, isolate-to-isolate; the platform guarantees a
   binding is only invokable by a worker configured with it). The signed identity token
   layers *application* identity (on-behalf-of `sub` + explicit, testable verifier) on top.
-  Documented in `packages/identity/token.ts`, `peer.ts`, and README.
+  Documented in `packages/identity/token.ts`, `packages/auth`, and README.
 - **DO stays in the gateway worker.** Moving a Durable Object class between scripts needs a
   risky transfer migration; deliberately deferred (deviation from RECOMMENDATIONS §1). The
   DO is already thinned to validate→encode→enqueue.

@@ -289,43 +289,47 @@ When set, the gate fails closed — unparseable entries are dropped, so a miscon
 
 ## Trust Boundaries
 
-Every hop into, between, and out of the workers crosses a named boundary in `packages/boundaries`, carrying a uniform context — {identity, trustZone, policy, request context} — and logging denials in one shape (`{identity, trustZone, outcome: "denied", reason}`). The Cedar policy engine (see [Authorization](#authorization-cedar)) evaluates at exactly these choke points.
+Trust zones are ordered from least to most trusted: **Untrusted** (public callers) → **Edge** (the gateway) → **Applications** (brain, responder, spend) → **Trusted** (the service registry, signing roots). Every hop into, between, and out of the workers crosses a named boundary, carrying a uniform context and logging denials in one shape (`{identity, zone, transport, outcome: "denied", reason}`). The Cedar policy engine (see [Authorization](#authorization-cedar)) evaluates at exactly these choke points.
 
-| Boundary | Module | Trust zones | Shape |
-| --- | --- | --- | --- |
-| Inbound | `packages/boundaries/inbound` | `ingress-discord`, `ingress-operator` | Guards (`{identity, trustZone, verify}`) that yield a typed principal (`discord` + verified interaction, `operator`) or a typed denial (reason + HTTP response) |
-| Peer | `packages/boundaries/peer` | `peer-queue`, `peer-binding` | Senders (`peerLinks`) mint a signed identity-context token beside the contracts-encoded envelope; receives verify the token (signature, audience, expiry, envelope-hash binding) **before** running the Cedar `authorize` seam via `peerDeliveryAuthorize`, so the principal Cedar sees is cryptographically established. See [Identity exchange](#identity-exchange-on-trust-zone-transitions) |
-| Outbound | `packages/boundaries/outbound` | `egress-discord`, `egress-ai-gateway`, `egress-cloudflare-api`, `egress-media` | Per-identity boundary clients enforcing credential injection, host allowlists, https-only, timeouts, and response-size caps; failure logs redact paths for identities whose paths embed credentials (`logPath: false` for `discord-webhook` and `media-download`) |
+| Boundary | Module | Shape |
+| --- | --- | --- |
+| Inbound (untrusted → edge) | `packages/boundaries/inbound` | Guards (`{identity, verify}`) that yield a typed principal (`discord` + verified interaction, `operator`) or a typed denial (reason + HTTP response) |
+| Service (edge/applications ↔ applications) | `packages/auth` | `serviceClients(env)` clients mint a signed identity-context token beside the contracts-encoded envelope; `createServiceServer` receives verify the token (signature, audience, expiry, envelope-hash binding) **before** the forwarding authorizer runs Cedar `service.invoke`, so the principal Cedar sees is cryptographically established. See [Identity exchange](#identity-exchange-on-service-hops) |
+| Outbound (→ external) | `packages/boundaries/outbound` | Per-identity boundary clients enforcing credential injection, host allowlists, https-only, timeouts, and response-size caps; failure logs redact paths for identities whose paths embed credentials (`logPath: false` for `discord-webhook` and `media-download`) |
+
+Only the gateway speaks HTTP, and its surface is **constructed from the spec**: `workers/public/gateway/openapi.yaml` is the source of truth, `npm run routes:build` generates the route table, and the gateway router wires paths, methods, and security schemes (ingress guards) to operationId handlers from it — an operation without a handler fails construction. Everything between workers is queues/worker RPC carrying Cap'n Proto: the queue hop body is a capnp `ServiceMessage` (`packages/contracts/service.capnp`) framing the envelope bytes with the JWS identity token, and the registry RPC exchanges capnp `ServiceManifest`/`ManifestSnapshot` payloads.
 
 ## Authorization (Cedar)
 
-All allow/deny decisions are centralised in `packages/authz` and evaluated by [Cedar](https://www.cedarpolicy.com/) (`@cedar-policy/cedar-wasm`, compiled at deploy time via wrangler's CompiledWasm rule and instantiated once per isolate):
+All allow/deny decisions are centralised in `packages/authz` and evaluated by [Cedar](https://www.cedarpolicy.com/) (`@cedar-policy/cedar-wasm`, compiled at deploy time via wrangler's CompiledWasm rule and instantiated once per isolate). Principals follow RFC naming: `Human` (Discord users) and `Machine` (services and the operator control plane).
 
-- **Policies** live in `packages/authz/policies/*.cedar` (`commands.cedar` for the slash-command surface incl. the admin gate and raghammer-ban forbid, `operator.cedar` for the `/gateway/*` control plane, `peer.cedar` for legitimate worker-to-worker hops). `peer.cedar` carries two actions: `peer.deliver` (evaluated at receive time on the verified issuer) and `peer.exchange` (evaluated at peer-client **construction** with the hop's `{fromZone, toZone}` context, so an unauthorized construction returns a fail-closed client). Each policy carries an `@id` annotation that denial diagnostics surface as the reason.
+- **Policies** live in `packages/authz/policies/*.cedar` (`commands.cedar` for the slash-command surface incl. the admin gate and raghammer-ban forbid, `operator.cedar` for the `/gateway/*` control plane, `services.cedar` for worker-to-worker hops). `services.cedar` carries two actions: `service.invoke` (evaluated at receive time on the verified issuer) and `service.exchange` (evaluated on first use of a service client with the hop's `{fromZone, toZone}` context, so an unauthorized hop yields a fail-closed client). Each policy carries an `@id` annotation that denial diagnostics surface as the reason.
+- **Registry-driven policy**: services register a manifest (zone, targets, operations) with the `ServiceRegistry` Durable Object on startup; the registry snapshot is merged into the Cedar entity store, and the `invoke-registered` / `exchange-registered` attribute rules authorize registered pairs. The static per-hop permits in `services.cedar` remain as the bootstrap fallback when the registry is empty or unreachable (fail closed to those permits, never open).
+- **Forwarding authorizer**: `authorizeAndForward` (`packages/authz/forward.ts`) puts authorization structurally on the request path — either the request is authorized and forwarded, or it exits with a logged denial; there is no boolean for a caller to ignore.
 - **To add an admin**, add the Discord user id to `RAG_ADMIN_USER_IDS` in `packages/authz/entities.ts` — membership of the `Group::"rag-admins"` entity is data, not policy.
-- **`authorize()` runs** at three choke points: the command registry pre-flight (`packages/domain/commands/registry.ts`, plus `/rag`'s in-window ban decision in `rag.ts`) with the D1-fetched ban state passed as `context.banned`; the gateway control routes after the operator bearer-token guard (`workers/public/gateway/src/index.ts`); and every peer receive via `peerDeliveryAuthorize` (`packages/authz/peer.ts`). Everything is deny-by-default — an action nobody permitted is refused.
+- **`authorize()` runs** at three choke points: the command registry pre-flight (`packages/domain/commands/registry.ts`, plus `/rag`'s in-window ban decision in `rag.ts`) with the D1-fetched ban state passed as `context.banned`; the gateway control routes after the operator bearer-token guard (`workers/public/gateway/src/index.ts`, principal `Machine::"operator"`); and every service receive/exchange via the forwarding authorizer inside `packages/auth`. Everything is deny-by-default — an action nobody permitted is refused.
 
 The guild allowlist deliberately stays at ingress (`packages/domain/guilds.ts`), not in Cedar, for now.
 
-## Identity exchange on trust-zone transitions
+## Identity exchange on service hops
 
-Every worker-to-worker hop carries a **signed identity-context token** (`packages/identity`) alongside the Cap'n Proto envelope, so the on-behalf-of principal and the minting worker are cryptographically established rather than asserted.
+Every worker-to-worker hop carries a **signed identity-context token** (`packages/identity`) alongside the Cap'n Proto envelope, so the subject and the minting service are cryptographically established rather than asserted.
 
-**Why not literal mTLS?** Cloudflare service bindings and queues are in-process, isolate-to-isolate calls within one account: a binding/queue can only be invoked by a worker configured with it, so the platform *already* guarantees the transport identity ("which worker is calling"). That platform guarantee is the practical equivalent of mTLS transport-level identity here — there are no sockets to negotiate TLS on, so we do not (and cannot, and need not) implement literal mTLS. What the platform does not carry is the *application* identity: who the request acts on behalf of, and an explicit, testable proof of the minting worker. The identity-context token layers exactly that on top.
+**Why not literal mTLS?** Cloudflare service bindings and queues are in-process, isolate-to-isolate calls within one account: a binding/queue can only be invoked by a worker configured with it, so the platform *already* guarantees the transport identity ("which worker is calling"). That platform guarantee is the practical equivalent of mTLS transport-level identity here — there are no sockets to negotiate TLS on, so we do not (and cannot, and need not) implement literal mTLS. What the platform does not carry is the *application* identity: who the request acts on behalf of, and an explicit, testable proof of the minting service. The identity-context token layers exactly that on top.
 
-**The token** (compact JWS, Ed25519/EdDSA) binds `{sub, act, iss, aud, trustZone, iat, exp (60s), jti, envelopeSha256}`. `sub` is the Discord user the request acts for (or `"system"` for user-less flows like spend reconciliation); `act` is the RFC 8693-style actor chain of workers traversed; `envelopeSha256` binds the token to one payload so a captured token cannot be replayed against different bytes. It rides as a sibling to the envelope — the queue message wrapper is `{ envelope, idToken }` and the responder binding takes `idToken` as a third RPC argument — leaving the capnp contract wire format untouched.
+**The token** (compact JWS, Ed25519/EdDSA) binds `{sub, act, iss, aud, trustZone, iat, exp (60s), jti, envelopeSha256}` — RFC 8693 vocabulary: `sub` is the **subject** (the Discord user the request acts for, or `"system"` for user-less flows like spend reconciliation), `act` is the **delegation chain** of machine principals traversed, `aud` is the **target** service. `envelopeSha256` binds the token to one payload so a captured token cannot be replayed against different bytes. It rides as a sibling to the envelope: the queue body is a capnp `ServiceMessage` (`service.capnp`) framing `{envelope :Data, idToken :Text}`, and the responder binding takes `idToken` as a third RPC argument. The token itself stays a compact JWS string — RFC 7515 fixes its JSON payload format, so capnp carries it rather than redefining it.
 
-**The flow (RFC 8693-style token exchange):**
+**The flow (RFC 8693-style token exchange, one exchange per hop):**
 
 ```
-Discord → gateway (verifies interaction/gateway signature)
+Discord (untrusted) → gateway (edge; verifies interaction/gateway signature)
         → mints ORIGIN context: iss=gateway, aud=brain, sub=<discord user id>
-        → brain verifies (sig + aud=brain + envelope hash) → Cedar peer.deliver
+        → brain (application) verifies (sig + aud=brain + envelope hash) → Cedar service.invoke
         → re-mints on behalf of the SAME sub: iss=brain, aud=responder|spend, act+=brain
-        → responder / spend verify → Cedar → process
+        → responder / spend (application) verify → Cedar → process
 ```
 
-At each receive the token is verified **before** Cedar runs, and the verified issuer becomes the Cedar `Peer` principal; any failure denies with the shared `peer_denied` log shape and the message is dropped/acked.
+At each receive the token is verified **before** Cedar runs, and the verified issuer becomes the Cedar `Machine` principal; any failure denies with the shared `service_denied` log shape and the message is dropped/acked. On success the handler receives the full verified `RequestContext` (subject, delegation chain, source, zone, transport) alongside the decoded payload.
 
 **Key provisioning.** Each sending worker holds a private Ed25519 signing key as a secret; public keys are committed (not secret) in `packages/identity/keyring.ts`. Generate a keypair with `tsx scripts/generate-keys.ts <worker>`, then:
 

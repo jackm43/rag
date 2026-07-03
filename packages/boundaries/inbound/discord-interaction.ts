@@ -108,7 +108,6 @@ export type DiscordInteractionPrincipal = {
 // signature authenticates Discord itself as the principal.
 export const discordInteractionGuard: InboundGuard<DiscordInteractionPrincipal> = {
   identity: "discord-interactions",
-  trustZone: "ingress-discord",
   verify: async (request, env) => {
     const interaction = await verifyDiscordRequest(request, env.DISCORD_PUBLIC_KEY);
     if (!interaction) {

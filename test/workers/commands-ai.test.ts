@@ -221,7 +221,7 @@ test("/bicture interaction is deferred and enqueues image generation", async () 
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { type: 5 });
@@ -339,7 +339,7 @@ test("/bicture without a prompt returns an immediate validation message", async 
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
@@ -514,7 +514,7 @@ test("/ragjam interaction is deferred and enqueues music generation", async () =
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { type: 5 });
@@ -709,7 +709,7 @@ test("/ragjam without lyrics enqueues auto-generated lyrics job", async () => {
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { type: 5 });

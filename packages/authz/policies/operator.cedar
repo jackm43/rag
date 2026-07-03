@@ -3,7 +3,7 @@
 
 @id("operator-gateway-control")
 permit (
-  principal == Operator::"control",
+  principal == Machine::"operator",
   action in [
     Action::"gateway.start",
     Action::"gateway.stop",

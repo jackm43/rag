@@ -9,7 +9,7 @@ import {
 import { appendSourceFallback } from "../../packages/ai/ask-mode.ts";
 import { editOriginalInteractionResponse } from "../../packages/discord/index.ts";
 import { encodeReplyJobEnvelope } from "../../packages/contracts/index.ts";
-import { createEnv, mintPeerToken, signedPeerMessage } from "../helpers.ts";
+import { createEnv, mintServiceToken, signedServiceMessage } from "../helpers.ts";
 
 const CHANNEL_ID = "200000000000000001";
 const APPLICATION_ID = "500000000000000001";
@@ -124,7 +124,7 @@ test("responder posts sanitized channel messages with allowed_mentions locked do
     await responderWorker.queue({
       messages: [
         {
-          body: await signedPeerMessage(
+          body: await signedServiceMessage(
             encodeReplyJobEnvelope(
               {
                 kind: "reply.channel_message",
@@ -180,7 +180,7 @@ test("responder edits interactions with text-only content through the outbox", a
     await responderWorker.queue({
       messages: [
         {
-          body: await signedPeerMessage(
+          body: await signedServiceMessage(
             encodeReplyJobEnvelope(
               {
                 kind: "reply.interaction_edit",
@@ -244,7 +244,7 @@ test("responder delivers media interaction edits over the RPC path", async () =>
     await deliverInteractionEdit(
       env,
       mediaEnvelope,
-      await mintPeerToken(mediaEnvelope, { iss: "brain", aud: "responder" }),
+      await mintServiceToken(mediaEnvelope, { iss: "brain", aud: "responder" }),
       {
         name: "bicture.png",
         contentType: "image/png",
@@ -294,7 +294,7 @@ test("responder rejects RPC envelopes that are not interaction edits", async () 
     deliverInteractionEdit(
       env,
       channelEnvelope,
-      await mintPeerToken(channelEnvelope, { iss: "brain", aud: "responder" }),
+      await mintServiceToken(channelEnvelope, { iss: "brain", aud: "responder" }),
       { name: "bicture.png", contentType: "image/png", data: new ArrayBuffer(4) },
     ),
   );
@@ -342,7 +342,7 @@ test("responder retries channel posts on retryable Discord errors and acks termi
 
   try {
     const env = createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" });
-    const body = await signedPeerMessage(
+    const body = await signedServiceMessage(
       encodeReplyJobEnvelope(
         { kind: "reply.channel_message", channelId: CHANNEL_ID, content: "hello" },
         { source: "worker" },

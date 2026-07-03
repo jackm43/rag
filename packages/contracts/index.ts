@@ -14,7 +14,19 @@ import {
   EventEnvelope,
   EventEnvelope_Payload_Which,
 } from "./envelope";
+import { asFramedBytes } from "./framing";
 import { isOptionalSnowflake, validateAiJob, validateAiSpendJob, validateReplyJob } from "./validate";
+
+export {
+  decodeManifestSnapshot,
+  decodeServiceManifest,
+  decodeServiceMessage,
+  encodeManifestSnapshot,
+  encodeServiceManifest,
+  encodeServiceMessage,
+  type WireServiceManifest,
+  type WireServiceMessage,
+} from "./service-transport";
 
 export {
   isSnowflake,
@@ -204,42 +216,9 @@ export const encodeAiSpendJobEnvelope = (job: AiSpendJob, options: EnvelopeOptio
   return new Uint8Array(message.toArrayBuffer());
 };
 
-const MAX_ENVELOPE_BYTES = 128 * 1024;
-const MAX_ENVELOPE_SEGMENTS = 16;
-
-// capnp-es sizes its segment list from the frame header before checking it
-// against the actual buffer, so hostile bytes can demand huge allocations.
-// Validate the unpacked framing ourselves before parsing.
-const isSaneFramedMessage = (bytes: Uint8Array) => {
-  if (bytes.byteLength < 8 || bytes.byteLength > MAX_ENVELOPE_BYTES || bytes.byteLength % 4 !== 0) {
-    return false;
-  }
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const segmentCount = view.getUint32(0, true) + 1;
-  if (segmentCount > MAX_ENVELOPE_SEGMENTS) {
-    return false;
-  }
-  let byteOffset = 4 + segmentCount * 4;
-  byteOffset += byteOffset % 8;
-  if (byteOffset > bytes.byteLength) {
-    return false;
-  }
-  for (let i = 0; i < segmentCount; i += 1) {
-    byteOffset += view.getUint32(4 + i * 4, true) * 8;
-    if (byteOffset > bytes.byteLength) {
-      return false;
-    }
-  }
-  return byteOffset === bytes.byteLength;
-};
-
 const readEnvelope = (value: unknown): EventEnvelope | null => {
-  const bytes = value instanceof Uint8Array
-    ? value
-    : value instanceof ArrayBuffer
-      ? new Uint8Array(value)
-      : null;
-  if (!bytes || !isSaneFramedMessage(bytes)) {
+  const bytes = asFramedBytes(value);
+  if (!bytes) {
     return null;
   }
   try {

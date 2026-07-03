@@ -4,7 +4,7 @@ import nacl from "tweetnacl";
 import worker from "../../workers/public/gateway/src/index.ts";
 import { encodeAiSpendJobEnvelope } from "../../packages/contracts/index.ts";
 import { processSpendQueueMessage } from "../../packages/ai/spend.ts";
-import { createDbMock, createEnv, createSignedRequest, signedPeerMessage } from "../helpers.ts";
+import { createDbMock, createEnv, createSignedRequest, signedServiceMessage } from "../helpers.ts";
 
 test("/rag interaction is deferred and edits the original response from waitUntil", async () => {
   const keyPair = nacl.sign.keyPair();
@@ -200,7 +200,7 @@ test("/raghammer rejects non-admin invokers", async () => {
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
@@ -264,7 +264,7 @@ test("/raghammer records a temporary /rag ban for admin invokers", async () => {
       keyPair.secretKey,
     );
 
-    const response = await worker.fetch(request, env, {} as never);
+    const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
@@ -305,7 +305,7 @@ test("/ragunban rejects non-admin invokers", async () => {
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
@@ -363,7 +363,7 @@ test("/ragunban removes active rag bans for admin invokers", async () => {
       keyPair.secretKey,
     );
 
-    const response = await worker.fetch(request, env, {} as never);
+    const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
@@ -421,7 +421,7 @@ test("/ragunban reports when there is no active rag ban", async () => {
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
@@ -451,7 +451,7 @@ test("/undorag rejects non-admin invokers", async () => {
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
@@ -494,7 +494,7 @@ test("/undorag removes the latest rag event and decrements the target total", as
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
@@ -536,7 +536,7 @@ test("/undorag reports when the target has no rags to undo", async () => {
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
@@ -585,7 +585,7 @@ test("/ragspend returns the invoker's precomputed spend", async () => {
       keyPair.secretKey,
     ),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
 
   assert.equal(response.status, 200);
@@ -632,7 +632,7 @@ test("/ragspendboard returns the precomputed spend leaderboard", async () => {
   const response = await worker.fetch(
     createSignedRequest({ type: 2, data: { name: "ragspendboard" } }, keyPair.secretKey),
     env,
-    {} as never,
+    { waitUntil: () => undefined } as never,
   );
 
   assert.equal(response.status, 200);
@@ -703,7 +703,7 @@ test("spend worker aggregates pending spend events", async () => {
 
     await processSpendQueueMessage(
       {
-        body: await signedPeerMessage(
+        body: await signedServiceMessage(
           encodeAiSpendJobEnvelope({ spendEventId: "event-1" }, { source: "worker" }),
           { iss: "brain", aud: "spend" },
         ),

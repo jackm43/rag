@@ -3,7 +3,7 @@ import {
   decodeAiSpendJobEnvelope,
   decodeReplyJobEnvelope,
 } from "../contracts";
-import { peerEnvelopeBytes } from "../boundaries/peer/peer";
+import { serviceEnvelopeBytes } from "../auth";
 import { logger } from "../logger";
 
 // Dead-letter consumers: a message landing here has exhausted its retries,
@@ -20,9 +20,10 @@ const logAndAck = (queue: string, message: Message<unknown>, kind: string | unde
   message.ack();
 };
 
-// Dead letters carry the wrapped peer message; unwrap to the capnp envelope
-// bytes before decoding the kind (falls back to raw bytes for resilience).
-const envelopeOf = (message: Message<unknown>) => peerEnvelopeBytes(message.body);
+// Dead letters carry the wrapped service message; unwrap to the capnp
+// envelope bytes before decoding the kind (falls back to raw bytes for
+// resilience).
+const envelopeOf = (message: Message<unknown>) => serviceEnvelopeBytes(message.body);
 
 export const processAiJobsDlqMessage = (message: Message<unknown>) =>
   logAndAck("ai-jobs-dlq", message, decodeAiJobEnvelope(envelopeOf(message))?.kind);

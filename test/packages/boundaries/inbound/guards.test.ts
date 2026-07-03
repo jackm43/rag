@@ -43,7 +43,8 @@ test("discord interaction guard denies bad signatures with the boundary context 
     const denial = warnings.lines.find((line) => line.message === "ingress_denied");
     assert.ok(denial);
     assert.equal(denial.identity, "discord-interactions");
-    assert.equal(denial.trustZone, "ingress-discord");
+    assert.equal(denial.zone, "untrusted");
+    assert.equal(denial.transport, "http");
     assert.equal(denial.outcome, "denied");
     assert.equal(denial.reason, "invalid_signature");
   } finally {
@@ -81,7 +82,8 @@ test("operator control guard denies missing config and wrong tokens with the bou
     assert.equal(denials.length, 2);
     for (const denial of denials) {
       assert.equal(denial.identity, "gateway-control");
-      assert.equal(denial.trustZone, "ingress-operator");
+      assert.equal(denial.zone, "untrusted");
+      assert.equal(denial.transport, "http");
       assert.equal(denial.outcome, "denied");
     }
 

@@ -13,7 +13,8 @@
     "deploy:spend": "wrangler deploy -c workers/services/spend/wrangler.jsonc",
     "check": "tsc --noEmit",
     "test": "vitest run",
-    "contracts:build": "capnp-es packages/contracts/envelope.capnp -ots",
+    "contracts:build": "capnp-es packages/contracts/envelope.capnp packages/contracts/service.capnp -ots",
+    "routes:build": "tsx scripts/generate-gateway-routes.ts",
     "register:commands": "tsx scripts/register-commands.ts",
     "config:push": "tsx scripts/push-config.ts",
     "backfill:spend": "tsx scripts/backfill-spend.ts",
@@ -27,7 +28,8 @@
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vitest": "^4.1.9",
-    "wrangler": "^4.13.2"
+    "wrangler": "^4.13.2",
+    "yaml": "^2.9.0"
   },
   "dependencies": {
     "@cedar-policy/cedar-wasm": "^4.11.2",

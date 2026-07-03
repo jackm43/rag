@@ -32,7 +32,6 @@ export type OperatorPrincipal = {
 // configured, and never accepts the Discord bot token.
 export const operatorControlGuard: InboundGuard<OperatorPrincipal> = {
   identity: "gateway-control",
-  trustZone: "ingress-operator",
   verify: async (request, env) => {
     const unauthorized = () => new Response("Unauthorized", { status: 401 });
 

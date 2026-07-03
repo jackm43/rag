@@ -181,7 +181,7 @@ test("/ask replies immediately without deferring when the requester is burst lim
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
@@ -212,7 +212,7 @@ test("/bicture replies immediately without deferring when the global daily budge
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
@@ -250,7 +250,7 @@ test("/ragjam does not enqueue a job when the requester is burst limited", async
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {

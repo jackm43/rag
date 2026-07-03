@@ -1,6 +1,5 @@
 import type { InteractionMessageData, InteractionResponseFile } from "../../discord";
-import { peerLinks } from "../../boundaries/peer/links";
-import { SYSTEM_SUBJECT } from "../../identity";
+import { serviceClients, SYSTEM_SUBJECT } from "../../auth";
 import { encodeAiJobEnvelope } from "../../contracts";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
@@ -103,7 +102,7 @@ export const executeCommand = async (
       ? await activeAiBanForUser(env, ctx.invoker.id, new Date())
       : null;
   const decision = authorize({
-    principal: { type: "User", id: ctx.invoker?.id ?? "unknown" },
+    principal: { type: "Human", id: ctx.invoker?.id ?? "unknown" },
     action: `command.${spec.name}`,
     resource: { type: "Guild", id: ctx.guildId ?? "unknown" },
     context: { banned: activeBan !== null },
@@ -132,14 +131,15 @@ export const executeCommand = async (
   }
 
   if (spec.kind === "enqueue") {
-    await peerLinks(env).gatewayToBrain.send(
-      env.AI_JOBS,
-      encodeAiJobEnvelope(spec.buildJob(ctx), {
+    await serviceClients(env).gatewayToBrain.call({
+      transport: "queue",
+      queue: env.AI_JOBS,
+      envelope: encodeAiJobEnvelope(spec.buildJob(ctx), {
         source: "interactions",
         guildId: ctx.guildId,
       }),
-      { sub: ctx.invoker?.id ?? SYSTEM_SUBJECT },
-    );
+      subject: { sub: ctx.invoker?.id ?? SYSTEM_SUBJECT },
+    });
     return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
   }
 

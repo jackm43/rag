@@ -1,5 +1,4 @@
-import { peerLinks } from "../boundaries/peer/links";
-import { SYSTEM_SUBJECT } from "../identity";
+import { serviceClients, SYSTEM_SUBJECT } from "../auth";
 import { encodeAiJobEnvelope, isSnowflake, MAX_FREE_TEXT_LENGTH, MAX_MENTION_IDS } from "../contracts";
 import { fetchBotRoleIds } from "../discord";
 import { activeAiBanForUser } from "./bans";
@@ -117,11 +116,12 @@ export const handleGatewayMessageCreate = async (
     return;
   }
 
-  await peerLinks(env).gatewayToBrain.send(
-    env.AI_JOBS,
-    encodeAiJobEnvelope(gatewayMessageJob(message, botUserId), { source: "gateway" }),
-    { sub: message.author?.id ?? SYSTEM_SUBJECT },
-  );
+  await serviceClients(env).gatewayToBrain.call({
+    transport: "queue",
+    queue: env.AI_JOBS,
+    envelope: encodeAiJobEnvelope(gatewayMessageJob(message, botUserId), { source: "gateway" }),
+    subject: { sub: message.author?.id ?? SYSTEM_SUBJECT },
+  });
 };
 
 // Brain-side resolution: everything the DO used to do that needs D1 or

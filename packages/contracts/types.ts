@@ -139,15 +139,12 @@ export type ResponderAttachment = {
   data: ArrayBuffer;
 };
 
-// Peer-hop queue message: the Cap'n Proto envelope bytes are carried unchanged,
-// with the signed identity-context token (compact JWS) as a sibling field. The
-// token is minted by the sending worker and verified at the receiving boundary
-// before Cedar runs; keeping it out of the capnp envelope means the contract
-// wire format is untouched and the token binds a hash of `envelope`.
-export type PeerQueueMessage = {
-  envelope: Uint8Array;
-  idToken: string;
-};
+// Service-hop queue body: capnp-encoded ServiceMessage bytes (service.capnp)
+// framing the EventEnvelope with the signed identity-context token (compact
+// JWS) as a sibling Text field. The token is minted by the sending service
+// and verified at the receiving boundary before Cedar runs; it binds a hash
+// of the envelope bytes.
+export type ServiceMessageBytes = Uint8Array;
 
 export type AiThread = {
   threadId: string;
@@ -197,15 +194,26 @@ export type DiscordChannel = {
 };
 
 export type Env = Cloudflare.Env & {
-  AI_JOBS: Queue<PeerQueueMessage>;
-  SPEND_JOBS?: Queue<PeerQueueMessage>;
-  DISCORD_OUTBOX?: Queue<PeerQueueMessage>;
+  AI_JOBS: Queue<ServiceMessageBytes>;
+  SPEND_JOBS?: Queue<ServiceMessageBytes>;
+  DISCORD_OUTBOX?: Queue<ServiceMessageBytes>;
   RESPONDER?: {
     deliverInteractionEdit: (
       envelope: Uint8Array,
       attachment: ResponderAttachment,
       idToken: string,
     ) => Promise<void>;
+  };
+  // ServiceRegistry Durable Object (hosted by the gateway worker). Typed
+  // structurally like RESPONDER so contracts does not import worker code.
+  // Both RPC payloads are capnp bytes (service.capnp: ServiceManifest in,
+  // ManifestSnapshot out).
+  SERVICE_REGISTRY?: {
+    idFromName: (name: string) => DurableObjectId;
+    get: (id: DurableObjectId) => {
+      register: (manifest: Uint8Array) => Promise<void>;
+      snapshot: () => Promise<Uint8Array>;
+    };
   };
   CLOUDFLARE_API_TOKEN?: string;
   CF_AIG_GATEWAY_ID?: string;

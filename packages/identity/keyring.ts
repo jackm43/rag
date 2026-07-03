@@ -1,10 +1,7 @@
-import {
-  importVerifyingKey,
-  type PublicKeyResolver,
-  type WorkerIdentity,
-} from "./token";
+import type { MachinePrincipal } from "../auth/principal";
+import { importVerifyingKey, type PublicKeyResolver } from "./token";
 
-// Static public keyring: worker identity -> Ed25519 public JWK. Public keys
+// Static public keyring: machine principal -> Ed25519 public JWK. Public keys
 // are NOT secret, so they are committed here and read by every verifier to
 // resolve an issuer's key. The matching private signing keys live in per-
 // worker secrets (e.g. GATEWAY_SIGNING_KEY) — see the README "Identity
@@ -17,7 +14,7 @@ import {
 // length of one deploy window; to support that, `PUBLIC_KEYRING` values may be
 // widened to an array of JWKs and the resolver taught to try each — kept as a
 // single key per worker for now since rotation is manual and rare.
-export const PUBLIC_KEYRING: Record<WorkerIdentity, JsonWebKey> = {
+export const PUBLIC_KEYRING: Record<MachinePrincipal, JsonWebKey> = {
   gateway: {
     kty: "OKP",
     crv: "Ed25519",
@@ -51,7 +48,7 @@ export const keyringResolver: PublicKeyResolver = async (iss) => {
   if (cached) {
     return cached;
   }
-  const jwk = PUBLIC_KEYRING[iss as WorkerIdentity];
+  const jwk = PUBLIC_KEYRING[iss as MachinePrincipal];
   if (!jwk) {
     return null;
   }

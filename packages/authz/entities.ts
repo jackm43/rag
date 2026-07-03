@@ -11,12 +11,13 @@ export const RAG_ADMIN_USER_IDS = [
 
 const RAG_ADMINS_GROUP: EntityUidJson = { type: "Group", id: "rag-admins" };
 
-// Entity store handed to every authorization call: the admin group and its
-// members. Principals absent from the store simply belong to no group.
-export const authzEntities: EntityJson[] = [
+// Static entity store handed to every authorization call: the admin group and
+// its members. Principals absent from the store simply belong to no group.
+// Dynamic entities (the service-registry snapshot) are merged in by callers.
+export const staticEntities: EntityJson[] = [
   { uid: RAG_ADMINS_GROUP, attrs: {}, parents: [] },
   ...RAG_ADMIN_USER_IDS.map((id) => ({
-    uid: { type: "User", id },
+    uid: { type: "Human", id },
     attrs: {},
     parents: [RAG_ADMINS_GROUP],
   })),

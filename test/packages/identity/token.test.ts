@@ -1,5 +1,6 @@
 import { assert, test } from "vitest";
 
+import type { MachinePrincipal } from "../../../packages/auth/principal.ts";
 import {
   buildIdentityContext,
   keyringResolver,
@@ -7,7 +8,6 @@ import {
   PUBLIC_KEYRING,
   verify,
   type PublicKeyResolver,
-  type WorkerIdentity,
 } from "../../../packages/identity/index.ts";
 
 const encoder = new TextEncoder();
@@ -16,7 +16,7 @@ const envelope = () => encoder.encode("cap-n-proto-envelope-bytes");
 // A fresh Ed25519 keypair plus a resolver that serves its public key for one
 // issuer. Mirrors the production shape (private key in a secret, public key in
 // the keyring) without depending on the committed keys.
-const keypairFor = async (iss: WorkerIdentity) => {
+const keypairFor = async (iss: MachinePrincipal) => {
   const keyPair = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
     "sign",
     "verify",
@@ -33,7 +33,7 @@ const gatewayToBrain = async (now = 1_000) => {
     iss: "gateway",
     aud: "brain",
     sub: "107426926909517824",
-    trustZone: "ingress-discord",
+    trustZone: "edge",
     envelopeBytes: bytes,
     now: now * 1000,
   });
@@ -134,7 +134,7 @@ test("a token whose payload is edited after signing is denied", async () => {
       act: ["gateway"],
       iss: "gateway",
       aud: "brain",
-      trustZone: "ingress-discord",
+      trustZone: "edge",
       iat: 1_000,
       exp: 1_060,
       jti: "forged",
@@ -154,7 +154,7 @@ test("a token whose payload is edited after signing is denied", async () => {
 });
 
 test("the committed keyring resolves known workers and rejects unknown ones", async () => {
-  for (const worker of Object.keys(PUBLIC_KEYRING) as WorkerIdentity[]) {
+  for (const worker of Object.keys(PUBLIC_KEYRING) as MachinePrincipal[]) {
     assert.isNotNull(await keyringResolver(worker), worker);
   }
   assert.isNull(await keyringResolver("nope"));

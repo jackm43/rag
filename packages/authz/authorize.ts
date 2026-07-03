@@ -12,34 +12,38 @@ import {
 // target, but under wrangler/workerd the module's default export is the
 // compiled WebAssembly.Module that initSync expects.
 import cedarWasmModule from "../../node_modules/@cedar-policy/cedar-wasm/web/cedar_wasm_bg.wasm";
-import { authzEntities } from "./entities";
+import type { EntityJson } from "@cedar-policy/cedar-wasm/web";
+import { staticEntities } from "./entities";
 import commandPolicies from "./policies/commands.cedar";
 import operatorPolicies from "./policies/operator.cedar";
-import peerPolicies from "./policies/peer.cedar";
+import servicePolicies from "./policies/services.cedar";
 
 // Centralised authorization: every boundary asks the Cedar engine instead of
 // carrying its own allow/deny logic. Policies live in policies/*.cedar,
 // group membership in entities.ts; callers supply request state (like the
-// D1-backed ban flag) as context.
+// D1-backed ban flag) as context, and may supply dynamic entities (the
+// service-registry snapshot) merged with the static store.
 
-export type AuthzPrincipal = {
-  type: "User" | "Operator" | "Peer";
+// A principal is either a Human (a Discord user) or a Machine (a service or
+// the operator control plane).
+export type Principal = {
+  type: "Human" | "Machine";
   id: string;
 };
 
-export type AuthzResource = {
+export type Resource = {
   type: "Guild" | "Gateway" | "Service";
   id: string;
 };
 
-export type AuthzRequest = {
-  principal: AuthzPrincipal;
+export type AuthorizationRequest = {
+  principal: Principal;
   action: string;
-  resource: AuthzResource;
+  resource: Resource;
   context?: Record<string, boolean | number | string>;
 };
 
-export type AuthzDecision = {
+export type Decision = {
   allowed: boolean;
   reason?: string;
 };
@@ -76,7 +80,7 @@ const ensureEngine = () => {
   }
   initSync({ module: cedarWasmModule });
   const parsed = preparsePolicySet(POLICY_SET_ID, {
-    staticPolicies: namedPolicies([commandPolicies, operatorPolicies, peerPolicies].join("\n\n")),
+    staticPolicies: namedPolicies([commandPolicies, operatorPolicies, servicePolicies].join("\n\n")),
   });
   if (parsed.type === "failure") {
     throw parseFailure(parsed.errors);
@@ -87,7 +91,12 @@ const ensureEngine = () => {
 // Deny-by-default: only an explicit permit (with no overriding forbid)
 // allows. reason names the forbid policies behind an explicit denial, or the
 // evaluation errors when the engine itself fails (which also denies).
-export const authorize = (request: AuthzRequest): AuthzDecision => {
+// dynamicEntities carries the service-registry snapshot when the caller has
+// one; absent, the static store and bootstrap policies still decide.
+export const authorize = (
+  request: AuthorizationRequest,
+  dynamicEntities: EntityJson[] = [],
+): Decision => {
   ensureEngine();
   const answer = statefulIsAuthorized({
     principal: request.principal,
@@ -95,7 +104,7 @@ export const authorize = (request: AuthzRequest): AuthzDecision => {
     resource: request.resource,
     context: request.context ?? {},
     preparsedPolicySetId: POLICY_SET_ID,
-    entities: authzEntities,
+    entities: dynamicEntities.length > 0 ? [...staticEntities, ...dynamicEntities] : staticEntities,
   });
   if (answer.type === "failure") {
     return { allowed: false, reason: answer.errors.map((error) => error.message).join("; ") };

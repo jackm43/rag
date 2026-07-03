@@ -5,7 +5,7 @@
 
 @id("user-commands")
 permit (
-  principal is User,
+  principal is Human,
   action in [
     Action::"command.rag",
     Action::"command.ragboard",
@@ -31,7 +31,7 @@ permit (
 
 @id("banned")
 forbid (
-  principal is User,
+  principal is Human,
   action in [
     Action::"command.rag",
     Action::"command.ask",

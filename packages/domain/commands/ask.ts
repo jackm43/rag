@@ -1,5 +1,4 @@
-import { peerLinks } from "../../boundaries/peer/links";
-import { SYSTEM_SUBJECT } from "../../identity";
+import { serviceClients, SYSTEM_SUBJECT } from "../../auth";
 import { encodeAiJobEnvelope } from "../../contracts";
 import { fallbackThreadTitle } from "../conversation";
 import { createThreadWithoutMessage, fetchChannel, isThreadChannel } from "../../discord";
@@ -52,9 +51,10 @@ export const runAskCommand = async (ctx: CommandContext, env: Env) => {
     title,
   });
 
-  await peerLinks(env).gatewayToBrain.send(
-    env.AI_JOBS,
-    encodeAiJobEnvelope(
+  await serviceClients(env).gatewayToBrain.call({
+    transport: "queue",
+    queue: env.AI_JOBS,
+    envelope: encodeAiJobEnvelope(
       {
         kind: "ask",
         channelId: thread.id,
@@ -64,8 +64,8 @@ export const runAskCommand = async (ctx: CommandContext, env: Env) => {
       },
       { source: "interactions", guildId: ctx.guildId },
     ),
-    { sub: requester?.id ?? SYSTEM_SUBJECT },
-  );
+    subject: { sub: requester?.id ?? SYSTEM_SUBJECT },
+  });
 
   return {
     content: `Started <#${thread.id}>`,

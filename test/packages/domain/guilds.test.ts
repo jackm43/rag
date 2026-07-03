@@ -58,7 +58,7 @@ test("interactions from a non-allowed guild get a friendly refusal", async () =>
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
@@ -74,7 +74,7 @@ test("PING interactions stay exempt from the guild allowlist", async () => {
   });
   const request = createSignedRequest({ type: 1 }, keyPair.secretKey);
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { type: 1 });
@@ -97,7 +97,7 @@ test("interactions from an allowed guild pass the gate", async () => {
     keyPair.secretKey,
   );
 
-  const response = await worker.fetch(request, env, {} as never);
+  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
