@@ -34,7 +34,8 @@
   "dependencies": {
     "@cedar-policy/cedar-wasm": "^4.11.2",
     "capnp-es": "^0.0.14",
-    "tweetnacl": "^1.0.3"
+    "tweetnacl": "^1.0.3",
+    "zod": "^3.25.76"
   },
   "overrides": {
     "undici": "6.27.0"

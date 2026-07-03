@@ -254,6 +254,19 @@ export type Env = Cloudflare.Env & {
   GATEWAY_DEVPROXY?: {
     invokeCommand: (message: ServiceMessageBytes) => Promise<DevProxyResult>;
   };
+  // DPoP jti replay-cache Durable Object, bound on the dev-proxy worker only.
+  // Strongly consistent (single-threaded) so the check-and-record is atomic.
+  DPOP_REPLAY?: {
+    idFromName: (name: string) => DurableObjectId;
+    get: (id: DurableObjectId) => {
+      seenBefore: (jti: string, ttlSeconds: number) => Promise<boolean>;
+    };
+  };
+  // The Discord user the dev-proxy acts as, and the guild its commands target.
+  // The gateway independently enforces DEV_PROXY_ALLOWED_SUBJECTS, so this is a
+  // convenience default, not a trust boundary.
+  DEV_PROXY_SUBJECT?: string;
+  DEV_PROXY_GUILD?: string;
   CLOUDFLARE_API_TOKEN?: string;
   CF_AIG_GATEWAY_ID?: string;
   GATEWAY_CONTROL_TOKEN?: string;

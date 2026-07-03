@@ -1,0 +1,85 @@
+{
+  "name": "ragbot-dev-proxy-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  "rules": [
+    {
+      // The auth/authz packages this worker imports (via serviceClients) load
+      // Cedar policy files as Text, exactly like the other workers.
+      "type": "Text",
+      "globs": [
+        "**/*.md",
+        "**/*.cedar"
+      ],
+      "fallthrough": true
+    }
+  ],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  // Put a Cloudflare Access application in front of this hostname. Access is the
+  // first gate; the worker cryptographically verifies the Access JWT it
+  // forwards (CF_ACCESS_TEAM_DOMAIN / CF_ACCESS_AUD below).
+  "routes": [
+    {
+      "pattern": "ragbot-dev.jsmunro.me",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "DISCORD_APPLICATION_ID": "1496842508251172895"
+    // Set these as vars (not secret — the team domain is public and the AUD tag
+    // is an identifier, not a credential) before deploy:
+    //   "CF_ACCESS_TEAM_DOMAIN": "<team>.cloudflareaccess.com"
+    //   "CF_ACCESS_AUD": "<access application AUD tag>"
+    //   "DEV_PROXY_SUBJECT": "<the Discord user id the proxy acts as>"
+    //   "DEV_PROXY_GUILD": "<guild id commands target>"
+    // Secret (never commit):
+    //   wrangler secret put DEV_PROXY_SIGNING_KEY   (private JWK from generate-keys.ts dev-proxy)
+    // On the GATEWAY worker, add the matching allowlist so the gateway will act
+    // as this subject:
+    //   "DEV_PROXY_ALLOWED_SUBJECTS": "<the same Discord user id>"
+  },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true
+    }
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DPOP_REPLAY",
+        "class_name": "DpopReplay"
+      },
+      // Service registry hosted by the gateway worker (the parent application).
+      {
+        "name": "SERVICE_REGISTRY",
+        "class_name": "ServiceRegistry",
+        "script_name": "ragbot-worker"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "DpopReplay"
+      ]
+    }
+  ],
+  // The dev-proxy's only egress: the gateway's DevProxy service-binding
+  // entrypoint. A service binding is invocable solely by a worker configured
+  // with it, so this hop is reachable only from here.
+  "services": [
+    {
+      "binding": "GATEWAY_DEVPROXY",
+      "service": "ragbot-worker",
+      "entrypoint": "DevProxy"
+    }
+  ]
+}
