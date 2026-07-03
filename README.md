@@ -418,6 +418,31 @@ wrangler secret put DEV_PROXY_SIGNING_KEY -c workers/public/dev-proxy/wrangler.j
 
 Set `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`, `DEV_PROXY_SUBJECT`, and `DEV_PROXY_GUILD` as vars on the dev-proxy worker, and add the matching `DEV_PROXY_ALLOWED_SUBJECTS` var on the **gateway** worker so it will act as that subject. Deploy the gateway before the dev-proxy so the `DevProxy` binding target exists.
 
+### Local development with `ragctl`
+
+`ragctl` (`cli/ragctl.ts`, run via `npm run ragctl -- <args>`) is the laptop client for the dev-proxy. It runs on Node (not workerd) and does everything the single-page UI does — mint a per-request DPoP proof and attach a Cloudflare Access token — but from the command line, so you can drive the **real** gateway → brain path from a terminal. It is a thin wrapper over `packages/devproxy-client`: the client owns no secrets, and `ragctl` supplies the DPoP proof and Access token through its middleware hooks.
+
+**One-time setup, then the everyday flow:**
+
+```sh
+npm run ragctl -- keys generate     # local DPoP ES256 (P-256) keypair
+npm run ragctl -- login             # Cloudflare Access SSO via cloudflared
+npm run ragctl -- cmd ragboard      # run a command through the dev-proxy
+npm run ragctl -- cmd ask --opt prompt="what is a rag?"
+```
+
+**Commands.** `keys generate [--force]` / `keys show` (public JWK + jkt only — the private key is never printed); `login [--refresh]` (browser SSO via `cloudflared`; `--refresh` re-fetches the token without re-authenticating) and `whoami` (decodes the cached token's claims); `discover` (lists the dev-proxy operations straight from `workers/public/dev-proxy/openapi.yaml`, so it works offline and never drifts from the typed client); `cmd <name> [--opt k=v …] [--channel <id>] [--json]` (the typed call); and `config` (shows the resolved config and where each value came from). Requires `cloudflared` on `PATH` for `login` (macOS: `brew install cloudflared`).
+
+**Where secrets live and how they're protected.** Everything `ragctl` persists lives under one home directory — `$RAGCTL_HOME`, else `$XDG_CONFIG_HOME/ragctl`, else `~/.config/ragctl` — created `0700`:
+
+- `dpop-key.json` (`0600`) — the DPoP keypair as a JWK. The private half never leaves this file: it is never printed by any command, and when loaded for signing it is imported **non-extractable** so it cannot be re-exported from the running process. Overwriting it (`keys generate --force`) rotates the jkt.
+- `access-token.json` (`0600`) — the Cloudflare Access application JWT as returned by `cloudflared`, cached with its expiry. `ragctl` never mints or verifies it (the worker re-verifies every call); `whoami` only decodes it for display.
+- `config.json` — optional `{ "baseUrl", "accessUrl" }` overrides.
+
+The home defaults outside the repo; a repo-local `.ragctl/` is also gitignored in case `RAGCTL_HOME` is pointed inside the tree.
+
+**Config precedence** is flag > env (`RAGCTL_BASE_URL`, `RAGCTL_ACCESS_URL`) > `config.json` > default (`https://ragbot-dev.jsmunro.me`). `accessUrl` (the Access application `cloudflared` authenticates against) defaults to `baseUrl`. The acting Discord subject is **not** a `ragctl` setting: it is server-side config (`DEV_PROXY_SUBJECT` + the gateway allowlist), never caller-supplied.
+
 ## Local and Deploy Commands
 
 `./deploy.sh`

@@ -132,11 +132,26 @@ A development application that runs in prod, so there is never a separate dev cl
   plus the two app-level gates.
 - OpenAPI/zod at ingress, capnp on the binding, reusing the generated contract layer.
 
-### Task 14 — `ragctl` local CLI *(pending, unblocked by 9/13)*
-Node CLI using `packages/devproxy-client`: local keypair/DPoP management (wire a
-`CryptoKeyPair` into `createDpopSigner`), `cloudflared` Access token acquisition (feed the
-`accessToken` hook), ergonomic typed calls to the dev-proxy API from a laptop. The typed
-client + DPoP signer it depends on now exist.
+### Task 14 — `ragctl` local CLI ✅ *(landed)*
+Node/tsx CLI (`cli/ragctl.ts`, `npm run ragctl -- …`) that wraps `packages/devproxy-client`
+to drive the deployed dev-proxy from a laptop:
+- **Local DPoP key** (`keys generate`/`show`): an ES256 (P-256) keypair persisted as a `0600`
+  JWK under a `0700` home (`$RAGCTL_HOME` → `$XDG_CONFIG_HOME/ragctl` → `~/.config/ragctl`).
+  The private half is never printed and is imported non-extractable when loaded; `loadSigner`
+  wires it into `createDpopSigner`, and jkt is computed with the worker's own `ecThumbprint`.
+- **Access token** (`login`/`whoami`): shells out to `cloudflared access login`/`token`,
+  caches the application JWT (`0600`) with its expiry, and feeds it to the client's
+  `accessToken` hook as `Cf-Access-Jwt-Assertion`; never mints or verifies it.
+- **Discovery + typed calls** (`discover`/`cmd`): `discover` lists operations from the
+  committed `openapi.yaml` (offline, in lockstep with the generated types); `cmd` builds a
+  `CommandRequest`, attaches a fresh DPoP proof + the token, and surfaces the fail-closed
+  status honestly (non-2xx → non-zero exit). `config` shows the resolved config + precedence
+  (flag > env > file > default).
+- Verified locally: `keys`/`config`/`discover`/`whoami` run under tsx; generated proofs pass
+  the worker's real `verifyDpopProof` (jkt match, replay + htm binding enforced); and `cmd`
+  sends the correct headers/body to a mock speaking the worker verifier. `login` + live `cmd`
+  need the deployed dev-proxy + `cloudflared`. No new deps (reuses the repo's `yaml`); no new
+  tests (local dev tool).
 
 ### Deferred idea (captured, not scheduled)
 - **Generated app-client servers (middleware) for frontend integrations** — per the user's
