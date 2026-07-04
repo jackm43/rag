@@ -27,4 +27,12 @@ export {
   type ActAsVerifyOptions,
   type ActAsVerifyResult,
 } from "./act-as-token";
-export { keyringResolver, resolverFromEnv, publicJwks, PUBLIC_KEYRING } from "./keyring";
+export {
+  keyringResolver,
+  resolverFromEnv,
+  actAsResolverFromEnv,
+  applicationPublicJwk,
+  publicJwks,
+  PUBLIC_KEYRING,
+  type ApplicationPublicKeysEnv,
+} from "./keyring";

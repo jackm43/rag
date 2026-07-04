@@ -6,6 +6,7 @@ import { errorMessage, logger } from "@rag/logger";
 import { REGISTRY_APPLICATION_ID_PATTERN } from "../../../../../lib/registry-kit/types";
 import { AuthUnconfiguredError, createAuth, resolveDiscordSubject } from "@rag/ingress/better-auth";
 import {
+  ApplicationAuthority,
   ApplicationRegistry,
   REGISTRY_MANIFEST,
   RegistryService,
@@ -13,12 +14,15 @@ import {
 } from "../../../service_server/src";
 import { OPENAPI } from "./openapi";
 
-// The registry worker hosts two control-plane Durable Objects:
+// The registry worker hosts the control-plane Durable Objects:
 // - ServiceRegistry: request placement and current manifest snapshot.
 // - ApplicationRegistry: the user-facing registry application backing
 //   registry.jsmunro.me application CRUD and scaffold requests.
+// - ApplicationAuthority: the per-application authority (idFromName(appId))
+//   that owns each application's members + signing key and mints act-as tokens.
 export { ServiceRegistry };
 export { ApplicationRegistry };
+export { ApplicationAuthority };
 export { RegistryService };
 
 const parseBody = async (request: Request): Promise<unknown | Response> => {

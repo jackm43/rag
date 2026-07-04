@@ -1,4 +1,5 @@
 import type { MachinePrincipal } from "../principal";
+import type { ActAsPublicKeyResolver } from "./act-as-token";
 import { importVerifyingKey, type PublicKeyResolver } from "./token";
 
 // Static public keyring: machine principal -> Ed25519 public JWK. Public keys
@@ -159,6 +160,47 @@ export const resolverFromEnv = (env?: ServicePublicKeysEnv): PublicKeyResolver =
       return null;
     }
     const key = await importVerifyingKey(jwk);
+    cache.set(iss, key);
+    return key;
+  };
+};
+
+// Application (act-as) issuers are OPEN string ids, not the closed
+// MachinePrincipal union, so they are not part of the committed PUBLIC_KEYRING.
+// Each registered application is its own OIDC-style issuer: the per-application
+// authority DO holds the private half (APPLICATION_SIGNING_KEYS) and publishes
+// the public half via its jwks() method. A verifier of an act-as token resolves
+// the issuer application's public key from the APPLICATION_PUBLIC_KEYS var — a
+// JSON map { appId: publicJwk } (public keys are not secret) — with no committed
+// default, so an unknown application issuer resolves to null and the verifier
+// denies with "unknown_issuer".
+export type ApplicationPublicKeysEnv = { APPLICATION_PUBLIC_KEYS?: string };
+
+// The verifying half of an OKP signing JWK: keep only the public point (kty,
+// crv, x) and drop the private scalar `d`, then stamp the publication metadata.
+// The authority DO stores the private JWK and derives the public point on the
+// fly for jwks() rather than tracking two copies.
+export const applicationPublicJwk = (jwk: JsonWebKey, appId: string): JsonWebKey =>
+  // kid is a valid RFC 7517 member carried at runtime but absent from the
+  // JsonWebKey lib type; cast rather than let the excess-property check reject
+  // it (publicJwks relies on the same runtime-carried kid).
+  ({ kty: jwk.kty, crv: jwk.crv, x: jwk.x, kid: appId, use: "sig", alg: "EdDSA" }) as JsonWebKey;
+
+export const actAsResolverFromEnv = (env?: ApplicationPublicKeysEnv): ActAsPublicKeyResolver => {
+  const keyring = parseEnvKeyring(env?.APPLICATION_PUBLIC_KEYS);
+  const cache = new Map<string, CryptoKey>();
+  return async (iss) => {
+    const cached = cache.get(iss);
+    if (cached) {
+      return cached;
+    }
+    const jwk = keyring[iss];
+    if (!jwk) {
+      return null;
+    }
+    // importVerifyingKey ignores JWK metadata (kid/use/alg) and imports the
+    // Ed25519 public point, so a published JWK resolves without stripping.
+    const key = await importVerifyingKey({ kty: jwk.kty, crv: jwk.crv, x: jwk.x });
     cache.set(iss, key);
     return key;
   };

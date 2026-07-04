@@ -45,3 +45,22 @@ when
   resource has zone &&
   context.toZone == resource.zone
 };
+
+// service.act-as authorizes a member service (principal) to have the
+// per-application authority mint an act-as token asserting it may act as the
+// target Application (resource). Like the invoke/exchange policies above there
+// are no hard-coded pairs: the resource Application's `members` set is supplied
+// by the application authority DO (its own datastore, keyed idFromName(appId)),
+// so granting or revoking a member is a control-plane state change, not a Cedar
+// source edit. The authority evaluates this at mint time before it will sign.
+@id("act-as-member")
+permit (
+  principal is Application,
+  action == Action::"service.act-as",
+  resource is Application
+)
+when
+{
+  resource has members &&
+  resource.members.contains(principal)
+};

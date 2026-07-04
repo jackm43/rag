@@ -84,16 +84,27 @@ export type ActAsVerifyResult =
   | { ok: true; context: ActAsContext }
   | { ok: false; reason: ActAsVerifyFailureReason };
 
-// Stamp a fresh 60s act-as assertion bound to the envelope hash.
+// Stamp a fresh 60s act-as assertion bound to the envelope hash. The binding is
+// supplied either as the raw envelope bytes or as a precomputed
+// base64url(SHA-256(envelope)): the application authority mints from the hash
+// alone, so a caller never ships the payload bytes to the authority DO to get a
+// token, while an in-process minter can pass the bytes and let this hash them.
 export const buildActAsContext = async (params: {
   iss: string;
   sub: string;
   act: string;
   aud: string;
-  envelopeBytes: Uint8Array;
+  envelopeBytes?: Uint8Array;
+  envelopeSha256?: string;
   now?: number;
   ttlSeconds?: number;
 }): Promise<ActAsContext> => {
+  const digest =
+    params.envelopeSha256 ??
+    (params.envelopeBytes ? await envelopeSha256(params.envelopeBytes) : null);
+  if (digest === null) {
+    throw new Error("buildActAsContext requires envelopeBytes or envelopeSha256");
+  }
   const iat = Math.floor((params.now ?? Date.now()) / 1000);
   return {
     iss: params.iss,
@@ -103,7 +114,7 @@ export const buildActAsContext = async (params: {
     iat,
     exp: iat + (params.ttlSeconds ?? ACT_AS_TTL_SECONDS),
     jti: crypto.randomUUID(),
-    envelopeSha256: await envelopeSha256(params.envelopeBytes),
+    envelopeSha256: digest,
   };
 };
 

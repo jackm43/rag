@@ -50,6 +50,14 @@
         "name": "REGISTRY_APPLICATIONS",
         "class_name": "ApplicationRegistry"
       },
+      // The per-application authority (idFromName(appId)): one instance per
+      // registered application, owning its members + signing key and minting
+      // act-as tokens. Defined here; other workers bind it via
+      // `script_name: "ragbot-registry-worker"`.
+      {
+        "name": "APPLICATION_AUTHORITY",
+        "class_name": "ApplicationAuthority"
+      },
       {
         "name": "ATTESTATIONS",
         "class_name": "AttestationStore",
@@ -88,6 +96,12 @@
       "tag": "v2",
       "new_sqlite_classes": [
         "ApplicationRegistry"
+      ]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": [
+        "ApplicationAuthority"
       ]
     }
   ]

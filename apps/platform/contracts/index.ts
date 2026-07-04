@@ -93,6 +93,31 @@ export type PlatformEnv = {
       getScaffoldResult: (applicationId: string) => Promise<unknown | null>;
     };
   };
+  // The per-application authority DO (idFromName(appId)): owns each
+  // application's member set + signing key and mints act-as tokens. Defined by
+  // the registry worker; bound cross-script by callers that need to mint.
+  APPLICATION_AUTHORITY?: {
+    idFromName: (name: string) => DurableObjectId;
+    get: (id: DurableObjectId) => {
+      configure: (input: unknown) => Promise<unknown | null>;
+      get: () => Promise<unknown | null>;
+      addMember: (appId: unknown, member: unknown) => Promise<unknown | null>;
+      removeMember: (appId: unknown, member: unknown) => Promise<unknown | null>;
+      jwks: () => Promise<{ keys: JsonWebKey[] }>;
+      mint: (input: unknown) => Promise<
+        | { ok: true; token: string; expiresIn: number }
+        | { ok: false; reason: string }
+      >;
+    };
+  };
+  // JSON map { appId: privateJwk } — the signing material the ApplicationAuthority
+  // DO reads to mint an application's act-as tokens. A secret on the registry
+  // worker; the DO returns only tokens, never the key.
+  APPLICATION_SIGNING_KEYS?: string;
+  // JSON map { appId: publicJwk } — the public halves a verifier resolves an
+  // act-as token issuer's key from (public keys are not secret). Consumed by
+  // actAsResolverFromEnv; unset means no application issuer resolves (deny).
+  APPLICATION_PUBLIC_KEYS?: string;
   REGISTRY_SERVICE?: {
     invoke: (message: ServiceMessageBytes) => Promise<RegistryInvokeResult>;
   };
