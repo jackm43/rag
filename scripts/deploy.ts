@@ -17,6 +17,9 @@ import { join } from "node:path";
 const DEPLOY_ORDER = [
   "ragbot-egress-worker",
   "ragbot-connectors-worker",
+  // connectors-api after the broker: it is the broker's HTTP face and binds the
+  // CONNECTORS entrypoint, so the defining worker must exist first.
+  "ragbot-connectors-api-worker",
   "ragbot-responder-worker",
   // attest before registry: registry binds attest's AttestationStore DO, so the
   // defining worker must exist first on a fresh deploy (circular DO dependency).

@@ -13,6 +13,19 @@ import { errorMessage, logger } from "@rag/logger";
 import { verifyArtifactAttestation } from "../../../../lib/attest-client/client";
 import type { Env } from "../../../../contracts";
 import { REGISTRY_APPLICATION_ID_PATTERN } from "../../../../lib/registry-kit/types";
+import {
+  isGrantRequest,
+  type GrantArtifact,
+  type GrantRequest,
+  type GrantStatusResult,
+} from "../../../../lib/registry-kit/grants";
+import {
+  grantStatus as grantStatusEngine,
+  GRANT_RETRY_MS,
+  submitGrant as submitGrantEngine,
+  sweepGrants,
+  type GrantDeps,
+} from "./grants-engine";
 
 // The per-application authority. Addressed by idFromName(appId), one Durable
 // Object instance per registered application, it is that application's OIDC-
@@ -71,8 +84,8 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
 type AuthorityRecord = { appId: string; registeredAt: string };
 
 // The attested artifact a client stakes its registration on — the exact repo
-// path + content hash CI attestation covers.
-export type RegistrationArtifact = { repository: string; path: string; sha256: string };
+// path + content hash CI attestation covers. Shared with the grant queue.
+export type RegistrationArtifact = GrantArtifact;
 
 const isArtifact = (value: unknown): value is RegistrationArtifact => {
   const record = asRecord(value);
@@ -260,20 +273,29 @@ export class ApplicationAuthority extends DurableObject<Env> {
       return { ok: false, reason: "not_attested" };
     }
 
+    await this.recordMember(appId, record.client, record.artifact, record.subject);
+    return { ok: true, snapshot: await this.snapshot(appId) };
+  }
+
+  // Record an attested client as a member (the set the Cedar service.act-as
+  // policy reads) and ensure the application's signing key exists. The caller
+  // has already established the attestation; this is the write side shared by
+  // the synchronous register() and the event-driven grant path.
+  private async recordMember(
+    appId: string,
+    client: string,
+    artifact: GrantArtifact,
+    subject?: string,
+  ): Promise<void> {
     const registration: ClientRegistration = {
-      client: record.client,
-      ...(record.subject ? { subject: record.subject } : {}),
-      artifact: record.artifact,
+      client,
+      ...(subject ? { subject } : {}),
+      artifact,
       attestedAt: new Date().toISOString(),
     };
-    await this.ctx.storage.put(`${MEMBER_PREFIX}${record.client}`, registration);
+    await this.ctx.storage.put(`${MEMBER_PREFIX}${client}`, registration);
     await this.ensureSigningMaterial(appId);
-    logger.info("application_authority_client_registered", {
-      appId,
-      client: record.client,
-      subject: record.subject,
-    });
-    return { ok: true, snapshot: await this.snapshot(appId) };
+    logger.info("application_authority_client_registered", { appId, client, subject });
   }
 
   // Revoke a client registration (control-plane state change; not attestation-gated).
@@ -285,6 +307,81 @@ export class ApplicationAuthority extends DurableObject<Env> {
     await this.ctx.storage.delete(`${MEMBER_PREFIX}${member}`);
     logger.info("application_authority_member_removed", { appId: bound, member });
     return this.snapshot(bound);
+  }
+
+  // The event-driven grant side. A control-plane grant request (register a
+  // client to act as this application, or revoke it) is claimed idempotently on
+  // its request id, then applied by the grant engine. A register whose
+  // attestation is not yet on record is NOT rejected: it is recorded as pending
+  // and the alarm re-checks it until the attestation lands (or the wait times
+  // out) — the durable wait the synchronous register() cannot offer, since the
+  // attestation arrives via the GitHub webhook after CI. The payload never
+  // widens what a member can do: the attestation match is still the sole
+  // authorization. This method only validates + binds; the engine owns the
+  // state machine so it is testable without a live Durable Object.
+  async submitGrant(input: unknown): Promise<GrantStatusResult> {
+    if (!isGrantRequest(input)) {
+      const requestId = typeof (input as { id?: unknown })?.id === "string" ? (input as { id: string }).id : "";
+      return { status: "rejected", requestId, reason: "invalid_request" };
+    }
+    const appId = await this.bind(input.appId);
+    if (!appId) {
+      return { status: "rejected", requestId: input.id, reason: "app_mismatch" };
+    }
+    // The app must have a signing key before it can host members.
+    await this.ensureSigningMaterial(appId);
+    return submitGrantEngine(this.grantDeps(appId), appId, input);
+  }
+
+  // Read the live state of a grant request (the result channel). Unknown ids —
+  // never submitted, or already swept after retention — read as "unknown".
+  async grantStatus(requestId: unknown): Promise<GrantStatusResult> {
+    if (typeof requestId !== "string" || requestId.length === 0) {
+      return { status: "unknown", requestId: "" };
+    }
+    return grantStatusEngine(this.grantDeps(), requestId);
+  }
+
+  // The alarm promotes pending registrations whose attestation has landed (or
+  // rejects those that waited too long) and sweeps terminal grant records past
+  // retention. It reschedules itself only while a registration is still pending,
+  // so an idle authority holds no standing alarm. It must never touch signing
+  // material or the member set beyond recordMember — the engine guarantees this.
+  async alarm(): Promise<void> {
+    const deps = this.grantDeps();
+    const pendingRemain = await sweepGrants(deps);
+    if (pendingRemain) {
+      await deps.storage.setAlarm(Date.now() + GRANT_RETRY_MS);
+    }
+  }
+
+  // Wire the grant engine's injected effects to this DO's storage, attestation
+  // client, and member writes. appId is threaded from submitGrant (which has
+  // just bound it); grantStatus/alarm read the already-bound id lazily.
+  private grantDeps(appId?: string): GrantDeps {
+    return {
+      storage: this.ctx.storage,
+      isAttested: async (artifact) =>
+        (
+          await verifyArtifactAttestation(this.env, {
+            repository: artifact.repository,
+            path: artifact.path,
+            sha256: artifact.sha256,
+            productionOnly: true,
+          })
+        ).ok,
+      recordMember: async (client, artifact, subject) => {
+        const bound = appId ?? (await this.boundAppId());
+        if (bound) {
+          await this.recordMember(bound, client, artifact, subject);
+        }
+      },
+      revokeMember: async (client) => {
+        await this.ctx.storage.delete(`${MEMBER_PREFIX}${client}`);
+        logger.info("application_authority_member_removed", { appId: appId ?? "", member: client });
+      },
+      now: () => Date.now(),
+    };
   }
 
   private async snapshot(appId: string): Promise<ApplicationAuthoritySnapshot> {

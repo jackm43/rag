@@ -9,16 +9,26 @@ Cloudflare Workers. Three products share one pnpm workspace:
   (`/ragspend`, `/ragspendboard`).
 - **The connectors platform** (`apps/connectors`) — a credential broker that
   holds every third-party secret (callers get opaque handles, never
-  credentials), a webhook ingress at `webhooks.jsmunro.me`, and the dev-proxy
-  admin app at `ragbot-dev.jsmunro.me` (Cloudflare Access + Discord OAuth).
+  credentials), the shared ingress at `webhooks.jsmunro.me` (provider webhooks
+  **and** Discord interaction callbacks), the machine-facing connectors API at
+  `connectors.jsmunro.me`, and the dev-proxy admin app at `ragbot-dev.jsmunro.me`
+  (Cloudflare Access + Discord OAuth).
 - **The control plane** (`apps/platform`) — the application registry
   (`registry.jsmunro.me`), artifact attestation (`attest.jsmunro.me`),
-  GraphQL metadata (`metadata.jsmunro.me`), and the egress sidecar that owns
-  all outbound-HTTP credentials.
+  GraphQL metadata (`metadata.jsmunro.me`), the per-application authority
+  (each app is its own OIDC-style issuer minting short-lived act-as tokens),
+  and the egress sidecar that owns all outbound-HTTP credentials.
 
-Every worker-to-worker hop is a signed, Cedar-authorized `ServiceMessage`;
-security is enforced at boundaries, not by network topology. Architecture,
-conventions, and how to build things live in [AGENTS.md](AGENTS.md).
+Every external edge is verified (Discord Ed25519, Cloudflare Access, provider
+webhook HMAC) and every hop is Cedar-authorized; internal `ServiceMessage` hops
+over a Cloudflare service binding or queue are *trusted by capability* (only a
+worker whose wrangler declares the binding can make the call) and carry an
+unsigned claims-only token, while `http` hops still verify a signature. Security
+is enforced at boundaries, not by network topology. Untrusted inbound follows an
+**ingress → processor → egress** triad: the shared ingress verifies and acks,
+a per-invocation processor Durable Object runs the work, and the egress sidecar
+owns every outbound credential. Architecture, conventions, and how to build
+things live in [AGENTS.md](AGENTS.md).
 
 ## Repository layout
 
@@ -26,7 +36,7 @@ conventions, and how to build things live in [AGENTS.md](AGENTS.md).
 apps/
   bot/          workers/{gateway, workflows, responder, spend}
                 lib/{domain, discord, ai, ingress}   contracts/
-  connectors/   workers/{broker, webhooks, dev-proxy}
+  connectors/   workers/{broker, webhooks, api, dev-proxy}
                 lib/ (broker internals)   devproxy-client/   contracts/
   platform/     workers/{registry, attest, metadata, egress}
                 lib/{registry-kit, attest-client}   contracts/
@@ -71,7 +81,9 @@ pnpm run scaffold         # generate a new application, service worker, or conne
 
 `pnpm run deploy` (what deploy.sh calls) discovers every `wrangler.jsonc`
 under `apps/` and deploys in binding-safe order: egress → connectors →
-responder → registry → attest → metadata → gateway → workflows → spend. A
+connectors-api → responder → **attest → registry** (registry binds attest's
+AttestationStore DO) → metadata → **workflows → gateway** (the gateway binds
+workflows' `InteractionSession` processor DO cross-script) → spend. A
 discovered worker missing from `DEPLOY_ORDER` in
 [scripts/deploy.ts](scripts/deploy.ts) fails the deploy loudly. The dev-proxy
 and webhooks workers have one-time bootstrap steps and deploy individually:
@@ -95,14 +107,18 @@ Secrets go on the worker that needs them:
    `pnpm run d1:migrate:remote`.
 2. Queues (before any deploy that references them):
    `ai-jobs`, `ai-jobs-dlq`, `ai-spend-jobs`, `ai-spend-jobs-dlq`,
-   `discord-outbox`, `discord-outbox-dlq`, `webhook-jobs`, `webhook-jobs-dlq`
-   (`wrangler queues create <name>`).
+   `discord-outbox`, `discord-outbox-dlq`, `webhook-jobs`, `webhook-jobs-dlq`,
+   `application-grants`, `application-grants-dlq` (the registry worker's
+   control-plane grant queue) (`wrangler queues create <name>`).
 3. AI config KV: `wrangler kv namespace create AI_CONFIG`, id into
    `apps/bot/workers/workflows/wrangler.jsonc`, then `pnpm run config:push`.
 4. Discord app: scopes `bot` + `applications.commands`; permissions Send
    Messages, Create Public Threads, Send Messages in Threads, Use Slash
-   Commands, Read Message History. Interactions endpoint = gateway URL +
-   `/discord`. Register commands: `pnpm run register:commands`.
+   Commands, Read Message History. Interactions endpoint =
+   `https://webhooks.jsmunro.me/{clientId}/interactions` (the Discord
+   application/client id); the webhooks worker verifies the Ed25519 signature,
+   returns a fast type-5 ack, and kicks the `InteractionSession` processor DO.
+   Register commands: `pnpm run register:commands`.
 5. Dev-proxy: Cloudflare Access self-hosted app on `ragbot-dev.jsmunro.me`
    (GitHub org + email allow policy); set `CF_ACCESS_TEAM_DOMAIN`/`CF_ACCESS_AUD`
    vars; Discord OAuth app with redirect
@@ -115,13 +131,23 @@ Secrets go on the worker that needs them:
 6. Webhooks: keypair via `generate-keys.ts webhooks` (public half into the
    `SERVICE_PUBLIC_KEYS` var on workflows + broker), broker deployed first
    with `GITHUB_WEBHOOK_SECRET`, then workflows, then
-   `pnpm run deploy:webhooks` + `WEBHOOKS_SIGNING_KEY`. Provider URL shape:
-   `https://webhooks.jsmunro.me/{provider}/{connectorId}` (e.g.
-   `/github/github-app`). The host is behind Cloudflare Access (service-token
-   only), but the `/github/*` and `/stripe/*` hook paths carry a
-   Bypass=Everyone policy so providers can POST — the provider HMAC (verified
-   in the broker) is the authentication there. All other paths require the
-   `ragbot-webhooks` service token.
+   `pnpm run deploy:webhooks` + `WEBHOOKS_SIGNING_KEY`. This shared ingress
+   carries two concerns, both keyed by the caller's client/connector id:
+   - Provider webhooks — `https://webhooks.jsmunro.me/{provider}/{connectorId}`
+     (e.g. `/github/github-app`); the provider HMAC (verified in the broker) is
+     the authentication.
+   - Discord interaction callbacks —
+     `https://webhooks.jsmunro.me/{clientId}/interactions`; the Ed25519
+     signature is the authentication, verified against the client's public key
+     in the `DISCORD_INTERACTION_PUBLIC_KEYS` var (JSON `{clientId: hexPubKey}`).
+     The worker binds workflows' `INTERACTION_SESSION` DO cross-script to kick
+     the processor.
+
+   The host is behind Cloudflare Access (service-token only), but the
+   `/github/*`, `/stripe/*`, and `*/interactions` paths carry a Bypass=Everyone
+   Access policy so providers and Discord can POST — the signature at the edge
+   is the authentication there. All other paths require the `ragbot-webhooks`
+   service token.
 7. GitHub App connector: create the App, `GITHUB_APP_ID` var +
    `GITHUB_APP_PRIVATE_KEY` secret on the broker
    (`apps/connectors/workers/broker`).

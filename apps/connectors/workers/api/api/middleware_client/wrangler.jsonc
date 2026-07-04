@@ -1,0 +1,76 @@
+{
+  "name": "ragbot-connectors-api-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  "rules": [
+    {
+      // The auth/authz packages this worker imports (via the service-kit client
+      // and cf-access ingress) load Cedar policy files as Text, exactly like the
+      // other workers.
+      "type": "Text",
+      "globs": [
+        "**/*.md",
+        "**/*.cedar"
+      ],
+      "fallthrough": true
+    }
+  ],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  // The dedicated, machine-facing HTTP surface over the credential broker
+  // (CONNECTORS.md "URL conventions"). Put a Cloudflare Access application in
+  // front of this hostname: Access is the sole perimeter gate, and the worker
+  // cryptographically verifies the Access JWT it forwards
+  // (CF_ACCESS_TEAM_DOMAIN / CF_ACCESS_AUD below). Automation authenticates with
+  // an Access service token; there is no Better Auth / Discord OAuth layer.
+  "routes": [
+    {
+      "pattern": "connectors.jsmunro.me",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    // Cloudflare account + Access team domain, copied from the registry worker.
+    // CF_ACCESS_TEAM_DOMAIN is half of the Access verification pair; CF_ACCESS_AUD
+    // (the Access application's AUD tag) is set as a SECRET after the Access app
+    // is created — until then the Access guard fails closed (401 for all).
+    //   wrangler secret put CF_ACCESS_AUD -c <this config>
+    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
+    "CF_ACCESS_TEAM_DOMAIN": "jsmunro.cloudflareaccess.com"
+  },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true
+    }
+  },
+  "durable_objects": {
+    "bindings": [
+      // Service registry hosted by the standalone ragbot-registry-worker. The
+      // edge harness registers this worker's manifest and the client derives the
+      // dev-proxy -> connectors exchange authorization from the registry snapshot.
+      {
+        "name": "SERVICE_REGISTRY",
+        "class_name": "ServiceRegistry",
+        "script_name": "ragbot-registry-worker"
+      }
+    ]
+  },
+  // The credential broker's Connectors entrypoint: this worker's sole egress, a
+  // service-binding hop (never a public route). A service binding is invocable
+  // solely by a worker configured with it, so the broker's HTTP face is reachable
+  // only from here; the broker stays binding-only. The hop is minted as the
+  // dev-proxy management principal over this trusted transport (no signing key).
+  "services": [
+    {
+      "binding": "CONNECTORS",
+      "service": "ragbot-connectors-worker",
+      "entrypoint": "Connectors"
+    }
+  ]
+}

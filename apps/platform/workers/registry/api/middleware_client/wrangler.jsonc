@@ -85,6 +85,36 @@
       "entrypoint": "Connectors"
     }
   ],
+  // The control-plane grant queue. This worker is BOTH the producer (its
+  // grant-enqueue HTTP routes push onto APPLICATION_GRANTS) and the consumer
+  // (it drains application-grants into the ApplicationAuthority DO). The DO's
+  // local attestation match is the authorization gate, so the queue only needs
+  // to be durable, not authenticated. Create both queues before first deploy:
+  // `wrangler queues create application-grants` and
+  // `wrangler queues create application-grants-dlq`.
+  "queues": {
+    "producers": [
+      {
+        "binding": "APPLICATION_GRANTS",
+        "queue": "application-grants"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "application-grants",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "application-grants-dlq"
+      },
+      {
+        "queue": "application-grants-dlq",
+        "max_batch_size": 10,
+        "max_batch_timeout": 30,
+        "max_retries": 1
+      }
+    ]
+  },
   "migrations": [
     {
       "tag": "v1",

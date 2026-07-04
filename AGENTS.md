@@ -12,18 +12,24 @@ through `op run --env-file=.env --`.
 
 pnpm workspace, three product apps + shared packages, all named `@rag/*`:
 
-- `apps/bot` — the Discord bot: `workers/gateway` (Discord ingress + the
+- `apps/bot` — the Discord bot: `workers/gateway` (Discord ws-ingress + the
   `DiscordGateway` Durable Object), `workers/workflows` (AI job consumer — the
-  only worker that runs AI), `workers/responder` (Discord write policy),
-  `workers/spend` (AI Gateway cost reconciliation). App code in `lib/`
-  (domain commands, discord helpers, ai/inference), messages in `contracts/`.
-- `apps/connectors` — the credential broker (`workers/broker`), webhook
-  ingress (`workers/webhooks`), dev-proxy admin app (`workers/dev-proxy` +
-  React web UI). Broker internals in `lib/`, generated API types in
-  `devproxy-client/`, messages in `contracts/`.
+  only worker that runs AI — and host of the `InteractionSession` processor DO,
+  which runs deferred commands + mentions to completion and edits the reply as
+  `workflows`), `workers/responder` (Discord write policy), `workers/spend`
+  (AI Gateway cost reconciliation). App code in `lib/` (domain commands,
+  discord helpers, ai/inference), messages in `contracts/`.
+- `apps/connectors` — the credential broker (`workers/broker`), the shared
+  ingress (`workers/webhooks`: provider webhooks + Discord interactions), the
+  machine-facing connectors API (`workers/api`, `connectors.jsmunro.me`), and
+  the dev-proxy admin app (`workers/dev-proxy` + React web UI). Broker
+  internals in `lib/`, generated API types in `devproxy-client/`, messages in
+  `contracts/`.
 - `apps/platform` — registry (control-plane DOs: `ServiceRegistry`,
-  `ApplicationRegistry`), attest, metadata, and the egress sidecar worker.
-  Scaffold generator in `lib/registry-kit`, messages in `contracts/`.
+  `ApplicationRegistry`, and `ApplicationAuthority` — the per-application
+  OIDC-style issuer that mints act-as tokens), attest, metadata, and the
+  egress sidecar worker. Scaffold generator in `lib/registry-kit`, messages in
+  `contracts/`.
 - `packages/` — only genuinely shared code:
   - `contracts-core` — the envelope kernel: capnp `EventEnvelope` /
     `ServiceMessage` schemas + generated modules, framing guards, transport
@@ -65,12 +71,28 @@ ingress/egress workers), `application` (internal domain workers),
 
 ## Security invariants (do not regress these)
 
-- **Every worker-to-worker hop is a signed `ServiceMessage`**: capnp envelope
-  bytes + an Ed25519 JWS binding `{sub, act, iss, aud, exp 60s, jti,
-  envelopeSha256}` (RFC 8693-style on-behalf-of; each hop re-mints with
-  itself as issuer and extends the delegation chain). Receivers verify
-  signature/issuer/audience/expiry/payload-hash **before** Cedar, which runs
-  **before** any handler.
+- **Every worker-to-worker hop is a `ServiceMessage`, trusted by transport**:
+  capnp envelope bytes + an identity token binding `{sub, act, iss, aud, exp
+  60s, jti, envelopeSha256}` (RFC 8693-style on-behalf-of; each hop re-mints
+  with itself as issuer and extends the delegation chain). `binding` and
+  `queue` transports are **trusted by capability** — only a worker whose
+  wrangler declares the binding/producer can make the call, so the binding
+  graph authenticates the caller and the token is carried claims-only
+  (unsigned); `http` transports still verify the Ed25519 JWS. Receivers read
+  issuer/audience/expiry/payload-hash (and, on `http`, the signature)
+  **before** Cedar, which runs **before** any handler. External edges always
+  verify (Discord Ed25519, CF Access, provider HMAC).
+- **act-as / on-behalf-of delegation** (`service-kit/identity/act-as-token.ts`,
+  opt-in per hop): a client may act *as an application* by carrying a
+  short-lived (60s), envelope-bound EdDSA assertion the target application's
+  `ApplicationAuthority` DO mints. The authority is the app's own OIDC-style
+  issuer (self-generated key, published via `jwks()`); membership is
+  **attestation-grounded** — a client is recorded as able to act as an app only
+  if its artifact carries a production attestation (local match against the
+  `AttestationStore`). Granting is event-driven (the `application-grants`
+  control-plane queue → `submitGrant`, which durably waits for a not-yet-present
+  attestation); minting stays synchronous and envelope-bound. Verifiers resolve
+  the issuer key at runtime (`actAsResolverFromAuthority`).
 - **Operation registration gate**: a `(service, operation)` pair must be in
   the sender's and receiver's manifests or the envelope is refused at the
   contract layer.
@@ -192,14 +214,28 @@ give it connector + service-hop permits and a manifest target, and bind
 ## Key flows (mental model)
 
 ```
-Discord → gateway (verify sig, Cedar, mint origin token, enqueue)
-        → workflows (verify, Cedar, AI + D1; re-mint per hop)
+Discord interaction → webhooks ingress (verify Ed25519 by clientId, type-5 ack,
+        kick InteractionSession) → processor DO (full pre-flight + handler,
+        all-deferred) → edit reply as workflows → egress
+Discord mention (gateway ws) → InteractionSession.runMention (keyed messageId,
+        claim() = per-message idempotency) → AI + D1 → responder → egress
+workflows AI hop (verify, Cedar, AI + D1; re-mint per hop)
         → responder (output policy: sanitize, cap, allowed_mentions)
         → egress (host/profile policy, inject credential, fetch)
 webhooks edge → broker webhook_verify → dedupe DO → workflows queue
+grant request → application-grants queue → registry consumer
+        → ApplicationAuthority.submitGrant (attestation-gated, durable wait)
 dev-proxy (CF Access → Better Auth session → allowlisted subject)
         → gateway DevProxy binding → the ordinary command pre-flight
 ```
+
+The **processor DO** (`InteractionSession`, in the workflows worker) is where
+untrusted inbound becomes work: the ingress carries no bot domain code, just
+verifies + acks + kicks the DO cross-script; the DO owns the whole command /
+mention pipeline and is the only place that can edit the reply (it holds
+`EGRESS` + `WORKFLOWS_SIGNING_KEY`). `claim()` on the DO storage is the durable
+idempotency guard (a Discord retry or ws-reconnect redelivery addresses the same
+DO and is dropped).
 
 The dev-proxy is the admin app that runs in production: Access is the
 perimeter, Better Auth (Discord OAuth, standalone `ragbot-auth` D1) supplies

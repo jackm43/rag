@@ -107,6 +107,11 @@ export type PlatformEnv = {
         | { ok: true; snapshot: unknown }
         | { ok: false; reason: string }
       >;
+      // Event-driven grant side (the `application-grants` queue): claims a grant
+      // request idempotently, applies it, and durably waits for a pending
+      // registration's attestation. grantStatus is the client's result channel.
+      submitGrant: (input: unknown) => Promise<{ status: string; requestId: string }>;
+      grantStatus: (requestId: unknown) => Promise<{ status: string; requestId: string }>;
       removeMember: (appId: unknown, member: unknown) => Promise<unknown | null>;
       jwks: () => Promise<{ keys: JsonWebKey[] }>;
       mint: (input: unknown) => Promise<
@@ -138,6 +143,14 @@ export type PlatformEnv = {
       verifyArtifact: (input: unknown) => Promise<unknown>;
       seenDelivery: (deliveryId: string, ttlMs: number) => Promise<boolean>;
     };
+  };
+  // The control-plane grant queue producer. A worker that declares this binding
+  // may enqueue an application-authority grant request (register/revoke); the
+  // registry worker consumes it and drives the target authority DO. The producer
+  // is capability-gated by the binding itself — the grant only takes effect if
+  // the authority's local attestation match passes.
+  APPLICATION_GRANTS?: {
+    send: (body: unknown) => Promise<void>;
   };
   REGISTRY_GITHUB_INSTALLATION_ID?: string;
   REGISTRY_GITHUB_OWNER?: string;

@@ -9,6 +9,7 @@ export type {
   RegistrationArtifact,
 } from "./authority";
 export { RegistryService } from "./entrypoint";
+export { processGrantDlqMessage, processGrantQueueMessage } from "./grants-consumer";
 export { REGISTRY_MANIFEST } from "./manifest";
 export { processRegistryRequest } from "./processor";
 export { ServiceRegistry } from "./registry";

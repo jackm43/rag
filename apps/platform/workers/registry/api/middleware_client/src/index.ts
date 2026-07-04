@@ -1,13 +1,22 @@
 import { cloudflareAccessGuard } from "@rag/ingress/cf-access";
+import { createQueueWorker } from "@rag/service-kit";
 import { createEdgeWorker, jsonResponse, pathPrefix, prepareApplicationHop } from "@rag/service-kit/edge";
 import { encodeRegistryInvokeEnvelope } from "../../../../../contracts";
 import type { Env, RegistryInvokeOperation, RegistryInvokeResult } from "../../../../../contracts";
 import { errorMessage, logger } from "@rag/logger";
 import { REGISTRY_APPLICATION_ID_PATTERN } from "../../../../../lib/registry-kit/types";
+import {
+  enqueueGrantRequest,
+  GRANT_REQUEST_KINDS,
+  isGrantArtifact,
+  type GrantRequestKind,
+} from "../../../../../lib/registry-kit/grants";
 import { AuthUnconfiguredError, createAuth, resolveDiscordSubject } from "@rag/ingress/better-auth";
 import {
   ApplicationAuthority,
   ApplicationRegistry,
+  processGrantDlqMessage,
+  processGrantQueueMessage,
   REGISTRY_MANIFEST,
   RegistryService,
   ServiceRegistry,
@@ -127,6 +136,71 @@ const handleApplications = async (request: Request, env: Env, url: URL): Promise
     return relay(await invokeRegistry(env, actor, "application.attestations.verify", {}, id));
   }
 
+  // Enqueue an application-authority grant request (register/revoke a client to
+  // act as the application). The enqueue only ACKS the request onto the durable
+  // control-plane queue; the authority DO applies it, waiting for the client's
+  // production attestation if it is not yet on record. The operator polls the
+  // returned requestId via GET .../grants/:requestId.
+  const grantsMatch = url.pathname.match(/^\/api\/applications\/([^/]+)\/grants$/);
+  if (grantsMatch && request.method === "POST") {
+    const id = decodeURIComponent(grantsMatch[1]);
+    if (!REGISTRY_APPLICATION_ID_PATTERN.test(id)) {
+      return jsonResponse(404, { error: "not_found" });
+    }
+    if (!env.APPLICATION_GRANTS) {
+      return jsonResponse(500, { error: "grants_queue_unbound" });
+    }
+    const body = await parseBody(request);
+    if (body instanceof Response) {
+      return body;
+    }
+    const record = asRecordBody(body);
+    const kind = record.kind;
+    const client = record.client;
+    if (
+      typeof kind !== "string" ||
+      !(GRANT_REQUEST_KINDS as readonly string[]).includes(kind) ||
+      typeof client !== "string" ||
+      !REGISTRY_APPLICATION_ID_PATTERN.test(client)
+    ) {
+      return jsonResponse(400, { error: "invalid_grant_request" });
+    }
+    const artifact = kind === "grant.register" ? record.artifact : undefined;
+    if (kind === "grant.register" && !isGrantArtifact(artifact)) {
+      return jsonResponse(400, { error: "invalid_grant_request" });
+    }
+    const subject = typeof record.subject === "string" ? record.subject : undefined;
+    try {
+      const requestId = await enqueueGrantRequest(env.APPLICATION_GRANTS, {
+        kind: kind as GrantRequestKind,
+        appId: id,
+        client,
+        ...(isGrantArtifact(artifact) ? { artifact } : {}),
+        ...(subject ? { subject } : {}),
+      });
+      return jsonResponse(202, { requestId, status: "pending" });
+    } catch {
+      return jsonResponse(400, { error: "invalid_grant_request" });
+    }
+  }
+
+  // Result channel: read the live state of a previously enqueued grant request.
+  const grantStatusMatch = url.pathname.match(/^\/api\/applications\/([^/]+)\/grants\/([^/]+)$/);
+  if (grantStatusMatch && request.method === "GET") {
+    const id = decodeURIComponent(grantStatusMatch[1]);
+    const requestId = decodeURIComponent(grantStatusMatch[2]);
+    if (!REGISTRY_APPLICATION_ID_PATTERN.test(id)) {
+      return jsonResponse(404, { error: "not_found" });
+    }
+    if (!env.APPLICATION_AUTHORITY) {
+      return jsonResponse(500, { error: "authority_unbound" });
+    }
+    const status = await env.APPLICATION_AUTHORITY.get(
+      env.APPLICATION_AUTHORITY.idFromName(id),
+    ).grantStatus(requestId);
+    return jsonResponse(200, status);
+  }
+
   const match = url.pathname.match(/^\/api\/applications\/([^/]+)$/);
   if (!match) {
     return jsonResponse(404, { error: "not_found" });
@@ -155,7 +229,10 @@ const handleApplications = async (request: Request, env: Env, url: URL): Promise
   return jsonResponse(405, { error: "method_not_allowed" });
 };
 
-export default createEdgeWorker<Env>({
+// The registry worker is both an edge (HTTP) worker and a queue consumer: the
+// edge serves registry.jsmunro.me + the grant-enqueue routes, and the consumer
+// drains the `application-grants` control-plane queue into the authority DO.
+const edge = createEdgeWorker<Env>({
   service: "registry",
   manifest: REGISTRY_MANIFEST,
   openapi: OPENAPI,
@@ -199,3 +276,13 @@ export default createEdgeWorker<Env>({
     },
   ],
 });
+
+const grants = createQueueWorker<Env>(REGISTRY_MANIFEST, {
+  "application-grants": processGrantQueueMessage,
+  "application-grants-dlq": processGrantDlqMessage,
+});
+
+export default {
+  fetch: edge.fetch,
+  queue: grants.queue,
+};
