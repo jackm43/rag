@@ -9,17 +9,17 @@ import {
   GATEWAY_SCHEMAS,
   GATEWAY_SECURITY_SCHEMES,
   type GatewayRouteBinding,
-} from "../workers/applications/gateway/api/middleware_client/src/application-bindings";
+} from "@rag/bot/workers/gateway/api/middleware_client/src/application-bindings";
 
 // Generates the gateway OpenAPI document and route table from application
 // bindings. This keeps the gateway aligned with generated application
 // middleware clients: bindings are the source of truth; OpenAPI and router data
-// are build artifacts (`npm run routes:build` after editing bindings).
+// are build artifacts (`pnpm run routes:build` after editing bindings).
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const specPath = join(root, "workers/applications/gateway/api/middleware_client/openapi.yaml");
-const openApiModulePath = join(root, "workers/applications/gateway/api/middleware_client/src/openapi.ts");
-const routesPath = join(root, "workers/applications/gateway/api/middleware_client/src/routes.ts");
+const specPath = join(root, "apps/bot/workers/gateway/api/middleware_client/openapi.yaml");
+const openApiModulePath = join(root, "apps/bot/workers/gateway/api/middleware_client/src/openapi.ts");
+const routesPath = join(root, "apps/bot/workers/gateway/api/middleware_client/src/routes.ts");
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"] as const;
 type HttpMethod = typeof HTTP_METHODS[number];
@@ -124,7 +124,7 @@ const routeEntries = [...routesByPath.entries()]
 const securityType = securitySchemeNames.map((name) => JSON.stringify(name)).join(" | ");
 
 const routesOutput = `// AUTO-GENERATED from gateway application bindings by
-// scripts/generate-gateway-routes.ts (\`npm run routes:build\`). Do not edit.
+// scripts/generate-gateway-routes.ts (\`pnpm run routes:build\`). Do not edit.
 
 export type GatewaySecurityScheme = ${securityType};
 
@@ -140,7 +140,7 @@ ${routeEntries}
 `;
 
 const openApiOutput = `// AUTO-GENERATED from gateway application bindings by
-// scripts/generate-gateway-routes.ts (\`npm run routes:build\`). Do not edit.
+// scripts/generate-gateway-routes.ts (\`pnpm run routes:build\`). Do not edit.
 
 export const OPENAPI = ${JSON.stringify(openapi, null, 2)} as const;
 `;

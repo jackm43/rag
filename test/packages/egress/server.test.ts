@@ -1,9 +1,12 @@
 import { afterEach, assert, test, vi } from "vitest";
 
-import { handleEgressRequest } from "../../../packages/egress/server.ts";
-import { encodeEgressRequestEnvelope, encodeManifestSnapshot } from "../../../packages/contracts/index.ts";
-import type { Env, EgressProfileConfig, ServiceMessageBytes } from "../../../packages/contracts/types.ts";
-import { createServiceRegistryMock, signedServiceMessage } from "../../helpers.ts";
+import { handleEgressRequest } from "@rag/egress/server";
+import { encodeEgressRequestEnvelope } from "@rag/egress/contracts";
+import { encodeManifestSnapshot } from "@rag/contracts-core";
+import type { EgressEnv as Env } from "@rag/egress/contracts";
+import type { EgressProfileConfig } from "@rag/egress/contracts";
+import type { ServiceMessageBytes } from "@rag/contracts-core";
+import { createServiceRegistryMock, signedServiceMessage } from "../../helpers";
 
 const egressEnvelope = () =>
   encodeEgressRequestEnvelope(

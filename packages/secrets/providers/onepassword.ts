@@ -1,7 +1,7 @@
 import type { Client, Item, ItemField } from "@1password/sdk";
 
-import type { Env } from "../../contracts/types";
-import { errorMessage, logger } from "../../logger";
+import type { SecretsEnv as Env } from "../env";
+import { errorMessage, logger } from "@rag/logger";
 import type { SecretsProvider } from "../types";
 
 // onepassword: resolves an "op://<vault>/<item>/<field>" reference via the

@@ -1,11 +1,11 @@
 export {};
 
 // Generates an Ed25519 signing keypair for one worker's identity-context
-// tokens. Prints the public JWK (paste into packages/identity/keyring.ts) and
+// tokens. Prints the public JWK (paste into packages/service-kit/identity/keyring.ts) and
 // the private JWK (store as the worker's signing-key secret, never committed):
 //
 //   tsx scripts/generate-keys.ts workflows
-//   wrangler secret put WORKFLOWS_SIGNING_KEY -c workers/services/workflows/wrangler.jsonc
+//   wrangler secret put WORKFLOWS_SIGNING_KEY -c apps/bot/workers/workflows/wrangler.jsonc
 //     (paste the printed private JWK JSON when prompted)
 //
 // The public/private keys are an Ed25519 pair; only the private JWK is a
@@ -51,7 +51,7 @@ const publicJwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
 const privateJwk = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
 
 // eslint-disable-next-line no-console
-console.log(`\n# ${worker} public JWK — commit to packages/identity/keyring.ts (PUBLIC_KEYRING.${worker}):`);
+console.log(`\n# ${worker} public JWK — commit to packages/service-kit/identity/keyring.ts (PUBLIC_KEYRING.${worker}):`);
 // eslint-disable-next-line no-console
 // Emit only kty/crv/x: workerd's importKey rejects an OKP JWK carrying
 // alg:"Ed25519", so the keyring stores the bare public point.

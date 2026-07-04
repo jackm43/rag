@@ -11,7 +11,7 @@ import {
 // @ts-expect-error -- the shipped .wasm.d.ts types the wasm-bindgen bundler
 // target, but under wrangler/workerd the module's default export is the
 // compiled WebAssembly.Module that initSync expects.
-import cedarWasmModule from "../../node_modules/@cedar-policy/cedar-wasm/web/cedar_wasm_bg.wasm";
+import cedarWasmModule from "./node_modules/@cedar-policy/cedar-wasm/web/cedar_wasm_bg.wasm";
 import type { EntityJson } from "@cedar-policy/cedar-wasm/web";
 import { staticEntities } from "./entities";
 import commandPolicies from "./policies/commands.cedar";

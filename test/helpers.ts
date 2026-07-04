@@ -1,25 +1,25 @@
 import nacl from "tweetnacl";
 
-import {
-  encodeAiJobEnvelope,
-  encodeManifestSnapshot,
-  encodeServiceMessage,
-  type EnvelopeOptions,
-} from "../packages/contracts";
-import type { AiJob, Env, ServiceMessageBytes } from "../packages/contracts/types";
+import { encodeAiJobEnvelope } from "@rag/bot/contracts";
+import { encodeManifestSnapshot, encodeServiceMessage, type EnvelopeOptions } from "@rag/contracts-core";
+import type { AiJob } from "@rag/bot/contracts";
+import type { Env } from "@rag/bot/contracts";
+import type { ServiceMessageBytes } from "@rag/contracts-core";
 import {
   SERVICE_ZONE,
   SYSTEM_SUBJECT,
   type MachinePrincipal,
-} from "../packages/auth/principal";
-import { ensureRequestPlacement, serviceHopIntent } from "../packages/auth/control-plane";
-import { serviceEnvelopeBytes } from "../packages/auth/message";
+} from "@rag/service-kit/principal";
+import { ensureRequestPlacement, serviceHopIntent } from "@rag/service-kit/control-plane";
+import { serviceEnvelopeBytes } from "@rag/service-kit/message";
 import {
   buildIdentityContext,
   importSigningKey,
   mint,
-} from "../packages/identity";
-import { handleEgressRequest } from "../packages/egress/server";
+} from "@rag/service-kit/identity";
+import { handleEgressRequest } from "@rag/egress/server";
+import { runDeferredCommandByName } from "@rag/bot/lib/domain/commands/session-run";
+import type { DiscordInteraction } from "@rag/bot/contracts";
 
 const encoder = new TextEncoder();
 
@@ -119,7 +119,7 @@ export type ServiceHopSpec = {
 
 // Mint a service identity-context token bound to the given envelope bytes.
 // When `hop.env` is supplied, this mirrors the production client path
-// (packages/auth/client.ts mintToken): it first calls ensureRequestPlacement
+// (packages/service-kit/client.ts mintToken): it first calls ensureRequestPlacement
 // against the same control plane the receiving server will consume against,
 // so placement enforcement is exercised end to end instead of bypassed.
 export const mintServiceToken = async (
@@ -279,12 +279,12 @@ export const serviceRegistrySnapshot = () =>
 
 // A minimal but fully functional in-memory control plane: it implements the
 // same createIntent/createPlacement/consumePlacement RPCs the real
-// SERVICE_REGISTRY Durable Object exposes (packages/auth/control-plane.ts),
+// SERVICE_REGISTRY Durable Object exposes (packages/service-kit/control-plane.ts),
 // so tests that build an env with this mock exercise the real placement
 // enforcement path end to end (mint on the client side, consume on the
 // server side) rather than tripping the "misconfigured registry" fail-closed
 // path. It intentionally skips the TTL/versioning edge cases the dedicated
-// control-plane tests (test/packages/auth/client.test.ts) cover directly —
+// control-plane tests (test/packages/service-kit/client.test.ts) cover directly —
 // every intent/placement created here is valid until the test process ends.
 type MockIntent = {
   id: string;
@@ -511,6 +511,20 @@ export const createEnv = (publicKeyHex: string, overrides: Record<string, unknow
     env.EGRESS = {
       fetchProfile: (message: unknown, body?: ArrayBuffer) =>
         handleEgressRequest(env as never, message, body),
+    };
+  }
+  // In-process INTERACTION_SESSION stub: production kicks the workflows worker's
+  // Durable Object (idFromName(interactionToken)) to run a deferred command and
+  // edit the response as `workflows`. Here we run the SAME dispatch synchronously
+  // against this env, so a deferred command's edit still travels the real egress
+  // hop under the suite's global-fetch mocks. Overridable via overrides.
+  if (env.INTERACTION_SESSION === undefined) {
+    env.INTERACTION_SESSION = {
+      idFromName: (name: string) => name,
+      get: () => ({
+        runDeferredCommand: (interaction: DiscordInteraction, commandName: string) =>
+          runDeferredCommandByName(interaction, commandName, env as never),
+      }),
     };
   }
   return env as never;

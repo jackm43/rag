@@ -11,12 +11,12 @@ import {
 } from "./access";
 import { configPath, resolveConfig, tokenPath, type ConfigOverrides } from "./config";
 import { discover } from "./discover";
-import { createDevProxyClient, type CommandRequest, type GithubApiRequest } from "../packages/devproxy-client/index";
+import { createDevProxyClient, type CommandRequest, type GithubApiRequest } from "@rag/connectors/devproxy-client";
 
 // ragctl — a local CLI for the ragbot dev-proxy. Runs on a laptop (Node, not
 // workerd) and drives the deployed dev-proxy: it acquires a Cloudflare Access
 // token via `cloudflared` and issues typed commands through
-// packages/devproxy-client. The dev-proxy now also requires a Better Auth
+// apps/connectors/devproxy-client. The dev-proxy now also requires a Better Auth
 // (Discord) session, which is established in the browser; a non-browser caller
 // must supply that session cookie via RAGCTL_SESSION_COOKIE (see `cmd` below).
 // See the README "Local development with ragctl" section for the operator flow.

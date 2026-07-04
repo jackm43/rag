@@ -1,6 +1,6 @@
-import { isRecord } from "../contracts/validation";
-import { isMachinePrincipal, type MachinePrincipal } from "../auth";
-import type { EgressProfileConfig as WireEgressProfileConfig } from "../contracts/types";
+import { isRecord } from "@rag/contracts-core";
+import { isMachinePrincipal, type MachinePrincipal } from "@rag/service-kit";
+import type { EgressProfileConfig as WireEgressProfileConfig } from "@rag/egress/contracts";
 
 export type EgressProfileConfig = WireEgressProfileConfig & {
   allowedCallers: MachinePrincipal[];

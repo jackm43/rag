@@ -4,9 +4,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   plugins: [
     cloudflareTest({
-      main: "./workers/applications/gateway/api/middleware_client/src/index.ts",
+      main: "./apps/bot/workers/gateway/api/middleware_client/src/index.ts",
       remoteBindings: false,
-      wrangler: { configPath: "./workers/applications/gateway/api/middleware_client/wrangler.jsonc" },
+      wrangler: { configPath: "./apps/bot/workers/gateway/api/middleware_client/wrangler.jsonc" },
       // The gateway now binds ServiceRegistry as an EXTERNAL Durable Object
       // (script_name: ragbot-registry-worker). Provide a stub of that worker so
       // miniflare can resolve the binding. register() is a no-op and snapshot()
@@ -29,6 +29,26 @@ export default defineConfig({
               'export default { fetch() { return new Response("Not found", { status: 404 }); } };',
             ].join("\n"),
             durableObjects: { SERVICE_REGISTRY: "ServiceRegistry" },
+          },
+          // The gateway also binds InteractionSession as an EXTERNAL Durable
+          // Object (script_name: ragbot-workflows-worker) to run deferred
+          // commands. Stub it so miniflare can resolve the binding; the real DO
+          // runs in the workflows worker. runDeferredCommand is a no-op here, so
+          // tests assert the KICK (deferred type-5 ack) at the gateway boundary
+          // and exercise the handler logic directly where needed.
+          {
+            name: "ragbot-workflows-worker",
+            modules: true,
+            compatibilityDate: "2026-04-23",
+            compatibilityFlags: ["nodejs_compat"],
+            script: [
+              'import { DurableObject } from "cloudflare:workers";',
+              "export class InteractionSession extends DurableObject {",
+              "  async runDeferredCommand() {}",
+              "}",
+              'export default { fetch() { return new Response("Not found", { status: 404 }); } };',
+            ].join("\n"),
+            durableObjects: { INTERACTION_SESSION: "InteractionSession" },
           },
         ],
       },

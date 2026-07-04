@@ -1,15 +1,19 @@
-import { createServiceServer } from "../auth";
-import type { MachinePrincipal } from "../auth";
-import { authorize } from "../authz/authorize";
+import { createServiceServer } from "@rag/service-kit";
+import type { MachinePrincipal } from "@rag/service-kit";
+import { authorize } from "@rag/authz/authorize";
 import type { EntityJson } from "@cedar-policy/cedar-wasm/web";
-import { decodeEgressRequestEnvelope, MAX_EGRESS_BODY_BYTES } from "../contracts";
-import type { EgressRequestJob, EgressResult, Env } from "../contracts/types";
-import { createBoundaryClient, type BoundaryCredential, type BoundaryPolicy } from "../boundaries/outbound/boundary-client";
-import { envelopeSha256 } from "../identity";
-import { logger } from "../logger";
+import { decodeEgressRequestEnvelope, MAX_EGRESS_BODY_BYTES } from "@rag/egress/contracts";
+import type { EgressRequestJob, EgressResult } from "@rag/egress/contracts";
+import type { EgressEnv } from "./contracts";
+import type { ServiceKitEnv } from "@rag/service-kit/env";
+
+type Env = EgressEnv & ServiceKitEnv;
+import { createBoundaryClient, type BoundaryCredential, type BoundaryPolicy } from "./outbound/boundary-client";
+import { envelopeSha256 } from "@rag/service-kit/identity";
+import { logger } from "@rag/logger";
 import { isEgressProfileConfig, type EgressProfileConfig } from "./config";
 import { DEFAULT_EGRESS_PROFILES } from "./profiles";
-import type { EgressIdentityZone } from "../boundaries/outbound/boundary-client";
+import type { EgressIdentityZone } from "./outbound/boundary-client";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -146,7 +150,14 @@ const egressServer = (env: Env) =>
     self: "egress",
     expectedIssuers: ["responder", "connectors", "workflows", "spend"],
     env,
-    transportTrust: { binding: "application" },
+    // Egress is only reachable over the EGRESS service binding, which the
+    // platform gates by capability — a worker can call it only if its wrangler
+    // config declares the binding. So the caller is authenticated by the binding
+    // graph itself; the signed identity token adds no trust here. Read the
+    // caller + on-behalf-of subject from the claims without verifying a
+    // signature. External inbound is verified at the edges (webhook/interaction
+    // hooks), not here.
+    transportTrust: { binding: "trusted" },
     authorizeInvoke: false,
   });
 

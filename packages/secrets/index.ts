@@ -3,8 +3,9 @@
 // backend by name; `resolveSecretRef(env, ref)` is the convenience that resolves
 // a whole {provider, ref}. Backends fail closed (missing/unreachable -> null),
 // so a connector op denies rather than surfacing a half-resolved credential.
-// See CONNECTORS.md for the {provider, ref} shape and the four backends.
-import type { Env } from "../contracts/types";
+// See AGENTS.md (connectors section) for the {provider, ref} shape; the four
+// backends live in ./providers.
+import type { SecretsEnv as Env } from "./env";
 import { cloudflareSecretStoreProvider } from "./providers/cloudflare-secret-store";
 import { hashicorpVaultProvider } from "./providers/hashicorp-vault";
 import { onepasswordProvider } from "./providers/onepassword";

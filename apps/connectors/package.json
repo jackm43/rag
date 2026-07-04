@@ -1,0 +1,36 @@
+{
+  "name": "@rag/connectors",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./contracts": "./contracts/index.ts",
+    "./devproxy-client": "./devproxy-client/index.ts",
+    "./lib": "./lib/index.ts",
+    "./workers/broker/src": "./workers/broker/src/index.ts",
+    "./workers/dev-proxy/api/middleware_client/src": "./workers/dev-proxy/api/middleware_client/src/index.ts",
+    "./workers/dev-proxy/service_server/src": "./workers/dev-proxy/service_server/src/index.ts",
+    "./workers/webhooks/api/middleware_client/src": "./workers/webhooks/api/middleware_client/src/index.ts",
+    "./workers/webhooks/service_server/src": "./workers/webhooks/service_server/src/index.ts",
+    "./*": "./*.ts",
+    "./*.json": "./*.json",
+    "./*.md": "./*.md"
+  },
+  "dependencies": {
+    "@rag/authz": "workspace:*",
+    "@rag/contracts-core": "workspace:*",
+    "@rag/egress": "workspace:*",
+    "@rag/ingress": "workspace:*",
+    "@rag/logger": "workspace:*",
+    "@rag/secrets": "workspace:*",
+    "@rag/service-kit": "workspace:*",
+    "@cedar-policy/cedar-wasm": "^4.11.2",
+    "@vitejs/plugin-react": "^6.0.3",
+    "capnp-es": "^0.0.14",
+    "lucide-react": "^1.23.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "vite": "^8.1.3",
+    "zod": "^3.25.76"
+  }
+}

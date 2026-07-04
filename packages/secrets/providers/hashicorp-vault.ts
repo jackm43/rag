@@ -1,6 +1,6 @@
-import { createBoundaryClient, type BoundaryFetch } from "../../boundaries/outbound/boundary-client";
-import type { Env } from "../../contracts/types";
-import { errorMessage, logger } from "../../logger";
+import { createBoundaryClient, type BoundaryFetch } from "@rag/egress/outbound/boundary-client";
+import type { SecretsEnv as Env } from "../env";
+import { errorMessage, logger } from "@rag/logger";
 import type { SecretsProvider } from "../types";
 
 // hashicorp-vault: reads (and, for the future UI, writes) a secret via Vault's

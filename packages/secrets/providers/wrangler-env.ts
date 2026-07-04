@@ -1,4 +1,4 @@
-import type { Env } from "../../contracts/types";
+import type { SecretsEnv as Env } from "../env";
 import type { SecretsProvider } from "../types";
 
 // wrangler-env: reads a secret from env by binding name. This is today's

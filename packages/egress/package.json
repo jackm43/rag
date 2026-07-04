@@ -1,0 +1,19 @@
+{
+  "name": "@rag/egress",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./*.ts",
+    "./*.json": "./*.json",
+    "./*.md": "./*.md"
+  },
+  "dependencies": {
+    "@rag/authz": "workspace:*",
+    "@rag/contracts-core": "workspace:*",
+    "@rag/logger": "workspace:*",
+    "@rag/service-kit": "workspace:*",
+    "@cedar-policy/cedar-wasm": "^4.11.2",
+    "capnp-es": "^0.0.14"
+  }
+}

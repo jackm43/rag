@@ -4,7 +4,7 @@ import {
   describeSecretsProviders,
   resolveSecretRef,
   secretsProvider,
-} from "../../../packages/secrets/index.ts";
+} from "@rag/secrets";
 
 const onePasswordSdk = vi.hoisted(() => ({
   createClient: vi.fn(),

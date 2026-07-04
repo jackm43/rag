@@ -1,5 +1,5 @@
-import type { Env } from "../../contracts/types";
-import { errorMessage, logger } from "../../logger";
+import type { SecretsEnv as Env } from "../env";
+import { errorMessage, logger } from "@rag/logger";
 import type { SecretsProvider } from "../types";
 
 // cloudflare-secret-store: reads from a Cloudflare Secrets Store binding

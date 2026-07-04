@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 
 export { };
 
-// Uploads every file in packages/ai/ai-config into the workflows worker's AI_CONFIG
+// Uploads every file in apps/bot/lib/ai/ai-config into the workflows worker's AI_CONFIG
 // KV namespace. Key scheme: the file's basename (e.g. "discord-response.json",
 // "discord-response-system-prompt.md") — the same keys loadConfig reads. The
 // bundled copies stay in the repo as the fallback + source of truth. Run after
@@ -13,8 +13,8 @@ export { };
 // redeploy — new isolates pick up the new value.
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..");
-const configDir = join(repoRoot, "packages/ai/ai-config");
-const workflowsConfig = join(repoRoot, "workers/services/workflows/wrangler.jsonc");
+const configDir = join(repoRoot, "apps/bot/lib/ai/ai-config");
+const workflowsConfig = join(repoRoot, "apps/bot/workers/workflows/wrangler.jsonc");
 
 const files = readdirSync(configDir).filter((name) => !name.startsWith("."));
 if (files.length === 0) {

@@ -32,7 +32,7 @@ type Spec = {
   paths?: Record<string, Record<string, SpecOperation>>;
 };
 
-// The spec lives at workers/applications/dev-proxy/api/middleware_client/openapi.yaml, one level up from cli/.
+// The spec lives at apps/connectors/workers/dev-proxy/api/middleware_client/openapi.yaml, one level up from cli/.
 const defaultSpecPath = (): string =>
   join(dirname(fileURLToPath(import.meta.url)), "..", "workers", "applications", "dev-proxy", "api", "middleware_client", "openapi.yaml");
 

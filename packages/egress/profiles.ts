@@ -1,4 +1,4 @@
-import type { MachinePrincipal } from "../auth";
+import type { MachinePrincipal } from "@rag/service-kit";
 import type { EgressProfileConfig } from "./config";
 
 // Bundled default egress profiles. NOTHING seeds the EgressControl Durable
@@ -15,7 +15,7 @@ import type { EgressProfileConfig } from "./config";
 // secrets module's Vault backend, which stay on direct boundary clients
 // because their hosts are dynamic per-registration/per-deployment and the
 // calls are credentialed (a wildcard-host egress profile would be a security
-// regression). See packages/connectors/handler.ts and
+// regression). See apps/connectors/lib/handler.ts and
 // packages/secrets/providers/hashicorp-vault.ts.
 export const DEFAULT_EGRESS_PROFILES: Partial<
   Record<MachinePrincipal, Record<string, EgressProfileConfig>>

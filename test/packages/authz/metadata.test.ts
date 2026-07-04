@@ -3,8 +3,8 @@ import { assert, test } from "vitest";
 import {
   authorizationMetadataToEntities,
   authorizeWithMetadata,
-} from "../../../packages/authz/metadata.ts";
-import { authorize } from "../../../packages/authz/authorize.ts";
+} from "@rag/authz/metadata";
+import { authorize } from "@rag/authz/authorize";
 
 const metadataPayload = {
   authorizationShape: {

@@ -1,0 +1,159 @@
+{
+  "name": "ragbot-workflows-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  "rules": [
+    {
+      "type": "Text",
+      "globs": [
+        "**/*.md",
+        "**/*.cedar"
+      ],
+      "fallthrough": true
+    }
+  ],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "vars": {
+    "DISCORD_APPLICATION_ID": "1496842508251172895",
+    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
+    // Guild allowlist (comma-separated guild snowflakes); fail closed when set.
+    "ALLOWED_GUILD_IDS": "457689460096630794"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ragbot",
+      "database_id": "5833b0bb-7806-483e-9015-32e209ce2fb0",
+      "migrations_dir": "../../../../migrations"
+    }
+  ],
+  // AI prompt/config store. Only the workflows worker runs AI, so only it binds this.
+  // loadConfig reads keys (file basenames) with a bundled fallback, so a fresh
+  // or empty namespace still works. Operator bootstrap (one time):
+  //   wrangler kv namespace create AI_CONFIG
+  // then paste the printed id below, and `npm run config:push` (also run by
+  // deploy.sh after deploy) uploads the ai-config files.
+  "kv_namespaces": [
+    {
+      "binding": "AI_CONFIG",
+      "id": "2a6dbd4428b64d6982bfe628445c163a"
+    }
+  ],
+  "ai": {
+    "binding": "AI"
+  },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true
+    }
+  },
+  "services": [
+    {
+      "binding": "RESPONDER",
+      "service": "ragbot-responder-worker",
+      "entrypoint": "Responder"
+    },
+    // The credential broker's Connectors entrypoint (CONNECTORS.md §"Binding +
+    // deploying"): the workflows worker is the first credential caller (grant/fetch/token
+    // via the workflowsToConnectors client, signed with WORKFLOWS_SIGNING_KEY). The
+    // broker must be deployed before this binding can resolve.
+    {
+      "binding": "CONNECTORS",
+      "service": "ragbot-connectors-worker",
+      "entrypoint": "Connectors"
+    },
+    // Generic egress sidecar. Discord (rest + webhook), media downloads, and
+    // AI Gateway HTTP all leave the worker through here now; the egress worker
+    // owns credential injection and host policy per profile.
+    // DISCORD_BOT_TOKEN and CF_AIG_TOKEN must be provisioned on the EGRESS
+    // worker (ragbot-egress-worker), NOT here — after this migration workflows
+    // no longer needs DISCORD_BOT_TOKEN or CF_AIG_TOKEN directly. The egress
+    // worker must be deployed before this binding can resolve.
+    {
+      "binding": "EGRESS",
+      "service": "ragbot-egress-worker",
+      "entrypoint": "Egress"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      // Service registry hosted by the standalone ragbot-registry-worker.
+      {
+        "name": "SERVICE_REGISTRY",
+        "class_name": "ServiceRegistry",
+        "script_name": "ragbot-registry-worker"
+      },
+      // Per-interaction processor DO, defined by this worker. The gateway
+      // ingress binds the same class cross-script to run deferred commands here
+      // (where EGRESS + WORKFLOWS_SIGNING_KEY live). One instance per Discord
+      // interaction token; state is a short-lived dedupe marker swept by alarm.
+      {
+        "name": "INTERACTION_SESSION",
+        "class_name": "InteractionSession"
+      }
+    ]
+  },
+  // First local DO class for this worker (SERVICE_REGISTRY above is cross-script
+  // and carries no migration here). The gateway's cross-script binding to
+  // InteractionSession must NOT declare a migration — only the defining worker
+  // (this one) does.
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "InteractionSession"
+      ]
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "SPEND_JOBS",
+        "queue": "ai-spend-jobs"
+      },
+      {
+        "binding": "DISCORD_OUTBOX",
+        "queue": "discord-outbox"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "ai-jobs",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 2,
+        "dead_letter_queue": "ai-jobs-dlq"
+      },
+      {
+        "queue": "ai-jobs-dlq",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 1
+      },
+      // Verified webhook events from the webhooks edge worker (mirrors the
+      // ai-jobs consumer). Operator bootstrap (one time, before deploying this
+      // consumer): `wrangler queues create webhook-jobs` and
+      // `wrangler queues create webhook-jobs-dlq`.
+      {
+        "queue": "webhook-jobs",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 2,
+        "dead_letter_queue": "webhook-jobs-dlq"
+      },
+      {
+        "queue": "webhook-jobs-dlq",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 1
+      }
+    ]
+  }
+}

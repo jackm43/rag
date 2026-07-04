@@ -1,6 +1,6 @@
 import { assert, test } from "vitest";
 
-import { errorDetails } from "../../packages/logger/index.ts";
+import { errorDetails } from "@rag/logger";
 
 test("errorDetails logs only name, message, and cause name/message", () => {
   const cause = new Error("upstream refused");

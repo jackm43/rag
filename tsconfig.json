@@ -17,7 +17,7 @@
   },
   "include": [
     "worker-configuration.d.ts",
-    "workers/**/*.ts",
+    "apps/**/*.ts",
     "packages/**/*.ts",
     "scripts/**/*.ts",
     "cli/**/*.ts",

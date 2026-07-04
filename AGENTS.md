@@ -1,182 +1,236 @@
-# Running With 1Password
+# Working in this repo
 
-## Required Secrets
+Read the [README](README.md) first for what the system is and how to run it.
+This file is the developer/agent guide: the architecture, the invariants you
+must not regress, and the checklists for adding things.
 
-This project expects these environment variables:
-- `DISCORD_APPLICATION_ID`
-- `DISCORD_PUBLIC_KEY`
-- `DISCORD_BOT_TOKEN`
+Run `pnpm run check` (tsc + dependency-direction check) and `pnpm test` before
+calling anything done. Wrangler needs Node 22+. Commands that touch secrets go
+through `op run --env-file=.env --`.
 
-`.env` is set to 1Password references (`op://...`), so run project commands through `op run`.
+## Architecture
 
-## Current Runtime Shape
+pnpm workspace, three product apps + shared packages, all named `@rag/*`:
 
-- Applications live at `workers/applications/<id>/{web, api/middleware_client, service_server}`:
-  `gateway` (`ragbot-worker`; Discord ingress, `DiscordGateway` DO, `DevProxy`
-  and `ApplicationMiddleware` entrypoints, `/.well-known/jwks.json` serving the
-  committed Ed25519 keyring), `registry` (control-plane DOs +
-  `REGISTRY_SERVICE` self-binding), `attest` (thin middleware -> signed
-  `attest.invoke` envelope -> `ATTEST_SERVICE` self-binding entrypoint;
-  business logic lives in `service_server/src/{operations,webhook}.ts`),
-  `metadata` (`METADATA_SERVICE`), `webhooks`, `dev-proxy`.
-- Services live at `workers/services/<id>` (no public route, no web/api
-  split): `workflows` (AI job queue consumer), `responder` (Discord write
-  egress: outbox consumer + `Responder` RPC entrypoint), `spend` (AI spend
-  aggregation queue consumer), `connectors` (the credential broker), `egress`
-  (the generic outbound-HTTP sidecar).
-- Trust zones (`packages/auth/principal.ts`): `platform` (public ingress +
-  egress/provider-boundary workers: gateway, attest, dev-proxy, webhooks,
-  egress), `application` (internal domain workers: workflows, responder,
-  spend, metadata, connectors), `management` (admin surfaces over application
-  resources), `control-plane` (infrastructure authority over runtime state and
-  trust machinery: registry). The old untrusted->edge->application->trusted
-  taxonomy is gone.
-- Egress: all outbound HTTP for discord-rest, discord-webhook, cloudflare-api,
-  media-download, and ai-gateway flows through the `egress` service worker as
-  signed `egress.request` hops, with bundled default profiles
-  (`packages/egress/profiles.ts`) so a fresh deploy works before any
-  `EgressControl` DO seeding (DO-stored profiles override the defaults).
-  `DISCORD_BOT_TOKEN`, `CF_AIG_TOKEN`, and `CLOUDFLARE_API_TOKEN` now live only
-  on the egress worker — the sole exception is the gateway's `DiscordGateway`
-  DO, which still holds `DISCORD_BOT_TOKEN` for the websocket `IDENTIFY`.
-  Deliberate exceptions that stay on the direct `packages/boundaries/outbound`
-  client: the connectors broker's per-connector provider hosts (dynamic hosts)
-  and the Vault secrets backend; the 1Password SDK does its own HTTP outside
-  any boundary client.
-- Modules:
-  - `packages/auth` centralised auth service client library: RFC-named identity vocabulary (`MachinePrincipal`, `Subject`, delegation chain, `Target`, `TrustZone` = `platform`/`application`/`management`/`control-plane`), `serviceClients(env)`/`createServiceClient` factory (Cedar exchange check, signing keys, token minting, transport, denial logging), `createServiceServer` receive pipeline yielding `ServiceRequest` (verified `RequestContext` + payload), service manifests and registry client, the operation-registration gate, and the fail-closed placement control plane (an env with no working `SERVICE_REGISTRY` binding denies rather than passes through)
-  - `packages/contracts/service.capnp` transport-layer contract for the service boundary: `ServiceMessage` (queue hop body: envelope bytes + JWS token), `ServiceManifest`/`ManifestSnapshot` (registry RPC payloads); generated code via `npm run contracts:build`. The identity token itself stays a JWS (RFC 7515), carried as Text
-  - `packages/authz` Cedar engine: `authorize()` (`Human`/`Machine` principals, static + registry entities), `authorizeAndForward` forwarding authorizer, policies in `packages/authz/policies/*.cedar` (`commands`, `gateway`, `connectors`, `egress`, `services`)
-  - `packages/identity` Ed25519 identity-context tokens (RFC 8693-style mint/verify), committed public keyring
-  - `packages/boundaries/inbound` ingress guards (Discord signature, Cloudflare Access, operator bearer token) plus the shared Better Auth session module (`packages/boundaries/inbound/better-auth.ts`, used by both dev-proxy and registry middlewares)
-  - `packages/boundaries/outbound` the now mostly-legacy-path direct egress boundary client (host allowlists, credentials, timeouts) — still used by the connectors broker's provider hosts and the Vault secrets backend; everything else routes through `packages/egress`
-  - `packages/egress` the egress sidecar's bundled default profiles (`profiles.ts`) and client/server halves that carry outbound HTTP as signed `egress.request` hops
-  - `packages/domain/http.ts` Discord signature verification, JSON responses, constant-time compare
-  - `packages/discord/index.ts` Discord REST helpers
-  - `workers/applications/gateway/service_server/src/gateway.ts` `DiscordGateway` Durable Object (`DISCORD_GATEWAY` binding)
-  - `workers/applications/registry/service_server/src/registry.ts` `ServiceRegistry` Durable Object (`SERVICE_REGISTRY` binding on every worker); workers register manifests on startup and the Cedar authorizer consumes the entity snapshot
-  - `workers/applications/gateway/api/middleware_client/src/application-bindings.ts` source of truth for the gateway's public routes and discovery docs — `npm run routes:build` generates `openapi.yaml`, `src/openapi.ts`, and `src/routes.ts`; `src/router.ts` wires paths, methods, security schemes (ingress guards) and operationId handlers from the generated route table.
-  - `workers/applications/metadata/api/middleware_client/src/application-bindings.ts` source of truth for the metadata GraphQL app's public routes — `npm run routes:build` generates `openapi.yaml` and `src/openapi.ts`; the worker serves the generated document at `/openapi.json`.
-  - `workers/applications/attest/api/middleware_client/src/application-bindings.ts` source of truth for the artifact-attestation webhook app's public routes — `npm run routes:build` generates `openapi.yaml` and `src/openapi.ts`; the worker serves the generated document at `/openapi.json`.
-  - `workers/applications/registry/api/middleware_client/src/application-bindings.ts` source of truth for the registry app's public routes — `npm run routes:build` generates `openapi.yaml` and `src/openapi.ts`; the worker serves the generated document at `/openapi.json`.
-  - `workers/applications/webhooks/api/middleware_client/src/application-bindings.ts` source of truth for the webhook-ingress app's public routes — `npm run routes:build` generates `openapi.yaml` and `src/openapi.ts`; the worker serves the generated document at `/openapi.json`.
-  - `workers/applications/dev-proxy/api/middleware_client/src/application-bindings.ts` source of truth for the dev-proxy admin app's public routes — `npm run routes:build` generates `openapi.yaml` and `src/openapi.ts`; `npm run devproxy:types` regenerates `packages/devproxy-client/api-types.ts`; the worker serves the generated document at `/openapi.json`.
-  - `packages/domain/mention.ts` mention handling, thread tracking, AI title generation, and AI queue consumer (thread conversation context)
-  - `packages/domain/commands/ask.ts` `/ask` thread creation, normal AI response handling, and web-search research mode
-  - `packages/domain/commands/ragspend.ts` `/ragspend` personal AI spend lookup and `/ragspendboard` spend leaderboard
-  - `packages/inference/client.ts` the centralised model-access interface: owns the AI Gateway credential (`CF_AIG_TOKEN` boundary client), URL construction, and binding-vs-gateway routing. Workers AI `@cf/...` / `workers-ai/...` models run on the `env.AI` binding (gateway-wrapped when a gatewayId is set); Unified Billing partner chat models use AI Gateway compat chat completions. Nothing outside this package touches `env.AI` or `gateway.ai.cloudflare.com`.
-  - `packages/ai/ai.ts` ragbot's chat workflows over `packages/inference`: config-derived request parameters and raw-payload interpretation (text/usage/sources extraction, mention sanitization). `/ask` research mode uses an OpenAI search model such as `openai/gpt-4o-search-preview` via the same seam.
-  - `packages/ai/spend.ts` raw spend event recording, AI Gateway log cost reconciliation, spend queue consumer helper, and dollar formatting
-  - `packages/ai/config.ts` loads source-controlled AI config from `packages/ai/ai-config`
-  - `packages/logger/index.ts` structured logging
-- Discord interactions route: `POST /discord`
-- Gateway control routes: `POST /gateway/start`, `GET /gateway/health` (both require `Authorization: Bearer $DISCORD_BOT_TOKEN`)
-- Public routes are allowlisted. Any path not listed here returns `404`.
-- Database: D1 (`DB` binding) using `schema.sql`
-- AI model binding: `AI`
-- Queue bindings:
- - producer: `AI_JOBS` -> `ai-jobs`
- - producer: `SPEND_JOBS` -> `ai-spend-jobs`
- - consumer: `ai-jobs` with dead-letter queue `ai-jobs-dlq`
- - spend worker consumer: `ai-spend-jobs` with dead-letter queue `ai-spend-jobs-dlq`
+- `apps/bot` — the Discord bot: `workers/gateway` (Discord ingress + the
+  `DiscordGateway` Durable Object), `workers/workflows` (AI job consumer — the
+  only worker that runs AI), `workers/responder` (Discord write policy),
+  `workers/spend` (AI Gateway cost reconciliation). App code in `lib/`
+  (domain commands, discord helpers, ai/inference), messages in `contracts/`.
+- `apps/connectors` — the credential broker (`workers/broker`), webhook
+  ingress (`workers/webhooks`), dev-proxy admin app (`workers/dev-proxy` +
+  React web UI). Broker internals in `lib/`, generated API types in
+  `devproxy-client/`, messages in `contracts/`.
+- `apps/platform` — registry (control-plane DOs: `ServiceRegistry`,
+  `ApplicationRegistry`), attest, metadata, and the egress sidecar worker.
+  Scaffold generator in `lib/registry-kit`, messages in `contracts/`.
+- `packages/` — only genuinely shared code:
+  - `contracts-core` — the envelope kernel: capnp `EventEnvelope` /
+    `ServiceMessage` schemas + generated modules, framing guards, transport
+    encode/decode, validation primitives. App message types do NOT live here.
+  - `service-kit` — the service-boundary library: signed hops
+    (`createClient` / `createServiceServer`), manifests + registry client,
+    the fail-closed placement control plane, Ed25519 identity tokens
+    (`service-kit/identity`, committed public keyring), and the edge harness
+    (`service-kit/edge`).
+  - `authz` — Cedar engine + `policies/*.cedar`; `ingress` — inbound guards
+    (CF Access, Better Auth session, operator token); `egress` — the egress
+    sidecar client/server + `egress.request`/`application.request` contracts
+    (+ `egress/outbound`, the legacy direct client); `secrets` — pluggable
+    secret backends (wrangler-env, cloudflare-secret-store, vault,
+    1password); `logger`.
 
-## Runtime Configuration
+**Layer split inside every application** (one deployed worker per app):
+`api/middleware_client` is the public edge — ingress guards, request shaping,
+generated OpenAPI, and a signed hop into the app's own `service_server` via a
+loopback service binding (`*_SERVICE` bound to the same worker's
+`WorkerEntrypoint`). Business logic lives only in `service_server`. Edge
+workers are built on `createEdgeWorker` (`packages/service-kit/edge.ts`),
+which owns manifest registration, the optional perimeter guard, `/health`,
+`/openapi.json`, 405-with-Allow, and the 404 fallback.
 
-AI config lives in `packages/ai/ai-config`:
-- `discord-response.json`: mention and `/ask` response model, max tokens, temperature, thread history limit, AI Gateway id used by the AI binding
-- `discord-response-system-prompt.md`: mention response system prompt
-- `ask-web-search.json`: `/ask` web-search model, max output tokens, temperature, search turns, search context size, AI Gateway id used by the AI binding
-- `ask-web-search-system-prompt.md`: neutral `/ask` web research system prompt
-- AI Gateway log cost is the source of truth for spend. AI requests include metadata for exact cost reconciliation.
+**Dependency rules** — enforced by `scripts/check-dep-direction.ts` (part of
+`pnpm run check`): packages never import apps; apps import other apps only
+through `lib/`, `contracts/`, or `devproxy-client/` (never another app's
+`workers/`); the workspace graph stays acyclic.
 
-## Setup and Run Commands
+**Env slices** — there is no global `Env`. Each shared package declares the
+slice it reads (`ServiceKitEnv`, `IngressEnv`, `EgressEnv`, `SecretsEnv`);
+each app's `contracts/` composes the slices plus its own bindings into that
+app's `Env`. New bindings go in the owning slice, not a grab-bag.
 
-Install dependencies:
+**Trust zones** (`packages/service-kit/principal.ts`): `platform` (public
+ingress/egress workers), `application` (internal domain workers),
+`management` (admin surfaces), `control-plane` (registry / trust machinery).
 
-```bash
-op run --env-file=.env -- npm install
+## Security invariants (do not regress these)
+
+- **Every worker-to-worker hop is a signed `ServiceMessage`**: capnp envelope
+  bytes + an Ed25519 JWS binding `{sub, act, iss, aud, exp 60s, jti,
+  envelopeSha256}` (RFC 8693-style on-behalf-of; each hop re-mints with
+  itself as issuer and extends the delegation chain). Receivers verify
+  signature/issuer/audience/expiry/payload-hash **before** Cedar, which runs
+  **before** any handler.
+- **Operation registration gate**: a `(service, operation)` pair must be in
+  the sender's and receiver's manifests or the envelope is refused at the
+  contract layer.
+- **Cedar is the only authorization engine** (`packages/authz`).
+  `service.exchange` at client build, `service.invoke` at receive, plus
+  domain actions (`command.*`, `gateway.*`, `connector.*`, `egress.use`).
+  Deny by default; use `authorizeAndForward` so there is no ignorable
+  boolean. Admins are data: `RAG_ADMIN_USER_IDS` in
+  `packages/authz/entities.ts`.
+- **Placement control plane fails closed**: no working `SERVICE_REGISTRY`
+  binding ⇒ the hop is denied, never silently allowed.
+- **Credentials live at the edge of the system only.** Outbound HTTP goes
+  through the egress sidecar (signed `egress.request`; profiles in
+  `packages/egress/profiles.ts`); provider secrets live only in the
+  connectors broker (phantom-token model — callers get opaque handles,
+  `authorizedFetch` runs broker-side). Deliberate exceptions: the broker's
+  dynamic provider hosts and the Vault backend stay on
+  `packages/egress/outbound`; the 1Password SDK does its own HTTP; the
+  `DiscordGateway` DO keeps the bot token for websocket IDENTIFY.
+- **Fail closed, disclose nothing**: denials return a bare status; the reason
+  is logged (shared `service_denied` shape), never echoed. Never log request
+  bodies, headers, tokens, or secret material — ids and envelope kinds only.
+- **Wire hygiene**: queue sends use `contentType: "bytes"` (JSON silently
+  mangles Uint8Array); messages are capped at 128 KiB (validators enforce
+  body caps below that); producers validate on encode AND consumers
+  re-validate on decode (zero trust between hops).
+- Decided and settled: signing stays **per-worker** (no central STS); the
+  `DiscordGateway` DO stays in the gateway worker (moving a DO class between
+  scripts needs a risky transfer migration).
+
+## How to add things
+
+Start with the scaffolder — it generates compiling code, registers the worker
+in `DEPLOY_ORDER`, and prints the remaining manual steps:
+
+```sh
+pnpm run scaffold app <id> [--display "Name"] [--route "GET /api/x opId svc.op"]...
+pnpm run scaffold worker <id> --app <bot|connectors|platform> [--queue <name>]
+pnpm run scaffold connector <id> --kind api_key --host <host> --secret-ref <ENV>
 ```
 
-Create D1 database:
+`scaffold app` reuses the registry's `buildApplicationScaffold`
+(`apps/platform/lib/registry-kit/scaffold.ts` — the same generator behind the
+registry app's PR flow), so the local and hosted paths cannot drift.
+The checklists below are what the scaffolder automates.
 
-```bash
-op run --env-file=.env -- npx wrangler d1 create ragbot
+### A new application (public API or web app)
+
+1. **Home**: a new product gets `apps/<app>/` with a `package.json` (name
+   `@rag/<app>`, `exports: {"./*": "./*.ts"}`, deps on the `@rag/*` packages
+   it uses — pnpm-workspace.yaml already globs `apps/*`). A worker inside an
+   existing product goes under that app's `workers/`.
+2. **Worker skeleton**: `workers/<id>/api/middleware_client/{src,wrangler.jsonc}`
+   and `workers/<id>/service_server/src`. One wrangler config per deployed
+   worker; the service server is reached via a loopback `services` binding
+   (`"service": "<own worker name>", "entrypoint": "<Entrypoint class>"`),
+   plus the external `SERVICE_REGISTRY` DO binding
+   (`script_name: "ragbot-registry-worker"`). Web UI (if any) in
+   `workers/<id>/web` with a self-anchored vite config.
+3. **Contracts**: add the payload struct + union arm in
+   `packages/contracts-core/envelope.capnp`, run `pnpm run contracts:build`,
+   then put the TS job type, validator, and encode/decode in **your app's**
+   `contracts/` module (build them from `@rag/contracts-core` kernel helpers:
+   `initEnvelope`, `readEnvelope`, `compact`, the `is*` validators). Add your
+   bindings to your app's `Env` there too.
+4. **Identity**: add the `MachinePrincipal` + zone in
+   `packages/service-kit/principal.ts`; write the manifest (`service`, `zone`,
+   `targets`, `operations`); add Cedar permits in
+   `packages/authz/policies/services.cedar` (bootstrap `service.invoke` /
+   `service.exchange`) and any domain actions in their policy file. If the
+   worker initiates hops: `tsx scripts/generate-keys.ts <id>`, public JWK
+   into `service-kit/identity/keyring.ts`, private JWK as a
+   `<ID>_SIGNING_KEY` secret.
+5. **Edge worker**: `export default createEdgeWorker({...})` with routes;
+   define `application-bindings.ts` (`X_APPLICATION`, `X_ROUTE_BINDINGS`,
+   optional `X_SECURITY_SCHEMES`/`X_SCHEMAS`) — `pnpm run routes:build`
+   discovers it and generates `openapi.yaml` + `src/openapi.ts`
+   automatically. Hop into the service server with `prepareApplicationHop`.
+6. **Deploy**: add the worker name to `DEPLOY_ORDER` in `scripts/deploy.ts`
+   (deploy fails loudly until you do — place it before anything that binds
+   it). Create any queues/KV first.
+7. **Tests** in `test/apps/<app>/`; run `pnpm run check` — the
+   dependency-direction check will catch layering mistakes.
+
+### A new webhook ingress
+
+Usually you don't need a new worker: the central receiver
+(`apps/connectors/workers/webhooks`) handles
+`POST webhooks.jsmunro.me/{provider}/{connectorId}` generically. To accept a
+new provider: add its HMAC scheme to `apps/connectors/lib/webhooks.ts`, the
+provider to the `WebhookEventProvider` union + `SIGNATURE_HEADERS` map, a
+webhook config on the connector's registry entry (secret ref + enabled), and
+a `connector.webhook.verify` Cedar permit. The receiver verifies via the
+broker (never sees the secret), dedupes on the broker-returned event id, and
+enqueues a signed `webhook.event` to the workflows worker — consumers go
+there.
+
+### A new internal service worker (no public route)
+
+Steps 1, 3, 4, 6, 7 above, minus the edge: a single worker dir with
+`wrangler.jsonc` + `src/`, reached only by service binding or queue. Queue
+consumers use `createQueueWorker(manifest, handlers)`
+(`packages/service-kit/queue-worker.ts`) so manifest registration and
+unknown-queue handling are inherited; receive with
+`createServiceServer(...).receive(message, decode, transport)`.
+
+### A new connector (third-party credential)
+
+Config, not code, if the auth shape exists (`api_key`,
+`oauth2_client_credentials`, `github_app`, 3LO): add a registry entry in
+`apps/connectors/lib/registry.ts` (id, kind, single `host`, `cedarResource`,
+`{provider, ref}` secret reference), Cedar permits per operation in
+`packages/authz/policies/connectors.cedar`, and the secret on the broker.
+A genuinely new auth shape adds a `lib/providers/<name>.ts` strategy. A new
+**caller** of the broker: add it to `CONNECTOR_CALLERS` in `lib/handler.ts`,
+give it connector + service-hop permits and a manifest target, and bind
+`CONNECTORS` on its worker.
+
+## Key flows (mental model)
+
+```
+Discord → gateway (verify sig, Cedar, mint origin token, enqueue)
+        → workflows (verify, Cedar, AI + D1; re-mint per hop)
+        → responder (output policy: sanitize, cap, allowed_mentions)
+        → egress (host/profile policy, inject credential, fetch)
+webhooks edge → broker webhook_verify → dedupe DO → workflows queue
+dev-proxy (CF Access → Better Auth session → allowlisted subject)
+        → gateway DevProxy binding → the ordinary command pre-flight
 ```
 
-Copy the generated id into `workers/applications/gateway/api/middleware_client/wrangler.jsonc`:
-- `database_id`
+The dev-proxy is the admin app that runs in production: Access is the
+perimeter, Better Auth (Discord OAuth, standalone `ragbot-auth` D1) supplies
+the acting Discord subject, sessions are bound to the Access identity, and
+the gateway independently enforces `DEV_PROXY_ALLOWED_SUBJECTS`.
 
-Do not point `preview_database_id` at the production database; create a separate preview DB if preview deployments are ever used.
+## Testing
 
-Apply D1 schema locally:
+`pnpm test` runs vitest inside workerd (`@cloudflare/vitest-pool-workers`;
+config in `vitest.config.ts` boots the gateway worker plus a stub registry
+worker). Tests live in `test/packages/*` (shared packages) and `test/apps/*`
+(app + worker behaviour); `test/helpers.ts` has the signed-message and env
+builders. Worker HTTP surfaces are tested through their routers/fetch
+handlers, not by mocking internals.
 
-```bash
-op run --env-file=.env -- npm run d1:migrate:local
-```
+## Gotchas
 
-Create queues:
-
-```bash
-op run --env-file=.env -- npx wrangler queues create ai-jobs
-op run --env-file=.env -- npx wrangler queues create ai-jobs-dlq
-op run --env-file=.env -- npx wrangler queues create ai-spend-jobs
-op run --env-file=.env -- npx wrangler queues create ai-spend-jobs-dlq
-```
-
-Register slash commands:
-
-```bash
-op run --env-file=.env -- npm run register:commands
-```
-
-Run local Worker dev server:
-
-```bash
-op run --env-file=.env -- npm run dev
-```
-
-Run local Worker dev server with both worker configs:
-
-```bash
-op run --env-file=.env -- npm run dev:all
-```
-
-Typecheck and test:
-
-```bash
-npm run check
-npm test
-```
-
-Deploy Worker:
-
-```bash
-op run --env-file=.env -- npm run deploy
-```
-
-Start Gateway connection (after deploy):
-
-```bash
-op run --env-file=.env -- sh -c 'curl -X POST "https://ragbot-worker.jsmunro.workers.dev/gateway/start" -H "Authorization: Bearer $DISCORD_BOT_TOKEN"'
-```
-
-Or run the helper:
-
-```bash
-./deploy.sh
-```
-
-## Discord App Configuration
-
-Bot scopes:
-- `bot`
-- `applications.commands`
-
-Bot permissions:
-- `Send Messages`
-- `Create Public Threads`
-- `Send Messages in Threads`
-- `Use Slash Commands`
-- `Read Message History` (required for thread conversation context)
-
-Use the deployed Worker URL plus `/discord` as the Discord interactions endpoint.
+- Node 22+ for wrangler; `pnpm install` (never npm — `workspace:*` deps).
+  The better-auth/zod peer warning on install is upstream noise.
+- `pnpm run contracts:build` needs the native capnp compiler
+  (`brew install capnp`); generated modules are committed.
+- Generated files (`openapi.yaml`, `src/openapi.ts`, `src/routes.ts`,
+  `devproxy-client/api-types.ts`, `packages/contracts-core/envelope.ts`) are
+  committed — regenerate via scripts, never hand-edit.
+- D1: change schema via `migrations/` only. `rag_ai_interactions` keeps a
+  dual-INSERT fallback (prod may lack the token-usage columns; SQLite has no
+  `ADD COLUMN IF NOT EXISTS`). Never point `preview_database_id` at prod.
+- AI config is memoized per isolate — `config:push` affects new isolates
+  only; a redeploy refreshes everything.
+- The AI usage guard fails open on D1 errors (deliberate); the guild
+  allowlist and everything security-boundary fails closed.
+- Open threads: per-operation Cedar enforcement across all hops (manifests
+  already carry `operations`); a real dev-proxy interaction bridge for async
+  AI results; the deferred "generated app-client servers" idea.

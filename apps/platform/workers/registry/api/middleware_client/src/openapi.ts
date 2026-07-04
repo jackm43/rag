@@ -1,0 +1,467 @@
+// AUTO-GENERATED from the application bindings by
+// scripts/generate-openapi.ts (`pnpm run routes:build`). Do not edit.
+
+export const OPENAPI = {
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ragbot registry",
+    "description": "Control-plane application for registering ragbot applications, storing application metadata, initiating scaffolds, and checking artifact attestation readiness.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://registry.jsmunro.me"
+    }
+  ],
+  "paths": {
+    "/openapi.json": {
+      "get": {
+        "operationId": "registryOpenApiJson",
+        "summary": "Registry generated OpenAPI document",
+        "security": [
+          {
+            "cfAccess": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Generated OpenAPI document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "registryHealth",
+        "summary": "Registry service health",
+        "security": [
+          {
+            "cfAccess": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Health snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "operationId": "registryIndex",
+        "summary": "Registry text landing response",
+        "security": [
+          {
+            "cfAccess": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Text response."
+          }
+        }
+      }
+    },
+    "/api/auth/{path}": {
+      "get": {
+        "operationId": "registryAuthGet",
+        "summary": "Better Auth session and OAuth endpoints",
+        "description": "Wildcard route owned by Better Auth under /api/auth/*, still behind Cloudflare Access.",
+        "security": [
+          {
+            "cfAccess": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Better Auth response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid Access token."
+          }
+        }
+      },
+      "post": {
+        "operationId": "registryAuthPost",
+        "summary": "Better Auth session and OAuth endpoints",
+        "description": "Wildcard route owned by Better Auth under /api/auth/*, still behind Cloudflare Access.",
+        "security": [
+          {
+            "cfAccess": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Better Auth response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid Access token."
+          }
+        }
+      }
+    },
+    "/api/applications": {
+      "get": {
+        "operationId": "listApplications",
+        "summary": "List registered applications",
+        "security": [
+          {
+            "cfAccess": [],
+            "betterAuthSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Application list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createApplication",
+        "summary": "Request a new application registration",
+        "security": [
+          {
+            "cfAccess": [],
+            "betterAuthSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplicationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Application request accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request."
+          }
+        }
+      }
+    },
+    "/api/applications/{id}": {
+      "get": {
+        "operationId": "getApplication",
+        "summary": "Read one registered application",
+        "security": [
+          {
+            "cfAccess": [],
+            "betterAuthSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{2,63}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Application metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Application not found."
+          }
+        }
+      },
+      "put": {
+        "operationId": "updateApplication",
+        "summary": "Update an application registration request",
+        "security": [
+          {
+            "cfAccess": [],
+            "betterAuthSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{2,63}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplicationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Application update accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Application not found."
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteApplication",
+        "summary": "Mark an application registration deleted",
+        "security": [
+          {
+            "cfAccess": [],
+            "betterAuthSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{2,63}$"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Application marked deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Application not found."
+          }
+        }
+      }
+    },
+    "/api/applications/{id}/attestations/verify": {
+      "post": {
+        "operationId": "verifyApplicationAttestations",
+        "summary": "Verify scaffold artifact attestations",
+        "security": [
+          {
+            "cfAccess": [],
+            "betterAuthSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{2,63}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Attestation verification snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Application or scaffold not found."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "cfAccess": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Cloudflare Access perimeter token."
+      },
+      "betterAuthSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "better-auth.session_token",
+        "description": "Better Auth Discord session bound to the Access identity."
+      }
+    },
+    "schemas": {
+      "ApplicationRequest": {
+        "type": "object",
+        "required": [
+          "id",
+          "displayName",
+          "zone",
+          "targets",
+          "operations",
+          "routes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{2,63}$"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "zone": {
+            "type": "string"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "method",
+                "path",
+                "operationId",
+                "serviceOperation"
+              ],
+              "properties": {
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "GET",
+                    "POST",
+                    "PUT",
+                    "PATCH",
+                    "DELETE"
+                  ]
+                },
+                "path": {
+                  "type": "string"
+                },
+                "operationId": {
+                  "type": "string"
+                },
+                "serviceOperation": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+} as const;

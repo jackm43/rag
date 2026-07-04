@@ -1,8 +1,12 @@
-import { createClient, createHopIntent, SYSTEM_SUBJECT, type Subject, type VerifiedRequestContext } from "../auth";
-import { encodeEgressRequestEnvelope } from "../contracts";
-import type { Env, ServiceMessageBytes } from "../contracts/types";
-import { envelopeSha256 } from "../identity";
-import type { BoundaryFetch } from "../boundaries/outbound/boundary-client";
+import { createClient, createHopIntent, SYSTEM_SUBJECT, type Subject, type VerifiedRequestContext } from "@rag/service-kit";
+import { encodeEgressRequestEnvelope } from "@rag/egress/contracts";
+import type { EgressEnv } from "./contracts";
+import type { ServiceKitEnv } from "@rag/service-kit/env";
+
+type Env = EgressEnv & ServiceKitEnv;
+import type { ServiceMessageBytes } from "@rag/contracts-core";
+import { envelopeSha256 } from "@rag/service-kit/identity";
+import type { BoundaryFetch } from "./outbound/boundary-client";
 
 const STRIPPED_HEADERS = new Set(["authorization", "cookie", "proxy-authorization"]);
 
@@ -20,7 +24,11 @@ const prepareEgressMessage = (
   intent: ReturnType<typeof createHopIntent>,
 ): Promise<ServiceMessageBytes> =>
   createClient({ env, self: caller, context })
-    .to("egress", { transportTrust: "application", authorizeExchange: false })
+    // Egress is reachable only over its capability-gated service binding, so the
+    // caller is authenticated by the binding graph; send a claims-only token and
+    // let the egress server read it without verifying a signature (no signing
+    // key required on any caller).
+    .to("egress", { transportTrust: "trusted", authorizeExchange: false })
     .prepare(envelope, { intent });
 
 const clientContextOf = (subject: Subject | undefined): VerifiedRequestContext =>

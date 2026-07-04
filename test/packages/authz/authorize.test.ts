@@ -1,8 +1,8 @@
 import { assert, test } from "vitest";
 
 import type { EntityJson } from "@cedar-policy/cedar-wasm/web";
-import { authorize, type AuthorizationRequest } from "../../../packages/authz/authorize.ts";
-import { RAG_ADMIN_USER_IDS } from "../../../packages/authz/entities.ts";
+import { authorize, type AuthorizationRequest } from "@rag/authz/authorize";
+import { RAG_ADMIN_USER_IDS } from "@rag/authz/entities";
 
 const ADMIN_ID = RAG_ADMIN_USER_IDS[0];
 const OUTSIDER_ID = "999999999999999999";
