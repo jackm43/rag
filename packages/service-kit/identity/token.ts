@@ -115,7 +115,10 @@ const ED25519 = { name: "Ed25519" } as const;
 // full, non-shared buffer, so the view is a sound BufferSource.
 const buf = (view: Uint8Array): BufferSource => view as unknown as BufferSource;
 
-const b64urlFromBytes = (bytes: Uint8Array): string => {
+// The compact-JWS base64url codec. Exported so the act-as-token module
+// (identity/act-as-token.ts) signs and parses tokens with the identical
+// encoding rather than a second, drift-prone copy.
+export const b64urlFromBytes = (bytes: Uint8Array): string => {
   let binary = "";
   for (const byte of bytes) {
     binary += String.fromCharCode(byte);
@@ -123,7 +126,7 @@ const b64urlFromBytes = (bytes: Uint8Array): string => {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 };
 
-const bytesFromB64url = (value: string): Uint8Array => {
+export const bytesFromB64url = (value: string): Uint8Array => {
   const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(
     value.length + ((4 - (value.length % 4)) % 4),
     "=",
@@ -136,10 +139,10 @@ const bytesFromB64url = (value: string): Uint8Array => {
   return bytes;
 };
 
-const b64urlJson = (value: unknown): string =>
+export const b64urlJson = (value: unknown): string =>
   b64urlFromBytes(encoder.encode(JSON.stringify(value)));
 
-const jsonFromB64url = (value: string): unknown =>
+export const jsonFromB64url = (value: string): unknown =>
   JSON.parse(decoder.decode(bytesFromB64url(value)));
 
 // base64url(SHA-256(bytes)); the value bound into a token and re-derived from

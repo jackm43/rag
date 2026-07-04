@@ -15,4 +15,16 @@ export {
   type VerifyOptions,
   type VerifyResult,
 } from "./token";
+export {
+  ACT_AS_TOKEN_TYP,
+  ACT_AS_TTL_SECONDS,
+  buildActAsContext,
+  mintActAs,
+  verifyActAs,
+  type ActAsContext,
+  type ActAsPublicKeyResolver,
+  type ActAsVerifyFailureReason,
+  type ActAsVerifyOptions,
+  type ActAsVerifyResult,
+} from "./act-as-token";
 export { keyringResolver, resolverFromEnv, publicJwks, PUBLIC_KEYRING } from "./keyring";
