@@ -18,7 +18,7 @@ import {
   mint,
 } from "@rag/service-kit/identity";
 import { handleEgressRequest } from "@rag/egress/server";
-import { runDeferredCommandByName } from "@rag/bot/lib/domain/commands/session-run";
+import { runDeferredCommandByName, runInteractionSession } from "@rag/bot/lib/domain/commands/session-run";
 import type { DiscordInteraction } from "@rag/bot/contracts";
 
 const encoder = new TextEncoder();
@@ -522,6 +522,8 @@ export const createEnv = (publicKeyHex: string, overrides: Record<string, unknow
     env.INTERACTION_SESSION = {
       idFromName: (name: string) => name,
       get: () => ({
+        run: (interaction: DiscordInteraction) =>
+          runInteractionSession(interaction, env as never),
         runDeferredCommand: (interaction: DiscordInteraction, commandName: string) =>
           runDeferredCommandByName(interaction, commandName, env as never),
       }),

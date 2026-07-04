@@ -62,6 +62,45 @@ const inlineMessage = (content: string) =>
 const hasCredentials = (ctx: CommandContext): ctx is CredentialedCommandContext =>
   Boolean(ctx.applicationId && ctx.interactionToken);
 
+// One policy decision per command: Cedar evaluates the admin gate and the
+// raghammer ban together, then AI-limited commands pay the usage lookup. The
+// ban state itself comes from D1, and only AI-limited commands pay for it,
+// exactly as before. Shared verbatim by the synchronous gateway path
+// (executeCommand) and the all-deferred processor path (runInteractionSession)
+// so there is a single authorization authority; a denial returns the message
+// each path renders its own way (inline type-4, or an edited deferred reply).
+export const authorizeAndLimit = async (
+  spec: CommandSpec,
+  ctx: CommandContext,
+  env: Env,
+): Promise<{ allowed: true } | { allowed: false; message: string }> => {
+  const activeBan =
+    spec.limitKind && ctx.invoker
+      ? await activeAiBanForUser(env, ctx.invoker.id, new Date())
+      : null;
+  const decision = authorize({
+    principal: { type: "Human", id: ctx.invoker?.id ?? "unknown" },
+    action: `command.${spec.name}`,
+    resource: { type: "Guild", id: ctx.guildId ?? "unknown" },
+    context: { banned: activeBan !== null },
+  });
+  if (!decision.allowed) {
+    return {
+      allowed: false,
+      message: activeBan ? aiBanMessage(activeBan.expires_at) : `You are not allowed to use /${spec.name}.`,
+    };
+  }
+
+  if (spec.limitKind) {
+    const usage = await checkAiUsageAllowed(env, ctx.invoker?.id, spec.limitKind);
+    if (!usage.allowed) {
+      return { allowed: false, message: usage.message };
+    }
+  }
+
+  return { allowed: true };
+};
+
 // Shared pre-flight chain: option validation -> interaction credentials ->
 // Cedar authorization (admin gate + raghammer ban) -> usage limits ->
 // dispatch (enqueue+defer, inline, or defer+run). Every command goes through
@@ -99,31 +138,9 @@ export const executeCommand = async (
     return inlineMessage(`Could not defer /${spec.name} without interaction credentials.`);
   }
 
-  // One policy decision per command: Cedar evaluates the admin gate and the
-  // raghammer ban together. The ban state itself still comes from D1, and
-  // only AI-limited commands pay for the lookup, exactly as before.
-  const activeBan =
-    spec.limitKind && ctx.invoker
-      ? await activeAiBanForUser(env, ctx.invoker.id, new Date())
-      : null;
-  const decision = authorize({
-    principal: { type: "Human", id: ctx.invoker?.id ?? "unknown" },
-    action: `command.${spec.name}`,
-    resource: { type: "Guild", id: ctx.guildId ?? "unknown" },
-    context: { banned: activeBan !== null },
-  });
-  if (!decision.allowed) {
-    if (activeBan) {
-      return inlineMessage(aiBanMessage(activeBan.expires_at));
-    }
-    return inlineMessage(`You are not allowed to use /${spec.name}.`);
-  }
-
-  if (spec.limitKind) {
-    const usage = await checkAiUsageAllowed(env, ctx.invoker?.id, spec.limitKind);
-    if (!usage.allowed) {
-      return inlineMessage(usage.message);
-    }
+  const gate = await authorizeAndLimit(spec, ctx, env);
+  if (!gate.allowed) {
+    return inlineMessage(gate.message);
   }
 
   if (spec.kind === "inline") {

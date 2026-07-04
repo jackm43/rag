@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { DiscordInteraction, Env } from "../../../contracts";
-import { runDeferredCommandByName } from "../../../lib/domain/commands/session-run";
+import { runDeferredCommandByName, runInteractionSession } from "../../../lib/domain/commands/session-run";
 
 // Matches the Discord interaction-token follow-up window: past this the token
 // is dead (a replay could never produce a real edit), so the dedupe marker is
@@ -9,14 +9,28 @@ const SESSION_TTL_MS = 15 * 60 * 1000;
 const PROCESSED_KEY = "processed-at";
 
 // One Durable Object per interaction (idFromName(interactionToken)), hosted by
-// the workflows worker. It runs a deferred-inline command to completion and
-// edits the original interaction response as the `workflows` principal — this
-// worker holds EGRESS + WORKFLOWS_SIGNING_KEY, which the gateway ingress does
-// not, so the deferred reply can only be sent from here. The gateway verified
-// the Discord signature before kicking us and reaches us over a binding-scoped
-// RPC, so the call itself is trusted. Idempotent: Discord may retry the initial
-// interaction POST, and both retries address the same DO.
+// the workflows worker. It runs the command to completion and edits the
+// original interaction response as the `workflows` principal — this worker
+// holds EGRESS + WORKFLOWS_SIGNING_KEY, which neither ingress does, so the
+// deferred reply can only be sent from here. Whoever kicks us — the gateway
+// (legacy /discord path) or the neutral webhooks ingress — has already verified
+// the Discord signature and reaches us over a binding-scoped RPC, so the call
+// itself is trusted. Idempotent: Discord may retry the initial interaction
+// POST, and both retries address the same DO.
 export class InteractionSession extends DurableObject<Env> {
+  // Full dispatch: the webhooks ingress forwards a verified interaction and the
+  // DO owns the entire pre-flight + handler (all commands deferred). This is the
+  // Phase 2 path that lets the ingress carry no bot domain code.
+  async run(interaction: DiscordInteraction): Promise<void> {
+    if (!(await this.claim())) {
+      return;
+    }
+    await runInteractionSession(interaction, this.env);
+  }
+
+  // Legacy path: the gateway pre-flights the command and kicks a single
+  // deferred-inline handler by name. Retained through the cutover window while
+  // Discord still points at the gateway /discord route; removed with it.
   async runDeferredCommand(interaction: DiscordInteraction, commandName: string): Promise<void> {
     if (!(await this.claim())) {
       return;

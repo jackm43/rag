@@ -18,6 +18,16 @@
     "nodejs_compat"
   ],
   "workers_dev": false,
+  "vars": {
+    // Discord application public keys for interaction-signature verification,
+    // keyed by application (client) id: { "<clientId>": "<hex public key>" }.
+    // Public keys only verify Ed25519 signatures (they cannot sign), so this is
+    // safe to embed as a plaintext var rather than a secret. The interactions
+    // route resolves the key per {clientId}; an unregistered id 404s.
+    // Value below is the ragbot application (id 1496842508251172895); its
+    // public key is op://Services/ragbot/PublicKey.
+    "DISCORD_INTERACTION_PUBLIC_KEYS": "{\"1496842508251172895\":\"1db2d138bb69ded0c0baff472b20bfc2fa4ca62770af2109f41c02436d53daec\"}"
+  },
   // The centralised webhook-ingress hostname (CONNECTORS.md "URL conventions":
   // a connector's inbound webhook is webhooks.jsmunro.me/{provider}/{id}).
   // The host is behind Cloudflare Access (service-token-only Allow policy), but
@@ -28,6 +38,13 @@
   // other path (e.g. /openapi.json) requires the ragbot-webhooks service token.
   // Access apps: "ragbot webhooks" (host), "ragbot webhooks — github/stripe
   // (public)" (path bypass).
+  //
+  // The Discord interactions path /{clientId}/interactions ALSO needs a
+  // Bypass=Everyone Access policy: Discord POSTs interaction callbacks and
+  // likewise cannot pass an Access ceremony — the Ed25519 signature (verified
+  // in-worker against the app's public key) is the authentication. Add the path
+  // pattern webhooks.jsmunro.me/*/interactions to the existing public bypass
+  // Access app (a manual Cloudflare-side step, done at cutover).
   "routes": [
     {
       "pattern": "webhooks.jsmunro.me",
@@ -60,6 +77,17 @@
         "name": "SERVICE_REGISTRY",
         "class_name": "ServiceRegistry",
         "script_name": "ragbot-registry-worker"
+      },
+      // The bot's InteractionSession processor DO, defined by the workflows
+      // worker. Bound cross-script (no migration on the binding side) so the
+      // interactions route can kick run() after verifying the Discord
+      // signature. The workflows worker must be deployed before this binding
+      // resolves — it is in the core DEPLOY_ORDER, which runs before this
+      // worker's manual `--only webhooks` bootstrap (scripts/deploy.ts).
+      {
+        "name": "INTERACTION_SESSION",
+        "class_name": "InteractionSession",
+        "script_name": "ragbot-workflows-worker"
       }
     ]
   },

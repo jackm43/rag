@@ -292,6 +292,25 @@ export type ConnectorsEnv = {
       firstSeen: (key: string, ttlMs: number) => Promise<boolean>;
     };
   };
+  // The bot's InteractionSession processor DO, defined by the workflows worker
+  // (apps/bot/workers/workflows) and bound here cross-script. The webhooks
+  // ingress verifies a Discord interaction signature, returns the type-5 ack,
+  // and kicks run() — which owns the entire command dispatch, so this worker
+  // carries no bot domain code. The interaction is passed as an opaque payload
+  // (structurally typed, mirroring WEBHOOK_DEDUPE / SERVICE_REGISTRY) so
+  // contracts never imports the bot's DiscordInteraction type.
+  INTERACTION_SESSION?: {
+    idFromName: (name: string) => DurableObjectId;
+    get: (id: DurableObjectId) => {
+      run: (interaction: unknown) => Promise<void>;
+    };
+  };
+  // Discord application public keys for interaction-signature verification,
+  // keyed by application (client) id: a JSON object { "<clientId>": "<hex>" }.
+  // Public keys only verify Ed25519 signatures, so this is safe to embed as a
+  // wrangler var (not a secret). Resolved per {clientId} on the interactions
+  // route; a future Phase-3 authority DO can supersede this static map.
+  DISCORD_INTERACTION_PUBLIC_KEYS?: string;
   // Gateway DevProxy service-binding entrypoint, bound on the dev-proxy worker
   // ONLY (apps/connectors/workers/dev-proxy). A service binding can be invoked solely by
   // a worker configured with it, so this RPC surface is reachable only from the

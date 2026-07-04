@@ -9,6 +9,17 @@ import nacl from "tweetnacl";
 // dispatch the payload themselves. The public key is safe to embed (it only
 // verifies), so this needs no secret.
 
+// Discord interaction transport constants, defined here (the neutral ingress
+// layer) so the platform webhook ingress can branch a verified interaction
+// without importing any bot domain code. The bot keeps its own copies in
+// apps/bot/contracts — these are Discord protocol invariants, not shared state.
+// Request type 1 (PING) and response type 1 (PONG) share the value; type 5 is
+// the deferred-channel-message ack the ingress returns for every non-PING
+// interaction (all commands are deferred; the processor DO edits the reply).
+export const DISCORD_INTERACTION_PING = 1;
+export const DISCORD_INTERACTION_PONG = 1;
+export const DISCORD_INTERACTION_DEFERRED_MESSAGE = 5;
+
 const encoder = new TextEncoder();
 const DISCORD_SIGNATURE_MAX_SKEW_SECONDS = 5 * 60;
 const DISCORD_SIGNATURE_PATTERN = /^[0-9a-fA-F]{128}$/;

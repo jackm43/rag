@@ -246,12 +246,14 @@ export type BotEnv = {
     ) => Promise<void>;
   };
   // InteractionSession Durable Object (defined in the workflows worker). Typed
-  // structurally like SERVICE_REGISTRY so contracts stays leaf. The gateway
-  // ingress binds it cross-script and kicks it to run a deferred command and
-  // edit the response as `workflows`; the workflows worker hosts it locally.
+  // structurally like SERVICE_REGISTRY so contracts stays leaf. Both ingresses
+  // bind it cross-script and kick it: the webhooks ingress via run() (full
+  // deferred dispatch), the gateway via runDeferredCommand() (legacy path). It
+  // edits the response as `workflows`; the workflows worker hosts it locally.
   INTERACTION_SESSION: {
     idFromName: (name: string) => DurableObjectId;
     get: (id: DurableObjectId) => {
+      run: (interaction: DiscordInteraction) => Promise<void>;
       runDeferredCommand: (interaction: DiscordInteraction, commandName: string) => Promise<void>;
     };
   };

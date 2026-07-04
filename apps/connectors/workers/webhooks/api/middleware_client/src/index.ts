@@ -1,5 +1,11 @@
 import { createClient, createHopIntent } from "@rag/service-kit";
-import { base64Of, createEdgeWorker, pathPattern, readCappedBody } from "@rag/service-kit/edge";
+import { base64Of, createEdgeWorker, jsonResponse, pathPattern, readCappedBody } from "@rag/service-kit/edge";
+import {
+  DISCORD_INTERACTION_DEFERRED_MESSAGE,
+  DISCORD_INTERACTION_PING,
+  DISCORD_INTERACTION_PONG,
+  verifyDiscordSignature,
+} from "@rag/ingress/discord";
 import { connectorsClient } from "../../../../../lib";
 import { CONNECTOR_ID_PATTERN, encodeWebhookEventEnvelope, MAX_WEBHOOK_BODY_BYTES, MAX_WEBHOOK_EVENT_TYPE_LENGTH } from "../../../../../contracts";
 import type { Env, WebhookEventProvider } from "../../../../../contracts";
@@ -38,6 +44,13 @@ const SIGNATURE_HEADERS: Record<WebhookEventProvider, readonly string[]> = {
 // broker re-checks it against the connector's own webhook config), {id} the
 // connector slug. Anything else on this hostname does not exist.
 const WEBHOOK_PATH_PATTERN = /^\/(github|stripe)\/([a-z][a-z0-9-]{0,63})$/;
+
+// POST /{clientId}/interactions: the platform ingress for Discord interaction
+// callbacks (commands, components, modals). {clientId} is the registered
+// application/client id; it resolves to that app's Ed25519 public key. The
+// signature IS the authentication (Discord cannot pass a Cloudflare Access
+// ceremony), so this path is Access-bypassed — see wrangler.jsonc.
+const INTERACTIONS_PATH_PATTERN = /^\/([A-Za-z0-9._-]{1,128})\/interactions$/;
 
 const notFound = () => new Response("Not found", { status: 404 });
 // Invalid or unverifiable deliveries all exit here with no detail — the broker
@@ -179,6 +192,74 @@ const handleWebhook = async (
   return new Response("Accepted", { status: 202 });
 };
 
+// The application's Ed25519 public key for {clientId}, from the embedded
+// DISCORD_INTERACTION_PUBLIC_KEYS map. Malformed JSON or an unregistered client
+// id resolves to undefined and the request 404s — an unknown app is not served.
+const resolveDiscordPublicKey = (env: Env, clientId: string): string | undefined => {
+  const raw = env.DISCORD_INTERACTION_PUBLIC_KEYS;
+  if (!raw) {
+    return undefined;
+  }
+  let map: unknown;
+  try {
+    map = JSON.parse(raw);
+  } catch {
+    logger.error("discord_public_keys_unparseable");
+    return undefined;
+  }
+  if (typeof map !== "object" || map === null) {
+    return undefined;
+  }
+  const value = (map as Record<string, unknown>)[clientId];
+  return typeof value === "string" ? value : undefined;
+};
+
+// POST /{clientId}/interactions: verify the Discord Ed25519 signature with the
+// app's public key, then — PING -> type-1 PONG (Discord's endpoint-validation
+// probe); anything else -> return the type-5 deferred ack and kick the
+// InteractionSession DO, which owns the full command dispatch. Verify + ack is
+// well within Discord's 3s budget (Ed25519 is fast; the DO kick rides
+// waitUntil). No bot domain code runs here: the verified interaction is handed
+// to the DO as an opaque payload.
+const handleInteractions = async (
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  clientId: string,
+): Promise<Response> => {
+  const publicKey = resolveDiscordPublicKey(env, clientId);
+  if (!publicKey) {
+    return notFound();
+  }
+
+  const interaction = await verifyDiscordSignature(request, publicKey);
+  if (interaction === null) {
+    return unauthorized();
+  }
+
+  const type = (interaction as { type?: unknown }).type;
+  if (type === DISCORD_INTERACTION_PING) {
+    return jsonResponse(200, { type: DISCORD_INTERACTION_PONG });
+  }
+
+  const token = (interaction as { token?: unknown }).token;
+  if (typeof token !== "string" || token.length === 0) {
+    return unauthorized();
+  }
+
+  if (!env.INTERACTION_SESSION) {
+    // A deploy misconfiguration: the cross-script DO binding is absent. Fail
+    // with a retryable 500 rather than silently dropping the interaction.
+    logger.error("interaction_session_unbound", { clientId });
+    return new Response("Internal error", { status: 500 });
+  }
+
+  ctx.waitUntil(
+    env.INTERACTION_SESSION.get(env.INTERACTION_SESSION.idFromName(token)).run(interaction),
+  );
+  return jsonResponse(200, { type: DISCORD_INTERACTION_DEFERRED_MESSAGE });
+};
+
 export default createEdgeWorker<Env>({
   service: "webhooks",
   manifest: WEBHOOKS_MANIFEST,
@@ -196,6 +277,12 @@ export default createEdgeWorker<Env>({
           }
           return handleWebhook(request, env, provider as WebhookEventProvider, connectorId);
         },
+      },
+    },
+    {
+      match: pathPattern(INTERACTIONS_PATH_PATTERN),
+      methods: {
+        POST: (request, env, ctx, [clientId]) => handleInteractions(request, env, ctx, clientId),
       },
     },
   ],
