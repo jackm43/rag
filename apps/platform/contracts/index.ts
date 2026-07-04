@@ -101,7 +101,12 @@ export type PlatformEnv = {
     get: (id: DurableObjectId) => {
       configure: (input: unknown) => Promise<unknown | null>;
       get: () => Promise<unknown | null>;
-      addMember: (appId: unknown, member: unknown) => Promise<unknown | null>;
+      // Attestation-gated: registers a client to act as the application only if
+      // its artifact carries a production attestation.
+      register: (input: unknown) => Promise<
+        | { ok: true; snapshot: unknown }
+        | { ok: false; reason: string }
+      >;
       removeMember: (appId: unknown, member: unknown) => Promise<unknown | null>;
       jwks: () => Promise<{ keys: JsonWebKey[] }>;
       mint: (input: unknown) => Promise<

@@ -10,16 +10,25 @@ import {
   mintActAs,
 } from "@rag/service-kit/identity";
 import { errorMessage, logger } from "@rag/logger";
+import { verifyArtifactAttestation } from "../../../../lib/attest-client/client";
 import type { Env } from "../../../../contracts";
 import { REGISTRY_APPLICATION_ID_PATTERN } from "../../../../lib/registry-kit/types";
 
 // The per-application authority. Addressed by idFromName(appId), one Durable
 // Object instance per registered application, it is that application's OIDC-
-// style issuer: it owns the member services allowed to act as the application
-// (a Cedar-gated set kept in this DO's datastore, NOT enumerated in code), holds
+// style issuer: it owns the clients registered to act as the application, holds
 // the application's signing material, and mints short-lived, envelope-bound
 // act-as tokens. It returns only tokens and public keys — the private signing
 // key never leaves the DO.
+//
+// Authorization is grounded in ATTESTATION, not self-assertion. A client is
+// registered to act as the application only if the codebase attests it: register()
+// verifies (a local match against the AttestationStore — no egress) that the
+// registering artifact has a production attestation on record. So "who may act as
+// this application" is exactly "what the repo, through CI attestation, says may".
+// A member is the RECORD of such an authorized registration; there is no manual
+// grant. act-as and on-behalf-of are the same primitive: a registration/mint
+// request, authorized first, differing only in the subject it carries.
 //
 // Why self-hosted rather than a Cloudflare-managed OAuth flow: an act-as hop is
 // machine-to-machine (one service acting as an application, no human), and every
@@ -56,8 +65,36 @@ type SigningMaterial = { privateJwk: JsonWebKey; publicJwk: JsonWebKey; createdA
 const isAppId = (value: unknown): value is string =>
   typeof value === "string" && REGISTRY_APPLICATION_ID_PATTERN.test(value);
 
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+
 type AuthorityRecord = { appId: string; registeredAt: string };
-type MemberRecord = { member: string; addedAt: string };
+
+// The attested artifact a client stakes its registration on — the exact repo
+// path + content hash CI attestation covers.
+export type RegistrationArtifact = { repository: string; path: string; sha256: string };
+
+const isArtifact = (value: unknown): value is RegistrationArtifact => {
+  const record = asRecord(value);
+  return (
+    !!record &&
+    typeof record.repository === "string" &&
+    record.repository.length > 0 &&
+    typeof record.path === "string" &&
+    record.path.length > 0 &&
+    typeof record.sha256 === "string" &&
+    /^[a-f0-9]{64}$/i.test(record.sha256)
+  );
+};
+
+// The record of one authorized (attestation-backed) client registration. A
+// registered client IS a member — the set the Cedar service.act-as policy reads.
+type ClientRegistration = {
+  client: string;
+  subject?: string;
+  artifact: RegistrationArtifact;
+  attestedAt: string;
+};
 
 export type ApplicationAuthoritySnapshot = {
   appId: string;
@@ -65,16 +102,36 @@ export type ApplicationAuthoritySnapshot = {
   members: string[];
 };
 
+export type ApplicationRegistrationRequest = {
+  // The application being registered with / acted as (this DO's identity).
+  appId: string;
+  // The service/client being registered to act as the application.
+  client: string;
+  // The production-attested artifact that authorizes the registration.
+  artifact: RegistrationArtifact;
+  // On-behalf-of subject; act-as the application itself when omitted.
+  subject?: string;
+};
+
+export type RegistrationFailure = "invalid_request" | "app_mismatch" | "not_attested";
+
+export type ApplicationRegistrationResult =
+  | { ok: true; snapshot: ApplicationAuthoritySnapshot }
+  | { ok: false; reason: RegistrationFailure };
+
 export type ActAsMintRequest = {
   // The application being acted as — this DO's own identity (idFromName(appId)).
   appId: string;
-  // The service the token asserts may act as the application.
+  // The registered client the token asserts may act as the application.
   member: string;
   // The service the minted token will be presented to (its `aud`).
   audience: string;
   // base64url(SHA-256(envelope bytes)) — binds the token to one payload. The
   // caller hashes the envelope so the payload never reaches the authority.
   envelopeSha256: string;
+  // On-behalf-of subject carried as the token `sub`; the application itself
+  // (act-as, no distinct subject) when omitted.
+  subject?: string;
 };
 
 export type ActAsMintFailure =
@@ -145,47 +202,81 @@ export class ApplicationAuthority extends DurableObject<Env> {
   }
 
   private async listMembers(): Promise<string[]> {
-    const stored = await this.ctx.storage.list<MemberRecord>({ prefix: MEMBER_PREFIX });
-    return [...stored.values()].map((record) => record.member).sort();
+    const stored = await this.ctx.storage.list<ClientRegistration>({ prefix: MEMBER_PREFIX });
+    return [...stored.values()].map((record) => record.client).sort();
   }
 
-  // Register (or re-affirm) this DO's application id and, optionally, seed its
-  // members. Idempotent; returns the current snapshot or null on a bad id.
+  // Bind (or re-affirm) this DO's application id and generate its keypair.
+  // Registration is when the app's key is mapped — "let the registration happen
+  // and map that info then". Idempotent; returns the snapshot or null on a bad id.
+  // It does NOT grant members: acting-as rights come only through the
+  // attestation-gated register() below.
   async configure(input: unknown): Promise<ApplicationAuthoritySnapshot | null> {
-    const record = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : null;
-    const appId = await this.bind(record?.appId as string);
+    const appId = await this.bind(asRecord(input)?.appId as string);
     if (!appId) {
       return null;
     }
-    if (Array.isArray(record?.members)) {
-      for (const member of record.members) {
-        if (isAppId(member)) {
-          await this.ctx.storage.put(`${MEMBER_PREFIX}${member}`, {
-            member,
-            addedAt: new Date().toISOString(),
-          } satisfies MemberRecord);
-        }
-      }
-    }
-    // Registration is when the app's keypair is generated and mapped — "let the
-    // registration happen and map that info then". Idempotent thereafter.
     await this.ensureSigningMaterial(appId);
     return this.snapshot(appId);
   }
 
-  async addMember(appId: unknown, member: unknown): Promise<ApplicationAuthoritySnapshot | null> {
-    const bound = await this.bind(appId as string);
-    if (!bound || !isAppId(member)) {
-      return null;
+  // Register a client to act as this application, authorized by attestation:
+  // the client's artifact must have a production attestation on record (local
+  // match against the AttestationStore, no egress). Only then is the client
+  // recorded as a member. act-as and on-behalf-of both flow through here — a
+  // subject distinguishes on-behalf-of. Idempotent per client.
+  async register(input: unknown): Promise<ApplicationRegistrationResult> {
+    const record = asRecord(input);
+    if (
+      !record ||
+      !isAppId(record.appId) ||
+      !isAppId(record.client) ||
+      !isArtifact(record.artifact) ||
+      (record.subject !== undefined && (typeof record.subject !== "string" || record.subject.length === 0))
+    ) {
+      return { ok: false, reason: "invalid_request" };
     }
-    await this.ctx.storage.put(`${MEMBER_PREFIX}${member}`, {
-      member,
-      addedAt: new Date().toISOString(),
-    } satisfies MemberRecord);
-    logger.info("application_authority_member_added", { appId: bound, member });
-    return this.snapshot(bound);
+    const appId = await this.bind(record.appId);
+    if (!appId) {
+      return { ok: false, reason: "app_mismatch" };
+    }
+
+    // Authorize against what the codebase attests: the registering artifact must
+    // carry a production attestation. Local match — the attestation arrives via
+    // the GitHub webhook and is stored; no outbound fetch here.
+    const attested = await verifyArtifactAttestation(this.env, {
+      repository: record.artifact.repository,
+      path: record.artifact.path,
+      sha256: record.artifact.sha256,
+      productionOnly: true,
+    });
+    if (!attested.ok) {
+      logger.warn("application_authority_registration_unattested", {
+        appId,
+        client: record.client,
+        repository: record.artifact.repository,
+        path: record.artifact.path,
+      });
+      return { ok: false, reason: "not_attested" };
+    }
+
+    const registration: ClientRegistration = {
+      client: record.client,
+      ...(record.subject ? { subject: record.subject } : {}),
+      artifact: record.artifact,
+      attestedAt: new Date().toISOString(),
+    };
+    await this.ctx.storage.put(`${MEMBER_PREFIX}${record.client}`, registration);
+    await this.ensureSigningMaterial(appId);
+    logger.info("application_authority_client_registered", {
+      appId,
+      client: record.client,
+      subject: record.subject,
+    });
+    return { ok: true, snapshot: await this.snapshot(appId) };
   }
 
+  // Revoke a client registration (control-plane state change; not attestation-gated).
   async removeMember(appId: unknown, member: unknown): Promise<ApplicationAuthoritySnapshot | null> {
     const bound = await this.bind(appId as string);
     if (!bound || !isAppId(member)) {
@@ -224,14 +315,15 @@ export class ApplicationAuthority extends DurableObject<Env> {
   // envelope-bound assertion with the application's key. Fails closed with a
   // reason; the private key is never returned.
   async mint(input: unknown): Promise<ActAsMintResult> {
-    const record = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : null;
+    const record = asRecord(input);
     if (
       !record ||
       !isAppId(record.appId) ||
       !isAppId(record.member) ||
       !isAppId(record.audience) ||
       typeof record.envelopeSha256 !== "string" ||
-      record.envelopeSha256.length === 0
+      record.envelopeSha256.length === 0 ||
+      (record.subject !== undefined && (typeof record.subject !== "string" || record.subject.length === 0))
     ) {
       return { ok: false, reason: "invalid_request" };
     }
@@ -272,9 +364,12 @@ export class ApplicationAuthority extends DurableObject<Env> {
       return { ok: false, reason: "no_signing_key" };
     }
 
+    // sub carries the on-behalf-of subject when present; otherwise the token
+    // asserts acting as the application itself (act-as, no distinct subject).
+    const subject = typeof record.subject === "string" ? record.subject : appId;
     const context = await buildActAsContext({
       iss: appId,
-      sub: appId,
+      sub: subject,
       act: member,
       aud: record.audience,
       envelopeSha256: record.envelopeSha256,
@@ -283,6 +378,7 @@ export class ApplicationAuthority extends DurableObject<Env> {
     logger.info("application_authority_act_as_minted", {
       appId,
       member,
+      subject: record.subject,
       audience: record.audience,
       jti: context.jti,
     });

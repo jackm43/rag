@@ -4,6 +4,9 @@ export type {
   ActAsMintRequest,
   ActAsMintResult,
   ApplicationAuthoritySnapshot,
+  ApplicationRegistrationRequest,
+  ApplicationRegistrationResult,
+  RegistrationArtifact,
 } from "./authority";
 export { RegistryService } from "./entrypoint";
 export { REGISTRY_MANIFEST } from "./manifest";
