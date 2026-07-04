@@ -261,6 +261,9 @@ importers:
       better-auth:
         specifier: ^1.6.23
         version: 1.6.23(react-dom@19.2.7)(react@19.2.7)(vitest@4.1.9)
+      tweetnacl:
+        specifier: ^1.0.3
+        version: 1.0.3
 
   packages/logger: {}
 
