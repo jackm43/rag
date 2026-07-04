@@ -30,9 +30,9 @@ export {
 export {
   keyringResolver,
   resolverFromEnv,
-  actAsResolverFromEnv,
+  actAsResolverFromAuthority,
   applicationPublicJwk,
   publicJwks,
   PUBLIC_KEYRING,
-  type ApplicationPublicKeysEnv,
+  type ApplicationAuthorityEnv,
 } from "./keyring";

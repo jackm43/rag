@@ -110,13 +110,11 @@ export type PlatformEnv = {
       >;
     };
   };
-  // JSON map { appId: privateJwk } — the signing material the ApplicationAuthority
-  // DO reads to mint an application's act-as tokens. A secret on the registry
-  // worker; the DO returns only tokens, never the key.
-  APPLICATION_SIGNING_KEYS?: string;
-  // JSON map { appId: publicJwk } — the public halves a verifier resolves an
-  // act-as token issuer's key from (public keys are not secret). Consumed by
-  // actAsResolverFromEnv; unset means no application issuer resolves (deny).
+  // OPTIONAL static override, JSON map { appId: publicJwk }, for resolving an
+  // act-as token issuer's key without a runtime JWKS fetch (tests, pinning).
+  // Public keys are not secret. Normally unset: the ApplicationAuthority DO
+  // generates its own key and actAsResolverFromAuthority fetches the public half
+  // from its jwks() at runtime, so no signing material is ever provisioned.
   APPLICATION_PUBLIC_KEYS?: string;
   REGISTRY_SERVICE?: {
     invoke: (message: ServiceMessageBytes) => Promise<RegistryInvokeResult>;

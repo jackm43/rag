@@ -29,6 +29,13 @@ import { REGISTRY_APPLICATION_ID_PATTERN } from "../../../../lib/registry-kit/ty
 // the assertion itself (identity/act-as-token.ts) and publishes its verifying
 // key via jwks() so any verifier resolves it with off-the-shelf JWKS tooling.
 //
+// Key custody is fully self-managed: the DO GENERATES its own Ed25519 keypair on
+// registration and keeps the private half in its durable storage. No signing key
+// is ever manually provisioned or committed, and the private half never leaves
+// the DO — only tokens and the public JWK do. A verifier resolves the public key
+// at runtime by fetching this jwks() over the binding (actAsResolverFromAuthority),
+// so there is no keyring to keep in sync.
+//
 // This is a separate concern from the ApplicationRegistry directory DO (the
 // catalog behind registry.jsmunro.me): the directory answers "what applications
 // exist"; the authority answers "who may act as THIS application, and here is a
@@ -36,7 +43,12 @@ import { REGISTRY_APPLICATION_ID_PATTERN } from "../../../../lib/registry-kit/ty
 // (whose list() enumerates every app) and the row backfill that would entail.
 
 const APP_KEY = "authority";
+const SIGNING_KEY = "signing";
 const MEMBER_PREFIX = "member:";
+
+const ED25519 = { name: "Ed25519" } as const;
+
+type SigningMaterial = { privateJwk: JsonWebKey; publicJwk: JsonWebKey; createdAt: string };
 
 // Members and audiences are open string ids (a MachinePrincipal such as
 // "workflows", or another application/connector id); the registry application id
@@ -76,10 +88,9 @@ export type ActAsMintResult =
   | { ok: false; reason: ActAsMintFailure };
 
 export class ApplicationAuthority extends DurableObject<Env> {
-  // Imported signing keys are cached per instance: import is async and pure, and
-  // the key for a given appId does not change at runtime (rotation redeploys the
-  // secret, which recreates the isolate).
-  private readonly keyCache = new Map<string, CryptoKey>();
+  // The imported private signing key, memoised per instance: import is async and
+  // pure, and the DO's own generated key is stable in durable storage.
+  private importedKey: CryptoKey | null = null;
 
   private async boundAppId(): Promise<string | null> {
     const record = await this.ctx.storage.get<AuthorityRecord>(APP_KEY);
@@ -105,38 +116,32 @@ export class ApplicationAuthority extends DurableObject<Env> {
     return appId;
   }
 
-  private signingJwk(appId: string): JsonWebKey | null {
-    const raw = this.env.APPLICATION_SIGNING_KEYS;
-    if (typeof raw !== "string") {
-      return null;
+  // Generate-once, self-managed signing material. On first use the DO mints its
+  // own Ed25519 keypair and persists it to durable storage; thereafter it reads
+  // the stored key. The private half never leaves the DO. DO method execution is
+  // single-threaded per instance, so the generate-if-absent is race-free.
+  private async ensureSigningMaterial(appId: string): Promise<{ key: CryptoKey; publicJwk: JsonWebKey }> {
+    let stored = await this.ctx.storage.get<SigningMaterial>(SIGNING_KEY);
+    if (!stored) {
+      const pair = (await crypto.subtle.generateKey(ED25519, true, ["sign", "verify"])) as CryptoKeyPair;
+      stored = {
+        privateJwk: await crypto.subtle.exportKey("jwk", pair.privateKey),
+        publicJwk: await crypto.subtle.exportKey("jwk", pair.publicKey),
+        createdAt: new Date().toISOString(),
+      };
+      await this.ctx.storage.put(SIGNING_KEY, stored);
+      this.importedKey = null;
+      logger.info("application_authority_key_generated", { appId });
     }
-    try {
-      const map = JSON.parse(raw) as Record<string, JsonWebKey>;
-      const jwk = map?.[appId];
-      return jwk && typeof jwk === "object" ? jwk : null;
-    } catch (error) {
-      logger.warn("application_signing_keys_invalid", { error: errorMessage(error) });
-      return null;
+    if (!this.importedKey) {
+      this.importedKey = await importSigningKey(stored.privateJwk);
     }
+    return { key: this.importedKey, publicJwk: stored.publicJwk };
   }
 
-  private async signingKey(appId: string): Promise<CryptoKey | null> {
-    const cached = this.keyCache.get(appId);
-    if (cached) {
-      return cached;
-    }
-    const jwk = this.signingJwk(appId);
-    if (!jwk) {
-      return null;
-    }
-    try {
-      const key = await importSigningKey(jwk);
-      this.keyCache.set(appId, key);
-      return key;
-    } catch (error) {
-      logger.warn("application_signing_key_import_failed", { appId, error: errorMessage(error) });
-      return null;
-    }
+  private async storedPublicJwk(): Promise<JsonWebKey | null> {
+    const stored = await this.ctx.storage.get<SigningMaterial>(SIGNING_KEY);
+    return stored?.publicJwk ?? null;
   }
 
   private async listMembers(): Promise<string[]> {
@@ -162,6 +167,9 @@ export class ApplicationAuthority extends DurableObject<Env> {
         }
       }
     }
+    // Registration is when the app's keypair is generated and mapped — "let the
+    // registration happen and map that info then". Idempotent thereafter.
+    await this.ensureSigningMaterial(appId);
     return this.snapshot(appId);
   }
 
@@ -207,8 +215,8 @@ export class ApplicationAuthority extends DurableObject<Env> {
   // application id (kid) without holding the private half.
   async jwks(): Promise<{ keys: JsonWebKey[] }> {
     const appId = await this.boundAppId();
-    const jwk = appId ? this.signingJwk(appId) : null;
-    return jwk ? { keys: [applicationPublicJwk(jwk, appId as string)] } : { keys: [] };
+    const jwk = await this.storedPublicJwk();
+    return appId && jwk ? { keys: [applicationPublicJwk(jwk, appId)] } : { keys: [] };
   }
 
   // Mint an act-as token: authorize the member against this application's Cedar
@@ -256,8 +264,11 @@ export class ApplicationAuthority extends DurableObject<Env> {
       return { ok: false, reason: "not_a_member" };
     }
 
-    const key = await this.signingKey(appId);
-    if (!key) {
+    let key: CryptoKey;
+    try {
+      ({ key } = await this.ensureSigningMaterial(appId));
+    } catch (error) {
+      logger.warn("application_authority_key_unavailable", { appId, error: errorMessage(error) });
       return { ok: false, reason: "no_signing_key" };
     }
 

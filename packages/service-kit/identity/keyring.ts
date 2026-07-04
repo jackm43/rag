@@ -168,39 +168,75 @@ export const resolverFromEnv = (env?: ServicePublicKeysEnv): PublicKeyResolver =
 // Application (act-as) issuers are OPEN string ids, not the closed
 // MachinePrincipal union, so they are not part of the committed PUBLIC_KEYRING.
 // Each registered application is its own OIDC-style issuer: the per-application
-// authority DO holds the private half (APPLICATION_SIGNING_KEYS) and publishes
-// the public half via its jwks() method. A verifier of an act-as token resolves
-// the issuer application's public key from the APPLICATION_PUBLIC_KEYS var — a
-// JSON map { appId: publicJwk } (public keys are not secret) — with no committed
-// default, so an unknown application issuer resolves to null and the verifier
-// denies with "unknown_issuer".
-export type ApplicationPublicKeysEnv = { APPLICATION_PUBLIC_KEYS?: string };
+// authority DO (idFromName(appId)) GENERATES its own Ed25519 keypair at
+// registration, keeps the private half in its durable storage — the key is never
+// manually provisioned and never leaves the DO — and publishes the public half
+// via its jwks() method. So a verifier resolves an act-as issuer's key at
+// RUNTIME by fetching the authority DO's JWKS over the binding, rather than from
+// any committed or secret keyring. An APPLICATION_PUBLIC_KEYS var (JSON map
+// { appId: publicJwk }; public keys are not secret) is honoured only as an
+// optional static override (tests, pinning). An unknown issuer resolves to null
+// and the verifier denies with "unknown_issuer".
+
+// Structural double of the APPLICATION_AUTHORITY DO binding — only the jwks()
+// method the resolver needs. Kept structural so service-kit stays app-agnostic
+// (packages never import app contracts), matching the client.ts pattern.
+type ApplicationAuthorityStub = { jwks: () => Promise<{ keys: JsonWebKey[] }> };
+type ApplicationAuthorityBinding = {
+  idFromName: (name: string) => unknown;
+  get: (id: unknown) => ApplicationAuthorityStub;
+};
+export type ApplicationAuthorityEnv = {
+  APPLICATION_AUTHORITY?: ApplicationAuthorityBinding;
+  APPLICATION_PUBLIC_KEYS?: string;
+};
 
 // The verifying half of an OKP signing JWK: keep only the public point (kty,
-// crv, x) and drop the private scalar `d`, then stamp the publication metadata.
-// The authority DO stores the private JWK and derives the public point on the
-// fly for jwks() rather than tracking two copies.
+// crv, x) and stamp the publication metadata (dropping any private scalar `d`).
+// The authority DO exports its generated public key straight through this for
+// jwks() rather than tracking two copies.
 export const applicationPublicJwk = (jwk: JsonWebKey, appId: string): JsonWebKey =>
   // kid is a valid RFC 7517 member carried at runtime but absent from the
   // JsonWebKey lib type; cast rather than let the excess-property check reject
   // it (publicJwks relies on the same runtime-carried kid).
   ({ kty: jwk.kty, crv: jwk.crv, x: jwk.x, kid: appId, use: "sig", alg: "EdDSA" }) as JsonWebKey;
 
-export const actAsResolverFromEnv = (env?: ApplicationPublicKeysEnv): ActAsPublicKeyResolver => {
-  const keyring = parseEnvKeyring(env?.APPLICATION_PUBLIC_KEYS);
+const importPublicPoint = (jwk: JsonWebKey): Promise<CryptoKey> =>
+  // importVerifyingKey ignores JWK metadata (kid/use/alg) and imports the
+  // Ed25519 public point, so a published JWK resolves without stripping.
+  importVerifyingKey({ kty: jwk.kty, crv: jwk.crv, x: jwk.x });
+
+// Resolve an act-as issuer's verifying key at runtime: prefer a static
+// APPLICATION_PUBLIC_KEYS override, else fetch the issuer application's JWKS from
+// its authority DO over the binding. Cached per isolate; the isolate is short-
+// lived (it dies when the worker's job finishes), so the cache cannot go stale
+// across a key rotation.
+export const actAsResolverFromAuthority = (env?: ApplicationAuthorityEnv): ActAsPublicKeyResolver => {
+  const override = parseEnvKeyring(env?.APPLICATION_PUBLIC_KEYS);
   const cache = new Map<string, CryptoKey>();
   return async (iss) => {
     const cached = cache.get(iss);
     if (cached) {
       return cached;
     }
-    const jwk = keyring[iss];
+    let jwk: JsonWebKey | undefined = override[iss];
+    if (!jwk && env?.APPLICATION_AUTHORITY) {
+      try {
+        const authority = env.APPLICATION_AUTHORITY;
+        const set = await authority.get(authority.idFromName(iss)).jwks();
+        // The authority stamps kid=appId; match it, else fall back to the sole
+        // published key (a freshly-registered app publishes exactly one).
+        jwk =
+          set?.keys?.find((candidate) => (candidate as { kid?: string }).kid === iss) ??
+          set?.keys?.[0];
+      } catch {
+        jwk = undefined;
+      }
+    }
     if (!jwk) {
       return null;
     }
-    // importVerifyingKey ignores JWK metadata (kid/use/alg) and imports the
-    // Ed25519 public point, so a published JWK resolves without stripping.
-    const key = await importVerifyingKey({ kty: jwk.kty, crv: jwk.crv, x: jwk.x });
+    const key = await importPublicPoint(jwk);
     cache.set(iss, key);
     return key;
   };
