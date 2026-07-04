@@ -1,5 +1,5 @@
 import type { InteractionMessageData, InteractionResponseFile } from "../../discord";
-import { serviceClients, SYSTEM_SUBJECT } from "../../auth";
+import { createClient, createHopIntent, SYSTEM_SUBJECT } from "../../auth";
 import { encodeAiJobEnvelope } from "../../contracts";
 import {
   CHANNEL_MESSAGE_WITH_SOURCE,
@@ -158,14 +158,23 @@ export const executeCommand = async (
   }
 
   if (spec.kind === "enqueue") {
-    await serviceClients(env).gatewayToWorkflows.call({
+    await createClient({
+      env,
+      self: "gateway",
+      context: { subject: ctx.invoker?.id ?? SYSTEM_SUBJECT },
+    }).to("workflows", { transportTrust: "application" }).call({
       transport: "queue",
       queue: env.AI_JOBS,
       envelope: encodeAiJobEnvelope(spec.buildJob(ctx), {
         source: "interactions",
         guildId: ctx.guildId,
       }),
-      subject: { sub: ctx.invoker?.id ?? SYSTEM_SUBJECT },
+      intent: createHopIntent({
+        action: `command.${spec.name}`,
+        resourceType: "Guild",
+        resourceId: ctx.guildId ?? "unknown",
+        method: spec.name,
+      }),
     });
     return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
   }

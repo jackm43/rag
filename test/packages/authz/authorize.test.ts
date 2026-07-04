@@ -54,20 +54,78 @@ test("a ban does not gate the admin commands", () => {
   }
 });
 
-test("the operator may drive the gateway control routes and nothing else", () => {
-  const operatorRequest = (action: string): AuthorizationRequest => ({
-    principal: { type: "Machine", id: "operator" },
+test("the gateway-control application may drive gateway control routes and nothing else", () => {
+  const controlRequest = (action: string): AuthorizationRequest => ({
+    principal: { type: "Application", id: "gateway-control" },
     action,
     resource: { type: "Gateway", id: "control" },
   });
+  const gatewayControl: EntityJson = {
+    uid: { type: "Gateway", id: "control" },
+    attrs: { plane: "control-plane" },
+    parents: [],
+  };
 
   for (const action of ["gateway.start", "gateway.stop", "gateway.health"]) {
-    assert.isTrue(authorize(operatorRequest(action)).allowed, action);
+    assert.isTrue(authorize(controlRequest(action), [gatewayControl]).allowed, action);
   }
-  assert.isFalse(authorize(operatorRequest("gateway.reboot")).allowed);
+  assert.isFalse(authorize(controlRequest("gateway.reboot"), [gatewayControl]).allowed);
   assert.isFalse(
-    authorize({ ...operatorRequest("gateway.start"), principal: { type: "Human", id: ADMIN_ID } }).allowed,
+    authorize({ ...controlRequest("gateway.start"), principal: { type: "Human", id: ADMIN_ID } }, [gatewayControl]).allowed,
   );
+});
+
+test("management and control-plane resources cannot be crossed by action class", () => {
+  const gatewayControl: EntityJson = {
+    uid: { type: "Gateway", id: "control" },
+    attrs: { plane: "control-plane" },
+    parents: [],
+  };
+  const gatewayManagement: EntityJson = {
+    uid: { type: "Gateway", id: "devproxy" },
+    attrs: { plane: "management" },
+    parents: [],
+  };
+  const connectorControl: EntityJson = {
+    uid: { type: "Connector", id: "*" },
+    attrs: {
+      plane: "control-plane",
+      adminRead: [{ __entity: { type: "Application", id: "dev-proxy" } }],
+      adminWrite: [{ __entity: { type: "Application", id: "dev-proxy" } }],
+    },
+    parents: [],
+  };
+  const connectorManagement: EntityJson = {
+    uid: { type: "Connector", id: "*" },
+    attrs: {
+      plane: "management",
+      adminRead: [{ __entity: { type: "Application", id: "dev-proxy" } }],
+      adminWrite: [{ __entity: { type: "Application", id: "dev-proxy" } }],
+    },
+    parents: [],
+  };
+
+  assert.isFalse(authorize({
+    principal: { type: "Application", id: "dev-proxy" },
+    action: "gateway.devproxy.invoke",
+    resource: { type: "Gateway", id: "control" },
+    context: { command: "ask" },
+  }, [gatewayControl]).allowed);
+  assert.isFalse(authorize({
+    principal: { type: "Application", id: "gateway-control" },
+    action: "gateway.start",
+    resource: { type: "Gateway", id: "devproxy" },
+  }, [gatewayManagement]).allowed);
+  assert.isFalse(authorize({
+    principal: { type: "Application", id: "dev-proxy" },
+    action: "connector.admin.read",
+    resource: { type: "Connector", id: "*" },
+  }, [connectorControl]).allowed);
+  assert.isTrue(authorize({
+    principal: { type: "Application", id: "dev-proxy" },
+    action: "connector.admin.read",
+    resource: { type: "Connector", id: "*" },
+  }, [connectorManagement]).allowed);
 });
 
 const invokeRequest = (
@@ -75,9 +133,9 @@ const invokeRequest = (
   receiver: string,
   operation?: string,
 ): AuthorizationRequest => ({
-  principal: { type: "Machine", id: sender },
+  principal: { type: "Application", id: sender },
   action: "service.invoke",
-  resource: { type: "Service", id: receiver },
+  resource: { type: "Service", id: `${receiver}:${operation ?? "unknown"}` },
   ...(operation ? { context: { operation } } : {}),
 });
 
@@ -87,68 +145,156 @@ const exchangeRequest = (
   fromZone: string,
   toZone: string,
 ): AuthorizationRequest => ({
-  principal: { type: "Machine", id: sender },
+  principal: { type: "Application", id: sender },
   action: "service.exchange",
-  resource: { type: "Service", id: receiver },
+  resource: { type: "Application", id: receiver },
   context: { fromZone, toZone },
 });
 
 test("service invocation is allowed for the legitimate hops and denied for the rest", () => {
-  assert.isTrue(authorize(invokeRequest("gateway", "workflows")).allowed);
-  assert.isTrue(authorize(invokeRequest("workflows", "responder")).allowed);
-  assert.isTrue(authorize(invokeRequest("workflows", "spend")).allowed);
+  const entities = registrySnapshot();
+  assert.isTrue(authorize(invokeRequest("gateway", "spend", "spend"), entities).allowed);
 
-  assert.isFalse(authorize(invokeRequest("gateway", "spend")).allowed);
+  assert.isFalse(authorize(invokeRequest("gateway", "spend", "unknown"), entities).allowed);
   assert.isFalse(authorize(invokeRequest("responder", "workflows")).allowed);
   assert.isFalse(authorize(invokeRequest("spend", "gateway")).allowed);
 });
 
 test("service exchange is permitted only for the legitimate zone transitions", () => {
-  assert.isTrue(authorize(exchangeRequest("gateway", "workflows", "edge", "application")).allowed);
-  assert.isTrue(authorize(exchangeRequest("workflows", "responder", "application", "application")).allowed);
-  assert.isTrue(authorize(exchangeRequest("workflows", "spend", "application", "application")).allowed);
+  const entities = registrySnapshot();
+  assert.isTrue(authorize(exchangeRequest("gateway", "spend", "platform", "application"), entities).allowed);
 
-  // Unauthorized pair, and a legitimate pair with mismatched zones.
+  // Unauthorized pair, and a registered pair with mismatched zones.
   assert.isFalse(authorize(exchangeRequest("responder", "workflows", "application", "application")).allowed);
-  assert.isFalse(authorize(exchangeRequest("gateway", "workflows", "edge", "trusted")).allowed);
+  assert.isFalse(authorize(exchangeRequest("gateway", "spend", "platform", "control-plane"), entities).allowed);
 });
 
-// The registry snapshot shape: Machine entities with zone/targets and Service
-// entities with zone/clients, as produced by ServiceRegistry.snapshot().
+// The registry snapshot shape: Application entities with zone/targets and
+// method-level Service entities with application/operation/clients, as produced
+// by ServiceRegistry.snapshot().
 const registrySnapshot = (): EntityJson[] => [
   {
-    uid: { type: "Machine", id: "gateway" },
+    uid: { type: "Application", id: "gateway" },
     attrs: {
-      zone: "edge",
-      targets: [{ __entity: { type: "Service", id: "spend" } }],
+      zone: "platform",
+      plane: "data",
+      targets: [{ __entity: { type: "Application", id: "spend" } }],
       operations: [],
     },
     parents: [],
   },
   {
-    uid: { type: "Service", id: "spend" },
+    uid: { type: "Application", id: "spend" },
     attrs: {
       zone: "application",
-      clients: [{ __entity: { type: "Machine", id: "gateway" } }],
+      plane: "data",
+      targets: [],
       operations: ["spend"],
+    },
+    parents: [],
+  },
+  {
+    uid: { type: "Service", id: "spend:spend" },
+    attrs: {
+      application: { __entity: { type: "Application", id: "spend" } },
+      zone: "application",
+      plane: "data",
+      operation: "spend",
+      clients: [{ __entity: { type: "Application", id: "gateway" } }],
     },
     parents: [],
   },
 ];
 
 test("registry entities extend the static policy to registered hops", () => {
-  // gateway -> spend is not a bootstrap hop, so it is denied statically...
+  // gateway -> spend is denied without registry/control-plane state...
   assert.isFalse(authorize(invokeRequest("gateway", "spend", "spend")).allowed);
-  assert.isFalse(authorize(exchangeRequest("gateway", "spend", "edge", "application")).allowed);
+  assert.isFalse(authorize(exchangeRequest("gateway", "spend", "platform", "application")).allowed);
 
   // ...but a registered manifest pair authorizes it through the attribute
   // rules, for an operation the receiver registers.
   const entities = registrySnapshot();
   assert.isTrue(authorize(invokeRequest("gateway", "spend", "spend"), entities).allowed);
-  assert.isTrue(authorize(exchangeRequest("gateway", "spend", "edge", "application"), entities).allowed);
+  assert.isTrue(authorize(exchangeRequest("gateway", "spend", "platform", "application"), entities).allowed);
 
   // The registered zones still bind: a mismatched transition is denied.
   assert.isFalse(authorize(exchangeRequest("gateway", "spend", "application", "application"), entities).allowed);
+});
+
+test("egress sidecar use is authorized by dynamic sidecar callers", () => {
+  const profile: EntityJson = {
+    uid: { type: "EgressSidecar", id: "responder:discord-rest" },
+    attrs: {
+      plane: "data",
+      callers: [{ __entity: { type: "Application", id: "responder" } }],
+    },
+    parents: [],
+  };
+  assert.isTrue(
+    authorize(
+      {
+        principal: { type: "Application", id: "responder" },
+        action: "egress.use",
+        resource: { type: "EgressSidecar", id: "responder:discord-rest" },
+      },
+      [profile],
+    ).allowed,
+  );
+  assert.isFalse(
+    authorize(
+      {
+        principal: { type: "Application", id: "workflows" },
+        action: "egress.use",
+        resource: { type: "EgressSidecar", id: "responder:discord-rest" },
+      },
+      [profile],
+    ).allowed,
+  );
+});
+
+test("connector capabilities are authorized by dynamic connector entities", () => {
+  const connector: EntityJson = {
+    uid: { type: "Connector", id: "github-app" },
+    attrs: {
+      plane: "data",
+      planes: ["data", "management"],
+      grant: [{ __entity: { type: "Application", id: "workflows" } }],
+      fetch: [{ __entity: { type: "Application", id: "workflows" } }],
+      token: [],
+      adminRead: [{ __entity: { type: "Application", id: "dev-proxy" } }],
+    },
+    parents: [],
+  };
+  assert.isTrue(
+    authorize(
+      {
+        principal: { type: "Application", id: "workflows" },
+        action: "connector.grant",
+        resource: { type: "Connector", id: "github-app" },
+      },
+      [connector],
+    ).allowed,
+  );
+  assert.isFalse(
+    authorize(
+      {
+        principal: { type: "Application", id: "dev-proxy" },
+        action: "connector.grant",
+        resource: { type: "Connector", id: "github-app" },
+      },
+      [connector],
+    ).allowed,
+  );
+  assert.isTrue(
+    authorize(
+      {
+        principal: { type: "Application", id: "dev-proxy" },
+        action: "connector.admin.read",
+        resource: { type: "Connector", id: "github-app" },
+      },
+      [connector],
+    ).allowed,
+  );
 });
 
 test("unknown actions are denied by default with no reason attached", () => {

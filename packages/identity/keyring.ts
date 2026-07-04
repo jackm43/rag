@@ -35,21 +35,50 @@ export const PUBLIC_KEYRING: Record<MachinePrincipal, JsonWebKey> = {
     crv: "Ed25519",
     x: "RHa6T_vqdx5v_bttgMzenwtdLII_Ud6_aP5CB6h7BSk",
   },
+  // The registry control-plane worker's verifying key. Its private half lives
+  // in the REGISTRY_SIGNING_KEY secret on workers/applications/registry and signs
+  // registry -> connectors hops for GitHub PR submission.
+  registry: {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "zwCQ4h35aDsQDr2aofod8QhE4u4uww4KaCZ0GEcZcYU",
+  },
+  // The attest webhook worker's verifying key. Its private half lives in the
+  // ATTEST_SIGNING_KEY secret on workers/applications/attest and signs attest ->
+  // connectors hops for GitHub webhook verification and repository reads.
+  attest: {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "QbSbr-8d158rIxcFofS4AvtgO3A76D7E9FwRy1ak4ls",
+  },
+  // The metadata application's verifying key. Its private half lives in the
+  // METADATA_SIGNING_KEY secret on workers/applications/metadata and signs
+  // metadata middleware -> MetadataService resolver hops.
+  metadata: {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "QoTuiYTuWxzFJEBrMNz6v-FeEvolJn8LRkzApyo_Hkc",
+  },
+  // Generic receiver identity for generated application service servers. The
+  // current slice verifies gateway-signed application.request calls; no private
+  // signing key is provisioned for this receiver unless it later needs to call
+  // another service itself.
+  "application-service": {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "BzIGFexQkQGWZj5WGBWa46PzXHCHkNbTAfzIKJ1Ye9E",
+  },
   // The dev-proxy worker's public verifying key. Its private half lives in the
-  // DEV_PROXY_SIGNING_KEY secret on workers/public/dev-proxy; the gateway's
+  // DEV_PROXY_SIGNING_KEY secret on workers/applications/dev-proxy; the gateway's
   // DevProxy entrypoint resolves this key to verify dev-proxy hops.
   "dev-proxy": {
     kty: "OKP",
     crv: "Ed25519",
     x: "v60E6h2mWbtpW9KMMQdUhSOXVWjrJEzK6WDz1aaIfWU",
   },
-  // The credential broker's verifying key. The broker is a VERIFY-ONLY receiver
-  // — it never signs an outbound service hop (its egress is provider HTTP, not a
-  // service call) — so this key's private half is not held anywhere in
-  // production and this entry is present only to keep the keyring exhaustive
-  // over MachinePrincipal. If the broker ever needs to call another service, a
-  // real CONNECTORS_SIGNING_KEY secret would be provisioned and this key used to
-  // verify its hops.
+  // The credential broker's verifying key. It is only needed when the broker
+  // signs outbound egress.request hops to a bound Egress worker; until provider
+  // calls move there, CONNECTORS_SIGNING_KEY may remain unprovisioned.
   connectors: {
     kty: "OKP",
     crv: "Ed25519",
@@ -62,6 +91,15 @@ export const PUBLIC_KEYRING: Record<MachinePrincipal, JsonWebKey> = {
     kty: "OKP",
     crv: "Ed25519",
     x: "hYMdAmVmhbs_L4wEZVJRUtp8stUdIPCliYyjA2zdbUY",
+  },
+  // The generic egress boundary is a receiver for signed application requests.
+  // It does not need this private half in production unless it later calls a
+  // downstream internal service, but the public entry keeps the development
+  // keyring exhaustive over MachinePrincipal.
+  egress: {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "OnAOWD6mg9DgW-k3_TzvUYJ6VzoVMEHcebPTYiUb8Tk",
   },
 };
 
@@ -125,3 +163,18 @@ export const resolverFromEnv = (env?: ServicePublicKeysEnv): PublicKeyResolver =
     return key;
   };
 };
+
+// RFC 7517 JWK Set view of the committed public keyring, for publication at a
+// /.well-known/jwks.json style endpoint (see the gateway's `jwks` operation).
+// This exists for key discovery only — it lets a relying party resolve a
+// machine principal's Ed25519 verifying key without teaching it the keyring's
+// internal shape. `kid` is the machine principal name, matching the `kid` the
+// JWS header carries (mint() in token.ts sets `kid: context.iss`).
+export const publicJwks = (): { keys: JsonWebKey[] } => ({
+  keys: Object.entries(PUBLIC_KEYRING).map(([kid, jwk]) => ({
+    ...jwk,
+    kid,
+    use: "sig",
+    alg: "EdDSA",
+  })),
+});

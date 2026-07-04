@@ -15,5 +15,5 @@ export const getTargetUsername = async (interaction: DiscordInteraction, env: En
   if (targetUser?.username) {
     return targetUser.username;
   }
-  return fetchUsername(env, targetId);
+  return fetchUsername(env, "workflows", targetId);
 };

@@ -489,6 +489,223 @@ export class WebhookEventPayload extends $.Struct {
   }
   toString(): string { return "WebhookEventPayload_" + super.toString(); }
 }
+/**
+* Generic application -> egress request. The caller signs this envelope with
+* its service identity; `profile` selects the egress worker's local policy
+* and credential injector. `headersJson` is a JSON object of caller-supplied
+* safe headers. The optional body travels as a sibling RPC argument, and
+* `bodySha256` binds those bytes to the signed envelope.
+*
+*/
+export class EgressRequestPayload extends $.Struct {
+  static readonly _capnp = {
+    displayName: "EgressRequestPayload",
+    id: "b243ccfd7f319c91",
+    size: new $.ObjectSize(0, 5),
+  };
+  get profile(): string {
+    return $.utils.getText(0, this);
+  }
+  set profile(value: string) {
+    $.utils.setText(0, value, this);
+  }
+  get method(): string {
+    return $.utils.getText(1, this);
+  }
+  set method(value: string) {
+    $.utils.setText(1, value, this);
+  }
+  get url(): string {
+    return $.utils.getText(2, this);
+  }
+  set url(value: string) {
+    $.utils.setText(2, value, this);
+  }
+  get headersJson(): string {
+    return $.utils.getText(3, this);
+  }
+  set headersJson(value: string) {
+    $.utils.setText(3, value, this);
+  }
+  get bodySha256(): string {
+    return $.utils.getText(4, this);
+  }
+  set bodySha256(value: string) {
+    $.utils.setText(4, value, this);
+  }
+  toString(): string { return "EgressRequestPayload_" + super.toString(); }
+}
+/**
+* Generic generated-app request. Middleware clients validate app-facing HTTP
+* routes, the gateway signs this envelope, and a generated application service
+* server verifies the service boundary before dispatching to app code.
+*
+*/
+export class ApplicationRequestPayload extends $.Struct {
+  static readonly _capnp = {
+    displayName: "ApplicationRequestPayload",
+    id: "ebe9cf2930a67241",
+    size: new $.ObjectSize(0, 8),
+  };
+  get applicationId(): string {
+    return $.utils.getText(0, this);
+  }
+  set applicationId(value: string) {
+    $.utils.setText(0, value, this);
+  }
+  get operationId(): string {
+    return $.utils.getText(1, this);
+  }
+  set operationId(value: string) {
+    $.utils.setText(1, value, this);
+  }
+  get serviceOperation(): string {
+    return $.utils.getText(2, this);
+  }
+  set serviceOperation(value: string) {
+    $.utils.setText(2, value, this);
+  }
+  get method(): string {
+    return $.utils.getText(3, this);
+  }
+  set method(value: string) {
+    $.utils.setText(3, value, this);
+  }
+  get url(): string {
+    return $.utils.getText(4, this);
+  }
+  set url(value: string) {
+    $.utils.setText(4, value, this);
+  }
+  get headersJson(): string {
+    return $.utils.getText(5, this);
+  }
+  set headersJson(value: string) {
+    $.utils.setText(5, value, this);
+  }
+  get bodyBase64(): string {
+    return $.utils.getText(6, this);
+  }
+  set bodyBase64(value: string) {
+    $.utils.setText(6, value, this);
+  }
+  get linkedTokenSha256(): string {
+    return $.utils.getText(7, this);
+  }
+  set linkedTokenSha256(value: string) {
+    $.utils.setText(7, value, this);
+  }
+  toString(): string { return "ApplicationRequestPayload_" + super.toString(); }
+}
+/**
+* One HTTP-shaped control-plane operation against registry.jsmunro.me,
+* carried over the registry worker's own service-binding entrypoint. The
+* middleware client owns browser authentication; the service server verifies
+* the signed service hop, consumes request placement, runs Cedar service.invoke,
+* then dispatches the operation named here.
+*
+*/
+export class RegistryInvokePayload extends $.Struct {
+  static readonly _capnp = {
+    displayName: "RegistryInvokePayload",
+    id: "f8f0768dbf188314",
+    size: new $.ObjectSize(0, 4),
+  };
+  get operation(): string {
+    return $.utils.getText(0, this);
+  }
+  set operation(value: string) {
+    $.utils.setText(0, value, this);
+  }
+  get actorJson(): string {
+    return $.utils.getText(1, this);
+  }
+  set actorJson(value: string) {
+    $.utils.setText(1, value, this);
+  }
+  get bodyJson(): string {
+    return $.utils.getText(2, this);
+  }
+  set bodyJson(value: string) {
+    $.utils.setText(2, value, this);
+  }
+  get targetId(): string {
+    return $.utils.getText(3, this);
+  }
+  set targetId(value: string) {
+    $.utils.setText(3, value, this);
+  }
+  toString(): string { return "RegistryInvokePayload_" + super.toString(); }
+}
+/**
+* One GraphQL metadata resolver request accepted by metadata.jsmunro.me's
+* service server. The HTTP middleware authenticates the bearer token and
+* validates the outer GraphQL request shape; the service boundary verifies the
+* signed hop, placement, and Cedar service.invoke before executing resolvers.
+*
+*/
+export class MetadataQueryPayload extends $.Struct {
+  static readonly _capnp = {
+    displayName: "MetadataQueryPayload",
+    id: "966fe3592a0b21ab",
+    size: new $.ObjectSize(0, 3),
+  };
+  get query(): string {
+    return $.utils.getText(0, this);
+  }
+  set query(value: string) {
+    $.utils.setText(0, value, this);
+  }
+  get variablesJson(): string {
+    return $.utils.getText(1, this);
+  }
+  set variablesJson(value: string) {
+    $.utils.setText(1, value, this);
+  }
+  get operationName(): string {
+    return $.utils.getText(2, this);
+  }
+  set operationName(value: string) {
+    $.utils.setText(2, value, this);
+  }
+  toString(): string { return "MetadataQueryPayload_" + super.toString(); }
+}
+/**
+* One HTTP-shaped GitHub webhook delivery accepted by attest.jsmunro.me's own
+* service-binding entrypoint. The middleware client owns the edge-level
+* method/size checks and collects only the small filtered GitHub signature
+* headers (x-hub-signature-256, x-github-delivery, x-github-event) into
+* headersJson; the service server verifies the signed service hop, then
+* verifies the GitHub signature via the connectors broker, dedupes, fetches
+* the commit tree, and records the attestation.
+*
+*/
+export class AttestInvokePayload extends $.Struct {
+  static readonly _capnp = {
+    displayName: "AttestInvokePayload",
+    id: "37f05d09d1c91cee",
+    size: new $.ObjectSize(0, 3),
+  };
+  get operation(): string {
+    return $.utils.getText(0, this);
+  }
+  set operation(value: string) {
+    $.utils.setText(0, value, this);
+  }
+  get headersJson(): string {
+    return $.utils.getText(1, this);
+  }
+  set headersJson(value: string) {
+    $.utils.setText(1, value, this);
+  }
+  get bodyBase64(): string {
+    return $.utils.getText(2, this);
+  }
+  set bodyBase64(value: string) {
+    $.utils.setText(2, value, this);
+  }
+  toString(): string { return "AttestInvokePayload_" + super.toString(); }
+}
 export class EventEnvelope_Actor extends $.Struct {
   static readonly _capnp = {
     displayName: "actor",
@@ -522,7 +739,12 @@ export const EventEnvelope_Payload_Which = {
   MESSAGE_RECEIVED: 9,
   DEVPROXY_COMMAND: 10,
   CONNECTOR_INVOKE: 11,
-  WEBHOOK_EVENT: 12
+  WEBHOOK_EVENT: 12,
+  EGRESS_REQUEST: 13,
+  APPLICATION_REQUEST: 14,
+  REGISTRY_INVOKE: 15,
+  METADATA_QUERY: 16,
+  ATTEST_INVOKE: 17
 } as const;
 export type EventEnvelope_Payload_Which = (typeof EventEnvelope_Payload_Which)[keyof typeof EventEnvelope_Payload_Which];
 export class EventEnvelope_Payload extends $.Struct {
@@ -539,6 +761,11 @@ export class EventEnvelope_Payload extends $.Struct {
   static readonly DEVPROXY_COMMAND = EventEnvelope_Payload_Which.DEVPROXY_COMMAND;
   static readonly CONNECTOR_INVOKE = EventEnvelope_Payload_Which.CONNECTOR_INVOKE;
   static readonly WEBHOOK_EVENT = EventEnvelope_Payload_Which.WEBHOOK_EVENT;
+  static readonly EGRESS_REQUEST = EventEnvelope_Payload_Which.EGRESS_REQUEST;
+  static readonly APPLICATION_REQUEST = EventEnvelope_Payload_Which.APPLICATION_REQUEST;
+  static readonly REGISTRY_INVOKE = EventEnvelope_Payload_Which.REGISTRY_INVOKE;
+  static readonly METADATA_QUERY = EventEnvelope_Payload_Which.METADATA_QUERY;
+  static readonly ATTEST_INVOKE = EventEnvelope_Payload_Which.ATTEST_INVOKE;
   static readonly _capnp = {
     displayName: "payload",
     id: "a636c8f1ec42d04d",
@@ -867,6 +1094,131 @@ export class EventEnvelope_Payload extends $.Struct {
   }
   set webhookEvent(value: WebhookEventPayload) {
     $.utils.setUint16(2, 12, this);
+    $.utils.copyFrom(value, $.utils.getPointer(7, this));
+  }
+  _adoptEgressRequest(value: $.Orphan<EgressRequestPayload>): void {
+    $.utils.setUint16(2, 13, this);
+    $.utils.adopt(value, $.utils.getPointer(7, this));
+  }
+  _disownEgressRequest(): $.Orphan<EgressRequestPayload> {
+    return $.utils.disown(this.egressRequest);
+  }
+  get egressRequest(): EgressRequestPayload {
+    $.utils.testWhich("egressRequest", $.utils.getUint16(2, this), 13, this);
+    return $.utils.getStruct(7, EgressRequestPayload, this);
+  }
+  _hasEgressRequest(): boolean {
+    return !$.utils.isNull($.utils.getPointer(7, this));
+  }
+  _initEgressRequest(): EgressRequestPayload {
+    $.utils.setUint16(2, 13, this);
+    return $.utils.initStructAt(7, EgressRequestPayload, this);
+  }
+  get _isEgressRequest(): boolean {
+    return $.utils.getUint16(2, this) === 13;
+  }
+  set egressRequest(value: EgressRequestPayload) {
+    $.utils.setUint16(2, 13, this);
+    $.utils.copyFrom(value, $.utils.getPointer(7, this));
+  }
+  _adoptApplicationRequest(value: $.Orphan<ApplicationRequestPayload>): void {
+    $.utils.setUint16(2, 14, this);
+    $.utils.adopt(value, $.utils.getPointer(7, this));
+  }
+  _disownApplicationRequest(): $.Orphan<ApplicationRequestPayload> {
+    return $.utils.disown(this.applicationRequest);
+  }
+  get applicationRequest(): ApplicationRequestPayload {
+    $.utils.testWhich("applicationRequest", $.utils.getUint16(2, this), 14, this);
+    return $.utils.getStruct(7, ApplicationRequestPayload, this);
+  }
+  _hasApplicationRequest(): boolean {
+    return !$.utils.isNull($.utils.getPointer(7, this));
+  }
+  _initApplicationRequest(): ApplicationRequestPayload {
+    $.utils.setUint16(2, 14, this);
+    return $.utils.initStructAt(7, ApplicationRequestPayload, this);
+  }
+  get _isApplicationRequest(): boolean {
+    return $.utils.getUint16(2, this) === 14;
+  }
+  set applicationRequest(value: ApplicationRequestPayload) {
+    $.utils.setUint16(2, 14, this);
+    $.utils.copyFrom(value, $.utils.getPointer(7, this));
+  }
+  _adoptRegistryInvoke(value: $.Orphan<RegistryInvokePayload>): void {
+    $.utils.setUint16(2, 15, this);
+    $.utils.adopt(value, $.utils.getPointer(7, this));
+  }
+  _disownRegistryInvoke(): $.Orphan<RegistryInvokePayload> {
+    return $.utils.disown(this.registryInvoke);
+  }
+  get registryInvoke(): RegistryInvokePayload {
+    $.utils.testWhich("registryInvoke", $.utils.getUint16(2, this), 15, this);
+    return $.utils.getStruct(7, RegistryInvokePayload, this);
+  }
+  _hasRegistryInvoke(): boolean {
+    return !$.utils.isNull($.utils.getPointer(7, this));
+  }
+  _initRegistryInvoke(): RegistryInvokePayload {
+    $.utils.setUint16(2, 15, this);
+    return $.utils.initStructAt(7, RegistryInvokePayload, this);
+  }
+  get _isRegistryInvoke(): boolean {
+    return $.utils.getUint16(2, this) === 15;
+  }
+  set registryInvoke(value: RegistryInvokePayload) {
+    $.utils.setUint16(2, 15, this);
+    $.utils.copyFrom(value, $.utils.getPointer(7, this));
+  }
+  _adoptMetadataQuery(value: $.Orphan<MetadataQueryPayload>): void {
+    $.utils.setUint16(2, 16, this);
+    $.utils.adopt(value, $.utils.getPointer(7, this));
+  }
+  _disownMetadataQuery(): $.Orphan<MetadataQueryPayload> {
+    return $.utils.disown(this.metadataQuery);
+  }
+  get metadataQuery(): MetadataQueryPayload {
+    $.utils.testWhich("metadataQuery", $.utils.getUint16(2, this), 16, this);
+    return $.utils.getStruct(7, MetadataQueryPayload, this);
+  }
+  _hasMetadataQuery(): boolean {
+    return !$.utils.isNull($.utils.getPointer(7, this));
+  }
+  _initMetadataQuery(): MetadataQueryPayload {
+    $.utils.setUint16(2, 16, this);
+    return $.utils.initStructAt(7, MetadataQueryPayload, this);
+  }
+  get _isMetadataQuery(): boolean {
+    return $.utils.getUint16(2, this) === 16;
+  }
+  set metadataQuery(value: MetadataQueryPayload) {
+    $.utils.setUint16(2, 16, this);
+    $.utils.copyFrom(value, $.utils.getPointer(7, this));
+  }
+  _adoptAttestInvoke(value: $.Orphan<AttestInvokePayload>): void {
+    $.utils.setUint16(2, 17, this);
+    $.utils.adopt(value, $.utils.getPointer(7, this));
+  }
+  _disownAttestInvoke(): $.Orphan<AttestInvokePayload> {
+    return $.utils.disown(this.attestInvoke);
+  }
+  get attestInvoke(): AttestInvokePayload {
+    $.utils.testWhich("attestInvoke", $.utils.getUint16(2, this), 17, this);
+    return $.utils.getStruct(7, AttestInvokePayload, this);
+  }
+  _hasAttestInvoke(): boolean {
+    return !$.utils.isNull($.utils.getPointer(7, this));
+  }
+  _initAttestInvoke(): AttestInvokePayload {
+    $.utils.setUint16(2, 17, this);
+    return $.utils.initStructAt(7, AttestInvokePayload, this);
+  }
+  get _isAttestInvoke(): boolean {
+    return $.utils.getUint16(2, this) === 17;
+  }
+  set attestInvoke(value: AttestInvokePayload) {
+    $.utils.setUint16(2, 17, this);
     $.utils.copyFrom(value, $.utils.getPointer(7, this));
   }
   toString(): string { return "EventEnvelope_Payload_" + super.toString(); }

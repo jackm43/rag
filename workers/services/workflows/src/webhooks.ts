@@ -12,7 +12,12 @@ import { logger } from "../../../../packages/logger";
 // decoded and value-validated. Anything that fails is logged as a denial and
 // acked so the queue never wedges on a hostile message.
 export const processWebhookQueueMessage = async (message: Message<unknown>, env: Env) => {
-  const server = createServiceServer({ self: "workflows", expectedIssuers: ["webhooks"], env });
+  const server = createServiceServer({
+    self: "workflows",
+    expectedIssuers: ["webhooks"],
+    env,
+    transportTrust: { queue: "application" },
+  });
   const received = await server.receive(message.body, decodeWebhookEventEnvelope);
   if (!received) {
     message.ack();

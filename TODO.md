@@ -64,3 +64,39 @@ The `/api/connectors/*` admin surface is live; these are the reserved/next bits.
 - [ ] Dev-proxy hardening — a real interaction bridge so async AI-command results
       are observable in-browser; broaden the admin surface as it grows.
 - [ ] Revisit the deferred "generated app-client servers" idea.
+
+## Egress + attest work (done)
+
+- [x] **Egress migration completed** — all outbound HTTP for discord-rest,
+      discord-webhook, cloudflare-api, media-download, and ai-gateway now flows
+      through the `egress` service worker as signed `egress.request` hops with
+      bundled default profiles (`packages/egress/profiles.ts`); `DISCORD_BOT_TOKEN`,
+      `CF_AIG_TOKEN`, and `CLOUDFLARE_API_TOKEN` moved off the application workers
+      onto the egress worker.
+- [x] **Attest pattern refactor** — `workers/applications/attest` now follows the
+      thin-middleware → signed `attest.invoke` → `ATTEST_SERVICE` self-binding
+      pattern, with business logic in `service_server/src/{operations,webhook}.ts`.
+- [x] **Placement fail-closed** — the `ServiceRegistry` placement control plane
+      denies a hop when an env has no working `SERVICE_REGISTRY` binding, instead
+      of silently letting it through.
+- [x] **JWKS + honest discovery** — the gateway serves a real
+      `/.well-known/jwks.json` from the committed keyring; discovery docs no
+      longer advertise unimplemented `/oauth/*` endpoints.
+- [x] **Shared Better Auth module + deploy order** — session module moved to
+      `packages/boundaries/inbound/better-auth.ts` (dev-proxy + registry both use
+      it); `npm run deploy` order is egress → connectors → responder → registry →
+      attest → metadata → gateway → workflows → spend.
+
+## Known deliberate exceptions
+
+Not every outbound call goes through the egress sidecar or a signed service
+hop, on purpose:
+
+- The connectors broker's per-connector **provider HTTP** stays on the direct
+  `packages/boundaries/outbound` client — provider hosts are dynamic,
+  per-registration, and already credentialed, so a wildcard egress profile
+  would be a security regression.
+- The **Vault secrets backend** likewise stays on the direct boundary client
+  for the same dynamic-host reason.
+- The **1Password SDK** does its own HTTP entirely outside any boundary
+  client (it is not a `fetch` call this codebase controls).

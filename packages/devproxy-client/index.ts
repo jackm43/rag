@@ -18,6 +18,7 @@ import type { components } from "./api-types";
 //     supply the Cookie header explicitly, as there is no cookie jar.
 
 export type CommandRequest = components["schemas"]["CommandRequest"];
+export type GithubApiRequest = components["schemas"]["GithubApiRequest"];
 
 export type DevProxyClientOptions = {
   // Base URL of the dev-proxy, e.g. "https://ragbot-dev.jsmunro.me".
@@ -35,35 +36,46 @@ export type DevProxyClientOptions = {
 export type DevProxyResponse = {
   status: number;
   body: unknown;
+  contentType: string;
+  json: boolean;
 };
 
 export type DevProxyClient = {
   command: (request: CommandRequest) => Promise<DevProxyResponse>;
+  github: (request: GithubApiRequest) => Promise<DevProxyResponse>;
 };
 
 export const createDevProxyClient = (options: DevProxyClientOptions): DevProxyClient => {
   const doFetch = options.fetch ?? fetch;
+  const headers = async (): Promise<Record<string, string>> => {
+    const requestHeaders: Record<string, string> = {
+      "content-type": "application/json",
+    };
+    if (options.accessToken) {
+      requestHeaders["Cf-Access-Jwt-Assertion"] = await options.accessToken();
+    }
+    if (options.sessionCookie) {
+      requestHeaders.Cookie = await options.sessionCookie();
+    }
+    return requestHeaders;
+  };
+  const postJson = async (path: string, request: unknown): Promise<DevProxyResponse> => {
+    const url = new URL(path, options.baseUrl).toString();
+    const response = await doFetch(url, {
+      method: "POST",
+      headers: await headers(),
+      body: JSON.stringify(request),
+      // Send the session cookie for same-origin browser callers.
+      credentials: "include",
+    });
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      return { status: response.status, contentType, json: true, body: await response.json().catch(() => null) };
+    }
+    return { status: response.status, contentType, json: false, body: await response.text().catch(() => "") };
+  };
   return {
-    command: async (request) => {
-      const url = new URL("/api/command", options.baseUrl).toString();
-      const headers: Record<string, string> = {
-        "content-type": "application/json",
-      };
-      if (options.accessToken) {
-        headers["Cf-Access-Jwt-Assertion"] = await options.accessToken();
-      }
-      if (options.sessionCookie) {
-        headers.Cookie = await options.sessionCookie();
-      }
-      const response = await doFetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(request),
-        // Send the session cookie for same-origin browser callers.
-        credentials: "include",
-      });
-      const body = await response.json().catch(() => null);
-      return { status: response.status, body };
-    },
+    command: (request) => postJson("/api/command", request),
+    github: (request) => postJson("/api/github", request),
   };
 };

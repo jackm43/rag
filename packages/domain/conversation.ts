@@ -90,7 +90,7 @@ const buildThreadConversationMessages = async (
   }
 
   if (job.kind === "thread_reply" && job.messageId) {
-    history = await fetchChannelMessages(env, job.channelId, {
+    history = await fetchChannelMessages(env, "workflows", job.channelId, {
       before: job.messageId,
       limit: config.historyLimit,
     }).catch((error) => {
@@ -119,7 +119,7 @@ const buildThreadConversationMessages = async (
   const promptParts: string[] = [];
   if (job.replyMessageId && !historyIds.has(job.replyMessageId)) {
     const replyChannelId = job.replyChannelId ?? job.channelId;
-    const referenced = await fetchMessage(env, replyChannelId, job.replyMessageId).catch((error) => {
+    const referenced = await fetchMessage(env, "workflows", replyChannelId, job.replyMessageId).catch((error) => {
       logger.warn("reply_context_fetch_failed", { error: errorMessage(error) });
       return null;
     });

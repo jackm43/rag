@@ -1,6 +1,7 @@
 import { errorMessage, logger } from "../logger";
 import type { SecretRef } from "../secrets";
-import type { GrantEntry } from "./types";
+import { isMachinePrincipal } from "../auth/principal";
+import type { ConnectorCapabilities, ConnectorCapability, GrantEntry } from "./types";
 
 // Persistence for the broker. Two stores sit on one strongly-consistent,
 // persistent key/value substrate (the CONNECTOR_STORE Durable Object in
@@ -95,6 +96,7 @@ export const durableObjectKeyValueStore = (binding: ConnectorStoreBinding): KeyV
 const GRANT_PREFIX = "grant:";
 const OAUTH_PREFIX = "oauth:";
 const CONFIG_PREFIX = "config:";
+const CAPABILITIES_PREFIX = "capabilities:";
 
 export type GrantStore = {
   put: (entry: GrantEntry) => Promise<void>;
@@ -140,6 +142,8 @@ export const createGrantStore = (kv: KeyValueStore, now: () => number = Date.now
 export type ConnectorConfigStore = {
   getSecretRef: (connectorId: string) => Promise<SecretRef | null>;
   setSecretRef: (connectorId: string, ref: SecretRef) => Promise<void>;
+  getCapabilities: (connectorId: string) => Promise<ConnectorCapabilities | null>;
+  setCapabilities: (connectorId: string, capabilities: ConnectorCapabilities) => Promise<void>;
 };
 
 const isSecretRef = (value: unknown): value is SecretRef =>
@@ -147,6 +151,29 @@ const isSecretRef = (value: unknown): value is SecretRef =>
   value !== null &&
   typeof (value as SecretRef).provider === "string" &&
   typeof (value as SecretRef).ref === "string";
+
+const CONNECTOR_CAPABILITIES: readonly ConnectorCapability[] = [
+  "grant",
+  "fetch",
+  "token",
+  "authorize",
+  "webhookVerify",
+  "adminRead",
+  "adminWrite",
+];
+
+export const isConnectorCapabilities = (value: unknown): value is ConnectorCapabilities => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return Object.entries(candidate).every(
+    ([capability, callers]) =>
+      CONNECTOR_CAPABILITIES.includes(capability as ConnectorCapability) &&
+      Array.isArray(callers) &&
+      callers.every(isMachinePrincipal),
+  );
+};
 
 export const createConnectorConfigStore = (kv: KeyValueStore): ConnectorConfigStore => ({
   getSecretRef: async (connectorId) => {
@@ -164,6 +191,25 @@ export const createConnectorConfigStore = (kv: KeyValueStore): ConnectorConfigSt
   },
   setSecretRef: async (connectorId, ref) => {
     await kv.write(`${CONFIG_PREFIX}${connectorId}`, JSON.stringify({ provider: ref.provider, ref: ref.ref }));
+  },
+  getCapabilities: async (connectorId) => {
+    const raw = await kv.read(`${CAPABILITIES_PREFIX}${connectorId}`);
+    if (!raw) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return isConnectorCapabilities(parsed) ? parsed : null;
+    } catch (error) {
+      logger.warn("connector_capabilities_decode_failed", { connectorId, error: errorMessage(error) });
+      return null;
+    }
+  },
+  setCapabilities: async (connectorId, capabilities) => {
+    if (!isConnectorCapabilities(capabilities)) {
+      throw new Error("Invalid connector capabilities");
+    }
+    await kv.write(`${CAPABILITIES_PREFIX}${connectorId}`, JSON.stringify(capabilities));
   },
 });
 

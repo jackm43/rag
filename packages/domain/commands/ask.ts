@@ -1,4 +1,4 @@
-import { serviceClients, SYSTEM_SUBJECT } from "../../auth";
+import { createClient, createHopIntent, SYSTEM_SUBJECT } from "../../auth";
 import { encodeAiJobEnvelope } from "../../contracts";
 import { fallbackThreadTitle } from "../conversation";
 import { createThreadWithoutMessage, fetchChannel, isThreadChannel } from "../../discord";
@@ -10,7 +10,7 @@ import { stringOption, type CommandContext } from "./context";
 export { shouldUseAskWebSearch } from "../../ai/ask-mode";
 
 const resolveThreadParentChannelId = async (env: Env, channelId: string) => {
-  const channel = await fetchChannel(env, channelId);
+  const channel = await fetchChannel(env, "workflows", channelId);
   if (channel && isThreadChannel(channel) && channel.parent_id) {
     return channel.parent_id;
   }
@@ -31,7 +31,7 @@ export const runAskCommand = async (ctx: CommandContext, env: Env) => {
   const requesterUsername = ctx.displayName;
   const title = fallbackThreadTitle(prompt);
   const targetChannelId = await resolveThreadParentChannelId(env, parentChannelId);
-  const thread = await createThreadWithoutMessage(env, targetChannelId, title).catch((error) => {
+  const thread = await createThreadWithoutMessage(env, "workflows", targetChannelId, title).catch((error) => {
     logger.warn("ask_thread_create_failed", {
       error: errorMessage(error),
       channelId: targetChannelId,
@@ -51,7 +51,11 @@ export const runAskCommand = async (ctx: CommandContext, env: Env) => {
     title,
   });
 
-  await serviceClients(env).gatewayToWorkflows.call({
+  await createClient({
+    env,
+    self: "gateway",
+    context: { subject: requester?.id ?? SYSTEM_SUBJECT },
+  }).to("workflows", { transportTrust: "application" }).call({
     transport: "queue",
     queue: env.AI_JOBS,
     envelope: encodeAiJobEnvelope(
@@ -64,7 +68,12 @@ export const runAskCommand = async (ctx: CommandContext, env: Env) => {
       },
       { source: "interactions", guildId: ctx.guildId },
     ),
-    subject: { sub: requester?.id ?? SYSTEM_SUBJECT },
+    intent: createHopIntent({
+      action: "command.ask",
+      resourceType: "Guild",
+      resourceId: ctx.guildId ?? "unknown",
+      method: "ask",
+    }),
   });
 
   return {

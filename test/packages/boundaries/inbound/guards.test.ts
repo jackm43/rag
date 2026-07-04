@@ -43,7 +43,7 @@ test("discord interaction guard denies bad signatures with the boundary context 
     const denial = warnings.lines.find((line) => line.message === "ingress_denied");
     assert.ok(denial);
     assert.equal(denial.identity, "discord-interactions");
-    assert.equal(denial.zone, "untrusted");
+    assert.equal(denial.zone, "platform");
     assert.equal(denial.transport, "http");
     assert.equal(denial.outcome, "denied");
     assert.equal(denial.reason, "invalid_signature");
@@ -52,7 +52,7 @@ test("discord interaction guard denies bad signatures with the boundary context 
   }
 });
 
-test("operator control guard denies missing config and wrong tokens with the boundary context shape", async () => {
+test("gateway control guard denies missing config and wrong tokens with the boundary context shape", async () => {
   const warnings = captureWarnings();
   try {
     const unconfigured = await operatorControlGuard.verify(
@@ -82,7 +82,7 @@ test("operator control guard denies missing config and wrong tokens with the bou
     assert.equal(denials.length, 2);
     for (const denial of denials) {
       assert.equal(denial.identity, "gateway-control");
-      assert.equal(denial.zone, "untrusted");
+      assert.equal(denial.zone, "platform");
       assert.equal(denial.transport, "http");
       assert.equal(denial.outcome, "denied");
     }
@@ -95,7 +95,7 @@ test("operator control guard denies missing config and wrong tokens with the bou
       env,
     );
     assert.ok(granted.ok);
-    assert.equal(granted.grant.principal, "operator");
+    assert.equal(granted.grant.principal, "gateway-control");
   } finally {
     warnings.restore();
   }

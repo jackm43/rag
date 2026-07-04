@@ -26,8 +26,6 @@ test("a service message round-trips envelope bytes and token", () => {
 });
 
 test("raw event-envelope bytes do not decode as a service message", () => {
-  // The receive path falls back to treating unrecognized bytes as a bare
-  // envelope (DLQ tolerance), so the wrapper decode must not claim them.
   assert.isNull(decodeServiceMessage(envelope()));
   assert.isNull(decodeServiceMessage(new Uint8Array([1, 2, 3, 4, 5])));
 });
@@ -44,7 +42,7 @@ test("a manifest and a snapshot round-trip over the wire", () => {
 
   const snapshot = encodeManifestSnapshot([
     manifest,
-    { service: "gateway", zone: "edge", targets: ["workflows"], operations: [], scopes: [] },
+    { service: "gateway", zone: "platform", targets: ["workflows"], operations: [], scopes: [] },
   ]);
   const decoded = decodeManifestSnapshot(snapshot);
   assert.ok(decoded);

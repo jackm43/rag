@@ -1,10 +1,20 @@
-import { assert, test } from "vitest";
+import { afterEach, assert, test, vi } from "vitest";
 
 import {
   describeSecretsProviders,
   resolveSecretRef,
   secretsProvider,
 } from "../../../packages/secrets/index.ts";
+
+const onePasswordSdk = vi.hoisted(() => ({
+  createClient: vi.fn(),
+}));
+
+vi.mock("@1password/sdk", () => onePasswordSdk);
+
+afterEach(() => {
+  onePasswordSdk.createClient.mockReset();
+});
 
 // The secrets-provider module is the gate through which the broker resolves every
 // credential. These tests prove two things: the factory selects the right backend
@@ -88,125 +98,96 @@ test("hashicorp-vault reads a KV v2 field, and fails closed when unconfigured or
   }
 });
 
-test("onepassword resolves an op:// reference via Connect, and fails closed", async () => {
+test("onepassword resolves an op:// reference via the SDK service account, and fails closed", async () => {
   // Unconfigured backend -> null.
   assert.isNull(
     await secretsProvider({} as never, "onepassword").get("op://Services/ragbot/KEY"),
   );
+  assert.equal(onePasswordSdk.createClient.mock.calls.length, 0);
 
   const env = {
-    OP_CONNECT_HOST: "https://connect.example.com",
-    OP_CONNECT_TOKEN: "op-token",
+    OP_SERVICE_ACCOUNT_TOKEN: "op-token",
   } as never;
-  const ok = captureFetch((url) => {
-    if (url.includes("/v1/vaults?")) {
-      return new Response(JSON.stringify([{ id: "vault-id", name: "Services" }]), { status: 200 });
-    }
-    if (url.endsWith("/items") || url.includes("/items?")) {
-      return new Response(JSON.stringify([{ id: "item-id", title: "ragbot" }]), { status: 200 });
-    }
-    // The item fetch.
-    return new Response(
-      JSON.stringify({ id: "item-id", fields: [{ id: "f1", label: "KEY", value: "op-value" }] }),
-      { status: 200 },
-    );
+  const resolve = vi.fn().mockResolvedValue("op-value");
+  onePasswordSdk.createClient.mockResolvedValue({
+    secrets: { resolve },
   });
-  try {
-    assert.equal(await secretsProvider(env, "onepassword").get("op://Services/ragbot/KEY"), "op-value");
-  } finally {
-    ok.restore();
-  }
+  assert.equal(await secretsProvider(env, "onepassword").get("op://Services/ragbot/KEY"), "op-value");
+  assert.deepEqual(onePasswordSdk.createClient.mock.calls[0]?.[0], {
+    auth: "op-token",
+    integrationName: "ragbot",
+    integrationVersion: "1.0.0",
+  });
+  assert.equal(resolve.mock.calls[0]?.[0], "op://Services/ragbot/KEY");
 
   // A non-op:// reference -> null.
   assert.isNull(await secretsProvider(env, "onepassword").get("Services/ragbot/KEY"));
 
-  // A missing field on the resolved item -> null (fail closed).
-  const missingField = captureFetch((url) => {
-    if (url.includes("/v1/vaults?")) {
-      return new Response(JSON.stringify([{ id: "vault-id" }]), { status: 200 });
-    }
-    if (url.includes("/items?")) {
-      return new Response(JSON.stringify([{ id: "item-id" }]), { status: 200 });
-    }
-    return new Response(JSON.stringify({ id: "item-id", fields: [] }), { status: 200 });
+  // SDK errors -> null (fail closed).
+  onePasswordSdk.createClient.mockResolvedValue({
+    secrets: { resolve: vi.fn().mockRejectedValue(new Error("missing field")) },
   });
-  try {
-    assert.isNull(await secretsProvider(env, "onepassword").get("op://Services/ragbot/KEY"));
-  } finally {
-    missingField.restore();
-  }
+  assert.isNull(await secretsProvider(env, "onepassword").get("op://Services/ragbot/MISSING"));
 });
 
-test("onepassword set writes the value back through Connect (replace vs add)", async () => {
+test("onepassword set writes the value back through the SDK (replace vs add)", async () => {
   const env = {
-    OP_CONNECT_HOST: "https://connect.example.com",
-    OP_CONNECT_TOKEN: "op-token",
+    OP_SERVICE_ACCOUNT_TOKEN: "op-token",
   } as never;
 
-  // An existing field is patched by id with a `replace` op; the value is never
+  // An existing field is replaced in-place; the value is never
   // echoed back to the caller (set resolves void).
-  const replace = captureFetch((url, init) => {
-    if (url.includes("/v1/vaults?")) {
-      return new Response(JSON.stringify([{ id: "vault-id", name: "Services" }]), { status: 200 });
-    }
-    if (url.includes("/items?")) {
-      return new Response(JSON.stringify([{ id: "item-id", title: "ragbot" }]), { status: 200 });
-    }
-    if (init?.method === "PATCH") {
-      return new Response(JSON.stringify({ id: "item-id" }), { status: 200 });
-    }
-    return new Response(
-      JSON.stringify({ id: "item-id", fields: [{ id: "f1", label: "KEY", value: "old" }] }),
-      { status: 200 },
-    );
+  const putReplace = vi.fn();
+  onePasswordSdk.createClient.mockResolvedValue({
+    vaults: { list: vi.fn().mockResolvedValue([{ id: "vault-id", title: "Services" }]) },
+    items: {
+      list: vi.fn().mockResolvedValue([{ id: "item-id", title: "ragbot" }]),
+      get: vi.fn().mockResolvedValue({
+        id: "item-id",
+        title: "ragbot",
+        vaultId: "vault-id",
+        sections: [],
+        fields: [{ id: "f1", title: "KEY", fieldType: "Concealed", value: "old" }],
+      }),
+      put: putReplace,
+    },
   });
-  try {
-    await secretsProvider(env, "onepassword").set?.("op://Services/ragbot/KEY", "new-secret");
-    const patch = replace.calls.find((call) => call.init?.method === "PATCH");
-    assert.ok(patch);
-    const body = JSON.parse(String(patch.init?.body)) as Array<{ op: string; path: string }>;
-    assert.equal(body[0].op, "replace");
-    assert.equal(body[0].path, "/fields/f1/value");
-  } finally {
-    replace.restore();
-  }
+  await secretsProvider(env, "onepassword").set?.("op://Services/ragbot/KEY", "new-secret");
+  assert.equal(putReplace.mock.calls[0]?.[0].fields[0].value, "new-secret");
 
   // An absent field is appended with an `add` op carrying the ref's label.
-  const add = captureFetch((url, init) => {
-    if (url.includes("/v1/vaults?")) {
-      return new Response(JSON.stringify([{ id: "vault-id" }]), { status: 200 });
-    }
-    if (url.includes("/items?")) {
-      return new Response(JSON.stringify([{ id: "item-id" }]), { status: 200 });
-    }
-    if (init?.method === "PATCH") {
-      return new Response(JSON.stringify({ id: "item-id" }), { status: 200 });
-    }
-    return new Response(JSON.stringify({ id: "item-id", fields: [] }), { status: 200 });
+  const putAdd = vi.fn();
+  onePasswordSdk.createClient.mockResolvedValue({
+    vaults: { list: vi.fn().mockResolvedValue([{ id: "vault-id", title: "Services" }]) },
+    items: {
+      list: vi.fn().mockResolvedValue([{ id: "item-id", title: "ragbot" }]),
+      get: vi.fn().mockResolvedValue({
+        id: "item-id",
+        title: "ragbot",
+        vaultId: "vault-id",
+        sections: [],
+        fields: [],
+      }),
+      put: putAdd,
+    },
   });
-  try {
-    await secretsProvider(env, "onepassword").set?.("op://Services/ragbot/NEW", "v");
-    const patch = add.calls.find((call) => call.init?.method === "PATCH");
-    const body = JSON.parse(String(patch?.init?.body)) as Array<{ op: string; value: { label: string } }>;
-    assert.equal(body[0].op, "add");
-    assert.equal(body[0].value.label, "NEW");
-  } finally {
-    add.restore();
-  }
+  await secretsProvider(env, "onepassword").set?.("op://Services/ragbot/NEW", "v");
+  const added = putAdd.mock.calls[0]?.[0].fields[0];
+  assert.equal(added.title, "NEW");
+  assert.equal(added.fieldType, "Concealed");
 
   // A vault/item that cannot be resolved throws — a runtime write does not
   // create the item, and it must not silently no-op.
-  const unresolved = captureFetch(() => new Response(JSON.stringify([]), { status: 200 }));
-  try {
-    await secretsProvider(env, "onepassword")
-      .set?.("op://Nope/Nope/KEY", "v")
-      .then(
-        () => assert.fail("expected a throw for an unresolved item"),
-        () => undefined,
-      );
-  } finally {
-    unresolved.restore();
-  }
+  onePasswordSdk.createClient.mockResolvedValue({
+    vaults: { list: vi.fn().mockResolvedValue([]) },
+    items: { list: vi.fn(), get: vi.fn(), put: vi.fn() },
+  });
+  await secretsProvider(env, "onepassword")
+    .set?.("op://Nope/Nope/KEY", "v")
+    .then(
+      () => assert.fail("expected a throw for an unresolved item"),
+      () => undefined,
+    );
 });
 
 test("describeSecretsProviders reports per-backend runtime write capability", async () => {
@@ -231,8 +212,7 @@ test("describeSecretsProviders reports per-backend runtime write capability", as
   const configured = describeSecretsProviders({
     VAULT_ADDR: "https://vault.example.com",
     VAULT_TOKEN: "s.token",
-    OP_CONNECT_HOST: "https://connect.example.com",
-    OP_CONNECT_TOKEN: "op-token",
+    OP_SERVICE_ACCOUNT_TOKEN: "op-token",
     SECRETS_STORE: { get: async () => null },
   } as never);
   const cfg = Object.fromEntries(configured.map((info) => [info.name, info]));

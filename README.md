@@ -4,7 +4,7 @@ Cloudflare Worker Discord bot for rag tracking, direct mention replies, and thre
 
 ## Tech Stack
 
-- Runtime: Cloudflare Workers (`workers/public/gateway/src/index.ts`, `workers/services/workflows/src/index.ts`, `workers/services/responder/src/index.ts`, `workers/services/spend/src/index.ts`)
+- Runtime: Cloudflare Workers (`workers/applications/gateway/api/middleware_client/src/index.ts`, `workers/services/workflows/src/index.ts`, `workers/services/responder/src/index.ts`, `workers/services/spend/src/index.ts`)
 - Language: TypeScript
 - Database: Cloudflare D1 (`DB`); schema lives in `migrations/` and is applied with `wrangler d1 migrations apply` (`npm run d1:migrate:local` / `d1:migrate:remote`). The wrangler configs deliberately set no `preview_database_id` — it used to point at the production database. If preview deployments are ever used, create a separate preview DB (`wrangler d1 create ragbot-preview`) and add its id as `preview_database_id`. `schema.sql` is a reference-only mirror of the full current schema — change the schema by adding a migration, not by editing it. No migration ALTERs `rag_ai_interactions` to add the token-usage columns: SQLite has no `ADD COLUMN IF NOT EXISTS`, the prod table may or may not already have them, and a failing ALTER would strand deploys, so `recordAiInteraction` keeps its dual-INSERT fallback until prod's shape is verified (`PRAGMA table_info(rag_ai_interactions)`)
 - AI: Workers AI binding (`AI`) and AI Gateway REST; model and prompt config live in `packages/ai/ai-config` (`@cf/...` Workers AI models, Unified Billing partner chat models such as `grok/grok-4.3`, and web-search models such as `openai/gpt-4o-search-preview`)
@@ -156,7 +156,7 @@ sequenceDiagram
 
 ### `/rag`
 
-- Entry: interaction command routed in `workers/public/gateway/src/index.ts`
+- Entry: interaction command routed in `workers/applications/gateway/api/middleware_client/src/index.ts`
 - Handler: `packages/domain/commands/rag.ts`
 - Data path:
   - one D1 batch: insert `rag_events` row + upsert/increment `rag_totals ... RETURNING rag_count` (no follow-up SELECT)
@@ -166,7 +166,7 @@ sequenceDiagram
 
 ### `/ragboard`
 
-- Entry: interaction command routed in `workers/public/gateway/src/index.ts`
+- Entry: interaction command routed in `workers/applications/gateway/api/middleware_client/src/index.ts`
 - Handler: `packages/domain/commands/ragboard.ts`
 - Data path:
   - select top 10 from `rag_totals` ordered by `rag_count`
@@ -175,7 +175,7 @@ sequenceDiagram
 
 ### `/ragspend`
 
-- Entry: interaction command routed in `workers/public/gateway/src/index.ts`
+- Entry: interaction command routed in `workers/applications/gateway/api/middleware_client/src/index.ts`
 - Handler: `packages/domain/commands/ragspend.ts`
 - Data path:
   - reads the invoking user's precomputed total from `rag_ai_spend_totals`
@@ -184,7 +184,7 @@ sequenceDiagram
 
 ### `/ragspendboard`
 
-- Entry: interaction command routed in `workers/public/gateway/src/index.ts`
+- Entry: interaction command routed in `workers/applications/gateway/api/middleware_client/src/index.ts`
 - Handler: `packages/domain/commands/ragspend.ts`
 - Data path:
   - selects top 10 from `rag_ai_spend_totals` ordered by AI Gateway log cost
@@ -193,7 +193,7 @@ sequenceDiagram
 
 ### `/ask`
 
-- Entry: interaction command routed in `workers/public/gateway/src/index.ts`
+- Entry: interaction command routed in `workers/applications/gateway/api/middleware_client/src/index.ts`
 - Handler: `packages/domain/commands/ask.ts` (thread creation + enqueue) and `packages/domain/consumer.ts` (AI answer)
 - Behavior:
   - defers the interaction
@@ -206,7 +206,7 @@ sequenceDiagram
 
 ### `/bicture`
 
-- Entry: interaction command routed in `workers/public/gateway/src/index.ts`
+- Entry: interaction command routed in `workers/applications/gateway/api/middleware_client/src/index.ts`
 - Handler: `packages/domain/commands/bicture.ts` (enqueue) and `packages/domain/consumer.ts` (image generation)
 - Behavior:
   - defers the interaction
@@ -217,7 +217,7 @@ sequenceDiagram
 
 ### `/ragjam`
 
-- Entry: interaction command routed in `workers/public/gateway/src/index.ts`
+- Entry: interaction command routed in `workers/applications/gateway/api/middleware_client/src/index.ts`
 - Handler: `packages/domain/commands/ragjam.ts`
 - Behavior:
   - defers the interaction
@@ -233,7 +233,7 @@ sequenceDiagram
 - Entry:
   - authenticated `POST /gateway/start` starts Durable Object gateway client
   - gateway listens for Discord `MESSAGE_CREATE`
-- Handlers: `workers/public/gateway/src/gateway.ts` (connection) and `packages/domain/mention.ts` (DO-side encode + workflows-side resolution)
+- Handlers: `workers/applications/gateway/service_server/src/gateway.ts` (connection) and `packages/domain/mention.ts` (DO-side encode + workflows-side resolution)
 - Queue and worker:
   - the DO enqueues every non-bot message with a usable prompt as a `message.received` event (no D1 thread lookup, no REST role fetch in the DO)
   - the workflows worker resolves events into `channel_reply`/`thread_reply` work in-process: thread lookup, bot-role fetch for role mentions, mention resolution, and usage limits
@@ -297,7 +297,9 @@ Trust zones are ordered from least to most trusted: **Untrusted** (public caller
 | Service (edge/applications ↔ applications) | `packages/auth` | `serviceClients(env)` clients mint a signed identity-context token beside the contracts-encoded envelope; `createServiceServer` receives verify the token (signature, audience, expiry, envelope-hash binding) **before** the forwarding authorizer runs Cedar `service.invoke`, so the principal Cedar sees is cryptographically established. See [Identity exchange](#identity-exchange-on-service-hops) |
 | Outbound (→ external) | `packages/boundaries/outbound` | Per-identity boundary clients enforcing credential injection, host allowlists, https-only, timeouts, and response-size caps; failure logs redact paths for identities whose paths embed credentials (`logPath: false` for `discord-webhook` and `media-download`) |
 
-Only the gateway speaks HTTP, and its surface is **constructed from the spec**: `workers/public/gateway/openapi.yaml` is the source of truth, `npm run routes:build` generates the route table, and the gateway router wires paths, methods, and security schemes (ingress guards) to operationId handlers from it — an operation without a handler fails construction. Everything between workers is queues/worker RPC carrying Cap'n Proto: the queue hop body is a capnp `ServiceMessage` (`packages/contracts/service.capnp`) framing the envelope bytes with the JWS identity token, and the registry RPC exchanges capnp `ServiceManifest`/`ManifestSnapshot` payloads.
+HTTP surfaces live under `workers/applications/*/api/middleware_client` and are **constructed from application bindings**. Gateway, metadata, attest, registry, webhooks, and dev-proxy each define route metadata in `src/application-bindings.ts`; `npm run routes:build` generates `openapi.yaml` and `src/openapi.ts` for each, plus the gateway route table. The gateway router wires paths, methods, and security schemes (ingress guards) to operationId handlers from its generated route table — an operation without a handler fails construction. Worker-to-worker traffic is queues/worker RPC carrying Cap'n Proto: the queue hop body is a capnp `ServiceMessage` (`packages/contracts/service.capnp`) framing the envelope bytes with the JWS identity token, and the registry RPC exchanges capnp `ServiceManifest`/`ManifestSnapshot` payloads.
+
+Registry application registration is not queue-backed: the registry middleware authenticates the request, then invokes the `REGISTRY_SERVICE` binding (`RegistryService` entrypoint) to mutate `ApplicationRegistry`, build scaffold artifacts, store the scaffold result, and optionally submit the GitHub PR through the connectors broker.
 
 ## Authorization (Cedar)
 
@@ -307,7 +309,7 @@ All allow/deny decisions are centralised in `packages/authz` and evaluated by [C
 - **Registry-driven policy**: services register a manifest (zone, targets, operations) with the `ServiceRegistry` Durable Object on startup; the registry snapshot is merged into the Cedar entity store, and the `invoke-registered` / `exchange-registered` attribute rules authorize registered pairs. The static per-hop permits in `services.cedar` remain as the bootstrap fallback when the registry is empty or unreachable (fail closed to those permits, never open).
 - **Forwarding authorizer**: `authorizeAndForward` (`packages/authz/forward.ts`) puts authorization structurally on the request path — either the request is authorized and forwarded, or it exits with a logged denial; there is no boolean for a caller to ignore.
 - **To add an admin**, add the Discord user id to `RAG_ADMIN_USER_IDS` in `packages/authz/entities.ts` — membership of the `Group::"rag-admins"` entity is data, not policy.
-- **`authorize()` runs** at three choke points: the command registry pre-flight (`packages/domain/commands/registry.ts`, plus `/rag`'s in-window ban decision in `rag.ts`) with the D1-fetched ban state passed as `context.banned`; the gateway control routes after the operator bearer-token guard (`workers/public/gateway/src/index.ts`, principal `Machine::"operator"`); and every service receive/exchange via the forwarding authorizer inside `packages/auth`. Everything is deny-by-default — an action nobody permitted is refused.
+- **`authorize()` runs** at three choke points: the command registry pre-flight (`packages/domain/commands/registry.ts`, plus `/rag`'s in-window ban decision in `rag.ts`) with the D1-fetched ban state passed as `context.banned`; the gateway control routes after the operator bearer-token guard (`workers/applications/gateway/api/middleware_client/src/index.ts`, principal `Machine::"operator"`); and every service receive/exchange via the forwarding authorizer inside `packages/auth`. Everything is deny-by-default — an action nobody permitted is refused.
 
 The guild allowlist deliberately stays at ingress (`packages/domain/guilds.ts`), not in Cedar, for now.
 
@@ -327,6 +329,8 @@ Discord (untrusted) → gateway (edge; verifies interaction/gateway signature)
         → workflows (application) verifies (sig + aud=workflows + envelope hash) → Cedar service.invoke
         → re-mints on behalf of the SAME sub: iss=workflows, aud=responder|spend, act+=workflows
         → responder / spend (application) verify → Cedar → process
+        → responder re-mints for aud=egress before Discord writes
+        → egress verifies → host/profile policy → injects provider credential
 ```
 
 At each receive the token is verified **before** Cedar runs, and the verified issuer becomes the Cedar `Machine` principal; any failure denies with the shared `service_denied` log shape and the message is dropped/acked. On success the handler receives the full verified `RequestContext` (subject, delegation chain, source, zone, transport) alongside the decoded payload.
@@ -334,11 +338,15 @@ At each receive the token is verified **before** Cedar runs, and the verified is
 **Key provisioning.** Each sending worker holds a private Ed25519 signing key as a secret; public keys are committed (not secret) in `packages/identity/keyring.ts`. Generate a keypair with `tsx scripts/generate-keys.ts <worker>`, then:
 
 ```sh
-wrangler secret put GATEWAY_SIGNING_KEY -c workers/public/gateway/wrangler.jsonc
+wrangler secret put GATEWAY_SIGNING_KEY -c workers/applications/gateway/api/middleware_client/wrangler.jsonc
 wrangler secret put WORKFLOWS_SIGNING_KEY   -c workers/services/workflows/wrangler.jsonc
+wrangler secret put RESPONDER_SIGNING_KEY   -c workers/services/responder/wrangler.jsonc
+wrangler secret put REGISTRY_SIGNING_KEY    -c workers/applications/registry/api/middleware_client/wrangler.jsonc
+wrangler secret put METADATA_SIGNING_KEY    -c workers/applications/metadata/api/middleware_client/wrangler.jsonc
+wrangler secret put ATTEST_SIGNING_KEY      -c workers/applications/attest/api/middleware_client/wrangler.jsonc
 ```
 
-Only the gateway (origin mint), workflows (downstream re-mint), and dev-proxy (origin mint for browser sessions) sign; the responder and spend workers are leaves that only verify against the committed keyring. To rotate a key, deploy the new private key to the secret and update the public JWK in `keyring.ts`.
+The gateway (origin mint), workflows (downstream re-mint), responder (Discord-write egress hop), registry, metadata, attest, webhooks, and dev-proxy sign. Spend and egress are receivers only unless they later call another internal service. To rotate a key, deploy the new private key to the secret and update the public JWK in `keyring.ts`.
 
 The identity-context token supports two optional session-binding claims, `dpopJkt` and `sid`, present only on an edge hop and absent on every service-to-service hop, so the verifier and existing minters are unchanged. The dev-proxy hop no longer populates them — the session is bound to the Cloudflare Access identity in the `ragbot-auth` store (see [Dev proxy](#dev-proxy-admin-application-that-runs-in-production)), not by a per-request proof.
 
@@ -346,11 +354,16 @@ The identity-context token supports two optional session-binding claims, `dpopJk
 
 | Worker | Config | Trust zone / role | Secrets |
 | --- | --- | --- | --- |
-| `ragbot-worker` | `workers/public/gateway/wrangler.jsonc` | Public entrypoint (`/discord`, gateway control) + `DiscordGateway` Durable Object. The DO keeps only the WebSocket lifecycle + IDENTIFY (bot token, unavoidable), payload validation, and encode+enqueue of `message.received` events — it uses no D1 and no Discord REST | `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (DO IDENTIFY + interaction-path Discord REST), `GATEWAY_CONTROL_TOKEN`, `GATEWAY_SIGNING_KEY` (mints origin identity-context tokens) |
+| `ragbot-worker` | `workers/applications/gateway/api/middleware_client/wrangler.jsonc` | Public entrypoint (`/discord`, gateway control) + `DiscordGateway` Durable Object. The DO keeps only the WebSocket lifecycle + IDENTIFY (bot token, unavoidable), payload validation, and encode+enqueue of `message.received` events — it uses no D1 and no Discord REST | `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (DO IDENTIFY + interaction-path Discord REST), `GATEWAY_CONTROL_TOKEN`, `GATEWAY_SIGNING_KEY` (mints origin identity-context tokens) |
 | `ragbot-workflows-worker` | `workers/services/workflows/wrangler.jsonc` | `ai-jobs` consumer: **read Discord + AI + D1**. Resolves raw `message.received` events (thread lookup, mention/role resolution, usage limits) in-process, reads thread history, replied-to messages, and bot roles over Discord REST, and creates `/ask`-style threads; every message/edit it produces leaves via the outbox queue or the responder RPC binding, never directly | `CF_AIG_TOKEN` (belongs to workflows **only** — remove it from `ragbot-worker` with `wrangler secret delete CF_AIG_TOKEN`), `DISCORD_BOT_TOKEN` (honestly required: Discord *reads* need the bot token too, so the workflows worker keeps it even though writes go through the responder), `WORKFLOWS_SIGNING_KEY` (re-mints on-behalf-of identity-context tokens for the responder and spend hops) |
-| `ragbot-responder-worker` | `workers/services/responder/wrangler.jsonc` | **Write Discord** — the single egress choke point. No public route. Consumes `discord-outbox` for text replies and exposes the `Responder` RPC entrypoint for media-bearing interaction edits. The only place `sanitizeAiText`, the message length cap, and `allowed_mentions: { parse: [] }` run on AI output before it reaches Discord | `DISCORD_BOT_TOKEN` |
+| `ragbot-responder-worker` | `workers/services/responder/wrangler.jsonc` | **Discord output policy**. No public route. Consumes `discord-outbox` for text replies and exposes the `Responder` RPC entrypoint for media-bearing interaction edits. The only place `sanitizeAiText`, the message length cap, and `allowed_mentions: { parse: [] }` run on AI output before it reaches Discord; then it signs a request to the bound `EGRESS` worker | `RESPONDER_SIGNING_KEY` |
+| `ragbot-egress-worker` | `workers/services/egress/wrangler.jsonc` | Generic bound egress proxy. Verifies signed `egress.request` envelopes, enforces the selected egress profile's host/timeout/response-size policy, injects the profile credential, and performs the outbound fetch. Discord is currently profiles `discord-rest` and `discord-webhook`; the same worker code can be deployed with other profiles for connectors/GitHub | `DISCORD_BOT_TOKEN` for `discord-rest`; optional `EGRESS_PROFILES_JSON` for additional profiles |
 | `ragbot-spend-worker` | `workers/services/spend/wrangler.jsonc` | `ai-spend-jobs` consumer: AI Gateway log reconciliation | `CLOUDFLARE_API_TOKEN` (scoped to AI Gateway read) |
-| `ragbot-dev-proxy-worker` | `workers/public/dev-proxy/wrangler.jsonc` | Public **admin app that runs in prod**: behind Cloudflare Access, with Better Auth (Discord OAuth) app identity on a standalone `ragbot-auth` D1; resolves the acting Discord subject from the session, then invokes the gateway's `DevProxy` service binding as the `dev-proxy` machine principal. No dev environment, no dev data — see [Dev proxy](#dev-proxy-admin-application-that-runs-in-production) | `DEV_PROXY_SIGNING_KEY`, `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET`, `BETTER_AUTH_SECRET` |
+| `ragbot-registry-worker` | `workers/applications/registry/api/middleware_client/wrangler.jsonc` | Registry application plus trusted service registry Durable Objects. HTTP middleware authenticates registry users, then invokes `RegistryService` with signed `registry.invoke` messages for application CRUD/scaffold work | `REGISTRY_SIGNING_KEY`, Better Auth/Cloudflare Access secrets |
+| `ragbot-metadata-worker` | `workers/applications/metadata/api/middleware_client/wrangler.jsonc` | `metadata.jsmunro.me` GraphQL metadata app. HTTP middleware validates bearer-token GraphQL requests, then invokes `MetadataService` with signed `metadata.query` messages; service resolvers read registry metadata and verify stored artifact attestations | `METADATA_QUERY_TOKEN`, `METADATA_SIGNING_KEY` |
+| `ragbot-attest-worker` | `workers/applications/attest/api/middleware_client/wrangler.jsonc` | GitHub artifact attestation ingestion and attestation store. Verifies GitHub webhooks through the connectors broker and stores attested artifact hashes/scopes | `ATTEST_SIGNING_KEY` |
+| `ragbot-dev-proxy-worker` | `workers/applications/dev-proxy/api/middleware_client/wrangler.jsonc` | Public **admin app that runs in prod**: behind Cloudflare Access, with Better Auth (Discord OAuth) app identity on a standalone `ragbot-auth` D1; resolves the acting Discord subject from the session, then invokes the gateway's `DevProxy` service binding as the `dev-proxy` machine principal. No dev environment, no dev data — see [Dev proxy](#dev-proxy-admin-application-that-runs-in-production) | `DEV_PROXY_SIGNING_KEY`, `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET`, `BETTER_AUTH_SECRET` |
+| `ragbot-webhooks-worker` | `workers/applications/webhooks/api/middleware_client/wrangler.jsonc` | Public provider webhook ingress. Verifies signatures through the connectors broker, dedupes valid event ids, and enqueues signed `webhook.event` messages to workflows | `WEBHOOKS_SIGNING_KEY` |
 
 Set a secret on a specific worker with `wrangler secret put NAME -c workers/services/workflows/wrangler.jsonc` (or the matching config file).
 
@@ -358,6 +371,7 @@ Set a secret on a specific worker with `wrangler secret put NAME -c workers/serv
 
 - **Text-only replies** (channel/thread posts, text interaction edits) go through the durable, retryable `discord-outbox` queue as encoded/validated envelopes (`reply.channel_message`, `reply.interaction_edit`).
 - **Media-bearing interaction edits** (`/bicture` image, `/ragjam` audio) go over a **service-binding RPC** (`Responder.deliverInteractionEdit`) instead: queue messages are capped at 128 KiB, the media bytes are already in workflows memory, and a queue retry would regenerate the media anyway. RPC is direct worker-to-worker with no network exposure.
+- The responder owns Discord message policy, then calls the bound generic `Egress` worker using a signed `egress.request` envelope. The egress worker owns the Discord bot token and host/profile policy. This pattern is intentionally provider-neutral: connectors/GitHub can bind a separately configured egress worker with their own profiles.
 - The workflows worker sends **raw model text** over the outbox; the responder applies the final output policy (sanitize, truncate to `MAX_DISCORD_MESSAGE_LENGTH`, `allowed_mentions: { parse: [] }`). `rag_ai_interactions.response_text` still records the **sanitized** text (the workflows worker computes the same pure policy function for the record), and `status = 'ok'` now means "handed to the outbox" — delivery failures show up in responder logs and its DLQ, not in that column.
 - Interaction-edit text (prompt echoes, failure notices) is not model output: the responder caps it at the Discord 2000-char hard limit and locks down `allowed_mentions`, but does not run `sanitizeAiText` speaker-line stripping over it.
 - **Deliberate boundary:** the main worker's deferred `/rag`-family and `/ask` responses still PATCH the interaction webhook directly. Interaction tokens are scoped and short-lived, the main worker owns the interaction, and no bot token is involved (webhook edits are token-authenticated), so this stays outside the responder.
@@ -370,7 +384,7 @@ The `DiscordGateway` Durable Object treats `MESSAGE_CREATE` as a second untruste
 
 ## Dev proxy (admin application that runs in production)
 
-The `ragbot-dev-proxy-worker` (`workers/public/dev-proxy`) is the human-facing **admin application** for ragbot: it lets an operator exercise the **real** gateway → workflows command path (and, over time, other sensitive service surfaces) against **real** data with no separate dev environment, dev client, or dev data. It is a public edge worker with a **layered auth model**, and its hop into the gateway is authorized identically to a Discord-initiated command — plus two extra app-level gates.
+The `ragbot-dev-proxy-worker` (`workers/applications/dev-proxy`) is the human-facing **admin application** for ragbot: it lets an operator exercise the **real** gateway → workflows command path (and, over time, other sensitive service surfaces) against **real** data with no separate dev environment, dev client, or dev data. It is a public edge worker with a **layered auth model**, and its hop into the gateway is authorized identically to a Discord-initiated command — plus two extra app-level gates.
 
 **Why this shape.** The gateway's existing ingresses are HTTP guards (Discord Ed25519 signature, operator control token). Rather than bolt a third public HTTP surface onto the gateway, the dev-proxy is a *separate* worker that reaches the gateway over a **service binding** — a hop invocable only by a worker configured with it, so the gateway's `DevProxy` entrypoint is reachable only from the dev-proxy and never from the public internet. The dev-proxy is a first-class `dev-proxy` machine principal (edge zone) with its own Ed25519 signing key, so its hop carries the same cryptographic identity as the gateway/workflows hops.
 
@@ -411,24 +425,24 @@ gateway DevProxy entrypoint (edge)
 
 Any failure returns a bare status and never discloses which gate refused. Inline commands (`/ragboard`, `/ragspend`, …) round-trip their result to the browser. Enqueue/AI commands (`/ask`, `/bicture`, `/ragjam`) run the full authorized path and enqueue to the workflows worker; because there is no real Discord interaction, the final Discord edit targets the real application id with a synthetic interaction token (a no-op at Discord), so the AI/D1/spend work runs and is observable while the browser sees the deferred acknowledgement.
 
-**Why Better Auth on D1.** Better Auth runs on workerd (verified under `@cloudflare/vitest-pool-workers`) and natively detects a Cloudflare D1 binding — passing the `AUTH_DB` binding directly uses its built-in D1 dialect, so there is no extra Kysely dependency. The schema is applied out-of-band as a committed D1 migration (`workers/public/dev-proxy/migrations`); Better Auth never introspects at runtime (D1 forbids the `sqlite_master` reads its migrator needs). The auth database is kept **separate** from the gateway's `ragbot` operational DB so login/session state never mingles with product data. The Discord OAuth access/refresh tokens live server-side in `AUTH_DB` and are never sent to the browser — the browser only holds an opaque session cookie.
+**Why Better Auth on D1.** Better Auth runs on workerd (verified under `@cloudflare/vitest-pool-workers`) and natively detects a Cloudflare D1 binding — passing the `AUTH_DB` binding directly uses its built-in D1 dialect, so there is no extra Kysely dependency. The schema is applied out-of-band as a committed D1 migration (`workers/applications/dev-proxy/api/middleware_client/migrations`); Better Auth never introspects at runtime (D1 forbids the `sqlite_master` reads its migrator needs). The auth database is kept **separate** from the gateway's `ragbot` operational DB so login/session state never mingles with product data. The Discord OAuth access/refresh tokens live server-side in `AUTH_DB` and are never sent to the browser — the browser only holds an opaque session cookie.
 
-**Contracts.** The public ingress is described by `workers/public/dev-proxy/openapi.yaml` (OpenAPI 3.1 with `cfAccess` + `betterAuthSession` security schemes) and validated at runtime with zod; the generated types (`packages/devproxy-client/api-types.ts`, `npm run devproxy:types`) are committed and the worker's zod schema `satisfies` them so ingress and client cannot drift. The service-binding payload is Cap'n Proto (`DevProxyCommandPayload` in `envelope.capnp`), reusing the same generated contract layer as the queue hops. `packages/devproxy-client` is a dumb typed client: it owns no credentials — the caller supplies the Access token and/or session cookie through hooks.
+**Contracts.** The public ingress is described by `workers/applications/dev-proxy/api/middleware_client/openapi.yaml` (OpenAPI 3.1 with `cfAccess` + `betterAuthSession` security schemes) and validated at runtime with zod; the generated types (`packages/devproxy-client/api-types.ts`, `npm run devproxy:types`) are committed and the worker's zod schema `satisfies` them so ingress and client cannot drift. The service-binding payload is Cap'n Proto (`DevProxyCommandPayload` in `envelope.capnp`), reusing the same generated contract layer as the queue hops. `packages/devproxy-client` is a dumb typed client: it owns no credentials — the caller supplies the Access token and/or session cookie through hooks.
 
 **Bootstrap.** Generate the signing key, register the Discord OAuth app, apply the auth schema, and put an Access application in front of the hostname:
 
 ```sh
 tsx scripts/generate-keys.ts dev-proxy
 # commit the printed public JWK to keyring.ts (already done for the current key), then:
-wrangler secret put DEV_PROXY_SIGNING_KEY -c workers/public/dev-proxy/wrangler.jsonc
+wrangler secret put DEV_PROXY_SIGNING_KEY -c workers/applications/dev-proxy/api/middleware_client/wrangler.jsonc
 
 # Discord OAuth app credentials + Better Auth secrets (secrets, never committed):
-wrangler secret put DISCORD_CLIENT_ID     -c workers/public/dev-proxy/wrangler.jsonc
-wrangler secret put DISCORD_CLIENT_SECRET -c workers/public/dev-proxy/wrangler.jsonc
-wrangler secret put BETTER_AUTH_SECRET    -c workers/public/dev-proxy/wrangler.jsonc   # random 32+ bytes
+wrangler secret put DISCORD_CLIENT_ID     -c workers/applications/dev-proxy/api/middleware_client/wrangler.jsonc
+wrangler secret put DISCORD_CLIENT_SECRET -c workers/applications/dev-proxy/api/middleware_client/wrangler.jsonc
+wrangler secret put BETTER_AUTH_SECRET    -c workers/applications/dev-proxy/api/middleware_client/wrangler.jsonc   # random 32+ bytes
 
 # apply the Better Auth schema to the standalone ragbot-auth D1 database:
-wrangler d1 migrations apply ragbot-auth -c workers/public/dev-proxy/wrangler.jsonc --remote
+wrangler d1 migrations apply ragbot-auth -c workers/applications/dev-proxy/api/middleware_client/wrangler.jsonc --remote
 ```
 
 In the **Discord developer portal**, add the OAuth2 redirect URI `https://ragbot-dev.jsmunro.me/api/auth/callback/discord`. Set `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`, `BETTER_AUTH_URL` (`https://ragbot-dev.jsmunro.me`), and `DEV_PROXY_GUILD` as vars on the dev-proxy worker, and keep the `DEV_PROXY_ALLOWED_SUBJECTS` var (the allowlist of Discord ids the proxy may act as) on the **gateway** worker. `DEV_PROXY_SUBJECT` is no longer used — the subject comes from the Discord session. Deploy the gateway before the dev-proxy so the `DevProxy` binding target exists.
@@ -444,7 +458,7 @@ npm run ragctl -- cmd ragboard      # run a command through the dev-proxy
 npm run ragctl -- cmd ask --opt prompt="what is a rag?"
 ```
 
-**Commands.** `login [--refresh]` (browser SSO via `cloudflared`; `--refresh` re-fetches the token without re-authenticating) and `whoami` (decodes the cached token's claims); `discover` (lists the dev-proxy operations straight from `workers/public/dev-proxy/openapi.yaml`, so it works offline and never drifts from the typed client); `cmd <name> [--opt k=v …] [--channel <id>] [--json]` (the typed call); and `config` (shows the resolved config and where each value came from). Requires `cloudflared` on `PATH` for `login` (macOS: `brew install cloudflared`).
+**Commands.** `login [--refresh]` (browser SSO via `cloudflared`; `--refresh` re-fetches the token without re-authenticating) and `whoami` (decodes the cached token's claims); `discover` (lists the dev-proxy operations straight from `workers/applications/dev-proxy/api/middleware_client/openapi.yaml`, so it works offline and never drifts from the typed client); `cmd <name> [--opt k=v …] [--channel <id>] [--json]` (the typed call); and `config` (shows the resolved config and where each value came from). Requires `cloudflared` on `PATH` for `login` (macOS: `brew install cloudflared`).
 
 **Where secrets live and how they're protected.** Everything `ragctl` persists lives under one home directory — `$RAGCTL_HOME`, else `$XDG_CONFIG_HOME/ragctl`, else `~/.config/ragctl` — created `0700`:
 

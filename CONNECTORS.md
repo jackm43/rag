@@ -263,7 +263,7 @@ backend's runtime write capability **honestly — it never fakes success**:
 | backend | with a `value` | with `ref` only |
 |---|---|---|
 | `hashicorp-vault` | **`written`** — writes the value (KV v2), re-points the connector | `referenced` (or `provision_required` if it does not resolve yet) |
-| `onepassword` | **`written`** — writes the value (Connect item patch), re-points | `referenced` / `provision_required` |
+| `onepassword` | **`written`** — writes the value (SDK item update), re-points | `referenced` / `provision_required` |
 | `cloudflare-secret-store` | **`provision_required`** — re-points, but the write is NOT possible at runtime; `detail` names the exact secret to provision via the CF control plane | `referenced` / `provision_required` |
 | `wrangler-env` | **`rejected`** — deploy-time only; `detail` says to `wrangler secret put` and redeploy. Nothing persisted | `referenced` / `provision_required` |
 
@@ -277,7 +277,7 @@ The dev-proxy exposes the admin surface as an HTTP API + UI behind its layered
 auth (CF Access perimeter → Better Auth Discord session bound to that Access
 identity → an on-behalf-of identity token minted for the acting Discord admin →
 the `CONNECTORS` binding), exactly as `/api/command` drives the gateway. See
-`workers/public/dev-proxy/openapi.yaml`.
+`workers/applications/dev-proxy/api/middleware_client/openapi.yaml`.
 
 | method + path | op | notes |
 |---|---|---|
@@ -307,14 +307,14 @@ the connector slug. See "Inbound webhooks" below — the worker is live.
 1. Deploy `ragbot-connectors-worker` (the broker) first — the `CONNECTORS`
    binding target must exist.
 2. The dev-proxy binds it (`services`: `ragbot-connectors-worker`, entrypoint
-   `Connectors`) — already in `workers/public/dev-proxy/wrangler.jsonc`. The
+   `Connectors`) — already in `workers/applications/dev-proxy/api/middleware_client/wrangler.jsonc`. The
    `dev-proxy → connectors` Cedar permits (`services.cedar` +
    `connectors.cedar`) and the `devProxyToConnectors` client already exist.
 3. Deploy the dev-proxy (its `DEV_PROXY_SIGNING_KEY` already signs the gateway
    hop; the same key signs the broker hop — no new secret).
 4. To make Vault / 1Password writes work, provision the backend env on the
-   **broker** worker (`VAULT_ADDR`+`VAULT_TOKEN` / `OP_CONNECT_HOST`+
-   `OP_CONNECT_TOKEN`); `getSecretsProviders` then reports them
+   **broker** worker (`VAULT_ADDR`+`VAULT_TOKEN` / `OP_SERVICE_ACCOUNT_TOKEN`);
+   `getSecretsProviders` then reports them
    `writable: true, configured: true`.
 
 ## Inbound webhooks (verify in the broker, receive at the edge)
@@ -323,7 +323,7 @@ Inbound webhooks are the **inbound mirror of `authorizedFetch`**: the edge
 receiver never sees the webhook secret, exactly as callers never see a provider
 credential.
 
-**The receiver** is `ragbot-webhooks-worker` (`workers/public/webhooks`) at
+**The receiver** is `ragbot-webhooks-worker` (`workers/applications/webhooks`) at
 `webhooks.jsmunro.me` — deliberately NOT behind CF Access (third parties POST to
 it) and kept off the Discord-interaction gateway (different threat model). Its
 sole route is `POST /{provider}/{id}` (`github`|`stripe` allowlist +
@@ -519,7 +519,7 @@ export type SecretsProvider = {
 **secret-resolution gate**: the strategy denies the connector op rather than
 surfacing a half-resolved credential. `set` is optional — its **presence IS the
 runtime write-capability** the admin surface reports (§ "The admin surface"
-below): `hashicorp-vault` (KV v2 write) and `onepassword` (Connect item patch)
+below): `hashicorp-vault` (KV v2 write) and `onepassword` (SDK item update)
 implement it; `cloudflare-secret-store` and `wrangler-env` omit it (their writes
 are control-plane / deploy-time). `configured()` reports whether the backend has
 the env/binding it needs; absent means always-configured (the `wrangler-env`
@@ -536,37 +536,23 @@ back to `wrangler-env` (the safe default). The `ref` locator differs per backend
 | `wrangler-env` | env binding name (`"GITHUB_APP_PRIVATE_KEY"`) | `env[ref]` | today's behaviour, the **default** |
 | `cloudflare-secret-store` | Secrets Store secret name | `env.SECRETS_STORE.get(ref)` | centralizes rotation + account access control |
 | `hashicorp-vault` | `"<mount>/<path>#<field>"` (KV v2) | `GET {VAULT_ADDR}/v1/<mount>/data/<path>` via a boundary client (host-allowlisted to `VAULT_ADDR`), `X-Vault-Token: VAULT_TOKEN` | KV v2; **runtime-writable** (`set` = KV v2 write) |
-| `onepassword` | `"op://<vault>/<item>/<field>"` | 1Password **Connect** REST API via a boundary client (host-allowlisted to `OP_CONNECT_HOST`), `Bearer OP_CONNECT_TOKEN` | **runtime-writable** (`set` = Connect item patch: replace the field or add a CONCEALED one; the vault/item must already exist). See the spike below |
+| `onepassword` | `"op://<vault>/<item>/<field>"` | 1Password JavaScript SDK, authenticated with `OP_SERVICE_ACCOUNT_TOKEN` | **runtime-writable** (`set` = SDK item update: replace the field or add a concealed one; the vault/item must already exist). |
 
-The two HTTP backends egress only through a host-allowlisted boundary client
-(`egress-vault` / `egress-onepassword` trust zones), so a secrets backend gets
-the same egress controls as a connector's provider host. The default `github-app`
+The Vault HTTP backend egresses only through a host-allowlisted boundary client
+(`egress-vault` trust zone). The 1Password backend delegates transport to the
+official SDK. The default `github-app`
 connector uses `{provider:"wrangler-env", ref:"GITHUB_APP_PRIVATE_KEY"}` (and
 `GITHUB_APP_ID` for the App id), so moving to Secrets Store / Vault / 1Password is
 a `provider` change on the registry entry — no code change.
 
-### The 1Password spike: SDK vs Connect
+### 1Password SDK service account setup
 
-**Finding: the official 1Password JavaScript SDK (`@1password/sdk`) does NOT run
-on workerd.** Its core (`@1password/sdk-core`) is a `wasm_bindgen` build whose
-Node entrypoint loads a ~10 MB WASM module **synchronously from disk at module
-load**:
-
-```js
-// node_modules/@1password/sdk-core/nodejs/core.js
-const path = require('path').join(__dirname, 'core_bg.wasm');
-const bytes = require('fs').readFileSync(path);
-const wasmModule = new WebAssembly.Module(bytes);   // sync compile of 10 MB
-```
-
-workerd has no filesystem (`fs.readFileSync` / `__dirname` do not resolve to a
-real file), Workers require WASM as a **bundled import**, not runtime-read bytes,
-and a synchronous 10 MB `WebAssembly.Module` compile outside startup is
-disallowed. The package ships only a `nodejs/` build and its README states it
-"currently supports `Node.JS`". So the `onepassword` provider is implemented
-against **1Password Connect** (the supported HTTP API for non-Node runtimes)
-through a boundary client, resolving `op://vault/item/field` references by walking
-Connect's REST surface (vault name → id, item title → id, then the item's fields).
+The `onepassword` backend uses the official `@1password/sdk` package with a
+1Password service account token. Provision `OP_SERVICE_ACCOUNT_TOKEN` on the
+connectors broker. Reads use `client.secrets.resolve("op://vault/item/field")`;
+writes update the existing item through the SDK item API. The service account
+must have read access for reads and edit access for runtime writes in the target
+vault.
 
 ### 3LO token store at rest
 

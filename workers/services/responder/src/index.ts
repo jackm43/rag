@@ -6,7 +6,7 @@ import {
   processOutboxMessage,
 } from "../../../../packages/domain/responder";
 import { processOutboxDlqMessage } from "../../../../packages/domain/dlq";
-import type { Env, ResponderAttachment } from "../../../../packages/contracts/types";
+import type { Env, ResponderAttachment, ServiceMessageBytes } from "../../../../packages/contracts/types";
 import { RESPONDER_MANIFEST } from "./manifest";
 
 // Service-binding RPC entrypoint for media-bearing interaction edits. Queue
@@ -16,12 +16,11 @@ import { RESPONDER_MANIFEST } from "./manifest";
 // durability here costs nothing.
 export class Responder extends WorkerEntrypoint<Env> {
   async deliverInteractionEdit(
-    envelope: Uint8Array,
+    message: ServiceMessageBytes,
     attachment: ResponderAttachment,
-    idToken: string,
   ) {
     await ensureRegistered(this.env, RESPONDER_MANIFEST);
-    await deliverInteractionEdit(this.env, envelope, idToken, attachment);
+    await deliverInteractionEdit(this.env, message, attachment);
   }
 }
 

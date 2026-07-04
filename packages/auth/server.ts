@@ -1,11 +1,14 @@
 import { authorizeAndForward } from "../authz/forward";
+import type { EntityJson } from "@cedar-policy/cedar-wasm/web";
 import { peekEnvelopeOperation } from "../contracts";
 import { resolverFromEnv, verify, type PublicKeyResolver } from "../identity";
 import type { Env } from "../contracts/types";
 import type { RequestContext, ServiceRequest } from "./context";
 import { logServiceDenial, parseServiceMessage } from "./message";
-import { SERVICE_OPERATIONS, SERVICE_ZONE, type MachinePrincipal, type Transport } from "./principal";
+import { SERVICE_OPERATIONS, SERVICE_ZONE, SYSTEM_SUBJECT, type MachinePrincipal, type Transport } from "./principal";
 import { registryEntities } from "./registry";
+import { serviceResourceId } from "./manifest";
+import { consumeRequestPlacement, serviceHopIntent, type HopIntent } from "./control-plane";
 
 // Receiving side of the service boundary. One pipeline for every transport:
 //   1. extract envelope + token from the received body
@@ -30,9 +33,17 @@ export type ServiceServerConfig = {
   // shared registry (SERVICE_OPERATIONS[self]) — the same set its manifest
   // declares from, so registration and enforcement cannot drift.
   operations?: readonly string[];
-  // For the registry entity snapshot; absent, static policies decide.
+  // For the registry/control-plane entity snapshot. If both are absent, service
+  // authorization has no dynamic topology and denies by default.
   env?: Env;
+  entities?: () => Promise<EntityJson[]>;
   resolver?: PublicKeyResolver;
+  // Per-transport trust mode. Default is "identity": require a signed
+  // identity-context token. "application" is the same signed-token mode, named
+  // for cross-application calls that must carry caller + subject/delegation
+  // context.
+  transportTrust?: Partial<Record<Transport, "identity" | "application">>;
+  authorizeInvoke?: boolean;
   now?: number;
 };
 
@@ -60,27 +71,18 @@ export const createServiceServer = (config: ServiceServerConfig): ServiceServer 
         deny(transport, fallbackIdentity, "body_unparseable");
         return null;
       }
-
-      if (parsed.idToken === null) {
-        deny(transport, fallbackIdentity, "identity_missing");
-        return null;
-      }
       const envelope = parsed.envelope;
-
       const result = await verify(config.resolver ?? resolverFromEnv(config.env), parsed.idToken, {
-        expectedAud: config.self,
-        expectedIssuers: config.expectedIssuers,
-        envelopeBytes: envelope,
-        now: config.now,
-      });
+          expectedAud: config.self,
+          expectedIssuers: config.expectedIssuers,
+          envelopeBytes: envelope,
+          now: config.now,
+        });
       if (!result.ok) {
         deny(transport, fallbackIdentity, `identity_${result.reason}`);
         return null;
       }
 
-      // The verified issuer is the cryptographically-trusted machine
-      // principal Cedar decides on; the subject and delegation chain ride in
-      // the verified context for downstream attribution.
       const source = result.context.iss;
 
       // Registration gate: a service is a collection of registered operations,
@@ -95,12 +97,63 @@ export const createServiceServer = (config: ServiceServerConfig): ServiceServer 
         return null;
       }
 
-      const entities = config.env ? await registryEntities(config.env) : [];
+      const tokenIntent: HopIntent = result.context.action && result.context.resource && result.context.method
+        ? {
+          action: result.context.action,
+          resource: result.context.resource,
+          method: result.context.method,
+        }
+        : serviceHopIntent(config.self, envelope);
+      const placementAllowed = await consumeRequestPlacement({
+        env: config.env,
+        placementId: result.context.placementId,
+        requestId: result.context.requestId,
+        correlationId: result.context.correlationId,
+        subject: result.context.sub ?? SYSTEM_SUBJECT,
+        source,
+        target: config.self,
+        intent: tokenIntent,
+      });
+      if (!placementAllowed) {
+        deny(transport, source, "placement_invalid");
+        return null;
+      }
+
+      const finish = () => {
+          const payload = decode(envelope);
+          if (payload === null) {
+            deny(transport, source, "envelope_invalid");
+            return null;
+          }
+          const context: RequestContext = {
+            subject: result.context.sub ?? SYSTEM_SUBJECT,
+            delegates: result.context.act ?? [source],
+            source,
+            target: config.self,
+            zone: result.context.trustZone ?? SERVICE_ZONE[source],
+            transport,
+            ...(result.context.dpopJkt !== undefined ? { dpopJkt: result.context.dpopJkt } : {}),
+            ...(result.context.sid !== undefined ? { sid: result.context.sid } : {}),
+            ...(result.context.requestId !== undefined ? { requestId: result.context.requestId } : {}),
+            ...(result.context.placementId !== undefined ? { placementId: result.context.placementId } : {}),
+            ...(result.context.correlationId !== undefined ? { correlationId: result.context.correlationId } : {}),
+            ...(result.context.action !== undefined ? { action: result.context.action } : {}),
+            ...(result.context.resource !== undefined ? { resource: result.context.resource } : {}),
+            ...(result.context.method !== undefined ? { method: result.context.method } : {}),
+          };
+          return { context, payload };
+      };
+
+      if (config.authorizeInvoke === false) {
+        return finish();
+      }
+
+      const entities = config.entities ? await config.entities() : config.env ? await registryEntities(config.env) : [];
       return authorizeAndForward(
         {
-          principal: { type: "Machine", id: source },
+          principal: { type: "Application", id: source },
           action: "service.invoke",
-          resource: { type: "Service", id: config.self },
+          resource: { type: "Service", id: serviceResourceId(config.self, operation) },
           // The operation rides in context so the registered-hop policy can
           // permit only the operations the receiving service registers, not
           // merely the service-level pairing.
@@ -110,24 +163,7 @@ export const createServiceServer = (config: ServiceServerConfig): ServiceServer 
           entities,
           deny: () => deny(transport, source, "not_authorized"),
         },
-        () => {
-          const payload = decode(envelope);
-          if (payload === null) {
-            deny(transport, source, "envelope_invalid");
-            return null;
-          }
-          const context: RequestContext = {
-            subject: result.context.sub,
-            delegates: result.context.act,
-            source,
-            target: config.self,
-            zone: result.context.trustZone,
-            transport,
-            ...(result.context.dpopJkt !== undefined ? { dpopJkt: result.context.dpopJkt } : {}),
-            ...(result.context.sid !== undefined ? { sid: result.context.sid } : {}),
-          };
-          return { context, payload };
-        },
+        finish,
       );
     },
   };

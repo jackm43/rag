@@ -17,6 +17,17 @@ export type ConnectorKind =
   | "oauth2_authorization_code"
   | "github_app";
 
+export type ConnectorCapability =
+  | "grant"
+  | "fetch"
+  | "token"
+  | "authorize"
+  | "webhookVerify"
+  | "adminRead"
+  | "adminWrite";
+
+export type ConnectorCapabilities = Partial<Record<ConnectorCapability, MachinePrincipal[]>>;
+
 export type ConnectorConfig = {
   // Stable slug (CONNECTOR_ID_PATTERN). Also the default Cedar resource id.
   id: string;
@@ -27,6 +38,10 @@ export type ConnectorConfig = {
   // Cedar resource id: authorization is against `Connector::<cedarResource>`.
   // Defaults to `id`; a shared resource lets several connectors reuse one grant.
   cedarResource: string;
+  // Control-plane authorization for this connector, materialized into dynamic
+  // Cedar Connector entities at runtime. Cedar policy stays generic; this data
+  // decides which applications can use or administer the connector.
+  capabilities?: ConnectorCapabilities;
   // A {provider, ref} reference to this connector's secret material: the API key
   // (api_key), the OAuth client secret (oauth2_*), or the App private-key PEM
   // (github_app). The strategy resolves it through the secrets-provider module

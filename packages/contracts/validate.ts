@@ -1,11 +1,18 @@
 import type {
   AiJob,
   AiSpendJob,
+  ApplicationRequestJob,
+  AttestInvokeJob,
+  AttestInvokeOperation,
   ConnectorInvokeJob,
   ConnectorOperation,
   DevProxyCommandJob,
   DevProxyCommandOption,
+  EgressRequestJob,
+  MetadataQueryJob,
   ReplyJob,
+  RegistryInvokeJob,
+  RegistryInvokeOperation,
   WebhookEventJob,
   WebhookEventProvider,
 } from "./types";
@@ -52,6 +59,26 @@ export const MAX_WEBHOOK_BODY_BYTES = 64 * 1024;
 export const MAX_WEBHOOK_BODY_BASE64_LENGTH = Math.ceil(MAX_WEBHOOK_BODY_BYTES / 3) * 4;
 export const MAX_WEBHOOK_EVENT_ID_LENGTH = 200;
 export const MAX_WEBHOOK_EVENT_TYPE_LENGTH = 100;
+export const EGRESS_PROFILE_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
+export const MAX_EGRESS_URL_LENGTH = 4096;
+export const MAX_EGRESS_HEADERS_JSON_LENGTH = 16 * 1024;
+export const MAX_EGRESS_BODY_BYTES = 25 * 1024 * 1024;
+export const MAX_EGRESS_BODY_SHA256_LENGTH = 64;
+export const APPLICATION_ID_PATTERN = /^[a-z][a-z0-9-]{2,63}$/;
+export const APPLICATION_OPERATION_PATTERN = /^[a-z][a-z0-9_.-]{0,127}$/;
+export const MAX_APPLICATION_URL_LENGTH = 4096;
+export const MAX_APPLICATION_HEADERS_JSON_LENGTH = 16 * 1024;
+export const MAX_APPLICATION_BODY_BYTES = 64 * 1024;
+export const MAX_APPLICATION_BODY_BASE64_LENGTH = Math.ceil(MAX_APPLICATION_BODY_BYTES / 3) * 4;
+export const APPLICATION_LINKED_TOKEN_SHA256_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+export const MAX_REGISTRY_ACTOR_JSON_LENGTH = 2048;
+export const MAX_REGISTRY_BODY_JSON_LENGTH = 96 * 1024;
+export const MAX_METADATA_QUERY_LENGTH = 16 * 1024;
+export const MAX_METADATA_VARIABLES_JSON_LENGTH = 32 * 1024;
+export const MAX_METADATA_OPERATION_NAME_LENGTH = 128;
+const EGRESS_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] as const;
+const APPLICATION_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] as const;
+const BASE64URL_SHA256_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
 
 const CONNECTOR_OPERATIONS: readonly ConnectorOperation[] = [
@@ -65,9 +92,25 @@ const CONNECTOR_OPERATIONS: readonly ConnectorOperation[] = [
   "admin_list",
   "admin_describe",
   "admin_set_secret",
+  "admin_set_capabilities",
   "admin_providers",
   "admin_installations",
 ];
+
+export const REGISTRY_INVOKE_OPERATIONS: readonly RegistryInvokeOperation[] = [
+  "application.list",
+  "application.create",
+  "application.get",
+  "application.update",
+  "application.delete",
+  "application.attestations.verify",
+];
+
+export const ATTEST_INVOKE_OPERATIONS: readonly AttestInvokeOperation[] = ["webhook.github"];
+// headersJson carries only the small filtered GitHub signature headers
+// (x-hub-signature-256, x-github-delivery, x-github-event), so it is capped
+// far below the general egress/application headersJson caps.
+export const MAX_ATTEST_HEADERS_JSON_LENGTH = 2 * 1024;
 
 const isString = (value: unknown): value is string => typeof value === "string";
 
@@ -272,6 +315,194 @@ export const validateWebhookEventJob = (value: unknown): value is WebhookEventJo
   value.bodyBase64.length <= MAX_WEBHOOK_BODY_BASE64_LENGTH &&
   value.bodyBase64.length % 4 === 0 &&
   BASE64_PATTERN.test(value.bodyBase64);
+
+export const validateEgressRequestJob = (value: unknown): value is EgressRequestJob => {
+  if (
+    !isRecord(value) ||
+    value.kind !== "egress.request" ||
+    !isString(value.profile) ||
+    !EGRESS_PROFILE_PATTERN.test(value.profile) ||
+    !isString(value.method) ||
+    !EGRESS_METHODS.includes(value.method.toUpperCase() as typeof EGRESS_METHODS[number]) ||
+    value.method !== value.method.toUpperCase() ||
+    !isString(value.url) ||
+    value.url.length === 0 ||
+    value.url.length > MAX_EGRESS_URL_LENGTH ||
+    !isString(value.headersJson) ||
+    value.headersJson.length > MAX_EGRESS_HEADERS_JSON_LENGTH ||
+    (value.bodySha256 !== undefined &&
+      (!isString(value.bodySha256) || !BASE64URL_SHA256_PATTERN.test(value.bodySha256)))
+  ) {
+    return false;
+  }
+
+  try {
+    const url = new URL(value.url);
+    if (url.protocol !== "https:") {
+      return false;
+    }
+    const headers = JSON.parse(value.headersJson) as unknown;
+    return (
+      isRecord(headers) &&
+      Object.entries(headers).every(
+        ([key, headerValue]) =>
+          /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(key) &&
+          isString(headerValue) &&
+          headerValue.length <= 8192,
+      )
+    );
+  } catch {
+    return false;
+  }
+};
+
+export const validateApplicationRequestJob = (value: unknown): value is ApplicationRequestJob => {
+  if (
+    !isRecord(value) ||
+    value.kind !== "application.request" ||
+    !isString(value.applicationId) ||
+    !APPLICATION_ID_PATTERN.test(value.applicationId) ||
+    !isString(value.operationId) ||
+    !APPLICATION_OPERATION_PATTERN.test(value.operationId) ||
+    !isString(value.serviceOperation) ||
+    !APPLICATION_OPERATION_PATTERN.test(value.serviceOperation) ||
+    !isString(value.method) ||
+    !APPLICATION_METHODS.includes(value.method.toUpperCase() as typeof APPLICATION_METHODS[number]) ||
+    value.method !== value.method.toUpperCase() ||
+    !isString(value.url) ||
+    value.url.length === 0 ||
+    value.url.length > MAX_APPLICATION_URL_LENGTH ||
+    !isString(value.headersJson) ||
+    value.headersJson.length > MAX_APPLICATION_HEADERS_JSON_LENGTH ||
+    !isString(value.bodyBase64) ||
+    value.bodyBase64.length > MAX_APPLICATION_BODY_BASE64_LENGTH ||
+    value.bodyBase64.length % 4 !== 0 ||
+    !BASE64_PATTERN.test(value.bodyBase64) ||
+    !isString(value.linkedTokenSha256) ||
+    !APPLICATION_LINKED_TOKEN_SHA256_PATTERN.test(value.linkedTokenSha256)
+  ) {
+    return false;
+  }
+
+  try {
+    const url = new URL(value.url);
+    const headers = JSON.parse(value.headersJson) as unknown;
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") &&
+      isRecord(headers) &&
+      Object.entries(headers).every(
+        ([key, headerValue]) =>
+          /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(key) &&
+          isString(headerValue) &&
+          headerValue.length <= 8192,
+      )
+    );
+  } catch {
+    return false;
+  }
+};
+
+const isJsonRecord = (value: string): boolean => {
+  try {
+    return isRecord(JSON.parse(value) as unknown);
+  } catch {
+    return false;
+  }
+};
+
+export const validateRegistryInvokeJob = (value: unknown): value is RegistryInvokeJob => {
+  if (
+    !isRecord(value) ||
+    value.kind !== "registry.invoke" ||
+    !isString(value.operation) ||
+    !REGISTRY_INVOKE_OPERATIONS.includes(value.operation as RegistryInvokeOperation) ||
+    !isString(value.actorJson) ||
+    value.actorJson.length === 0 ||
+    value.actorJson.length > MAX_REGISTRY_ACTOR_JSON_LENGTH ||
+    !isJsonRecord(value.actorJson) ||
+    !isString(value.bodyJson) ||
+    value.bodyJson.length === 0 ||
+    value.bodyJson.length > MAX_REGISTRY_BODY_JSON_LENGTH ||
+    !isJsonRecord(value.bodyJson) ||
+    (value.targetId !== undefined &&
+      (!isString(value.targetId) || !APPLICATION_ID_PATTERN.test(value.targetId)))
+  ) {
+    return false;
+  }
+
+  const operation = value.operation as RegistryInvokeOperation;
+  const requiresTarget =
+    operation === "application.get" ||
+    operation === "application.update" ||
+    operation === "application.delete" ||
+    operation === "application.attestations.verify";
+  return requiresTarget ? value.targetId !== undefined : value.targetId === undefined;
+};
+
+// The only GitHub webhook headers the middleware client is allowed to forward
+// into headersJson. Anything else (including the raw request's other
+// headers) must never reach the envelope — the service server verifies the
+// signature via the connectors broker using exactly these.
+export const ATTEST_WEBHOOK_SIGNATURE_HEADERS = [
+  "x-hub-signature-256",
+  "x-github-delivery",
+  "x-github-event",
+] as const;
+
+export const validateAttestInvokeJob = (value: unknown): value is AttestInvokeJob => {
+  if (
+    !isRecord(value) ||
+    value.kind !== "attest.invoke" ||
+    !isString(value.operation) ||
+    !ATTEST_INVOKE_OPERATIONS.includes(value.operation as AttestInvokeOperation) ||
+    !isString(value.headersJson) ||
+    value.headersJson.length > MAX_ATTEST_HEADERS_JSON_LENGTH ||
+    !isString(value.bodyBase64) ||
+    value.bodyBase64.length > MAX_WEBHOOK_BODY_BASE64_LENGTH ||
+    value.bodyBase64.length % 4 !== 0 ||
+    !BASE64_PATTERN.test(value.bodyBase64)
+  ) {
+    return false;
+  }
+  try {
+    const headers = JSON.parse(value.headersJson) as unknown;
+    return (
+      isRecord(headers) &&
+      Object.entries(headers).every(
+        ([key, headerValue]) =>
+          (ATTEST_WEBHOOK_SIGNATURE_HEADERS as readonly string[]).includes(key) &&
+          isString(headerValue) &&
+          headerValue.length <= 8192,
+      )
+    );
+  } catch {
+    return false;
+  }
+};
+
+export const validateMetadataQueryJob = (value: unknown): value is MetadataQueryJob => {
+  if (
+    !isRecord(value) ||
+    value.kind !== "metadata.query" ||
+    !isString(value.query) ||
+    value.query.length === 0 ||
+    value.query.length > MAX_METADATA_QUERY_LENGTH ||
+    !isString(value.variablesJson) ||
+    value.variablesJson.length === 0 ||
+    value.variablesJson.length > MAX_METADATA_VARIABLES_JSON_LENGTH ||
+    (value.operationName !== undefined &&
+      (!isString(value.operationName) ||
+        value.operationName.length === 0 ||
+        value.operationName.length > MAX_METADATA_OPERATION_NAME_LENGTH))
+  ) {
+    return false;
+  }
+  try {
+    return isRecord(JSON.parse(value.variablesJson) as unknown);
+  } catch {
+    return false;
+  }
+};
 
 export const validateAiSpendJob = (value: unknown): value is AiSpendJob =>
   isRecord(value) &&

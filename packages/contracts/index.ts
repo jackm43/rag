@@ -4,22 +4,32 @@ import type {
   AiChatJob,
   AiJob,
   AiSpendJob,
+  ApplicationRequestJob,
+  AttestInvokeJob,
   BictureJob,
   ConnectorInvokeJob,
   DevProxyCommandJob,
   DevProxyCommandOption,
+  EgressRequestJob,
+  MetadataQueryJob,
   MessageReceivedJob,
   RagjamJob,
   ReplyJob,
+  RegistryInvokeJob,
   WebhookEventJob,
   WebhookEventProvider,
 } from "./types";
 import {
+  ApplicationRequestPayload,
+  AttestInvokePayload,
   ChatPayload,
   ConnectorInvokePayload,
   DevProxyCommandPayload,
+  EgressRequestPayload,
   EventEnvelope,
   EventEnvelope_Payload_Which,
+  MetadataQueryPayload,
+  RegistryInvokePayload,
   WebhookEventPayload,
 } from "./envelope";
 import { asFramedBytes } from "./framing";
@@ -27,9 +37,14 @@ import {
   isOptionalSnowflake,
   validateAiJob,
   validateAiSpendJob,
+  validateApplicationRequestJob,
+  validateAttestInvokeJob,
   validateConnectorInvokeJob,
   validateDevProxyCommandJob,
+  validateEgressRequestJob,
+  validateMetadataQueryJob,
   validateReplyJob,
+  validateRegistryInvokeJob,
   validateWebhookEventJob,
 } from "./validate";
 
@@ -44,21 +59,42 @@ export {
   type WireServiceMessage,
 } from "./service-transport";
 
+export type { ApplicationRequestJob, PreparedApplicationRequest } from "./types";
+
 export {
+  ATTEST_WEBHOOK_SIGNATURE_HEADERS,
   CONNECTOR_HANDLE_PATTERN,
   CONNECTOR_ID_PATTERN,
   DEVPROXY_COMMAND_PATTERN,
+  EGRESS_PROFILE_PATTERN,
+  APPLICATION_ID_PATTERN,
+  APPLICATION_LINKED_TOKEN_SHA256_PATTERN,
+  APPLICATION_OPERATION_PATTERN,
   isSnowflake,
+  MAX_APPLICATION_BODY_BASE64_LENGTH,
+  MAX_APPLICATION_BODY_BYTES,
+  MAX_APPLICATION_HEADERS_JSON_LENGTH,
+  MAX_APPLICATION_URL_LENGTH,
+  MAX_ATTEST_HEADERS_JSON_LENGTH,
   MAX_CONNECTOR_PARAMS_LENGTH,
   MAX_CONNECTOR_SCOPE_LENGTH,
   MAX_CONNECTOR_SCOPES,
   MAX_CONNECTOR_SUBJECT_LENGTH,
   MAX_DEVPROXY_OPTION_NAME_LENGTH,
   MAX_DEVPROXY_OPTIONS,
+  MAX_EGRESS_BODY_BYTES,
+  MAX_EGRESS_BODY_SHA256_LENGTH,
+  MAX_EGRESS_HEADERS_JSON_LENGTH,
+  MAX_EGRESS_URL_LENGTH,
   MAX_FREE_TEXT_LENGTH,
   MAX_INTERACTION_TOKEN_LENGTH,
   MAX_MENTION_IDS,
+  MAX_METADATA_OPERATION_NAME_LENGTH,
+  MAX_METADATA_QUERY_LENGTH,
+  MAX_METADATA_VARIABLES_JSON_LENGTH,
   MAX_REPLY_CONTENT_LENGTH,
+  MAX_REGISTRY_ACTOR_JSON_LENGTH,
+  MAX_REGISTRY_BODY_JSON_LENGTH,
   MAX_SPEND_EVENT_ID_LENGTH,
   MAX_USERNAME_LENGTH,
   MAX_WEBHOOK_BODY_BASE64_LENGTH,
@@ -68,9 +104,14 @@ export {
   SNOWFLAKE_PATTERN,
   validateAiJob,
   validateAiSpendJob,
+  validateApplicationRequestJob,
+  validateAttestInvokeJob,
   validateConnectorInvokeJob,
   validateDevProxyCommandJob,
+  validateEgressRequestJob,
+  validateMetadataQueryJob,
   validateReplyJob,
+  validateRegistryInvokeJob,
   validateWebhookEventJob,
   WEBHOOK_PROVIDERS,
 } from "./validate";
@@ -100,6 +141,11 @@ const CONNECTOR_INVOKE_TYPE = "connector.invoke";
 // enqueue to the workflows worker). Mirrors the entry in SERVICE_OPERATIONS.workflows
 // (packages/auth/principal.ts) — a literal here for the same no-cycle reason.
 const WEBHOOK_EVENT_TYPE = "webhook.event";
+const EGRESS_REQUEST_TYPE = "egress.request";
+const APPLICATION_REQUEST_TYPE = "application.request";
+const REGISTRY_INVOKE_TYPE = "registry.invoke";
+const METADATA_QUERY_TYPE = "metadata.query";
+const ATTEST_INVOKE_TYPE = "attest.invoke";
 
 type ChatLikeKind = AiChatJob["kind"] | AiAskJob["kind"];
 
@@ -562,6 +608,100 @@ export const encodeWebhookEventEnvelope = (
   return new Uint8Array(message.toArrayBuffer());
 };
 
+export const encodeEgressRequestEnvelope = (
+  job: EgressRequestJob,
+  options: EnvelopeOptions,
+): Uint8Array => {
+  if (!validateEgressRequestJob(job)) {
+    throw new Error("Invalid egress request for event envelope");
+  }
+  const message = new capnp.Message();
+  const envelope = initEnvelope(message, EGRESS_REQUEST_TYPE, options);
+  const payload = envelope.payload._initEgressRequest();
+  payload.profile = job.profile;
+  payload.method = job.method;
+  payload.url = job.url;
+  payload.headersJson = job.headersJson;
+  if (job.bodySha256 !== undefined) {
+    payload.bodySha256 = job.bodySha256;
+  }
+  return new Uint8Array(message.toArrayBuffer());
+};
+
+export const encodeApplicationRequestEnvelope = (
+  job: ApplicationRequestJob,
+  options: EnvelopeOptions,
+): Uint8Array => {
+  if (!validateApplicationRequestJob(job)) {
+    throw new Error("Invalid application request for event envelope");
+  }
+  const message = new capnp.Message();
+  const envelope = initEnvelope(message, APPLICATION_REQUEST_TYPE, options);
+  const payload = envelope.payload._initApplicationRequest();
+  payload.applicationId = job.applicationId;
+  payload.operationId = job.operationId;
+  payload.serviceOperation = job.serviceOperation;
+  payload.method = job.method;
+  payload.url = job.url;
+  payload.headersJson = job.headersJson;
+  payload.bodyBase64 = job.bodyBase64;
+  payload.linkedTokenSha256 = job.linkedTokenSha256;
+  return new Uint8Array(message.toArrayBuffer());
+};
+
+export const encodeRegistryInvokeEnvelope = (
+  job: RegistryInvokeJob,
+  options: EnvelopeOptions,
+): Uint8Array => {
+  if (!validateRegistryInvokeJob(job)) {
+    throw new Error("Invalid registry invocation for event envelope");
+  }
+  const message = new capnp.Message();
+  const envelope = initEnvelope(message, REGISTRY_INVOKE_TYPE, options);
+  const payload = envelope.payload._initRegistryInvoke();
+  payload.operation = job.operation;
+  payload.actorJson = job.actorJson;
+  payload.bodyJson = job.bodyJson;
+  if (job.targetId !== undefined) {
+    payload.targetId = job.targetId;
+  }
+  return new Uint8Array(message.toArrayBuffer());
+};
+
+export const encodeMetadataQueryEnvelope = (
+  job: MetadataQueryJob,
+  options: EnvelopeOptions,
+): Uint8Array => {
+  if (!validateMetadataQueryJob(job)) {
+    throw new Error("Invalid metadata query for event envelope");
+  }
+  const message = new capnp.Message();
+  const envelope = initEnvelope(message, METADATA_QUERY_TYPE, options);
+  const payload = envelope.payload._initMetadataQuery();
+  payload.query = job.query;
+  payload.variablesJson = job.variablesJson;
+  if (job.operationName !== undefined) {
+    payload.operationName = job.operationName;
+  }
+  return new Uint8Array(message.toArrayBuffer());
+};
+
+export const encodeAttestInvokeEnvelope = (
+  job: AttestInvokeJob,
+  options: EnvelopeOptions,
+): Uint8Array => {
+  if (!validateAttestInvokeJob(job)) {
+    throw new Error("Invalid attest invocation for event envelope");
+  }
+  const message = new capnp.Message();
+  const envelope = initEnvelope(message, ATTEST_INVOKE_TYPE, options);
+  const payload = envelope.payload._initAttestInvoke();
+  payload.operation = job.operation;
+  payload.headersJson = job.headersJson;
+  payload.bodyBase64 = job.bodyBase64;
+  return new Uint8Array(message.toArrayBuffer());
+};
+
 const webhookEventFrom = (payload: WebhookEventPayload): WebhookEventJob =>
   compact({
     kind: "webhook.event",
@@ -584,6 +724,134 @@ export const decodeWebhookEventEnvelope = (bytes: unknown): WebhookEventJob | nu
     }
     const job = webhookEventFrom(envelope.payload.webhookEvent);
     return validateWebhookEventJob(job) && envelope.type === WEBHOOK_EVENT_TYPE ? job : null;
+  } catch {
+    return null;
+  }
+};
+
+const egressRequestFrom = (payload: EgressRequestPayload): EgressRequestJob =>
+  compact({
+    kind: "egress.request",
+    profile: payload.profile,
+    method: payload.method,
+    url: payload.url,
+    headersJson: payload.headersJson,
+    bodySha256: optionalText(payload.bodySha256),
+  }) as EgressRequestJob;
+
+const applicationRequestFrom = (payload: ApplicationRequestPayload): ApplicationRequestJob =>
+  compact({
+    kind: "application.request",
+    applicationId: payload.applicationId,
+    operationId: payload.operationId,
+    serviceOperation: payload.serviceOperation,
+    method: payload.method,
+    url: payload.url,
+    headersJson: payload.headersJson,
+    bodyBase64: payload.bodyBase64,
+    linkedTokenSha256: payload.linkedTokenSha256,
+  }) as ApplicationRequestJob;
+
+const registryInvokeFrom = (payload: RegistryInvokePayload): RegistryInvokeJob =>
+  compact({
+    kind: "registry.invoke",
+    operation: payload.operation,
+    actorJson: payload.actorJson,
+    bodyJson: payload.bodyJson,
+    targetId: optionalText(payload.targetId),
+  }) as RegistryInvokeJob;
+
+const metadataQueryFrom = (payload: MetadataQueryPayload): MetadataQueryJob =>
+  compact({
+    kind: "metadata.query",
+    query: payload.query,
+    variablesJson: payload.variablesJson,
+    operationName: optionalText(payload.operationName),
+  }) as MetadataQueryJob;
+
+const attestInvokeFrom = (payload: AttestInvokePayload): AttestInvokeJob =>
+  compact({
+    kind: "attest.invoke",
+    operation: payload.operation,
+    headersJson: payload.headersJson,
+    bodyBase64: payload.bodyBase64,
+  }) as AttestInvokeJob;
+
+export const decodeEgressRequestEnvelope = (bytes: unknown): EgressRequestJob | null => {
+  const envelope = readEnvelope(bytes);
+  if (!envelope) {
+    return null;
+  }
+  try {
+    if (envelope.payload.which() !== EventEnvelope_Payload_Which.EGRESS_REQUEST) {
+      return null;
+    }
+    const job = egressRequestFrom(envelope.payload.egressRequest);
+    return validateEgressRequestJob(job) && envelope.type === EGRESS_REQUEST_TYPE ? job : null;
+  } catch {
+    return null;
+  }
+};
+
+export const decodeApplicationRequestEnvelope = (bytes: unknown): ApplicationRequestJob | null => {
+  const envelope = readEnvelope(bytes);
+  if (!envelope) {
+    return null;
+  }
+  try {
+    if (envelope.payload.which() !== EventEnvelope_Payload_Which.APPLICATION_REQUEST) {
+      return null;
+    }
+    const job = applicationRequestFrom(envelope.payload.applicationRequest);
+    return validateApplicationRequestJob(job) && envelope.type === APPLICATION_REQUEST_TYPE ? job : null;
+  } catch {
+    return null;
+  }
+};
+
+export const decodeRegistryInvokeEnvelope = (bytes: unknown): RegistryInvokeJob | null => {
+  const envelope = readEnvelope(bytes);
+  if (!envelope) {
+    return null;
+  }
+  try {
+    if (envelope.payload.which() !== EventEnvelope_Payload_Which.REGISTRY_INVOKE) {
+      return null;
+    }
+    const job = registryInvokeFrom(envelope.payload.registryInvoke);
+    return validateRegistryInvokeJob(job) && envelope.type === REGISTRY_INVOKE_TYPE ? job : null;
+  } catch {
+    return null;
+  }
+};
+
+export const decodeMetadataQueryEnvelope = (bytes: unknown): MetadataQueryJob | null => {
+  const envelope = readEnvelope(bytes);
+  if (!envelope) {
+    return null;
+  }
+  try {
+    if (envelope.payload.which() !== EventEnvelope_Payload_Which.METADATA_QUERY) {
+      return null;
+    }
+    const job = metadataQueryFrom(envelope.payload.metadataQuery);
+    return validateMetadataQueryJob(job) && envelope.type === METADATA_QUERY_TYPE ? job : null;
+  } catch {
+    return null;
+  }
+};
+
+export const decodeAttestInvokeEnvelope = (bytes: unknown): AttestInvokeJob | null => {
+  const envelope = readEnvelope(bytes);
+  if (!envelope) {
+    return null;
+  }
+  try {
+    if (envelope.payload.which() !== EventEnvelope_Payload_Which.ATTEST_INVOKE) {
+      return null;
+    }
+    const job = attestInvokeFrom(envelope.payload.attestInvoke);
+    return validateAttestInvokeJob(job) && envelope.type === ATTEST_INVOKE_TYPE ? job : null;
   } catch {
     return null;
   }

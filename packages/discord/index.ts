@@ -1,7 +1,8 @@
-import { boundaryClients } from "../boundaries/outbound/clients";
+import { boundaryClients, type EgressCaller } from "../boundaries/outbound/clients";
 import { logger } from "../logger";
 import { DISCORD_API_BASE_URL, type DiscordChannel, type DiscordMessage, type Env } from "../contracts/types";
 import { isDiscordMessage, isRecord } from "../contracts/validation";
+import type { Subject } from "../auth";
 
 const DISCORD_CHANNEL_TYPE_PUBLIC_THREAD = 11;
 const DISCORD_CHANNEL_TYPE_PRIVATE_THREAD = 12;
@@ -19,11 +20,12 @@ const auditLogReasonHeader = (reason: string) => encodeURIComponent(reason);
 
 const discordJsonRequest = async (
   env: Env,
+  caller: EgressCaller,
   path: string,
   init: RequestInit = {},
   options: { nullOnError?: boolean } = {},
 ): Promise<unknown> => {
-  const response = await boundaryClients(env).discordRest(`${DISCORD_API_BASE_URL}${path}`, init);
+  const response = await boundaryClients(env, caller).discordRest(`${DISCORD_API_BASE_URL}${path}`, init);
 
   if (!response.ok) {
     if (options.nullOnError) {
@@ -67,8 +69,13 @@ export type InteractionResponseFile = {
   data: BlobPart;
 };
 
-export const postChannelMessage = async (env: Env, channelId: string, content: string) =>
-  boundaryClients(env).discordRest(`${DISCORD_API_BASE_URL}/channels/${channelId}/messages`, {
+export const postChannelMessage = async (
+  env: Env,
+  caller: EgressCaller,
+  channelId: string,
+  content: string,
+) =>
+  boundaryClients(env, caller).discordRest(`${DISCORD_API_BASE_URL}/channels/${channelId}/messages`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -81,13 +88,38 @@ export const postChannelMessage = async (env: Env, channelId: string, content: s
     }),
   });
 
+export const postChannelMessageForSubject = async (
+  env: Env,
+  caller: EgressCaller,
+  channelId: string,
+  content: string,
+  subject: Subject,
+) =>
+  boundaryClients(env, caller).discordRest(
+    `${DISCORD_API_BASE_URL}/channels/${channelId}/messages`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        content,
+        allowed_mentions: {
+          parse: [],
+        },
+      }),
+    },
+    { subject },
+  );
+
 export const createThreadFromMessage = async (
   env: Env,
+  caller: EgressCaller,
   channelId: string,
   messageId: string,
   name: string,
 ): Promise<DiscordChannel | null> => {
-  const payload = await discordJsonRequest(env, threadsRoute(channelId, messageId), {
+  const payload = await discordJsonRequest(env, caller, threadsRoute(channelId, messageId), {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -103,10 +135,11 @@ export const createThreadFromMessage = async (
 
 export const createThreadWithoutMessage = async (
   env: Env,
+  caller: EgressCaller,
   channelId: string,
   name: string,
 ): Promise<DiscordChannel | null> => {
-  const payload = await discordJsonRequest(env, threadsRoute(channelId), {
+  const payload = await discordJsonRequest(env, caller, threadsRoute(channelId), {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -121,13 +154,18 @@ export const createThreadWithoutMessage = async (
   return isDiscordChannel(payload) ? payload : null;
 };
 
-export const fetchChannel = async (env: Env, channelId: string): Promise<DiscordChannel | null> => {
-  const payload = await discordJsonRequest(env, channelRoute(channelId)).catch(() => null);
+export const fetchChannel = async (
+  env: Env,
+  caller: EgressCaller,
+  channelId: string,
+): Promise<DiscordChannel | null> => {
+  const payload = await discordJsonRequest(env, caller, channelRoute(channelId)).catch(() => null);
   return isDiscordChannel(payload) ? payload : null;
 };
 
 export const fetchChannelMessages = async (
   env: Env,
+  caller: EgressCaller,
   channelId: string,
   options: { before?: string; limit?: number } = {},
 ): Promise<DiscordMessage[]> => {
@@ -139,6 +177,7 @@ export const fetchChannelMessages = async (
 
   const payload = await discordJsonRequest(
     env,
+    caller,
     `/channels/${channelId}/messages?${params}`,
     {},
     { nullOnError: true },
@@ -148,11 +187,13 @@ export const fetchChannelMessages = async (
 
 export const fetchMessage = async (
   env: Env,
+  caller: EgressCaller,
   channelId: string,
   messageId: string,
 ): Promise<DiscordMessage | null> => {
   const payload = await discordJsonRequest(
     env,
+    caller,
     `/channels/${channelId}/messages/${messageId}`,
     {},
     { nullOnError: true },
@@ -160,8 +201,12 @@ export const fetchMessage = async (
   return isDiscordMessage(payload) ? payload : null;
 };
 
-export const fetchUsername = async (env: Env, userId: string): Promise<string | null> => {
-  const user = await discordJsonRequest(env, `/users/${userId}`, {}, { nullOnError: true })
+export const fetchUsername = async (
+  env: Env,
+  caller: EgressCaller,
+  userId: string,
+): Promise<string | null> => {
+  const user = await discordJsonRequest(env, caller, `/users/${userId}`, {}, { nullOnError: true })
     .catch(() => null);
   return isRecord(user) && typeof user.username === "string" ? user.username : null;
 };
@@ -171,6 +216,7 @@ const botRoleCache = new Map<string, { roleIds: string[]; expiresAt: number }>()
 
 export const fetchBotRoleIds = async (
   env: Env,
+  caller: EgressCaller,
   guildId: string,
   botUserId: string,
 ): Promise<string[]> => {
@@ -180,7 +226,7 @@ export const fetchBotRoleIds = async (
     return cached.roleIds;
   }
 
-  const response = await boundaryClients(env)
+  const response = await boundaryClients(env, caller)
     .discordRest(`${DISCORD_API_BASE_URL}/guilds/${guildId}/members/${botUserId}`)
     .catch(() => null);
   if (!response?.ok) {
@@ -197,10 +243,12 @@ export const fetchBotRoleIds = async (
 
 export const editOriginalInteractionResponse = async (
   env: Env,
+  caller: EgressCaller,
   applicationId: string,
   interactionToken: string,
   data: InteractionMessageData,
   files: InteractionResponseFile[] = [],
+  subject?: Subject,
 ): Promise<boolean> => {
   const body = files.length > 0
     ? (() => {
@@ -217,13 +265,14 @@ export const editOriginalInteractionResponse = async (
     })()
     : JSON.stringify(data);
 
-  const response = await boundaryClients(env).discordWebhook(
+  const response = await boundaryClients(env, caller).discordWebhook(
     `${DISCORD_API_BASE_URL}/webhooks/${applicationId}/${interactionToken}/messages/@original`,
     {
       method: "PATCH",
       headers: files.length > 0 ? undefined : { "content-type": "application/json" },
       body,
     },
+    subject ? { subject } : undefined,
   );
   if (!response.ok) {
     // Never log the interaction token: it authenticates webhook edits.

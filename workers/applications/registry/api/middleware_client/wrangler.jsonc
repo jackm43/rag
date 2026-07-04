@@ -1,0 +1,94 @@
+{
+  "name": "ragbot-registry-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "rules": [
+    {
+      "type": "Text",
+      "globs": [
+        "**/*.cedar"
+      ],
+      "fallthrough": true
+    }
+  ],
+  "routes": [
+    {
+      "pattern": "registry.jsmunro.me",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
+    "CF_ACCESS_TEAM_DOMAIN": "jsmunro.cloudflareaccess.com",
+    "BETTER_AUTH_URL": "https://registry.jsmunro.me",
+    "REGISTRY_GITHUB_OWNER": "jackm",
+    "REGISTRY_GITHUB_REPO": "rag",
+    "REGISTRY_GITHUB_BASE_BRANCH": "main"
+  },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true
+    }
+  },
+  // This worker DEFINES the ServiceRegistry Durable Object. Every other worker
+  // binds it via `script_name: "ragbot-registry-worker"`.
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SERVICE_REGISTRY",
+        "class_name": "ServiceRegistry"
+      },
+      {
+        "name": "REGISTRY_APPLICATIONS",
+        "class_name": "ApplicationRegistry"
+      },
+      {
+        "name": "ATTESTATIONS",
+        "class_name": "AttestationStore",
+        "script_name": "ragbot-attest-worker"
+      }
+    ]
+  },
+  "d1_databases": [
+    {
+      "binding": "AUTH_DB",
+      "database_name": "ragbot-auth",
+      "database_id": "2768451b-39c6-4e8f-ada6-13c8beb2012e",
+      "migrations_dir": "../../../dev-proxy/api/middleware_client/migrations"
+    }
+  ],
+  "services": [
+    {
+      "binding": "REGISTRY_SERVICE",
+      "service": "ragbot-registry-worker",
+      "entrypoint": "RegistryService"
+    },
+    {
+      "binding": "CONNECTORS",
+      "service": "ragbot-connectors-worker",
+      "entrypoint": "Connectors"
+    }
+  ],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ServiceRegistry"
+      ]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": [
+        "ApplicationRegistry"
+      ]
+    }
+  ]
+}

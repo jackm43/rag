@@ -26,6 +26,7 @@ import {
   type MachinePrincipal,
   type TrustZone,
 } from "../auth/principal";
+import type { CorrelatedJwtClaims } from "../auth/claims";
 
 export const IDENTITY_TOKEN_TYP = "ragbot-idctx+jws";
 
@@ -40,25 +41,27 @@ const DEFAULT_CLOCK_SKEW_SECONDS = 5;
 // Modelled on RFC 8693 (OAuth token exchange): `sub` is the subject the
 // request acts for, `act` is the delegation chain of machine principals that
 // have handled it.
-export type IdentityContext = {
+export type IdentityContext = CorrelatedJwtClaims<MachinePrincipal, MachinePrincipal> & {
   // Discord user id, or SYSTEM_SUBJECT for user-less flows.
   sub: string;
   // Delegation chain, oldest first, each entry a machine principal the
   // request has traversed. RFC 8693 §4.1 style, flattened to an array.
   act: MachinePrincipal[];
-  // Minting service (also the JWS `kid`).
-  iss: MachinePrincipal;
-  // Target service the token is addressed to.
-  aud: MachinePrincipal;
   // Trust zone the token was minted from.
   trustZone: TrustZone;
-  // Issued-at / expiry, seconds since epoch.
-  iat: number;
-  exp: number;
-  // Unique token id.
-  jti: string;
   // base64url(SHA-256(envelope bytes)) — binds the token to one payload.
   envelopeSha256: string;
+  // Request-scoped control-plane identifiers. requestId names the ingress
+  // intent/audit record; placementId names the one-time queue/RPC placement.
+  requestId?: string;
+  placementId?: string;
+  // The application-level intent this placement authorized. The envelope still
+  // has its registered service operation; these fields let callers bind a more
+  // specific action/resource/method such as a connector or command operation
+  // without teaching the identity layer those catalogs.
+  action?: string;
+  resource?: string;
+  method?: string;
   // Optional session-binding claims, set only by the dev-proxy edge worker
   // when it mints an on-behalf-of token for a Cloudflare Access + DPoP browser
   // session. Absent on every service-to-service hop, so existing minters and
@@ -164,9 +167,16 @@ export const buildIdentityContext = async (params: {
   act?: MachinePrincipal[];
   now?: number;
   ttlSeconds?: number;
+  notBefore?: number;
+  correlationId?: string;
   // Session-binding claims for the dev-proxy edge hop; omitted elsewhere.
   dpopJkt?: string;
   sid?: string;
+  requestId?: string;
+  placementId?: string;
+  action?: string;
+  resource?: string;
+  method?: string;
 }): Promise<IdentityContext> => {
   const iat = Math.floor((params.now ?? Date.now()) / 1000);
   return {
@@ -176,9 +186,16 @@ export const buildIdentityContext = async (params: {
     aud: params.aud,
     trustZone: params.trustZone,
     iat,
+    nbf: params.notBefore ?? iat,
     exp: iat + (params.ttlSeconds ?? IDENTITY_CONTEXT_TTL_SECONDS),
     jti: crypto.randomUUID(),
+    ...(params.correlationId !== undefined ? { correlationId: params.correlationId } : {}),
     envelopeSha256: await envelopeSha256(params.envelopeBytes),
+    ...(params.requestId !== undefined ? { requestId: params.requestId } : {}),
+    ...(params.placementId !== undefined ? { placementId: params.placementId } : {}),
+    ...(params.action !== undefined ? { action: params.action } : {}),
+    ...(params.resource !== undefined ? { resource: params.resource } : {}),
+    ...(params.method !== undefined ? { method: params.method } : {}),
     ...(params.dpopJkt !== undefined ? { dpopJkt: params.dpopJkt } : {}),
     ...(params.sid !== undefined ? { sid: params.sid } : {}),
   };
@@ -213,9 +230,16 @@ const asContext = (value: unknown): IdentityContext | null => {
     !isMachinePrincipal(candidate.aud) ||
     typeof candidate.trustZone !== "string" ||
     typeof candidate.iat !== "number" ||
+    typeof candidate.nbf !== "number" ||
     typeof candidate.exp !== "number" ||
     typeof candidate.jti !== "string" ||
+    (candidate.correlationId !== undefined && typeof candidate.correlationId !== "string") ||
     typeof candidate.envelopeSha256 !== "string" ||
+    (candidate.requestId !== undefined && typeof candidate.requestId !== "string") ||
+    (candidate.placementId !== undefined && typeof candidate.placementId !== "string") ||
+    (candidate.action !== undefined && typeof candidate.action !== "string") ||
+    (candidate.resource !== undefined && typeof candidate.resource !== "string") ||
+    (candidate.method !== undefined && typeof candidate.method !== "string") ||
     // Optional session-binding claims, but when present they must be strings —
     // a non-string is a malformed token, not a hop without a session.
     (candidate.dpopJkt !== undefined && typeof candidate.dpopJkt !== "string") ||
@@ -283,7 +307,7 @@ export const verify = async (
     if (now > context.exp + skew) {
       return { ok: false, reason: "expired" };
     }
-    if (now + skew < context.iat) {
+    if (now + skew < context.nbf) {
       return { ok: false, reason: "not_yet_valid" };
     }
 

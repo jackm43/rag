@@ -4,9 +4,13 @@ import * as capnp from "capnp-es";
 import {
   decodeAiJobEnvelope,
   decodeAiSpendJobEnvelope,
+  decodeMetadataQueryEnvelope,
+  decodeRegistryInvokeEnvelope,
   decodeReplyJobEnvelope,
   encodeAiJobEnvelope,
   encodeAiSpendJobEnvelope,
+  encodeMetadataQueryEnvelope,
+  encodeRegistryInvokeEnvelope,
   encodeReplyJobEnvelope,
   MAX_FREE_TEXT_LENGTH,
   MAX_REPLY_CONTENT_LENGTH,
@@ -196,6 +200,47 @@ test("spend jobs round-trip through the event envelope", () => {
   assert.ok(bytes instanceof Uint8Array);
   assert.deepEqual(decodeAiSpendJobEnvelope(bytes), job);
   assert.equal(decodeAiJobEnvelope(bytes), null);
+});
+
+test("registry invoke jobs round-trip through the event envelope", () => {
+  const job = {
+    kind: "registry.invoke" as const,
+    operation: "application.update" as const,
+    actorJson: JSON.stringify({ discordId: USER_ID, accessSub: "access-sub", email: "alice@example.com" }),
+    bodyJson: JSON.stringify({ displayName: "Sample App" }),
+    targetId: "sample-app",
+  };
+
+  const bytes = encodeRegistryInvokeEnvelope(job, { source: "worker" });
+  assert.deepEqual(decodeRegistryInvokeEnvelope(bytes), job);
+  assert.equal(decodeReplyJobEnvelope(bytes), null);
+});
+
+test("registry invoke encode rejects missing required targets", () => {
+  assert.throws(() =>
+    encodeRegistryInvokeEnvelope(
+      {
+        kind: "registry.invoke",
+        operation: "application.update",
+        actorJson: JSON.stringify({ discordId: USER_ID, accessSub: "access-sub" }),
+        bodyJson: "{}",
+      },
+      { source: "worker" },
+    ),
+  );
+});
+
+test("metadata query jobs round-trip through the event envelope", () => {
+  const job = {
+    kind: "metadata.query" as const,
+    query: "query($id: String!) { authorizationShape(id: $id) { service application } }",
+    variablesJson: JSON.stringify({ id: "sample-app", includeAttestations: true }),
+    operationName: "AuthorizationShape",
+  };
+
+  const bytes = encodeMetadataQueryEnvelope(job, { source: "worker" });
+  assert.deepEqual(decodeMetadataQueryEnvelope(bytes), job);
+  assert.equal(decodeRegistryInvokeEnvelope(bytes), null);
 });
 
 test("encode rejects malformed snowflake ids", () => {

@@ -10,44 +10,25 @@ import type { MachinePrincipal, Transport, TrustZone } from "./principal";
 
 export type ParsedServiceMessage = {
   envelope: Uint8Array;
-  idToken: string | null;
+  idToken: string;
 };
 
 export const wrapServiceMessage = (envelope: Uint8Array, idToken: string): Uint8Array =>
   encodeServiceMessage(envelope, idToken);
 
-const asBytes = (value: unknown): Uint8Array | null =>
-  value instanceof Uint8Array
-    ? value
-    : value instanceof ArrayBuffer
-      ? new Uint8Array(value)
-      : null;
-
-// The pre-capnp wrapper shape ({envelope, idToken} object over structured
-// clone), tolerated for messages already in flight during a deploy.
-const isLegacyMessage = (value: unknown): value is { envelope?: unknown; idToken?: unknown } =>
-  typeof value === "object" &&
-  value !== null &&
-  !(value instanceof Uint8Array) &&
-  !(value instanceof ArrayBuffer) &&
-  "envelope" in value;
-
-// Parse a received body into envelope bytes + token. Accepts, in order: the
-// capnp ServiceMessage wrapper, the legacy object wrapper, and raw envelope
-// bytes (DLQ/legacy tolerance — no token, so verification will deny).
+// Parse a received body into envelope bytes + token. The service boundary only
+// accepts the capnp ServiceMessage wrapper; callers must not send raw envelopes
+// or structured-clone objects.
 export const parseServiceMessage = (body: unknown): ParsedServiceMessage | null => {
-  if (isLegacyMessage(body)) {
-    const envelope = asBytes(body.envelope);
-    return envelope
-      ? { envelope, idToken: typeof body.idToken === "string" ? body.idToken : null }
+  const bytes = body instanceof Uint8Array
+    ? body
+    : body instanceof ArrayBuffer
+      ? new Uint8Array(body)
       : null;
-  }
-  const bytes = asBytes(body);
   if (!bytes) {
     return null;
   }
-  const wire = decodeServiceMessage(bytes);
-  return wire ?? { envelope: bytes, idToken: null };
+  return decodeServiceMessage(bytes);
 };
 
 // Pull just the capnp envelope bytes out of a received body (DLQ logging).

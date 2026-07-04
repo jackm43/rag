@@ -1,0 +1,492 @@
+openapi: 3.1.0
+info:
+  title: ragbot admin (dev-proxy)
+  description: Human-facing admin application. Requests first pass Cloudflare Access; command and
+    connector operations additionally require a Better Auth Discord session bound to the Access
+    identity.
+  version: 2.0.0
+servers:
+  - url: https://ragbot-dev.jsmunro.me
+paths:
+  /openapi.json:
+    get:
+      operationId: devProxyOpenApiJson
+      summary: Dev-proxy generated OpenAPI document
+      security:
+        - cfAccess: []
+      responses:
+        "200":
+          description: Generated OpenAPI document.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /:
+    get:
+      operationId: devProxyPage
+      summary: The dev-proxy single-page admin UI
+      security:
+        - cfAccess: []
+      responses:
+        "200":
+          description: HTML page.
+          content:
+            text/html:
+              schema:
+                type: string
+  /apis:
+    get:
+      operationId: devProxyApiWorkbenchPage
+      summary: The dev-proxy API workbench view
+      security:
+        - cfAccess: []
+      responses:
+        "200":
+          description: HTML page.
+          content:
+            text/html:
+              schema:
+                type: string
+  /github:
+    get:
+      operationId: devProxyGithubPage
+      summary: The dev-proxy GitHub API browser view
+      security:
+        - cfAccess: []
+      responses:
+        "200":
+          description: HTML page.
+          content:
+            text/html:
+              schema:
+                type: string
+  /api/auth/{path}:
+    get:
+      operationId: devProxyAuthGet
+      summary: Better Auth session and OAuth endpoints
+      security:
+        - cfAccess: []
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Better Auth response.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          description: Missing or invalid Access token.
+    post:
+      operationId: devProxyAuthPost
+      summary: Better Auth session and OAuth endpoints
+      security:
+        - cfAccess: []
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Better Auth response.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          description: Missing or invalid Access token.
+  /api/command:
+    post:
+      operationId: devProxyCommand
+      summary: Proxy a slash command through the gateway
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommandRequest"
+      responses: &a1
+        "200": &a2
+          description: Request succeeded.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400": &a3
+          description: Malformed request.
+        "401": &a4
+          description: Missing or invalid Access token, or no valid Better Auth session.
+        "403": &a5
+          description: The authenticated subject is not authorized for the requested operation.
+        "502": &a6
+          description: Upstream service or connector broker error.
+  /api/github:
+    post:
+      operationId: callGithubApi
+      summary: Call a GitHub API through the GitHub App connector
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GithubApiRequest"
+      responses: *a1
+  /api/github/routes:
+    get:
+      operationId: listGithubRoutes
+      summary: List known GitHub REST API routes
+      security:
+        - cfAccess: []
+      responses:
+        "200":
+          description: GitHub REST API route catalog.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          description: Missing or invalid Access token.
+        "503":
+          description: Route catalog is not provisioned in the runtime bucket.
+  /api/connectors:
+    get:
+      operationId: listConnectors
+      summary: List connectors and their secret status
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      responses: *a1
+  /api/connectors/{id}:
+    get:
+      operationId: describeConnector
+      summary: Describe one connector's config and status
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      parameters:
+        - &a7
+          name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: ^[a-z][a-z0-9-]{0,63}$
+      responses:
+        "200": *a2
+        "400": *a3
+        "401": *a4
+        "403": *a5
+        "404":
+          description: Unknown connector.
+        "502": *a6
+  /api/connectors/{id}/secret:
+    put:
+      operationId: setConnectorSecret
+      summary: Set or re-point a connector's secret
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      parameters:
+        - *a7
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetConnectorSecretRequest"
+      responses:
+        "200": *a2
+        "202":
+          description: Connector re-pointed; out-of-band provisioning is required.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400": *a3
+        "401": *a4
+        "403": *a5
+        "404":
+          description: Unknown connector.
+        "409":
+          description: The operation was refused and nothing was persisted.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "502": *a6
+  /api/connectors/{id}/grant:
+    post:
+      operationId: connectorGrant
+      summary: Begin an admin-initiated 3LO authorization
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      parameters:
+        - *a7
+      responses:
+        "200": *a2
+        "400": *a3
+        "401": *a4
+        "403": *a5
+        "404":
+          description: Unknown connector.
+        "502": *a6
+  /api/connectors/{id}/installations:
+    get:
+      operationId: listConnectorInstallations
+      summary: List a github_app connector's App installations
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      parameters:
+        - *a7
+      responses:
+        "200": *a2
+        "400": *a3
+        "401": *a4
+        "403": *a5
+        "404":
+          description: Unknown connector.
+        "502": *a6
+  /api/connectors/{id}/callback:
+    get:
+      operationId: connectorCallbackGet
+      summary: 3LO provider redirect callback
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      parameters:
+        - *a7
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 2048
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 2048
+        - name: error
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: error_description
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Authorization complete.
+          content:
+            text/html:
+              schema:
+                type: string
+        "400":
+          description: Provider denial or missing callback parameters.
+          content:
+            text/html:
+              schema:
+                type: string
+        "401":
+          description: Missing or invalid Access token, or no valid Better Auth session.
+        "403":
+          description: The broker refused completion.
+          content:
+            text/html:
+              schema:
+                type: string
+        "404":
+          description: Unknown connector.
+        "502":
+          description: The broker's code-for-token exchange failed.
+          content:
+            text/html:
+              schema:
+                type: string
+    post:
+      operationId: connectorCallbackPost
+      summary: 3LO completion API variant
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      parameters:
+        - *a7
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteAuthorizationRequest"
+      responses:
+        "200": *a2
+        "400": *a3
+        "401": *a4
+        "403": *a5
+        "404":
+          description: Unknown connector.
+        "502": *a6
+  /api/secrets/providers:
+    get:
+      operationId: getSecretsProviders
+      summary: List secrets backends and runtime write capability
+      security:
+        - cfAccess: []
+          betterAuthSession: []
+      responses: *a1
+components:
+  securitySchemes:
+    cfAccess:
+      type: apiKey
+      in: header
+      name: Cf-Access-Jwt-Assertion
+      description: Cloudflare Access application token. Browser requests may also present the Access cookie.
+    betterAuthSession:
+      type: apiKey
+      in: cookie
+      name: better-auth.session_token
+      description: Better Auth Discord session bound to the Cloudflare Access identity.
+  schemas:
+    CommandOption:
+      type: object
+      required:
+        - name
+        - value
+      properties:
+        name:
+          type: string
+          maxLength: 32
+        value:
+          type: string
+          maxLength: 4000
+    CommandRequest:
+      type: object
+      required:
+        - command
+      properties:
+        command:
+          type: string
+          pattern: ^[a-z][a-z0-9_]{0,31}$
+        channelId:
+          type: string
+          pattern: ^\d{17,20}$
+        options:
+          type: array
+          maxItems: 25
+          items:
+            $ref: "#/components/schemas/CommandOption"
+    GithubApiRequest:
+      type: object
+      required:
+        - installationId
+      properties:
+        installationId:
+          type: string
+          pattern: ^\d{1,20}$
+        method:
+          type: string
+          enum:
+            - GET
+            - POST
+            - PUT
+            - PATCH
+            - DELETE
+        path:
+          type: string
+          pattern: ^/
+          maxLength: 2048
+        route:
+          type: string
+          pattern: ^(GET|POST|PUT|PATCH|DELETE)\s+/
+          maxLength: 2048
+        params:
+          type: object
+          additionalProperties:
+            oneOf:
+              - type: string
+              - type: number
+              - type: boolean
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+            maxLength: 4096
+        body:
+          type: string
+          maxLength: 1048576
+    SetConnectorSecretRequest:
+      type: object
+      required:
+        - provider
+      properties:
+        provider:
+          type: string
+          enum:
+            - wrangler-env
+            - cloudflare-secret-store
+            - hashicorp-vault
+            - onepassword
+        ref:
+          type: string
+          maxLength: 512
+        value:
+          type: string
+          maxLength: 65536
+    CompleteAuthorizationRequest:
+      type: object
+      required:
+        - code
+        - state
+      properties:
+        code:
+          type: string
+          maxLength: 2048
+        state:
+          type: string
+          maxLength: 2048
+    GrantAuthorizationResult:
+      type: object
+      required:
+        - url
+        - state
+        - connectorId
+      properties:
+        url:
+          type: string
+        state:
+          type: string
+        connectorId:
+          type: string
+    CompleteAuthorizationResult:
+      type: object
+      required:
+        - authorized
+        - connectorId
+      properties:
+        authorized:
+          type: boolean
+        connectorId:
+          type: string

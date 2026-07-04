@@ -17,7 +17,7 @@ declare const process: {
   env: Record<string, string | undefined>;
 };
 
-const WORKERS = ["gateway", "workflows", "responder", "spend", "dev-proxy", "connectors", "webhooks"] as const;
+const WORKERS = ["gateway", "workflows", "responder", "spend", "registry", "attest", "metadata", "dev-proxy", "connectors", "webhooks"] as const;
 type Worker = (typeof WORKERS)[number];
 
 const SECRET_NAMES: Record<Worker, string> = {
@@ -25,10 +25,12 @@ const SECRET_NAMES: Record<Worker, string> = {
   workflows: "WORKFLOWS_SIGNING_KEY",
   responder: "RESPONDER_SIGNING_KEY",
   spend: "SPEND_SIGNING_KEY",
+  registry: "REGISTRY_SIGNING_KEY",
+  attest: "ATTEST_SIGNING_KEY",
+  metadata: "METADATA_SIGNING_KEY",
   "dev-proxy": "DEV_PROXY_SIGNING_KEY",
-  // The credential broker is verify-only today and holds no signing secret; this
-  // entry lets an operator generate a keypair if the broker ever needs to sign
-  // an outbound service hop (see packages/auth/principal.ts).
+  // The credential broker needs this when provider HTTP moves behind a bound
+  // Egress worker and it signs connector -> egress requests.
   connectors: "CONNECTORS_SIGNING_KEY",
   // The webhook-ingress worker signs its webhook_verify hop into the broker and
   // its enqueue hop to the workflows worker.

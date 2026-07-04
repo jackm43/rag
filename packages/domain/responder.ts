@@ -1,13 +1,15 @@
 import { sanitizeAiText } from "../ai/ai";
 import { createServiceServer } from "../auth";
 import { decodeReplyJobEnvelope } from "../contracts";
-import { editOriginalInteractionResponse, postChannelMessage } from "../discord";
+import { editOriginalInteractionResponse, postChannelMessageForSubject } from "../discord";
 import { errorMessage, logger } from "../logger";
+import type { RequestContext } from "../auth/context";
 import {
   MAX_DISCORD_MESSAGE_LENGTH,
   type Env,
   type InteractionEditReplyJob,
   type ResponderAttachment,
+  type ServiceMessageBytes,
 } from "../contracts/types";
 
 const DISCORD_MESSAGE_HARD_LIMIT = 2000;
@@ -59,9 +61,11 @@ const applyInteractionEdit = async (
   env: Env,
   job: InteractionEditReplyJob,
   attachment: ResponderAttachment | null,
+  context: RequestContext,
 ) => {
   await editOriginalInteractionResponse(
     env,
+    "responder",
     job.applicationId,
     job.interactionToken,
     {
@@ -70,11 +74,17 @@ const applyInteractionEdit = async (
       ...(attachment ? { attachments: [{ id: "0", filename: attachment.name }] } : {}),
     },
     attachment ? [attachment] : [],
+    { sub: context.subject, delegates: context.delegates },
   );
 };
 
 const responderServer = (env: Env) =>
-  createServiceServer({ self: "responder", expectedIssuers: ["workflows"], env });
+  createServiceServer({
+    self: "responder",
+    expectedIssuers: ["workflows"],
+    env,
+    transportTrust: { queue: "application", binding: "application" },
+  });
 
 // Only interaction edits may arrive over the binding transport; a verified
 // envelope of any other kind is the wrong operation for this entrypoint.
@@ -88,12 +98,11 @@ const decodeInteractionEdit = (bytes: Uint8Array): InteractionEditReplyJob | nul
 // run Cedar, then apply the media edit.
 export const deliverInteractionEdit = async (
   env: Env,
-  envelopeBytes: unknown,
-  idToken: string,
+  message: ServiceMessageBytes,
   attachment: ResponderAttachment | null = null,
 ) => {
   const received = await responderServer(env).receive(
-    { envelope: envelopeBytes, idToken },
+    message,
     decodeInteractionEdit,
     "binding",
   );
@@ -101,7 +110,7 @@ export const deliverInteractionEdit = async (
     throw new Error("Invalid interaction edit envelope");
   }
 
-  await applyInteractionEdit(env, received.payload, attachment);
+  await applyInteractionEdit(env, received.payload, attachment, received.context);
 };
 
 const isRetryableDiscordStatus = (status: number) => status === 429 || status >= 500;
@@ -116,7 +125,13 @@ export const processOutboxMessage = async (message: Message<unknown>, env: Env) 
 
   try {
     if (job.kind === "reply.channel_message") {
-      const response = await postChannelMessage(env, job.channelId, finalizeAiReplyText(job.content));
+      const response = await postChannelMessageForSubject(
+        env,
+        "responder",
+        job.channelId,
+        finalizeAiReplyText(job.content),
+        { sub: received.context.subject, delegates: received.context.delegates },
+      );
       if (!response.ok) {
         logger.warn("reply_delivery_rejected", { kind: job.kind, status: response.status });
         if (isRetryableDiscordStatus(response.status)) {
@@ -126,7 +141,7 @@ export const processOutboxMessage = async (message: Message<unknown>, env: Env) 
       }
     } else {
       // Already verified + decoded above; apply directly rather than re-verifying.
-      await applyInteractionEdit(env, job, null);
+      await applyInteractionEdit(env, job, null, received.context);
     }
     message.ack();
   } catch (error) {

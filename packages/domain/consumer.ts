@@ -17,6 +17,7 @@ import { finalizeAiReplyText } from "./responder";
 import { recordAiThread } from "./threads";
 import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "../ai/tracked-ai";
 import { createServiceServer } from "../auth";
+import type { RequestContext } from "../auth/context";
 import { decodeAiJobEnvelope } from "../contracts";
 import {
   type AiAskJob,
@@ -62,36 +63,7 @@ const recordAiInteraction = async (
       )
       .run();
   } catch (error) {
-    // Fallback for a production rag_ai_interactions table that predates the
-    // token-usage columns. SQLite has no "ADD COLUMN IF NOT EXISTS" and the
-    // prod table's shape is not knowable from the repo, so no migration adds
-    // the columns (see migrations/0001_initial.sql). Delete this once prod
-    // is verified to have them.
-    try {
-      await env.DB.prepare(
-        "INSERT INTO rag_ai_interactions (kind, channel_id, message_id, requester_user_id, requester_username, prompt, response_text, model, ai_duration_ms, total_duration_ms, status, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      )
-        .bind(
-          job.kind,
-          job.channelId,
-          job.messageId ?? null,
-          job.requesterUserId ?? null,
-          job.requesterUsername ?? null,
-          job.prompt,
-          responseText,
-          model,
-          aiDurationMs,
-          totalDurationMs,
-          status,
-          errorText,
-        )
-        .run();
-    } catch (fallbackError) {
-      logger.warn("interaction_record_failed", {
-        error: errorMessage(fallbackError),
-        firstError: errorMessage(error),
-      });
-    }
+    logger.warn("interaction_record_failed", { error: errorMessage(error) });
   }
 };
 
@@ -101,6 +73,7 @@ const processMessageReceivedJob = async (
   decoded: MessageReceivedJob,
   env: Env,
   startedAt: number,
+  context?: RequestContext,
 ) => {
   let resolved: AiChatJob | null = null;
   try {
@@ -111,10 +84,22 @@ const processMessageReceivedJob = async (
   if (!resolved) {
     return;
   }
-  await processChatJob(resolved, env, startedAt);
+  await processChatJob(resolved, env, startedAt, context);
 };
 
-const processChatJob = async (job: AiChatJob | AiAskJob, env: Env, startedAt: number) => {
+const contextSubject = (context: RequestContext | undefined, fallback?: string) => context
+  ? { sub: context.subject, delegates: context.delegates, requestId: context.requestId, correlationId: context.correlationId }
+  : fallback;
+const requestSubject = (context: RequestContext | undefined) => context
+  ? { sub: context.subject, delegates: context.delegates, requestId: context.requestId, correlationId: context.correlationId }
+  : undefined;
+
+const processChatJob = async (
+  job: AiChatJob | AiAskJob,
+  env: Env,
+  startedAt: number,
+  context?: RequestContext,
+) => {
   let model = "unknown";
   let aiDurationMs: number | null = null;
   let content: string | null = null;
@@ -145,6 +130,7 @@ const processChatJob = async (job: AiChatJob | AiAskJob, env: Env, startedAt: nu
       requesterUsername: job.requesterUsername,
       channelId: job.channelId,
       messageId: job.messageId,
+      subject: requestSubject(context),
     };
 
     let messages: ChatMessage[];
@@ -210,7 +196,7 @@ const processChatJob = async (job: AiChatJob | AiAskJob, env: Env, startedAt: nu
     let responseChannelId = job.channelId;
     if (job.kind === "thread_start") {
       const title = fallbackThreadTitle(job.prompt);
-      const thread = await createThreadFromMessage(env, job.channelId, job.messageId, title);
+      const thread = await createThreadFromMessage(env, "workflows", job.channelId, job.messageId, title);
       if (!thread) {
         await record("discord_thread_create_invalid", null);
         return;
@@ -228,7 +214,7 @@ const processChatJob = async (job: AiChatJob | AiAskJob, env: Env, startedAt: nu
       });
     }
 
-    await sendChannelReply(env, responseChannelId, responseText, job.requesterUserId);
+    await sendChannelReply(env, responseChannelId, responseText, contextSubject(context, job.requesterUserId));
     await record("ok", null);
   } catch (error) {
     logger.error("ai_job_failed", { error: errorMessage(error) });
@@ -238,7 +224,7 @@ const processChatJob = async (job: AiChatJob | AiAskJob, env: Env, startedAt: nu
         env,
         job.channelId,
         "I started this thread, but the AI response failed. Try again in a moment.",
-        job.requesterUserId,
+        contextSubject(context, job.requesterUserId),
       ).catch(() => undefined);
     }
   }
@@ -251,12 +237,13 @@ type AiJobProcessors = {
     job: Extract<AiJob, { kind: K }>,
     env: Env,
     startedAt: number,
+    context: RequestContext,
   ) => Promise<void>;
 };
 
 const jobProcessors: AiJobProcessors = {
-  ragjam: (job, env) => processRagjamJob(job, env),
-  bicture: (job, env) => processBictureJob(job, env),
+  ragjam: (job, env, _startedAt, context) => processRagjamJob(job, env, context),
+  bicture: (job, env, _startedAt, context) => processBictureJob(job, env, context),
   "message.received": processMessageReceivedJob,
   ask: processChatJob,
   thread_start: processChatJob,
@@ -266,7 +253,12 @@ const jobProcessors: AiJobProcessors = {
 
 export const processAiQueueMessage = async (message: Message<unknown>, env: Env) => {
   const startedAt = Date.now();
-  const server = createServiceServer({ self: "workflows", expectedIssuers: ["gateway"], env });
+  const server = createServiceServer({
+    self: "workflows",
+    expectedIssuers: ["gateway"],
+    env,
+    transportTrust: { queue: "application" },
+  });
   const received = await server.receive(message.body, decodeAiJobEnvelope);
   if (!received) {
     message.ack();
@@ -277,7 +269,8 @@ export const processAiQueueMessage = async (message: Message<unknown>, env: Env)
     job: AiJob,
     env: Env,
     startedAt: number,
+    context: RequestContext,
   ) => Promise<void>;
-  await process(received.payload, env, startedAt);
+  await process(received.payload, env, startedAt, received.context);
   message.ack();
 };

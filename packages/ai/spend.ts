@@ -1,7 +1,7 @@
 import { decodeAiSpendJobEnvelope, encodeAiSpendJobEnvelope } from "../contracts";
 import { errorMessage, logger } from "../logger";
 import { boundaryClients } from "../boundaries/outbound/clients";
-import { createServiceServer, serviceClients, SYSTEM_SUBJECT } from "../auth";
+import { createClient, createServiceServer, SYSTEM_SUBJECT, type Subject, type VerifiedRequestContext } from "../auth";
 import type { Env } from "../contracts/types";
 import { isRecord } from "../contracts/validation";
 
@@ -18,6 +18,7 @@ type SpendEventInput = {
   totalTokens?: number | null;
   unitCount?: number;
   sourceId?: string;
+  subject?: Subject;
 };
 
 type SpendEventRow = {
@@ -33,6 +34,16 @@ type SpendEventRow = {
   estimated_cost_micros: number | null;
   status: string;
 };
+
+const clientContextOf = (subject: Subject | undefined, fallback: string | undefined): VerifiedRequestContext =>
+  subject
+    ? {
+        subject: subject.sub,
+        delegates: subject.delegates,
+        requestId: subject.requestId,
+        correlationId: subject.correlationId,
+      }
+    : { subject: fallback ?? SYSTEM_SUBJECT };
 
 const optionalUsage = (value: number | null | undefined) =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
@@ -74,11 +85,14 @@ export const recordAiSpendEvent = async (env: Env, input: SpendEventInput) => {
       // Spend reconciliation is a workflows-originated flow: it re-mints an
       // on-behalf-of token for the original requester when known, else the
       // user-less "system" subject.
-      await serviceClients(env).workflowsToSpend.call({
+      await createClient({
+        env,
+        self: "workflows",
+        context: clientContextOf(input.subject, input.requesterUserId),
+      }).to("spend", { transportTrust: "application" }).call({
         transport: "queue",
         queue: env.SPEND_JOBS,
         envelope: encodeAiSpendJobEnvelope({ spendEventId: sourceId }, { source: "worker" }),
-        subject: { sub: input.requesterUserId ?? SYSTEM_SUBJECT },
         delaySeconds: 120,
       });
     }
@@ -131,7 +145,7 @@ const findGatewayLogCostMicros = async (env: Env, sourceId: string) => {
     const url = new URL(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/ai-gateway/gateways/${gatewayId}/logs`);
     url.searchParams.set("page", String(page));
     url.searchParams.set("per_page", "50");
-    const response = await boundaryClients(env).cloudflareApi(url);
+    const response = await boundaryClients(env, "spend").cloudflareApi(url);
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(`AI Gateway logs request failed (${response.status}): ${JSON.stringify(payload)}`);
@@ -154,7 +168,12 @@ const findGatewayLogCostMicros = async (env: Env, sourceId: string) => {
 };
 
 export const processSpendQueueMessage = async (message: Message<unknown>, env: Env) => {
-  const server = createServiceServer({ self: "spend", expectedIssuers: ["workflows"], env });
+  const server = createServiceServer({
+    self: "spend",
+    expectedIssuers: ["workflows"],
+    env,
+    transportTrust: { queue: "application" },
+  });
   const received = await server.receive(message.body, decodeAiSpendJobEnvelope);
   if (!received) {
     message.ack();

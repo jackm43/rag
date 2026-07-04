@@ -118,6 +118,68 @@ struct WebhookEventPayload {
   bodyBase64 @5 :Text;
 }
 
+struct EgressRequestPayload {
+  # Generic application -> egress request. The caller signs this envelope with
+  # its service identity; `profile` selects the egress worker's local policy
+  # and credential injector. `headersJson` is a JSON object of caller-supplied
+  # safe headers. The optional body travels as a sibling RPC argument, and
+  # `bodySha256` binds those bytes to the signed envelope.
+  profile @0 :Text;
+  method @1 :Text;
+  url @2 :Text;
+  headersJson @3 :Text;
+  bodySha256 @4 :Text;
+}
+
+struct ApplicationRequestPayload {
+  # Generic generated-app request. Middleware clients validate app-facing HTTP
+  # routes, the gateway signs this envelope, and a generated application service
+  # server verifies the service boundary before dispatching to app code.
+  applicationId @0 :Text;
+  operationId @1 :Text;
+  serviceOperation @2 :Text;
+  method @3 :Text;
+  url @4 :Text;
+  headersJson @5 :Text;
+  bodyBase64 @6 :Text;
+  linkedTokenSha256 @7 :Text;
+}
+
+struct RegistryInvokePayload {
+  # One HTTP-shaped control-plane operation against registry.jsmunro.me,
+  # carried over the registry worker's own service-binding entrypoint. The
+  # middleware client owns browser authentication; the service server verifies
+  # the signed service hop, consumes request placement, runs Cedar service.invoke,
+  # then dispatches the operation named here.
+  operation @0 :Text;
+  actorJson @1 :Text;
+  bodyJson @2 :Text;
+  targetId @3 :Text;
+}
+
+struct MetadataQueryPayload {
+  # One GraphQL metadata resolver request accepted by metadata.jsmunro.me's
+  # service server. The HTTP middleware authenticates the bearer token and
+  # validates the outer GraphQL request shape; the service boundary verifies the
+  # signed hop, placement, and Cedar service.invoke before executing resolvers.
+  query @0 :Text;
+  variablesJson @1 :Text;
+  operationName @2 :Text;
+}
+
+struct AttestInvokePayload {
+  # One HTTP-shaped GitHub webhook delivery accepted by attest.jsmunro.me's own
+  # service-binding entrypoint. The middleware client owns the edge-level
+  # method/size checks and collects only the small filtered GitHub signature
+  # headers (x-hub-signature-256, x-github-delivery, x-github-event) into
+  # headersJson; the service server verifies the signed service hop, then
+  # verifies the GitHub signature via the connectors broker, dedupes, fetches
+  # the commit tree, and records the attestation.
+  operation @0 :Text;
+  headersJson @1 :Text;
+  bodyBase64 @2 :Text;
+}
+
 struct EventEnvelope {
   v @0 :UInt16;
   type @1 :Text;
@@ -143,5 +205,10 @@ struct EventEnvelope {
     devproxyCommand @18 :DevProxyCommandPayload;
     connectorInvoke @19 :ConnectorInvokePayload;
     webhookEvent @20 :WebhookEventPayload;
+    egressRequest @21 :EgressRequestPayload;
+    applicationRequest @22 :ApplicationRequestPayload;
+    registryInvoke @23 :RegistryInvokePayload;
+    metadataQuery @24 :MetadataQueryPayload;
+    attestInvoke @25 :AttestInvokePayload;
   }
 }

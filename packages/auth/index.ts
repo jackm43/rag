@@ -13,15 +13,28 @@ export {
   type Transport,
   type TrustZone,
 } from "./principal";
-export type { RequestContext, ServiceRequest } from "./context";
+export type { CorrelatedJwtClaims, JwtClaims } from "./claims";
+export type { RequestContext, ServiceRequest, VerifiedRequestContext } from "./context";
 export {
+  bumpRequestIntentVersion,
+  createHopIntent,
+  type HopIntent,
+  type HopIntentInput,
+  revokeRequestIntent,
+} from "./control-plane";
+export {
+  createClient,
   createServiceClient,
-  serviceClients,
+  createServiceClientFromEnv,
+  type ClientConfig,
+  type ClientPrepareOptions,
+  type ClientServiceCall,
+  type ClientTarget,
   type HopSession,
+  type EnvServiceClientConfig,
   type ServiceCall,
   type ServiceClient,
   type ServiceClientConfig,
-  type ServiceClients,
 } from "./client";
 export {
   createServiceServer,

@@ -3,9 +3,11 @@ import { authorizeAndForward } from "../authz/forward";
 import { buildIdentityContext, importSigningKey, mint } from "../identity";
 import { errorMessage, logger } from "../logger";
 import { logServiceDenial, wrapServiceMessage } from "./message";
-import { SERVICE_ZONE, type MachinePrincipal, type Subject, type Transport } from "./principal";
+import { SERVICE_ZONE, SYSTEM_SUBJECT, type MachinePrincipal, type Subject, type Transport } from "./principal";
 import { registryEntities } from "./registry";
 import type { Env, ResponderAttachment, ServiceMessageBytes } from "../contracts/types";
+import type { VerifiedRequestContext } from "./context";
+import { ensureRequestPlacement, serviceHopIntent, type HopIntent } from "./control-plane";
 
 // Sending side of the service boundary, behind a single factory. A client is
 // built per (self, target) hop and privately encapsulates: the Cedar
@@ -26,6 +28,7 @@ export type ServiceCall =
       envelope: Uint8Array;
       subject: Subject;
       delaySeconds?: number;
+      intent?: HopIntent;
     }
   | {
       transport: "binding";
@@ -33,6 +36,7 @@ export type ServiceCall =
       envelope: Uint8Array;
       attachment: ResponderAttachment;
       subject: Subject;
+      intent?: HopIntent;
     };
 
 // Session-binding claims carried into the minted token for a dev-proxy edge
@@ -54,8 +58,11 @@ export type ServiceClient = {
     envelope: Uint8Array,
     subject: Subject,
     session?: HopSession,
+    intent?: HopIntent,
   ) => Promise<ServiceMessageBytes>;
 };
+
+export type TransportTrust = "identity" | "application";
 
 export type ServiceClientConfig = {
   self: MachinePrincipal;
@@ -64,7 +71,18 @@ export type ServiceClientConfig = {
   // no signing secret provisioned (which fails the client closed: every hop
   // requires exchange material).
   signingKey: (() => Promise<CryptoKey | null>) | null;
+  // "identity" and "application" mint a signed identity-context token beside
+  // the envelope. "application" is the preferred name for cross-application
+  // requests that must carry an application credential plus on-behalf-of
+  // subject/delegation context.
+  transportTrust?: TransportTrust;
+  // Boundary/sidecar receivers (for example egress) still receive a signed
+  // token addressed to their service binding, but they authorize the domain
+  // action with their own boundary policy rather than participating in the
+  // application target graph.
+  authorizeExchange?: boolean;
   // Registry snapshot loader for Cedar; absent in tests.
+  env?: Env;
   entities?: () => Promise<EntityJson[]>;
 };
 
@@ -77,6 +95,7 @@ const memo = <T>(create: () => Promise<T>): (() => Promise<T>) => {
 export const createServiceClient = (config: ServiceClientConfig): ServiceClient => {
   const fromZone = SERVICE_ZONE[config.self];
   const toZone = SERVICE_ZONE[config.target];
+  const authorizeExchange = config.authorizeExchange ?? true;
 
   // Authorization for the hop, evaluated once on first use (the registry
   // snapshot is async, so this cannot run in the constructor). Cedar decides
@@ -86,18 +105,21 @@ export const createServiceClient = (config: ServiceClientConfig): ServiceClient 
     if (config.signingKey === null) {
       return "missing_exchange_material";
     }
-    const entities = config.entities ? await config.entities() : [];
-    const allowed = await authorizeAndForward(
-      {
-        principal: { type: "Machine", id: config.self },
-        action: "service.exchange",
-        resource: { type: "Service", id: config.target },
-        context: { fromZone, toZone },
-      },
-      { entities, deny: () => undefined },
-      () => true,
-    );
-    return allowed ? null : "exchange_not_authorized";
+    if (authorizeExchange) {
+      const entities = config.entities ? await config.entities() : [];
+      const allowed = await authorizeAndForward(
+        {
+          principal: { type: "Application", id: config.self },
+          action: "service.exchange",
+          resource: { type: "Application", id: config.target },
+          context: { fromZone, toZone },
+        },
+        { entities, deny: () => undefined },
+        () => true,
+      );
+      return allowed ? null : "exchange_not_authorized";
+    }
+    return null;
   });
 
   const denyCall = (transport: Transport, reason: string): Error => {
@@ -109,11 +131,19 @@ export const createServiceClient = (config: ServiceClientConfig): ServiceClient 
     envelope: Uint8Array,
     subject: Subject,
     session?: HopSession,
+    intent: HopIntent = serviceHopIntent(config.target, envelope),
   ): Promise<string | null> => {
     const key = config.signingKey ? await config.signingKey() : null;
     if (!key) {
       return null;
     }
+    const placement = await ensureRequestPlacement({
+      env: config.env,
+      subject,
+      source: config.self,
+      target: config.target,
+      intent,
+    });
     const context = await buildIdentityContext({
       iss: config.self,
       aud: config.target,
@@ -121,6 +151,12 @@ export const createServiceClient = (config: ServiceClientConfig): ServiceClient 
       act: subject.delegates,
       trustZone: fromZone,
       envelopeBytes: envelope,
+      requestId: placement.requestId,
+      placementId: placement.placementId,
+      correlationId: placement.correlationId,
+      action: intent.action,
+      resource: intent.resource,
+      method: intent.method,
       dpopJkt: session?.dpopJkt,
       sid: session?.sid,
     });
@@ -136,30 +172,46 @@ export const createServiceClient = (config: ServiceClientConfig): ServiceClient 
     subject: Subject,
     transport: Transport,
     session?: HopSession,
+    intent?: HopIntent,
   ): Promise<string> => {
     const denial = await constructionDenial();
     if (denial) {
       throw denyCall(transport, denial);
     }
-    const token = await mintToken(envelope, subject, session);
+    const token = await mintToken(envelope, subject, session, intent);
     if (token === null) {
       throw denyCall(transport, "signing_key_unavailable");
     }
     return token;
   };
 
+  const prepareBody = async (
+    envelope: Uint8Array,
+    subject: Subject,
+    transport: Transport,
+    session?: HopSession,
+    intent?: HopIntent,
+  ): Promise<ServiceMessageBytes> => {
+    return wrapServiceMessage(envelope, await authorizeAndMint(envelope, subject, transport, session, intent));
+  };
+
   return {
-    prepare: async (envelope, subject, session) => {
-      const token = await authorizeAndMint(envelope, subject, "binding", session);
-      return wrapServiceMessage(envelope, token);
+    prepare: async (envelope, subject, session, intent) => {
+      return prepareBody(envelope, subject, "binding", session, intent);
     },
     call: async (request) => {
-      const token = await authorizeAndMint(request.envelope, request.subject, request.transport);
+      const body = await prepareBody(
+        request.envelope,
+        request.subject,
+        request.transport,
+        undefined,
+        request.intent,
+      );
       if (request.transport === "queue") {
         // contentType "bytes" is load-bearing: the wrapper is capnp bytes, and
         // the queue's default ("json") silently JSON-mangles a Uint8Array into
         // an index-keyed object the receiving boundary rejects.
-        await request.queue.send(wrapServiceMessage(request.envelope, token), {
+        await request.queue.send(body, {
           contentType: "bytes",
           ...(request.delaySeconds === undefined ? {} : { delaySeconds: request.delaySeconds }),
         });
@@ -168,24 +220,22 @@ export const createServiceClient = (config: ServiceClientConfig): ServiceClient 
       if (!request.env.RESPONDER) {
         throw new Error("RESPONDER service binding is required to send media replies");
       }
-      await request.env.RESPONDER.deliverInteractionEdit(request.envelope, request.attachment, token);
+      await request.env.RESPONDER.deliverInteractionEdit(body, request.attachment);
     },
   };
 };
 
-type SigningSecret =
-  | "GATEWAY_SIGNING_KEY"
-  | "WORKFLOWS_SIGNING_KEY"
-  | "DEV_PROXY_SIGNING_KEY"
-  | "WEBHOOKS_SIGNING_KEY";
-
 // Import a private signing key from its secret (private JWK JSON). Absent or
 // unparseable keys resolve to null so the client fails closed with a logged
 // denial rather than throwing an opaque error.
-const loadSigningKey = async (env: Env, secret: SigningSecret): Promise<CryptoKey | null> => {
-  const raw = env[secret];
+const loadSigningKey = async (env: Env, secret: string): Promise<CryptoKey | null> => {
+  const raw = (env as unknown as Record<string, unknown>)[secret];
   if (!raw) {
     logger.warn("service_signing_key_missing", { secret });
+    return null;
+  }
+  if (typeof raw !== "string") {
+    logger.warn("service_signing_key_invalid", { secret, error: "secret_not_string" });
     return null;
   }
   try {
@@ -196,75 +246,120 @@ const loadSigningKey = async (env: Env, secret: SigningSecret): Promise<CryptoKe
   }
 };
 
-// Per-worker service clients: the ready-to-use client for every legitimate
-// hop, each pre-bound to the sending service's signing key. Only the services
-// that send hold a key (gateway mints origin contexts; workflows re-mints
-// downstream), so a worker that never uses a given client never imports its
-// (absent) key.
-export type ServiceClients = {
-  gatewayToWorkflows: ServiceClient;
-  workflowsToResponder: ServiceClient;
-  workflowsToSpend: ServiceClient;
-  // Workflows -> credential broker. The intended first caller of the connectors
-  // worker; no worker binds CONNECTORS yet, so this client is constructed but
-  // unused until a caller wires it (the broker's authn+authz still gate it).
-  workflowsToConnectors: ServiceClient;
-  // Dev-proxy → gateway (edge → edge), the development application's hop into
-  // the gateway's DevProxy entrypoint. Only workers/public/dev-proxy holds
-  // DEV_PROXY_SIGNING_KEY, so only it can construct a usable client.
-  devProxyToGateway: ServiceClient;
-  // Dev-proxy → connectors broker (edge → application), the admin surface's hop
-  // for the connector.admin.* management ops. Same DEV_PROXY_SIGNING_KEY; the
-  // broker gates which admin op via connectors.cedar.
-  devProxyToConnectors: ServiceClient;
-  // Webhooks → connectors broker (edge → application): the webhook-ingress
-  // worker's signature-verification hop (connector.webhook.verify — a boolean
-  // out, never a secret). Only the webhooks worker holds WEBHOOKS_SIGNING_KEY,
-  // so only it can construct a usable client.
-  webhooksToConnectors: ServiceClient;
-  // Webhooks → workflows (edge → application): the validated-event enqueue hop onto
-  // the webhook queue, mirroring how the gateway enqueues to the workflows worker. Same
-  // WEBHOOKS_SIGNING_KEY.
-  webhooksToWorkflows: ServiceClient;
+export type EnvServiceClientConfig = {
+  self: MachinePrincipal;
+  target: MachinePrincipal;
+  signingSecret?: string;
+  transportTrust?: TransportTrust;
+  authorizeExchange?: boolean;
 };
 
-const buildClients = (env: Env): ServiceClients => {
-  // A missing secret is passed as a null loader so the client fails closed
-  // (missing_exchange_material) on first use instead of failing per send.
-  const gatewayKey = env.GATEWAY_SIGNING_KEY
-    ? memo(() => loadSigningKey(env, "GATEWAY_SIGNING_KEY"))
-    : null;
-  const workflowsKey = env.WORKFLOWS_SIGNING_KEY
-    ? memo(() => loadSigningKey(env, "WORKFLOWS_SIGNING_KEY"))
-    : null;
-  const devProxyKey = env.DEV_PROXY_SIGNING_KEY
-    ? memo(() => loadSigningKey(env, "DEV_PROXY_SIGNING_KEY"))
-    : null;
-  const webhooksKey = env.WEBHOOKS_SIGNING_KEY
-    ? memo(() => loadSigningKey(env, "WEBHOOKS_SIGNING_KEY"))
-    : null;
-  const entities = () => registryEntities(env);
+type QueueServiceCall = Extract<ServiceCall, { transport: "queue" }>;
+type BindingServiceCall = Extract<ServiceCall, { transport: "binding" }>;
 
+export type ClientServiceCall =
+  | Omit<QueueServiceCall, "subject">
+  | Omit<BindingServiceCall, "subject">;
+
+export type ClientPrepareOptions = {
+  session?: HopSession;
+  intent?: HopIntent;
+};
+
+export type ClientTarget = {
+  call: (request: ClientServiceCall) => Promise<void>;
+  prepare: (envelope: Uint8Array, options?: ClientPrepareOptions) => Promise<ServiceMessageBytes>;
+  service: ServiceClient;
+};
+
+export type ClientConfig = {
+  env: Env;
+  self: MachinePrincipal;
+  context: VerifiedRequestContext;
+  signingSecret?: string;
+  transportTrust?: TransportTrust;
+};
+
+const subjectFrom = (context: VerifiedRequestContext): Subject => {
   return {
-    gatewayToWorkflows: createServiceClient({ self: "gateway", target: "workflows", signingKey: gatewayKey, entities }),
-    workflowsToResponder: createServiceClient({ self: "workflows", target: "responder", signingKey: workflowsKey, entities }),
-    workflowsToSpend: createServiceClient({ self: "workflows", target: "spend", signingKey: workflowsKey, entities }),
-    workflowsToConnectors: createServiceClient({ self: "workflows", target: "connectors", signingKey: workflowsKey, entities }),
-    devProxyToGateway: createServiceClient({ self: "dev-proxy", target: "gateway", signingKey: devProxyKey, entities }),
-    devProxyToConnectors: createServiceClient({ self: "dev-proxy", target: "connectors", signingKey: devProxyKey, entities }),
-    webhooksToConnectors: createServiceClient({ self: "webhooks", target: "connectors", signingKey: webhooksKey, entities }),
-    webhooksToWorkflows: createServiceClient({ self: "webhooks", target: "workflows", signingKey: webhooksKey, entities }),
+    sub: context.subject || SYSTEM_SUBJECT,
+    delegates: context.delegates,
+    requestId: context.requestId,
+    correlationId: context.correlationId,
   };
 };
 
-const clientsByEnv = new WeakMap<Env, ServiceClients>();
+const sessionFrom = (context: VerifiedRequestContext): HopSession | undefined =>
+  context.dpopJkt === undefined && context.sid === undefined
+    ? undefined
+    : {
+        ...(context.dpopJkt !== undefined ? { dpopJkt: context.dpopJkt } : {}),
+        ...(context.sid !== undefined ? { sid: context.sid } : {}),
+      };
 
-export const serviceClients = (env: Env): ServiceClients => {
-  const cached = clientsByEnv.get(env);
+export const createClient = (config: ClientConfig) => {
+  const defaultSubject = subjectFrom(config.context);
+  const defaultSession = sessionFrom(config.context);
+  return {
+    subject: defaultSubject,
+    context: config.context,
+    to: (
+      target: MachinePrincipal,
+      options: Pick<EnvServiceClientConfig, "signingSecret" | "transportTrust" | "authorizeExchange"> = {},
+    ): ClientTarget => {
+      const service = createServiceClientFromEnv(config.env, {
+        self: config.self,
+        target,
+        signingSecret: options.signingSecret ?? config.signingSecret,
+        transportTrust: options.transportTrust ?? config.transportTrust,
+        authorizeExchange: options.authorizeExchange,
+      });
+      return {
+        service,
+        prepare: (envelope, request = {}) =>
+          service.prepare(envelope, defaultSubject, request.session ?? defaultSession, request.intent),
+        call: (request) =>
+          service.call({
+            ...request,
+            subject: defaultSubject,
+          } as ServiceCall),
+      };
+    },
+  };
+};
+
+const signingSecretFor = (self: MachinePrincipal) =>
+  `${self.toUpperCase().replace(/-/g, "_")}_SIGNING_KEY`;
+
+const configuredClients = new WeakMap<Env, Map<string, ServiceClient>>();
+
+export const createServiceClientFromEnv = (
+  env: Env,
+  config: EnvServiceClientConfig,
+): ServiceClient => {
+  let byConfig = configuredClients.get(env);
+  if (!byConfig) {
+    byConfig = new Map();
+    configuredClients.set(env, byConfig);
+  }
+  const secret = config.signingSecret ?? signingSecretFor(config.self);
+  const key = `${config.self}->${config.target}:${secret}:${config.transportTrust ?? "identity"}:${config.authorizeExchange ?? true}`;
+  const cached = byConfig.get(key);
   if (cached) {
     return cached;
   }
-  const clients = buildClients(env);
-  clientsByEnv.set(env, clients);
-  return clients;
+
+  const raw = (env as unknown as Record<string, unknown>)[secret];
+  const signingKey = typeof raw === "string" ? memo(() => loadSigningKey(env, secret)) : null;
+  const client = createServiceClient({
+    self: config.self,
+    target: config.target,
+    signingKey,
+    transportTrust: config.transportTrust,
+    authorizeExchange: config.authorizeExchange,
+    env,
+    entities: () => registryEntities(env),
+  });
+  byConfig.set(key, client);
+  return client;
 };

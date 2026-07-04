@@ -13,21 +13,20 @@
 // Machine principals: the workers/services of this application.
 //
 // `dev-proxy` is the development/admin application that runs in production: a
-// public edge worker (workers/public/dev-proxy) that authenticates an untrusted
+// public edge worker (workers/applications/dev-proxy) that authenticates an untrusted
 // browser via Cloudflare Access + a Better Auth Discord session, then invokes the
 // gateway's DevProxy service-binding entrypoint carrying the authenticated
 // (Discord) subject. It occupies
 // the edge zone alongside the gateway and exchanges into it; it holds its own
 // Ed25519 signing key so its hops carry strong crypto identity, exactly like
-// the gateway/workflows. See workers/public/dev-proxy/README section in README.md.
+// the gateway/workflows. See workers/applications/dev-proxy/README section in README.md.
 //
 // `connectors` is the credential broker (workers/services/connectors): the
 // single home for provider credentials (GitHub App keys, API keys, OAuth
-// grants). It is reachable ONLY over a service binding — no route — and it is a
-// VERIFY-ONLY receiver: it accepts on-behalf-of hops from the services allowed
-// to use a connector, but it does not itself sign outbound service tokens (its
-// egress is provider HTTP through a boundary client, not a service hop), so it
-// holds no signing key. See packages/connectors and CONNECTORS.md.
+// grants). It is reachable ONLY over a service binding — no route — and today is
+// mostly a verify-only receiver. When provider HTTP moves behind the generic
+// Egress worker, it signs outbound egress.request hops with CONNECTORS_SIGNING_KEY.
+// See packages/connectors and CONNECTORS.md.
 //
 // `webhooks` is the webhook-ingress edge worker (webhooks.jsmunro.me): the
 // centralised receiver third-party providers POST to (NOT behind CF Access —
@@ -41,9 +40,14 @@ export type MachinePrincipal =
   | "workflows"
   | "responder"
   | "spend"
+  | "registry"
+  | "attest"
+  | "metadata"
+  | "application-service"
   | "dev-proxy"
   | "connectors"
-  | "webhooks";
+  | "webhooks"
+  | "egress";
 
 // The single service operation the connectors broker accepts over its service
 // binding. Every connector operation (fetch/token/authorize) is carried as one
@@ -53,6 +57,21 @@ export type MachinePrincipal =
 // caller may touch, and for which operation, is gated separately by the
 // `connector.*` policies against the `Connector::<id>` resource.
 export const CONNECTOR_INVOKE_OPERATION = "connector.invoke";
+
+// The generic egress proxy operation. Application workers call a bound Egress
+// worker with a signed request envelope that names a configured egress profile
+// (for example discord-rest or github-api); the egress worker owns the outbound
+// credential injection and host policy for that profile.
+export const EGRESS_REQUEST_OPERATION = "egress.request";
+export const APPLICATION_REQUEST_OPERATION = "application.request";
+export const REGISTRY_INVOKE_OPERATION = "registry.invoke";
+export const METADATA_QUERY_OPERATION = "metadata.query";
+// The single service operation attest's own service-binding entrypoint
+// accepts: an HTTP-shaped GitHub webhook delivery relayed by the middleware
+// client after its own edge-level method/size checks. Mirrors
+// REGISTRY_INVOKE_OPERATION exactly — the specific webhook operation rides in
+// the decoded payload.
+export const ATTEST_INVOKE_OPERATION = "attest.invoke";
 
 // The single service operation the gateway's DevProxy entrypoint accepts over
 // its service binding. A dev-proxy hop frames a DevProxyCommandPayload envelope
@@ -71,36 +90,57 @@ export const SYSTEM_SUBJECT = "system";
 export type Subject = {
   sub: string;
   delegates?: MachinePrincipal[];
+  requestId?: string;
+  correlationId?: string;
 };
 
 // The service a request is addressed to.
 export type Target = MachinePrincipal;
 
-// Trust zones, ordered from least to most trusted:
-//   untrusted (public callers) -> edge (public-facing workers)
-//   -> application (internal services) -> trusted (registry, signing roots).
-export type TrustZone = "untrusted" | "edge" | "application" | "trusted";
+// Runtime domain positions. These are not caller-supplied trust assertions:
+// the auth client derives a worker's position from its configured machine
+// principal.
+//
+// Practical rules:
+// - platform: public ingress workers and provider/egress boundary workers. They
+//   authenticate or mediate traffic at the platform boundary.
+// - application: internal product/data services that run domain workflows.
+// - management: operator/admin product surfaces over application resources
+//   (for example connector admin APIs or a dev-proxy admin UI). Management may
+//   request control-plane changes, but it is not control-plane authority.
+// - control-plane: infrastructure authority over runtime state and trust
+//   machinery (service registry, request intent/placement records, revocation,
+//   signing/key metadata, and authorization-affecting runtime config).
+export type TrustZone = "platform" | "application" | "management" | "control-plane";
 
 // The zone each service occupies. Every service hop carries an on-behalf-of
 // token exchange regardless of whether it crosses zones; the zone pair is
 // evaluated by Cedar `service.exchange` policy at client construction.
 export const SERVICE_ZONE: Record<MachinePrincipal, TrustZone> = {
-  gateway: "edge",
+  gateway: "platform",
   workflows: "application",
   responder: "application",
   spend: "application",
+  registry: "control-plane",
+  attest: "platform",
+  metadata: "application",
+  "application-service": "application",
   // The dev-proxy is a public-facing worker like the gateway: it terminates an
   // untrusted browser caller (CF Access + a Better Auth Discord session) and
   // exchanges an on-behalf-of token into the gateway. Edge → edge exchange is
   // authorized by Cedar.
-  "dev-proxy": "edge",
+  "dev-proxy": "platform",
   // The credential broker is an internal application-zone service like the
   // workflows: authorized callers exchange into it from the application zone.
   connectors: "application",
   // The webhook-ingress worker terminates untrusted third-party POSTs on its
   // own subdomain, so it sits at the edge like the gateway and dev-proxy, and
   // exchanges edge → application into the broker and the workflows worker.
-  webhooks: "edge",
+  webhooks: "platform",
+  // Egress workers are bound per application or application cluster and hold
+  // outbound provider credentials. They are not public ingress; they are a
+  // credentialed egress boundary.
+  egress: "platform",
 };
 
 // A service is a collection of registered operations. Each service accepts
@@ -135,6 +175,10 @@ export const SERVICE_OPERATIONS: Record<MachinePrincipal, readonly string[]> = {
   ],
   responder: ["reply.channel_message", "reply.interaction_edit"],
   spend: ["spend"],
+  registry: [REGISTRY_INVOKE_OPERATION],
+  attest: [ATTEST_INVOKE_OPERATION],
+  metadata: [METADATA_QUERY_OPERATION],
+  "application-service": [APPLICATION_REQUEST_OPERATION],
   "dev-proxy": [],
   // Every connector operation arrives as one `connector.invoke` envelope; the
   // specific operation (fetch/token/authorize) rides in the payload and is
@@ -144,6 +188,37 @@ export const SERVICE_OPERATIONS: Record<MachinePrincipal, readonly string[]> = {
   // webhook POSTs); it exposes no service boundary of its own, so it registers
   // no operations — it only SENDS hops (to the broker and the workflows worker).
   webhooks: [],
+  egress: [EGRESS_REQUEST_OPERATION],
+};
+
+export const SERVICE_TARGETS: Record<MachinePrincipal, readonly MachinePrincipal[]> = {
+  gateway: ["workflows", "application-service"],
+  workflows: ["responder", "spend", "connectors"],
+  responder: [],
+  spend: [],
+  registry: ["registry", "connectors"],
+  attest: ["attest", "connectors"],
+  metadata: ["metadata", "registry", "attest"],
+  "application-service": [],
+  "dev-proxy": ["gateway", "connectors"],
+  connectors: [],
+  webhooks: ["connectors", "workflows"],
+  egress: [],
+};
+
+export const SERVICE_SCOPES: Record<MachinePrincipal, readonly string[]> = {
+  gateway: ["gateway:control:control-plane", "gateway:devproxy:management"],
+  workflows: [],
+  responder: [],
+  spend: [],
+  registry: [],
+  attest: [],
+  metadata: [],
+  "application-service": [],
+  "dev-proxy": [],
+  connectors: [],
+  webhooks: [],
+  egress: [],
 };
 
 // How a request crossed into the receiving service.
@@ -153,10 +228,18 @@ export const isMachinePrincipal = (value: unknown): value is MachinePrincipal =>
   value === "gateway" ||
   value === "workflows" ||
   value === "responder" ||
-  value === "spend" ||
-  value === "dev-proxy" ||
-  value === "connectors" ||
-  value === "webhooks";
+    value === "spend" ||
+    value === "registry" ||
+    value === "attest" ||
+    value === "metadata" ||
+    value === "application-service" ||
+    value === "dev-proxy" ||
+    value === "connectors" ||
+    value === "webhooks" ||
+    value === "egress";
 
 export const isTrustZone = (value: unknown): value is TrustZone =>
-  value === "untrusted" || value === "edge" || value === "application" || value === "trusted";
+  value === "platform" ||
+  value === "application" ||
+  value === "management" ||
+  value === "control-plane";

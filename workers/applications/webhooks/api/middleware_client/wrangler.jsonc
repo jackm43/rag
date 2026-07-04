@@ -1,0 +1,90 @@
+{
+  "name": "ragbot-webhooks-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  "rules": [
+    {
+      // The auth/authz packages this worker imports load
+      // Cedar policy files as Text, exactly like the other workers.
+      "type": "Text",
+      "globs": [
+        "**/*.md",
+        "**/*.cedar"
+      ],
+      "fallthrough": true
+    }
+  ],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  // The centralised webhook-ingress hostname (CONNECTORS.md "URL conventions":
+  // a connector's inbound webhook is webhooks.jsmunro.me/{provider}/{id}).
+  // Deliberately NOT behind Cloudflare Access — third-party providers POST
+  // here and cannot pass an Access ceremony; the provider's HMAC signature
+  // (verified broker-side via connector.webhook.verify) is the authentication.
+  "routes": [
+    {
+      "pattern": "webhooks.jsmunro.me",
+      "custom_domain": true
+    }
+  ],
+  // Secret (never commit) — set with `wrangler secret put <NAME> -c <this config>`:
+  //   WEBHOOKS_SIGNING_KEY  (private Ed25519 JWK from scripts/generate-keys.ts
+  //                          webhooks; signs the webhook_verify hop into the
+  //                          broker and the enqueue hop to the workflows worker)
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true
+    }
+  },
+  "durable_objects": {
+    "bindings": [
+      // TTL'd webhook-replay dedupe store (one object per connector, keyed by
+      // the broker-returned provider event id). Defined by this worker.
+      {
+        "name": "WEBHOOK_DEDUPE",
+        "class_name": "WebhookDedupe"
+      },
+      // Service registry hosted by the standalone ragbot-registry-worker.
+      {
+        "name": "SERVICE_REGISTRY",
+        "class_name": "ServiceRegistry",
+        "script_name": "ragbot-registry-worker"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": [
+        "WebhookDedupe"
+      ]
+    }
+  ],
+  // Verified events are enqueue-only to the workflows worker (providers retry on
+  // non-2xx/timeout, so nothing slow may run inline).
+  "queues": {
+    "producers": [
+      {
+        "binding": "WEBHOOK_JOBS",
+        "queue": "webhook-jobs"
+      }
+    ]
+  },
+  // The credential broker's Connectors entrypoint: the webhook_verify hop.
+  // A service binding is invocable solely by a worker configured with it; the
+  // broker returns only { valid, eventId? } — the webhook secret never
+  // reaches this worker (the phantom-token philosophy, applied inbound).
+  "services": [
+    {
+      "binding": "CONNECTORS",
+      "service": "ragbot-connectors-worker",
+      "entrypoint": "Connectors"
+    }
+  ]
+}

@@ -24,7 +24,7 @@ import {
 } from "../secrets";
 import { sharedAccessTokenCache } from "./cache";
 import { listAppInstallations } from "./providers/github";
-import { CONNECTOR_REGISTRY, lookupConnector } from "./registry";
+import { CONNECTOR_REGISTRY, connectorsToEntities, lookupConnector } from "./registry";
 import {
   createConnectorConfigStore,
   createGrantStore,
@@ -32,6 +32,7 @@ import {
   createOAuthTokenStore,
   durableObjectKeyValueStore,
   generateHandle,
+  isConnectorCapabilities,
   type ConnectorConfigStore,
   type GrantStore,
   type OAuthStateStore,
@@ -75,7 +76,7 @@ import { ConnectorError, type ConnectorConfig, type GrantEntry, type StrategyCon
 // it cannot use a credential. `webhooks` is the webhook-ingress edge worker: it
 // reaches ONLY `connector.webhook.verify` (a boolean out, never a secret), so a
 // compromised receiver can verify signatures but never touch a credential.
-const CONNECTOR_CALLERS: readonly MachinePrincipal[] = ["workflows", "dev-proxy", "webhooks"];
+const CONNECTOR_CALLERS: readonly MachinePrincipal[] = ["workflows", "dev-proxy", "registry", "attest", "webhooks"];
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 
@@ -104,6 +105,7 @@ const denied = (status: number): ConnectorResult => ({ status });
 type CredentialOperation = Exclude<
   ConnectorOperation,
   "admin_list" | "admin_describe" | "admin_set_secret" | "admin_providers" | "admin_installations"
+  | "admin_set_capabilities"
 >;
 const CEDAR_ACTION: Record<CredentialOperation, string> = {
   grant: "connector.grant",
@@ -186,6 +188,15 @@ const filterResponseHeaders = (headers: Headers): Record<string, string> => {
   return filtered;
 };
 
+// Deliberate remaining exception to the egress migration: connector provider
+// HTTP stays on a direct boundary client, host-allowlisted to exactly this
+// connector's registered host. Provider hosts (connector.host, plus the OAuth
+// tokenUrl/authorizationUrl the provider strategies use) are dynamic per
+// connector registration, and these are credentialed calls (GitHub App
+// tokens, OAuth client secrets). A static egress profile would need a
+// wildcard host, and a wildcard-host profile for a CREDENTIALED egress is a
+// security regression — unlike media-download's wildcard, which is
+// uncredentialed. So no egress profile exists for connector providers.
 const connectorBoundary = (connector: ConnectorConfig): BoundaryFetch =>
   createBoundaryClient({
     identity: `connector-${connector.id}`,
@@ -214,9 +225,20 @@ const configStore = (env: Env): ConnectorConfigStore => createConnectorConfigSto
 // path reads through this so the change actually takes effect (and survives).
 // An absent override leaves the registry default untouched.
 const effectiveConnector = async (connector: ConnectorConfig, env: Env): Promise<ConnectorConfig> => {
-  const override = await configStore(env).getSecretRef(connector.id);
-  return override ? { ...connector, secret: override } : connector;
+  const store = configStore(env);
+  const [secretRef, capabilities] = await Promise.all([
+    store.getSecretRef(connector.id),
+    store.getCapabilities(connector.id),
+  ]);
+  return {
+    ...connector,
+    ...(secretRef ? { secret: secretRef } : {}),
+    ...(capabilities ? { capabilities } : {}),
+  };
 };
+
+const connectorEntities = async (env: Env) =>
+  connectorsToEntities(await Promise.all(CONNECTOR_REGISTRY.map((connector) => effectiveConnector(connector, env))));
 
 // The flows a connector's kind supports, for the admin surface (informational —
 // the per-op capability is still Cedar-gated). Derived from the strategy so the
@@ -260,13 +282,14 @@ const authorizeConnector = async (
   connector: ConnectorConfig,
   env: Env,
 ): Promise<boolean> => {
+  const entities = [...(await registryEntities(env)), ...(await connectorEntities(env))];
   const decision = authorize(
     {
-      principal: { type: "Machine", id: caller },
+      principal: { type: "Application", id: caller },
       action: CEDAR_ACTION[operation],
       resource: { type: "Connector", id: connector.cedarResource },
     },
-    await registryEntities(env),
+    entities,
   );
   return decision.allowed;
 };
@@ -308,13 +331,14 @@ const authorizeAdmin = async (
   resourceId: string,
   env: Env,
 ): Promise<boolean> => {
+  const entities = [...(await registryEntities(env)), ...(await connectorEntities(env))];
   const decision = authorize(
     {
-      principal: { type: "Machine", id: caller },
+      principal: { type: "Application", id: caller },
       action,
       resource: { type: "Connector", id: resourceId },
     },
-    await registryEntities(env),
+    entities,
   );
   return decision.allowed;
 };
@@ -883,6 +907,34 @@ const handleAdminSetSecret = async (
   });
 };
 
+const handleAdminSetCapabilities = async (
+  job: ConnectorInvokeJob,
+  caller: MachinePrincipal,
+  context: RequestContext,
+  env: Env,
+): Promise<ConnectorResult> => {
+  const connector = lookupConnector(job.connectorId);
+  if (!connector) {
+    logDenied("unknown_connector", { caller, connectorId: job.connectorId });
+    return denied(404);
+  }
+  if (!(await authorizeAdmin(caller, "connector.admin.write", connector.cedarResource, env))) {
+    logDenied("not_authorized", { caller, connectorId: connector.id, action: "connector.admin.write" });
+    return denied(403);
+  }
+  const params = parseParams(job.paramsJson);
+  if (!isConnectorCapabilities(params.capabilities)) {
+    logDenied("invalid_capabilities", { caller, connectorId: connector.id });
+    return denied(400);
+  }
+  await configStore(env).setCapabilities(connector.id, params.capabilities);
+  auditAdmin("admin_set_capabilities", caller, context, {
+    connectorId: connector.id,
+    capabilityKeys: Object.keys(params.capabilities).sort(),
+  });
+  return { status: 200 };
+};
+
 // List a github_app connector's App installations for the admin surface (the
 // reserved GET /api/connectors/{id}/installations endpoint). Gated under the
 // existing connector.admin.read action — it discloses configuration-level facts
@@ -950,6 +1002,8 @@ export const handleConnectorInvoke = async (
         return await handleAdminDescribe(job, caller, received.context, env);
       case "admin_set_secret":
         return await handleAdminSetSecret(job, caller, received.context, env);
+      case "admin_set_capabilities":
+        return await handleAdminSetCapabilities(job, caller, received.context, env);
       case "admin_providers":
         return await handleAdminProviders(caller, received.context, env);
       case "admin_installations":

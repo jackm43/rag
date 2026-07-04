@@ -1,10 +1,24 @@
 import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
-import worker from "../../workers/public/gateway/src/index.ts";
+import worker from "../../workers/applications/gateway/api/middleware_client/src/index.ts";
 import { encodeAiSpendJobEnvelope } from "../../packages/contracts/index.ts";
 import { processSpendQueueMessage } from "../../packages/ai/spend.ts";
 import { createDbMock, createEnv, createSignedRequest, signedServiceMessage } from "../helpers.ts";
+
+// Outbound HTTP bodies now travel through the egress hop as raw bytes, so a
+// captured init.body is an ArrayBuffer rather than the original string. The
+// bytes are byte-identical to before; decode them to assert on content.
+const bodyText = (init: RequestInit | undefined): string => {
+  const body = init?.body;
+  if (typeof body === "string") {
+    return body;
+  }
+  if (body instanceof ArrayBuffer) {
+    return new TextDecoder().decode(body);
+  }
+  return String(body);
+};
 
 test("/rag interaction is deferred and edits the original response from waitUntil", async () => {
   const keyPair = nacl.sign.keyPair();
@@ -59,7 +73,7 @@ test("/rag interaction is deferred and edits the original response from waitUnti
       "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
     );
     assert.equal(discordCall.init?.method, "PATCH");
-    assert.deepEqual(JSON.parse(String(discordCall.init?.body)), {
+    assert.deepEqual(JSON.parse(bodyText(discordCall.init)), {
       content: "<@2> just ragged. Total: 7",
       allowed_mentions: {
         parse: [],
@@ -173,7 +187,7 @@ test("/rag is blocked while the invoker has an active raghammer ban", async () =
       (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
     );
     assert.ok(editCall);
-    assert.deepEqual(JSON.parse(String(editCall.init?.body)), {
+    assert.deepEqual(JSON.parse(bodyText(editCall.init)), {
       content: "You cannot use /rag until <t:4070908800:R>.",
       allowed_mentions: { parse: [] },
     });
@@ -705,7 +719,7 @@ test("spend worker aggregates pending spend events", async () => {
       {
         body: await signedServiceMessage(
           encodeAiSpendJobEnvelope({ spendEventId: "event-1" }, { source: "worker" }),
-          { iss: "workflows", aud: "spend" },
+          { iss: "workflows", aud: "spend", env },
         ),
         attempts: 1,
         ack: () => {

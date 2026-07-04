@@ -1,10 +1,9 @@
 import { SERVICE_OPERATIONS, SERVICE_ZONE } from "../../../../packages/auth/principal";
 import type { ServiceManifest } from "../../../../packages/auth/manifest";
 
-// The responder's position: an application service (the sole Discord write
-// egress) accepting reply operations and exchanging into nothing. Its
-// registered operations are declared from the shared registry so the manifest
-// and the boundary enforce the same set.
+// The responder's position: an application service accepting reply operations.
+// Discord writes cross the egress boundary as a sidecar policy decision, not as
+// a domain application target.
 export const RESPONDER_MANIFEST: ServiceManifest = {
   service: "responder",
   zone: SERVICE_ZONE.responder,

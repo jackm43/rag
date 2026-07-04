@@ -11,6 +11,11 @@ export type ServiceManifest = {
   zone: TrustZone;
   targets: MachinePrincipal[];
   operations: string[];
+  // Runtime-registered control-plane/management resources owned by this
+  // application.
+  // Encoded over the existing service.capnp `scopes` field until resource
+  // manifests get their own contract. Format: `gateway:<id>:<plane>`, where
+  // plane is `control-plane`, `management`, or `data`.
   scopes?: string[];
 };
 
@@ -29,43 +34,72 @@ export const isServiceManifest = (value: unknown): value is ServiceManifest => {
   );
 };
 
-const entityRef = (type: "Machine" | "Service", id: string) => ({
+const serviceMethodId = (service: MachinePrincipal, operation: string) => `${service}:${operation}`;
+
+export const serviceResourceId = (service: MachinePrincipal, operation: string) =>
+  serviceMethodId(service, operation);
+
+const entityRef = (type: "Application" | "Service", id: string) => ({
   __entity: { type, id },
 });
 
-// The registry as Cedar entities: for each registered service, a Machine
-// principal entity (zone, targets, operations) and a Service resource entity
-// (zone, clients derived from the OTHER manifests' targets, and the
-// operations it accepts). The Service carries operations so the invoke policy
-// can authorize the specific operation against the receiver's registered set,
-// not just the service-level pairing. Pure so the position calculation is
-// testable outside the Durable Object.
+const gatewayResourceFromScope = (scope: string): EntityJson | null => {
+  const [kind, id, plane] = scope.split(":");
+  if (kind !== "gateway" || !id || !plane) {
+    return null;
+  }
+  if (plane !== "control-plane" && plane !== "management" && plane !== "data") {
+    return null;
+  }
+  return {
+    uid: { type: "Gateway", id },
+    attrs: { plane },
+    parents: [],
+  };
+};
+
+// The registry as Cedar entities: for each registered application, an
+// Application principal/resource entity (zone, target applications), plus one
+// method-level Service resource per operation it accepts. Service resources are
+// data-plane method objects, so Cedar authorizes invocation against
+// Service::<application>:<operation>, not a broad service bucket.
 export const manifestsToEntities = (manifests: ServiceManifest[]): EntityJson[] => {
   const entities: EntityJson[] = [];
   for (const manifest of manifests) {
     const clients = manifests
       .filter((other) => other.targets.includes(manifest.service))
-      .map((other) => entityRef("Machine", other.service));
+      .map((other) => entityRef("Application", other.service));
     entities.push(
       {
-        uid: { type: "Machine", id: manifest.service },
+        uid: { type: "Application", id: manifest.service },
         attrs: {
           zone: manifest.zone,
-          targets: manifest.targets.map((target) => entityRef("Service", target)),
-          operations: manifest.operations,
-        },
-        parents: [],
-      },
-      {
-        uid: { type: "Service", id: manifest.service },
-        attrs: {
-          zone: manifest.zone,
-          clients,
+          plane: "data",
+          targets: manifest.targets.map((target) => entityRef("Application", target)),
           operations: manifest.operations,
         },
         parents: [],
       },
     );
+    for (const operation of manifest.operations) {
+      entities.push({
+        uid: { type: "Service", id: serviceMethodId(manifest.service, operation) },
+        attrs: {
+          application: entityRef("Application", manifest.service),
+          zone: manifest.zone,
+          plane: "data",
+          operation,
+          clients,
+        },
+        parents: [],
+      });
+    }
+    for (const scope of manifest.scopes ?? []) {
+      const resource = gatewayResourceFromScope(scope);
+      if (resource) {
+        entities.push(resource);
+      }
+    }
   }
   return entities;
 };

@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/openapi.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Dev-proxy generated OpenAPI document */
+        get: operations["devProxyOpenApiJson"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/": {
         parameters: {
             query?: never;
@@ -11,13 +28,62 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * The dev-proxy single-page admin UI
-         * @description Serves the self-contained page with a "Sign in with Discord" button and the command form. Behind Cloudflare Access; the page drives Better Auth's login endpoints and posts commands with the session cookie.
-         */
+        /** The dev-proxy single-page admin UI */
         get: operations["devProxyPage"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/apis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The dev-proxy API workbench view */
+        get: operations["devProxyApiWorkbenchPage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/github": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The dev-proxy GitHub API browser view */
+        get: operations["devProxyGithubPage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Better Auth session and OAuth endpoints */
+        get: operations["devProxyAuthGet"];
+        put?: never;
+        /** Better Auth session and OAuth endpoints */
+        post: operations["devProxyAuthPost"];
         delete?: never;
         options?: never;
         head?: never;
@@ -33,11 +99,42 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Proxy a slash command through the gateway
-         * @description Runs a command through the production gateway → workflows path, authorized as the authenticated Discord user. Requires BOTH a valid Access token AND a Better Auth session that is bound to the same Access identity. The response is the gateway's command result relayed verbatim.
-         */
+        /** Proxy a slash command through the gateway */
         post: operations["devProxyCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/github": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Call a GitHub API through the GitHub App connector */
+        post: operations["callGithubApi"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/github/routes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List known GitHub REST API routes */
+        get: operations["listGithubRoutes"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -51,10 +148,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List the connectors and their secret status
-         * @description The connectors admin surface. Behind the SAME layered auth as /api/command (Access verified + a Better Auth session bound to that Access identity). The dev-proxy mints an on-behalf-of identity token (the acting Discord admin) and invokes the connectors broker's Connectors service binding with the connector.admin.list op. NEVER returns a secret value — only whether each connector's referenced secret currently resolves, and which backend it resolves through.
-         */
+        /** List connectors and their secret status */
         get: operations["listConnectors"];
         put?: never;
         post?: never;
@@ -71,10 +165,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Describe one connector's config and status
-         * @description One connector's configuration + status (connector.admin.read). No secret value; the secret is described only by its {provider, ref} reference and whether it resolves.
-         */
+        /** Describe one connector's config and status */
         get: operations["describeConnector"];
         put?: never;
         post?: never;
@@ -92,10 +183,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /**
-         * Set or re-point a connector's secret
-         * @description Write or re-point a connector's secret (connector.admin.write). The secret `value` flows INWARD only — to the broker, then the backend — and is NEVER returned. The outcome depends on the backend's runtime write capability: `written` (hashicorp-vault, onepassword), `provision_required` (cloudflare-secret-store — re-pointed but must be provisioned via the CF control plane; returned as 202), or `rejected` (wrangler-env with a value is deploy-time only; returned as 409). No outcome is faked.
-         */
+        /** Set or re-point a connector's secret */
         put: operations["setConnectorSecret"];
         post?: never;
         delete?: never;
@@ -113,10 +201,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Begin an admin-initiated 3LO authorization
-         * @description Starts a connector's oauth2_authorization_code (3LO) consent flow as the authenticated Discord admin (connector.authorize at the broker). The broker mints a SINGLE-USE state bound to that acting subject, persists it, and returns the provider consent URL; the UI sends the admin there, and the provider redirects back to GET /api/connectors/{id}/callback with the code and that state. Only a connector whose kind supports 3LO can begin — anything else is the broker's fail-closed 400, relayed honestly. No request body.
-         */
+        /** Begin an admin-initiated 3LO authorization */
         post: operations["connectorGrant"];
         delete?: never;
         options?: never;
@@ -131,10 +216,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List a github_app connector's App installations
-         * @description The connector's GitHub App installations (connector.admin.read at the broker), trimmed to {id, accountLogin, repositorySelection} for the admin UI's installation picker. The App JWT that lists them stays broker-side; only a github_app connector has installations to list (anything else is the broker's fail-closed 400).
-         */
+        /** List a github_app connector's App installations */
         get: operations["listConnectorInstallations"];
         put?: never;
         post?: never;
@@ -151,16 +233,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * 3LO provider redirect callback (browser)
-         * @description The connector's authorization callback (https://ragbot-dev.jsmunro.me/api/connectors/{id}/callback) — where the provider redirects the admin's browser after the consent page. The browser still carries the Access cookie and the Better Auth session, so the SAME layered auth applies as on begin; the broker additionally enforces that the completing subject is the one the single-use state was minted for. With ?code=&state= the worker forwards both to the broker's complete_authorization (the code is sensitive — forwarded only, never logged or echoed); with a provider denial (?error=...) it reports failure WITHOUT calling the broker. Responds with a minimal self-contained HTML page either way.
-         */
+        /** 3LO provider redirect callback */
         get: operations["connectorCallbackGet"];
         put?: never;
-        /**
-         * 3LO completion (API variant)
-         * @description Completes a 3LO authorization with the same params as the browser callback, as a JSON body instead of a query string — for an API-driven caller that received the provider redirect out-of-band. Same layered auth, same broker-side subject-bound single-use state enforcement, same code-sensitivity rules.
-         */
+        /** 3LO completion API variant */
         post: operations["connectorCallbackPost"];
         delete?: never;
         options?: never;
@@ -175,10 +251,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List the secrets backends and their runtime write capability
-         * @description The secrets backends (connector.admin.list): for each, whether it is runtime-`writable` (the admin surface may write a value) and whether it is `configured` on the broker. The UI disables value entry for non-writable backends. Never returns a secret value.
-         */
+        /** List secrets backends and runtime write capability */
         get: operations["getSecretsProviders"];
         put?: never;
         post?: never;
@@ -193,119 +266,78 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         CommandOption: {
-            /** @description Slash-command option name. */
             name: string;
-            /** @description Option value (coerced by the command layer as a Discord option). */
             value: string;
         };
         CommandRequest: {
-            /** @description Slash-command name (e.g. ask, rag, ragboard). */
             command: string;
-            /** @description Optional Discord channel id the command targets. */
             channelId?: string;
             options?: components["schemas"]["CommandOption"][];
         };
-        /** @description A connector's config-level facts + secret status. No secret value. */
-        ConnectorSummary: {
-            /** @description The connector's stable slug id. */
-            id: string;
-            /** @description The connector kind (e.g. github_app, api_key, oauth2_*). */
-            kind: string;
-            /** @description The single provider host this connector may reach. */
-            host: string;
-            /** @description The operations the kind supports (grant/fetch/token/authorize). */
-            flows: string[];
-            /** @description Whether the connector's referenced secret currently resolves. */
-            secretConfigured: boolean;
-            /** @description The backend the secret resolves through (registry default or override). */
-            secretProvider: string;
-        };
-        ConnectorDetail: components["schemas"]["ConnectorSummary"] & {
-            /** @description The Cedar resource id authorization is against. */
-            cedarResource: string;
-            /** @description The secret's backend locator (a reference, never a value). */
-            secretRef: string;
-            /** @description Whether an admin has re-pointed the secret away from the registry default. */
-            secretOverridden: boolean;
-        };
-        SecretsProviderStatus: {
-            /** @description The backend name (wrangler-env / cloudflare-secret-store / hashicorp-vault / onepassword). */
-            name: string;
-            /** @description Whether the backend supports a runtime secret write (set). */
-            writable: boolean;
-            /** @description Whether the backend has the env/binding it needs on the broker. */
-            configured: boolean;
+        GithubApiRequest: {
+            installationId: string;
+            /** @enum {string} */
+            method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+            path?: string;
+            route?: string;
+            params?: {
+                [key: string]: string | number | boolean;
+            };
+            headers?: {
+                [key: string]: string;
+            };
+            body?: string;
         };
         SetConnectorSecretRequest: {
-            /**
-             * @description The secrets backend to point the connector at.
-             * @enum {string}
-             */
+            /** @enum {string} */
             provider: "wrangler-env" | "cloudflare-secret-store" | "hashicorp-vault" | "onepassword";
-            /** @description The backend locator (env binding name / Secrets Store name / Vault "<mount>/<path>#<field>" / "op://vault/item/field"). Required when a value is supplied. */
             ref?: string;
-            /** @description The secret material. Flows INWARD only (to the broker, then the backend); never returned. Omit to only re-point the connector at an already-provisioned ref. */
             value?: string;
         };
-        /** @description The outcome of a set-secret op. Never contains the secret value. */
-        SetConnectorSecretResult: {
-            /**
-             * @description written (value written at runtime), referenced (re-pointed to an existing ref), provision_required (re-pointed but must be provisioned out-of-band), rejected (refused; nothing persisted).
-             * @enum {string}
-             */
-            status: "written" | "referenced" | "provision_required" | "rejected";
-            connectorId: string;
-            provider: string;
-            ref: string;
-            /** @description Whether the connector's secret now resolves through the chosen reference. */
-            secretConfigured: boolean;
-            /** @description A human-readable operator message (never the secret value). */
-            detail?: string;
-        };
-        /** @description A begun 3LO authorization. The state is the broker-minted single-use handle bound to the acting subject; it rides in the consent URL and comes back on the callback. */
-        GrantAuthorizationResult: {
-            /** @description The provider consent URL to send the admin to. */
-            url: string;
-            /** @description The broker-minted single-use, subject-bound state. */
-            state: string;
-            /** @description The connector the authorization was begun for. */
-            connectorId: string;
-        };
-        /** @description The 3LO completion params (the POST variant of the browser callback's query string). The code is sensitive — forwarded to the broker only, never logged, never returned. */
         CompleteAuthorizationRequest: {
-            /** @description The provider's authorization code. */
             code: string;
-            /** @description The broker-minted single-use state from begin. */
             state: string;
         };
-        /** @description A completed 3LO authorization. Never carries a token or the code. */
-        CompleteAuthorizationResult: {
-            /** @description Always true on 200 — the broker stored the subject's tokens. */
-            authorized: boolean;
-            /** @description The connector the authorization completed for. */
+        GrantAuthorizationResult: {
+            url: string;
+            state: string;
             connectorId: string;
         };
-        /** @description One GitHub App installation, trimmed to the identifying fields the admin surface needs (the raw provider response stays broker-side). */
-        ConnectorInstallation: {
-            /** @description The installation id (github_app grant input). */
-            id: number;
-            /** @description The org/user account the App is installed on. */
-            accountLogin: string;
-            /** @description Whether the installation covers all or selected repositories. */
-            repositorySelection: string;
+        CompleteAuthorizationResult: {
+            authorized: boolean;
+            connectorId: string;
         };
     };
     responses: never;
-    parameters: {
-        /** @description The connector's stable slug id. */
-        ConnectorId: string;
-    };
+    parameters: never;
     requestBodies: never;
     headers: never;
     pathItems: never;
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    devProxyOpenApiJson: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Generated OpenAPI document. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     devProxyPage: {
         parameters: {
             query?: never;
@@ -326,6 +358,108 @@ export interface operations {
             };
         };
     };
+    devProxyApiWorkbenchPage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description HTML page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    devProxyGithubPage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description HTML page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    devProxyAuthGet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Better Auth response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or invalid Access token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    devProxyAuthPost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Better Auth response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or invalid Access token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     devProxyCommand: {
         parameters: {
             query?: never;
@@ -339,7 +473,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Command result (a Discord interaction response payload). */
+            /** @description Request succeeded. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -350,29 +484,119 @@ export interface operations {
                     };
                 };
             };
-            /** @description Malformed command request body. */
+            /** @description Malformed request. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Missing/invalid Access token, or no valid Better Auth session, or a session presented under a different Access identity than it was bound to (cross-identity replay). */
+            /** @description Missing or invalid Access token, or no valid Better Auth session. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description The acting Discord subject is not allowed by the gateway. */
+            /** @description The authenticated subject is not authorized for the requested operation. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Upstream gateway error. */
+            /** @description Upstream service or connector broker error. */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    callGithubApi: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GithubApiRequest"];
+            };
+        };
+        responses: {
+            /** @description Request succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Malformed request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid Access token, or no valid Better Auth session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The authenticated subject is not authorized for the requested operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream service or connector broker error. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listGithubRoutes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description GitHub REST API route catalog. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or invalid Access token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Route catalog is not provisioned in the runtime bucket. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -389,32 +613,39 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The connectors and their (secret-free) status. */
+            /** @description Request succeeded. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        connectors?: components["schemas"]["ConnectorSummary"][];
+                        [key: string]: unknown;
                     };
                 };
             };
-            /** @description Missing/invalid Access token or no valid session. */
+            /** @description Malformed request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid Access token, or no valid Better Auth session. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description The dev-proxy is not authorized for connector.admin.list. */
+            /** @description The authenticated subject is not authorized for the requested operation. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Broker error. */
+            /** @description Upstream service or connector broker error. */
             502: {
                 headers: {
                     [name: string]: unknown;
@@ -428,32 +659,38 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The connector's stable slug id. */
-                id: components["parameters"]["ConnectorId"];
+                id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The connector detail (secret-free). */
+            /** @description Request succeeded. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        connector?: components["schemas"]["ConnectorDetail"];
+                        [key: string]: unknown;
                     };
                 };
             };
-            /** @description Missing/invalid Access token or no valid session. */
+            /** @description Malformed request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid Access token, or no valid Better Auth session. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description The dev-proxy is not authorized for connector.admin.read. */
+            /** @description The authenticated subject is not authorized for the requested operation. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -467,7 +704,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Broker error. */
+            /** @description Upstream service or connector broker error. */
             502: {
                 headers: {
                     [name: string]: unknown;
@@ -481,8 +718,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The connector's stable slug id. */
-                id: components["parameters"]["ConnectorId"];
+                id: string;
             };
             cookie?: never;
         };
@@ -492,43 +728,43 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Secret written (`written`) or connector re-pointed (`referenced`). */
+            /** @description Request succeeded. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        secret?: components["schemas"]["SetConnectorSecretResult"];
+                        [key: string]: unknown;
                     };
                 };
             };
-            /** @description Connector re-pointed, but the backend cannot be written at runtime — provision the secret out-of-band (`provision_required`). */
+            /** @description Connector re-pointed; out-of-band provisioning is required. */
             202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        secret?: components["schemas"]["SetConnectorSecretResult"];
+                        [key: string]: unknown;
                     };
                 };
             };
-            /** @description Malformed body (unknown provider, or a value with no ref). */
+            /** @description Malformed request. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Missing/invalid Access token or no valid session. */
+            /** @description Missing or invalid Access token, or no valid Better Auth session. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description The dev-proxy is not authorized for connector.admin.write. */
+            /** @description The authenticated subject is not authorized for the requested operation. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -542,16 +778,23 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The operation was refused (e.g. a value for a deploy-time-only backend); `secret.detail` says why. Nothing was persisted. */
+            /** @description The operation was refused and nothing was persisted. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        secret?: components["schemas"]["SetConnectorSecretResult"];
+                        [key: string]: unknown;
                     };
                 };
+            };
+            /** @description Upstream service or connector broker error. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -560,37 +803,38 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The connector's stable slug id. */
-                id: components["parameters"]["ConnectorId"];
+                id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The provider consent URL to send the admin to. */
+            /** @description Request succeeded. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GrantAuthorizationResult"];
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
-            /** @description The connector's kind has no 3LO authorization flow. */
+            /** @description Malformed request. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Missing/invalid Access token or no valid session. */
+            /** @description Missing or invalid Access token, or no valid Better Auth session. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description The dev-proxy is not authorized for connector.authorize. */
+            /** @description The authenticated subject is not authorized for the requested operation. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -604,7 +848,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Broker error. */
+            /** @description Upstream service or connector broker error. */
             502: {
                 headers: {
                     [name: string]: unknown;
@@ -618,39 +862,38 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The connector's stable slug id. */
-                id: components["parameters"]["ConnectorId"];
+                id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The connector's installations. */
+            /** @description Request succeeded. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        installations?: components["schemas"]["ConnectorInstallation"][];
+                        [key: string]: unknown;
                     };
                 };
             };
-            /** @description The connector's kind has no installations to list. */
+            /** @description Malformed request. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Missing/invalid Access token or no valid session. */
+            /** @description Missing or invalid Access token, or no valid Better Auth session. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description The dev-proxy is not authorized for connector.admin.read. */
+            /** @description The authenticated subject is not authorized for the requested operation. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -664,7 +907,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Broker error. */
+            /** @description Upstream service or connector broker error. */
             502: {
                 headers: {
                     [name: string]: unknown;
@@ -676,25 +919,20 @@ export interface operations {
     connectorCallbackGet: {
         parameters: {
             query?: {
-                /** @description The provider's authorization code (success redirect). */
                 code?: string;
-                /** @description The broker-minted single-use state from begin. */
                 state?: string;
-                /** @description The provider's denial code (e.g. access_denied). */
                 error?: string;
-                /** @description The provider's human-readable denial detail. */
                 error_description?: string;
             };
             header?: never;
             path: {
-                /** @description The connector's stable slug id. */
-                id: components["parameters"]["ConnectorId"];
+                id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Authorization complete (HTML page). */
+            /** @description Authorization complete. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -703,7 +941,7 @@ export interface operations {
                     "text/html": string;
                 };
             };
-            /** @description Provider denial (?error=...) or missing/malformed code/state (HTML page). */
+            /** @description Provider denial or missing callback parameters. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -712,14 +950,14 @@ export interface operations {
                     "text/html": string;
                 };
             };
-            /** @description Missing/invalid Access token or no valid session. */
+            /** @description Missing or invalid Access token, or no valid Better Auth session. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description The state is unknown, expired, already used, or bound to a different subject than the session's (HTML page). */
+            /** @description The broker refused completion. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -735,7 +973,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The broker's code-for-token exchange failed (HTML page). */
+            /** @description The broker's code-for-token exchange failed. */
             502: {
                 headers: {
                     [name: string]: unknown;
@@ -751,8 +989,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The connector's stable slug id. */
-                id: components["parameters"]["ConnectorId"];
+                id: string;
             };
             cookie?: never;
         };
@@ -762,30 +999,32 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Authorization complete; the broker stored the subject's tokens. */
+            /** @description Request succeeded. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CompleteAuthorizationResult"];
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
-            /** @description Malformed body (missing code/state). */
+            /** @description Malformed request. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Missing/invalid Access token or no valid session. */
+            /** @description Missing or invalid Access token, or no valid Better Auth session. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description The state is unknown, expired, already used, or bound to a different subject than the session's. */
+            /** @description The authenticated subject is not authorized for the requested operation. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -799,7 +1038,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The broker's code-for-token exchange failed. */
+            /** @description Upstream service or connector broker error. */
             502: {
                 headers: {
                     [name: string]: unknown;
@@ -817,32 +1056,39 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The secrets backends and their capability. */
+            /** @description Request succeeded. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        providers?: components["schemas"]["SecretsProviderStatus"][];
+                        [key: string]: unknown;
                     };
                 };
             };
-            /** @description Missing/invalid Access token or no valid session. */
+            /** @description Malformed request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid Access token, or no valid Better Auth session. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description The dev-proxy is not authorized for connector.admin.list. */
+            /** @description The authenticated subject is not authorized for the requested operation. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Broker error. */
+            /** @description Upstream service or connector broker error. */
             502: {
                 headers: {
                     [name: string]: unknown;

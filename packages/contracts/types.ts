@@ -167,6 +167,9 @@ export type ConnectorOperation =
   //   admin_set_secret — write/point a connector's secret (connectorId; params
   //                      carry {provider, ref?, value?}); the value flows inward
   //                      only and is never echoed back
+  //   admin_set_capabilities — replace a connector's application capability
+  //                      lists. This is a control-plane update; it never touches
+  //                      provider credentials.
   //   admin_providers — the secrets backends + their runtime write capability
   //   admin_installations — a github_app connector's App installations (id +
   //                      account + repository selection; gated by
@@ -174,6 +177,7 @@ export type ConnectorOperation =
   | "admin_list"
   | "admin_describe"
   | "admin_set_secret"
+  | "admin_set_capabilities"
   | "admin_providers"
   | "admin_installations";
 
@@ -215,6 +219,93 @@ export type WebhookEventJob = {
   receivedAt: string;
   bodyBase64: string;
 };
+
+export type EgressRequestJob = {
+  kind: "egress.request";
+  profile: string;
+  method: string;
+  url: string;
+  headersJson: string;
+  bodySha256?: string;
+};
+
+export type EgressResult = {
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  body: ArrayBuffer;
+};
+
+export type EgressCredentialRef = {
+  header: string;
+  env: string;
+  prefix?: string;
+};
+
+export type EgressProfileConfig = {
+  identity?: string;
+  allowedCallers: string[];
+  allowedHosts: string[];
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+  logPath?: boolean;
+  credential?: EgressCredentialRef;
+};
+
+export type ApplicationRequestJob = {
+  kind: "application.request";
+  applicationId: string;
+  operationId: string;
+  serviceOperation: string;
+  method: string;
+  url: string;
+  headersJson: string;
+  bodyBase64: string;
+  linkedTokenSha256: string;
+};
+
+export type RegistryInvokeOperation =
+  | "application.list"
+  | "application.create"
+  | "application.get"
+  | "application.update"
+  | "application.delete"
+  | "application.attestations.verify";
+
+export type RegistryInvokeJob = {
+  kind: "registry.invoke";
+  operation: RegistryInvokeOperation;
+  actorJson: string;
+  bodyJson: string;
+  targetId?: string;
+};
+
+export type MetadataQueryJob = {
+  kind: "metadata.query";
+  query: string;
+  variablesJson: string;
+  operationName?: string;
+};
+
+// The single operation attest's own service-binding entrypoint accepts today:
+// an HTTP-shaped GitHub webhook delivery relayed by the middleware client
+// after its own edge-level method/size checks. Mirrors RegistryInvokeOperation.
+export type AttestInvokeOperation = "webhook.github";
+
+// headersJson carries ONLY the small filtered GitHub signature headers
+// (x-hub-signature-256, x-github-delivery, x-github-event) as a JSON object —
+// never the full request header set. bodyBase64 is the raw webhook body,
+// capped at MAX_WEBHOOK_BODY_BYTES before base64 (like WebhookEventJob).
+export type AttestInvokeJob = {
+  kind: "attest.invoke";
+  operation: AttestInvokeOperation;
+  headersJson: string;
+  bodyBase64: string;
+};
+
+export type PreparedApplicationRequest =
+  | { ok: true; message: ServiceMessageBytes }
+  | { ok: false; status: number; error: string };
 
 export type ChannelMessageReplyJob = {
   kind: "reply.channel_message";
@@ -382,6 +473,21 @@ export type ConnectorResult = {
   installations?: ConnectorInstallation[];
 };
 
+export type RegistryInvokeResult = {
+  status: number;
+  body: unknown;
+};
+
+export type MetadataQueryResult = {
+  status: number;
+  body: unknown;
+};
+
+export type AttestInvokeResult = {
+  status: number;
+  body: unknown;
+};
+
 // Service-hop queue body: capnp-encoded ServiceMessage bytes (service.capnp)
 // framing the EventEnvelope with the signed identity-context token (compact
 // JWS) as a sibling Text field. The token is minted by the sending service
@@ -437,15 +543,18 @@ export type DiscordChannel = {
 };
 
 export type Env = Cloudflare.Env & {
+  METADATA_QUERY_TOKEN?: string;
+  LINKED_APP_TOKEN?: string;
+  LINKED_APP_TOKEN_SHA256?: string;
   AI_JOBS: Queue<ServiceMessageBytes>;
   SPEND_JOBS?: Queue<ServiceMessageBytes>;
   DISCORD_OUTBOX?: Queue<ServiceMessageBytes>;
   // Verified webhook events from the webhooks edge worker to the workflows worker
-  // (producer on workers/public/webhooks, consumer on the workflows worker), carrying
+  // (producer on workers/applications/webhooks, consumer on the workflows worker), carrying
   // wrapped ServiceMessage bytes exactly like AI_JOBS.
   WEBHOOK_JOBS?: Queue<ServiceMessageBytes>;
   // The webhooks worker's TTL'd dedupe store, a Durable Object it defines and
-  // binds (workers/public/webhooks). One object per connector; firstSeen()
+  // binds (workers/applications/webhooks). One object per connector; firstSeen()
   // atomically records a provider event id and reports whether it was new
   // within the replay window. Typed structurally, like SERVICE_REGISTRY.
   WEBHOOK_DEDUPE?: {
@@ -456,12 +565,27 @@ export type Env = Cloudflare.Env & {
   };
   RESPONDER?: {
     deliverInteractionEdit: (
-      envelope: Uint8Array,
+      message: ServiceMessageBytes,
       attachment: ResponderAttachment,
-      idToken: string,
     ) => Promise<void>;
   };
-  // ServiceRegistry Durable Object (hosted by the gateway worker). Typed
+  // Generic bound egress proxy. Application workers call this with a signed
+  // egress.request ServiceMessage plus optional raw body bytes. The egress
+  // worker owns host allowlists and credential injection for the named profile.
+  EGRESS?: {
+    fetchProfile: (message: ServiceMessageBytes, body?: ArrayBuffer) => Promise<EgressResult>;
+  };
+  // Per-application egress profile authority. The egress worker selects an
+  // object by verified caller/application, then resolves the requested profile.
+  EGRESS_CONTROL?: {
+    idFromName: (name: string) => DurableObjectId;
+    get: (id: DurableObjectId) => {
+      getProfile: (profile: string) => Promise<EgressProfileConfig | null>;
+      putProfile: (profile: string, config: EgressProfileConfig) => Promise<void>;
+      snapshot: () => Promise<Record<string, EgressProfileConfig>>;
+    };
+  };
+  // ServiceRegistry Durable Object (hosted by ragbot-registry-worker). Typed
   // structurally like RESPONDER so contracts does not import worker code.
   // Both RPC payloads are capnp bytes (service.capnp: ServiceManifest in,
   // ManifestSnapshot out).
@@ -470,10 +594,158 @@ export type Env = Cloudflare.Env & {
     get: (id: DurableObjectId) => {
       register: (manifest: Uint8Array) => Promise<void>;
       snapshot: () => Promise<Uint8Array>;
+      createIntent: (record: {
+        iss: string;
+        sub: string;
+        aud: string;
+        jti: string;
+        correlationId: string;
+        subject: string;
+        initiatingApplication: string;
+        action: string;
+        resource: string;
+        method: string;
+        allowedApplications: string[];
+        ttlMs?: number;
+      }) => Promise<{
+        id: string;
+        iss: string;
+        sub: string;
+        aud: string;
+        iat: number;
+        nbf: number;
+        exp: number;
+        jti: string;
+        correlationId: string;
+        subject: string;
+        initiatingApplication: string;
+        action: string;
+        resource: string;
+        method: string;
+        allowedApplications: string[];
+        expiresAt: number;
+        version: number;
+        revokedAt?: number;
+      }>;
+      createPlacement: (record: {
+        iss: string;
+        sub: string;
+        aud: string;
+        jti: string;
+        correlationId: string;
+        requestId: string;
+        subject: string;
+        source: string;
+        target: string;
+        action: string;
+        resource: string;
+        method: string;
+        ttlMs?: number;
+      }) => Promise<{
+        id: string;
+        iss: string;
+        sub: string;
+        aud: string;
+        iat: number;
+        nbf: number;
+        exp: number;
+        jti: string;
+        correlationId: string;
+        requestId: string;
+        subject: string;
+        source: string;
+        target: string;
+        action: string;
+        resource: string;
+        method: string;
+        expiresAt: number;
+        intentVersion: number;
+      } | null>;
+      consumePlacement: (input: {
+        placementId: string;
+        requestId: string;
+        correlationId?: string;
+        subject: string;
+        source: string;
+        target: string;
+        action: string;
+        resource: string;
+        method: string;
+      }) => Promise<boolean>;
+      revokeIntent: (requestId: string) => Promise<{
+        id: string;
+        iss: string;
+        sub: string;
+        aud: string;
+        iat: number;
+        nbf: number;
+        exp: number;
+        jti: string;
+        correlationId: string;
+        subject: string;
+        initiatingApplication: string;
+        action: string;
+        resource: string;
+        method: string;
+        allowedApplications: string[];
+        expiresAt: number;
+        version: number;
+        revokedAt?: number;
+      } | null>;
+      bumpIntentVersion: (requestId: string) => Promise<{
+        id: string;
+        iss: string;
+        sub: string;
+        aud: string;
+        iat: number;
+        nbf: number;
+        exp: number;
+        jti: string;
+        correlationId: string;
+        subject: string;
+        initiatingApplication: string;
+        action: string;
+        resource: string;
+        method: string;
+        allowedApplications: string[];
+        expiresAt: number;
+        version: number;
+        revokedAt?: number;
+      } | null>;
+    };
+  };
+  REGISTRY_APPLICATIONS?: {
+    idFromName: (name: string) => DurableObjectId;
+    get: (id: DurableObjectId) => {
+      create: (input: unknown) => Promise<unknown>;
+      get: (id: string) => Promise<unknown | null>;
+      list: () => Promise<unknown[]>;
+      update: (id: string, input: unknown) => Promise<unknown | null>;
+      remove: (id: string, actor: unknown) => Promise<unknown | null>;
+      putScaffoldResult: (applicationId: string, result: unknown) => Promise<void>;
+      getScaffoldResult: (applicationId: string) => Promise<unknown | null>;
+    };
+  };
+  REGISTRY_SERVICE?: {
+    invoke: (message: ServiceMessageBytes) => Promise<RegistryInvokeResult>;
+  };
+  METADATA_SERVICE?: {
+    invoke: (message: ServiceMessageBytes) => Promise<MetadataQueryResult>;
+  };
+  ATTEST_SERVICE?: {
+    invoke: (message: ServiceMessageBytes) => Promise<AttestInvokeResult>;
+  };
+  ATTESTATIONS?: {
+    idFromName: (name: string) => DurableObjectId;
+    get: (id: DurableObjectId) => {
+      record: (attestation: unknown) => Promise<void>;
+      list: (repository?: string) => Promise<unknown[]>;
+      verifyArtifact: (input: unknown) => Promise<unknown>;
+      seenDelivery: (deliveryId: string, ttlMs: number) => Promise<boolean>;
     };
   };
   // Gateway DevProxy service-binding entrypoint, bound on the dev-proxy worker
-  // ONLY (workers/public/dev-proxy). A service binding can be invoked solely by
+  // ONLY (workers/applications/dev-proxy). A service binding can be invoked solely by
   // a worker configured with it, so this RPC surface is reachable only from the
   // dev-proxy — the platform guarantee that gates the dev application's
   // strong-identity hop into the gateway. Typed structurally so contracts does
@@ -544,16 +816,13 @@ export type Env = Cloudflare.Env & {
   VAULT_ADDR?: string;
   VAULT_TOKEN?: string;
   VAULT_NAMESPACE?: string;
-  //   OP_CONNECT_HOST / OP_CONNECT_TOKEN — 1Password Connect. The onepassword
-  //     provider resolves op://vault/item/field references via the Connect REST
-  //     API through a boundary client host-allowlisted to OP_CONNECT_HOST. (The
-  //     official 1Password SDK is Node-only and does not run on workerd — see
-  //     CONNECTORS.md — so the broker uses Connect's HTTP API instead.)
-  OP_CONNECT_HOST?: string;
-  OP_CONNECT_TOKEN?: string;
+  //   OP_SERVICE_ACCOUNT_TOKEN — 1Password service account token. The
+  //     onepassword provider resolves op://vault/item/field references through
+  //     the official 1Password JavaScript SDK.
+  OP_SERVICE_ACCOUNT_TOKEN?: string;
   // The guild the dev-proxy's commands target. The acting Discord subject is no
   // longer an env default — it is the Discord id of the authenticated Better Auth
-  // session (see workers/public/dev-proxy). The gateway independently enforces
+  // session (see workers/applications/dev-proxy). The gateway independently enforces
   // DEV_PROXY_ALLOWED_SUBJECTS, so guild is a convenience default, not a trust
   // boundary.
   DEV_PROXY_GUILD?: string;
@@ -573,17 +842,28 @@ export type Env = Cloudflare.Env & {
   // public keys from the committed keyring, not these.
   GATEWAY_SIGNING_KEY?: string;
   WORKFLOWS_SIGNING_KEY?: string;
+  RESPONDER_SIGNING_KEY?: string;
+  CONNECTORS_SIGNING_KEY?: string;
   // The dev-proxy worker's Ed25519 signing key (private JWK JSON). Held only by
-  // workers/public/dev-proxy, which mints the on-behalf-of identity-context
+  // workers/applications/dev-proxy, which mints the on-behalf-of identity-context
   // token for each browser session's command hop into the gateway.
   DEV_PROXY_SIGNING_KEY?: string;
   // The webhook-ingress worker's Ed25519 signing key (private JWK JSON). Held
   // only by the webhooks edge worker, which mints the identity-context token
   // for its webhook_verify hop into the broker and its enqueue hop to the workflows worker.
   WEBHOOKS_SIGNING_KEY?: string;
-  // Dev-proxy ingress configuration (workers/public/dev-proxy). All are read
+  REGISTRY_SIGNING_KEY?: string;
+  ATTEST_SIGNING_KEY?: string;
+  METADATA_SIGNING_KEY?: string;
+  REGISTRY_GITHUB_INSTALLATION_ID?: string;
+  REGISTRY_GITHUB_OWNER?: string;
+  REGISTRY_GITHUB_REPO?: string;
+  REGISTRY_GITHUB_BASE_BRANCH?: string;
+  ATTEST_GITHUB_OWNER?: string;
+  ATTEST_GITHUB_REPO?: string;
+  // Dev-proxy ingress configuration (workers/applications/dev-proxy). All are read
   // via env so nothing about the deployment's Access team or audience is baked
-  // into code. See workers/public/dev-proxy/README notes and README.md.
+  // into code. See workers/applications/dev-proxy/README notes and README.md.
   //   CF_ACCESS_TEAM_DOMAIN — e.g. "myteam.cloudflareaccess.com"; its
   //     /cdn-cgi/access/certs JWKS verifies the Access application token.
   //   CF_ACCESS_AUD — the Access application AUD tag (audience) the token must
@@ -599,7 +879,7 @@ export type Env = Cloudflare.Env & {
   // only (the sole runtime AI consumer). loadConfig reads it with a bundled
   // fallback, so it is optional — a fresh namespace or KV outage still works.
   AI_CONFIG?: KVNamespace;
-  // Dev-proxy application-identity layer (workers/public/dev-proxy). Better Auth
+  // Dev-proxy application-identity layer (workers/applications/dev-proxy). Better Auth
   // with Discord OAuth runs BEHIND Cloudflare Access: Access is the perimeter,
   // Better Auth resolves which Discord user is acting, and that Discord id
   // becomes the command's subject. Better Auth is authN only; Cedar stays authZ.
@@ -612,6 +892,9 @@ export type Env = Cloudflare.Env & {
   //   BETTER_AUTH_URL — the public origin Access fronts (https://ragbot-dev…),
   //     from which Better Auth derives its OAuth callback and cookie domain.
   AUTH_DB?: D1Database;
+  // R2 bucket for dev-proxy runtime assets that should not be embedded into the
+  // SPA bundle, such as the generated GitHub REST API route catalog.
+  DEVPROXY_ASSETS?: R2Bucket;
   DISCORD_CLIENT_ID?: string;
   DISCORD_CLIENT_SECRET?: string;
   BETTER_AUTH_SECRET?: string;

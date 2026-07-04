@@ -1,7 +1,7 @@
 import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
-import worker from "../../../workers/public/gateway/src/index.ts";
+import worker from "../../../workers/applications/gateway/api/middleware_client/src/index.ts";
 import { GUILD_NOT_ALLOWED_MESSAGE, isGuildAllowed } from "../../../packages/domain/guilds.ts";
 import { handleGatewayMessageCreate, resolveGatewayMessage } from "../../../packages/domain/mention.ts";
 import { createEnv, createSignedRequest } from "../../helpers.ts";

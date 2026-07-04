@@ -1,4 +1,6 @@
-import type { ConnectorConfig } from "./types";
+import type { CedarValueJson, EntityJson } from "@cedar-policy/cedar-wasm/web";
+import type { MachinePrincipal } from "../auth/principal";
+import type { ConnectorCapability, ConnectorConfig } from "./types";
 
 // The declarative connector registry. Each entry is a connector; adding a
 // provider is an entry here (plus a new provider file in providers/ ONLY for a
@@ -16,13 +18,24 @@ export const CONNECTOR_REGISTRY: ConnectorConfig[] = [
     kind: "github_app",
     host: "api.github.com",
     cedarResource: "github-app",
+    capabilities: {
+      grant: ["workflows", "dev-proxy", "registry", "attest"],
+      fetch: ["workflows", "dev-proxy", "registry", "attest"],
+      token: ["workflows"],
+      webhookVerify: ["webhooks", "attest"],
+      adminRead: ["dev-proxy"],
+      adminWrite: ["dev-proxy"],
+    },
     // The App private-key PEM. Defaults to the worker secret GITHUB_APP_PRIVATE_KEY
     // (wrangler-env) so behaviour is unchanged; point `provider` at another
     // backend (cloudflare-secret-store / hashicorp-vault / onepassword) to move
     // it. The numeric App id is read via the default appId ref (GITHUB_APP_ID).
     secret: { provider: "wrangler-env", ref: "GITHUB_APP_PRIVATE_KEY" },
     appId: { provider: "wrangler-env", ref: "GITHUB_APP_ID" },
-    staticHeaders: { accept: "application/vnd.github+json" },
+    staticHeaders: {
+      accept: "application/vnd.github+json",
+      "user-agent": "rag-apps-gateway",
+    },
     // Installation tokens last ~1h; align the handle lifetime to that.
     grantTtlSeconds: 3600,
     maxResponseBytes: 5 * 1024 * 1024,
@@ -49,6 +62,11 @@ export const CONNECTOR_REGISTRY: ConnectorConfig[] = [
     kind: "oauth2_authorization_code",
     host: "discord.com",
     cedarResource: "discord-user",
+    capabilities: {
+      authorize: ["dev-proxy"],
+      adminRead: ["dev-proxy"],
+      adminWrite: ["dev-proxy"],
+    },
     tokenUrl: "https://discord.com/api/oauth2/token",
     authorizationUrl: "https://discord.com/oauth2/authorize",
     clientIdRef: { provider: "wrangler-env", ref: "DISCORD_OAUTH_CLIENT_ID" },
@@ -84,3 +102,66 @@ const BY_ID = new Map(CONNECTOR_REGISTRY.map((connector) => [connector.id, conne
 
 export const lookupConnector = (id: string | undefined): ConnectorConfig | null =>
   id ? BY_ID.get(id) ?? null : null;
+
+const capabilityAttr: Record<ConnectorCapability, string> = {
+  grant: "grant",
+  fetch: "fetch",
+  token: "token",
+  authorize: "authorize",
+  webhookVerify: "webhookVerify",
+  adminRead: "adminRead",
+  adminWrite: "adminWrite",
+};
+
+const appRefs = (apps: MachinePrincipal[] | undefined) =>
+  (apps ?? []).map((app) => ({ __entity: { type: "Application", id: app } }));
+
+const hasManagementCapability = (capabilities: Partial<Record<ConnectorCapability, Set<MachinePrincipal>>>) =>
+  (capabilities.adminRead?.size ?? 0) > 0 || (capabilities.adminWrite?.size ?? 0) > 0;
+
+export const connectorsToEntities = (connectors: ConnectorConfig[] = CONNECTOR_REGISTRY): EntityJson[] => {
+  const byResource = new Map<string, ConnectorConfig[]>();
+  for (const connector of connectors) {
+    const existing = byResource.get(connector.cedarResource) ?? [];
+    existing.push(connector);
+    byResource.set(connector.cedarResource, existing);
+  }
+
+  const entities: EntityJson[] = [
+    {
+      uid: { type: "Connector", id: "*" },
+      attrs: {
+        plane: "management",
+        adminList: appRefs(["dev-proxy"]),
+      },
+      parents: [],
+    },
+  ];
+
+  for (const [resource, grouped] of byResource) {
+    const merged: Partial<Record<ConnectorCapability, Set<MachinePrincipal>>> = {};
+    for (const connector of grouped) {
+      for (const [capability, callers] of Object.entries(connector.capabilities ?? {}) as Array<[
+        ConnectorCapability,
+        MachinePrincipal[],
+      ]>) {
+        const set = merged[capability] ?? new Set<MachinePrincipal>();
+        callers.forEach((caller) => set.add(caller));
+        merged[capability] = set;
+      }
+    }
+    const attrs: Record<string, CedarValueJson> = { plane: "data" };
+    if (hasManagementCapability(merged)) {
+      attrs.planes = ["data", "management"];
+    }
+    for (const [capability, callers] of Object.entries(merged) as Array<[
+      ConnectorCapability,
+      Set<MachinePrincipal>,
+    ]>) {
+      attrs[capabilityAttr[capability]] = appRefs([...callers]);
+    }
+    entities.push({ uid: { type: "Connector", id: resource }, attrs, parents: [] });
+  }
+
+  return entities;
+};

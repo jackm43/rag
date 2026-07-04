@@ -1,14 +1,17 @@
 import type { Env } from "../../contracts/types";
-import { createBoundaryClient, type BoundaryFetch } from "./boundary-client";
+import type { BoundaryFetch } from "./boundary-client";
+import { createEgressClient, type EgressCaller, type EgressFetchOptions } from "../../egress/client";
 
-const DISCORD_TIMEOUT_MS = 15_000;
-const CLOUDFLARE_API_TIMEOUT_MS = 30_000;
-const MEDIA_TIMEOUT_MS = 30_000;
-const MEDIA_MAX_RESPONSE_BYTES = 25 * 1024 * 1024;
-
+// Every application outbound HTTP client now routes through the generic egress
+// sidecar worker: the credential, host allowlist, timeout and size caps live
+// in the egress worker's profile (bundled defaults in packages/egress/profiles
+// plus any DO-seeded overrides), never here. createEgressClient fails closed
+// ("EGRESS service binding is required for bound egress") when env.EGRESS is
+// absent — there is no direct-fetch fallback.
+//
 // AI Gateway egress is not here: model access (credential, URL construction,
 // binding-vs-HTTP routing) is centralized behind packages/inference, which
-// builds its own boundary client for the gateway host.
+// builds its own egress client for the "ai-gateway" profile.
 export type BoundaryClients = {
   discordRest: BoundaryFetch;
   discordWebhook: BoundaryFetch;
@@ -21,50 +24,11 @@ const lazy = <T>(create: () => T) => {
   return () => (value ??= create());
 };
 
-const buildClients = (env: Env): BoundaryClients => {
-  const discordRest = lazy(() =>
-    createBoundaryClient({
-      identity: "discord-rest",
-      trustZone: "egress-discord",
-      credential: { header: "authorization", value: `Bot ${env.DISCORD_BOT_TOKEN}` },
-      allowedHosts: ["discord.com"],
-      defaultTimeoutMs: DISCORD_TIMEOUT_MS,
-    }));
-  const discordWebhook = lazy(() =>
-    createBoundaryClient({
-      identity: "discord-webhook",
-      trustZone: "egress-discord",
-      allowedHosts: ["discord.com"],
-      defaultTimeoutMs: DISCORD_TIMEOUT_MS,
-      // Webhook paths embed the interaction token (webhooks/{app}/{token}/...),
-      // which authenticates edits — never log them.
-      logPath: false,
-    }));
-  const cloudflareApi = lazy(() => {
-    if (!env.CLOUDFLARE_API_TOKEN) {
-      throw new Error("CLOUDFLARE_API_TOKEN is required for Cloudflare API requests");
-    }
-    return createBoundaryClient({
-      identity: "cloudflare-api",
-      trustZone: "egress-cloudflare-api",
-      credential: { header: "authorization", value: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
-      allowedHosts: ["api.cloudflare.com"],
-      defaultTimeoutMs: CLOUDFLARE_API_TIMEOUT_MS,
-    });
-  });
-  // Path logging audit: discord-rest paths carry channel/message/guild ids,
-  // cloudflare-api paths carry account/gateway ids — safe to log.
-  // discord-webhook and media-download are host-only (logPath: false).
-  const mediaDownload = lazy(() =>
-    createBoundaryClient({
-      identity: "media-download",
-      trustZone: "egress-media",
-      allowedHosts: "*",
-      defaultTimeoutMs: MEDIA_TIMEOUT_MS,
-      maxResponseBytes: MEDIA_MAX_RESPONSE_BYTES,
-      // Model-chosen hosts: keep failure logs host-only.
-      logPath: false,
-    }));
+const buildClients = (env: Env, caller: EgressCaller): BoundaryClients => {
+  const discordRest = lazy(() => createEgressClient(env, "discord-rest", caller));
+  const discordWebhook = lazy(() => createEgressClient(env, "discord-webhook", caller));
+  const cloudflareApi = lazy(() => createEgressClient(env, "cloudflare-api", caller));
+  const mediaDownload = lazy(() => createEgressClient(env, "media-download", caller));
 
   return {
     get discordRest() {
@@ -82,14 +46,24 @@ const buildClients = (env: Env): BoundaryClients => {
   };
 };
 
-const clientsByEnv = new WeakMap<Env, BoundaryClients>();
+// Cache per env AND per caller: two workers can share an Env-shaped object in
+// tests, and a client built for one caller must never be returned to another
+// (the egress hop is signed with the caller's identity).
+const clientsByEnv = new WeakMap<Env, Map<EgressCaller, BoundaryClients>>();
 
-export const boundaryClients = (env: Env): BoundaryClients => {
-  const cached = clientsByEnv.get(env);
+export const boundaryClients = (env: Env, caller: EgressCaller): BoundaryClients => {
+  let byCaller = clientsByEnv.get(env);
+  if (!byCaller) {
+    byCaller = new Map();
+    clientsByEnv.set(env, byCaller);
+  }
+  const cached = byCaller.get(caller);
   if (cached) {
     return cached;
   }
-  const clients = buildClients(env);
-  clientsByEnv.set(env, clients);
+  const clients = buildClients(env, caller);
+  byCaller.set(caller, clients);
   return clients;
 };
+
+export type { EgressFetchOptions, EgressCaller };

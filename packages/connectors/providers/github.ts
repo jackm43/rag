@@ -141,6 +141,7 @@ export const mintAppJwt = async (
 // The default {provider, ref} for the numeric App id when a connector does not
 // override `appId`. Keeps behaviour unchanged from the env-binding days.
 const DEFAULT_APP_ID_REF = { provider: "wrangler-env", ref: "GITHUB_APP_ID" } as const;
+const GITHUB_USER_AGENT = "rag-apps-gateway";
 
 // Imported App keys are cached per isolate: PEM import is async and pure.
 const importedKeys = new Map<string, Promise<CryptoKey>>();
@@ -202,7 +203,7 @@ const resolveInstallationToken = async (ctx: StrategyContext): Promise<ResolvedT
         authorization: `Bearer ${jwt}`,
         accept: "application/vnd.github+json",
         "content-type": "application/json",
-        "user-agent": "ragbot-connectors",
+        "user-agent": GITHUB_USER_AGENT,
       },
       body: JSON.stringify({
         ...(p.repositories ? { repositories: p.repositories } : {}),
@@ -256,7 +257,7 @@ export const listAppInstallations = async (
     headers: {
       authorization: `Bearer ${jwt}`,
       accept: "application/vnd.github+json",
-      "user-agent": "ragbot-connectors",
+      "user-agent": GITHUB_USER_AGENT,
     },
   });
   if (!response.ok) {
@@ -300,6 +301,7 @@ const githubAppStrategy: ConnectorStrategy = {
     return {
       authorization: `Bearer ${token.value}`,
       accept: "application/vnd.github+json",
+      "user-agent": GITHUB_USER_AGENT,
       ...(ctx.connector.staticHeaders ?? {}),
     };
   },

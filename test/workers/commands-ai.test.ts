@@ -1,11 +1,25 @@
 import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
-import worker from "../../workers/public/gateway/src/index.ts";
+import worker from "../../workers/applications/gateway/api/middleware_client/src/index.ts";
 import workflowsWorker from "../../workers/services/workflows/src/index.ts";
 import { shouldUseAskWebSearch } from "../../packages/domain/commands/ask.ts";
 import { decodeAiJobEnvelope, decodeReplyJobEnvelope } from "../../packages/contracts/index.ts";
 import { createDbMock, createEnv, createSignedRequest, gatewayAiJob, sentEnvelope } from "../helpers.ts";
+
+// Outbound HTTP bodies now travel through the egress hop as raw bytes, so a
+// captured init.body is an ArrayBuffer rather than the original string. The
+// bytes are byte-identical to before; decode them to assert on content.
+const bodyText = (init: RequestInit | undefined): string => {
+  const body = init?.body;
+  if (typeof body === "string") {
+    return body;
+  }
+  if (body instanceof ArrayBuffer) {
+    return new TextDecoder().decode(body);
+  }
+  return String(body);
+};
 
 const RAGJAM_APPLICATION_ID = "500000000000000001";
 const RAGJAM_CHANNEL_ID = "500000000000000002";
@@ -111,7 +125,7 @@ test("/ask replies with the thread link immediately and answers via the AI jobs 
       (call) => call.url === `https://discord.com/api/v10/channels/${ASK_CHANNEL_ID}/threads`,
     );
     assert.ok(threadCall);
-    assert.deepEqual(JSON.parse(String(threadCall.init?.body)), {
+    assert.deepEqual(JSON.parse(bodyText(threadCall.init)), {
       name: "How do queue retries work",
       type: 11,
       auto_archive_duration: 1440,
@@ -121,7 +135,7 @@ test("/ask replies with the thread link immediately and answers via the AI jobs 
       (call) => call.url === "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original",
     );
     assert.ok(editCall);
-    assert.deepEqual(JSON.parse(String(editCall.init?.body)), {
+    assert.deepEqual(JSON.parse(bodyText(editCall.init)), {
       content: `Started <#${ASK_THREAD_ID}>`,
       allowed_mentions: {
         parse: [],
@@ -163,7 +177,7 @@ test("/ask replies with the thread link immediately and answers via the AI jobs 
 
     const gatewayCalls = fetchCalls.filter((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.equal(gatewayCalls.length, 1);
-    const gatewayBody = JSON.parse(String(gatewayCalls[0].init?.body)) as { messages: Array<{ role: string; content: string }> };
+    const gatewayBody = JSON.parse(bodyText(gatewayCalls[0].init)) as { messages: Array<{ role: string; content: string }> };
     assert.match(gatewayBody.messages[0].content, /This is a \/ask thread/);
     assert.deepEqual(gatewayBody.messages.slice(1), [
       { role: "user", content: "Alice: How do queue retries work?" },
@@ -282,6 +296,7 @@ test("queue handler delivers the /bicture image through the responder RPC bindin
               prompt: "a tiny jpeg test image",
             },
             { source: "interactions" },
+            env,
           ),
           ack: () => {
             acked = true;
@@ -309,7 +324,7 @@ test("queue handler delivers the /bicture image through the responder RPC bindin
     // No direct Discord egress from the workflows worker; the media edit goes over RPC.
     assert.equal(fetchCalls.find((call) => call.url.includes("discord.com")), undefined);
     assert.equal(rpcCalls.length, 1);
-    assert.deepEqual(decodeReplyJobEnvelope(rpcCalls[0].envelope), {
+    assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(rpcCalls[0].envelope)), {
       kind: "reply.interaction_edit",
       applicationId: BICTURE_APPLICATION_ID,
       interactionToken: "interaction-token",
@@ -395,6 +410,7 @@ test("queue handler downloads url-returned /bicture images with a timeout signal
               prompt: "a tiny png test image",
             },
             { source: "interactions" },
+            env,
           ),
           ack: () => undefined,
         },
@@ -406,7 +422,7 @@ test("queue handler downloads url-returned /bicture images with a timeout signal
     assert.ok(downloadCall.init?.signal instanceof AbortSignal);
 
     assert.equal(rpcCalls.length, 1);
-    assert.deepEqual(decodeReplyJobEnvelope(rpcCalls[0].envelope), {
+    assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(rpcCalls[0].envelope)), {
       kind: "reply.interaction_edit",
       applicationId: BICTURE_APPLICATION_ID,
       interactionToken: "interaction-token",
@@ -466,6 +482,7 @@ test("queue handler edits /bicture response with a failure message when the imag
               prompt: "an oversized image",
             },
             { source: "interactions" },
+            env,
           ),
           ack: () => {
             acked = true;
@@ -588,6 +605,7 @@ test("queue handler delivers the /ragjam audio through the responder RPC binding
               lyrics: "Walking down a dusty road\nWith the sunset painting gold",
             },
             { source: "interactions" },
+            env,
           ),
           ack: () => {
             acked = true;
@@ -618,7 +636,7 @@ test("queue handler delivers the /ragjam audio through the responder RPC binding
     // No direct Discord egress from the workflows worker; the media edit goes over RPC.
     assert.equal(fetchCalls.find((call) => call.url.includes("discord.com")), undefined);
     assert.equal(rpcCalls.length, 1);
-    assert.deepEqual(decodeReplyJobEnvelope(rpcCalls[0].envelope), {
+    assert.deepEqual(decodeReplyJobEnvelope(sentEnvelope(rpcCalls[0].envelope)), {
       kind: "reply.interaction_edit",
       applicationId: RAGJAM_APPLICATION_ID,
       interactionToken: "interaction-token",
@@ -677,6 +695,7 @@ test("queue handler preserves long /ragjam prompt text up to the Discord message
               prompt: longPrompt,
             },
             { source: "interactions" },
+            env,
           ),
           ack: () => undefined,
         },
@@ -684,7 +703,7 @@ test("queue handler preserves long /ragjam prompt text up to the Discord message
     } as never, env);
 
     assert.equal(rpcCalls.length, 1);
-    assert.equal(decodeReplyJobEnvelope(rpcCalls[0].envelope)?.content, `Prompt: ${longPrompt}`);
+    assert.equal(decodeReplyJobEnvelope(sentEnvelope(rpcCalls[0].envelope))?.content, `Prompt: ${longPrompt}`);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -778,6 +797,7 @@ test("queue handler lets /ragjam auto-generate lyrics when omitted", async () =>
               prompt: "A warm acoustic folk ballad",
             },
             { source: "interactions" },
+            env,
           ),
           ack: () => undefined,
         },
@@ -934,7 +954,7 @@ test("/ask uses the web-search model for current research prompts", async () => 
     assert.equal(askMetadata.discord_user_id, ASK_USER_ID);
     assert.equal(askMetadata.discord_channel_id, ASK_THREAD_ID);
     assert.match(askMetadata.ragbot_request_id, /^aigreq:/);
-    const webSearchBody = JSON.parse(String(webSearchCall.init?.body));
+    const webSearchBody = JSON.parse(bodyText(webSearchCall.init));
     assert.equal(webSearchBody.model, "openai/gpt-4o-search-preview");
     assert.match(webSearchBody.messages[0].content, /careful web research assistant/);
     assert.match(webSearchBody.messages[1].content, /best GPUs across nvidia and AMD currently/);
@@ -993,6 +1013,7 @@ test("queue handler posts a failure notice into the thread when the /ask answer 
               prompt: "What are the latest GPU prices?",
             },
             { source: "interactions" },
+            env,
           ),
           ack: () => {
             acked = true;

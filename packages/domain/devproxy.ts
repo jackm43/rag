@@ -33,9 +33,9 @@ import { routeInteraction } from "./commands/router";
 //      dev-proxy call can only ever act as a pre-approved subject (fail closed:
 //      unset/empty denies all). This bounds impersonation independently of who
 //      passed Access upstream.
-//   3. Cedar devproxy.invoke — the app-level capability surface: which command
-//      operations the dev application may proxy at all (devproxy.cedar),
-//      evaluated with the MACHINE principal.
+//   3. Cedar gateway.devproxy.invoke — the app-level management-plane
+//      capability surface: which command operations the dev application may
+//      proxy at all (gateway.cedar), evaluated with the Application principal.
 //   4. The ordinary command pre-flight — routeInteraction → executeCommand runs
 //      the guild allowlist, per-user Cedar command.* authorization, raghammer
 //      ban, and usage limits, EXACTLY as a Discord-initiated command would. A
@@ -135,9 +135,9 @@ export const handleDevProxyCommand = async (
   // Step 3: app-level capability surface (which commands may be proxied).
   const capability = authorize(
     {
-      principal: { type: "Machine", id: "dev-proxy" },
-      action: "devproxy.invoke",
-      resource: { type: "DevProxy", id: "gateway" },
+      principal: { type: "Application", id: "dev-proxy" },
+      action: "gateway.devproxy.invoke",
+      resource: { type: "Gateway", id: "devproxy" },
       context: { command: job.command },
     },
     await registryEntities(env),

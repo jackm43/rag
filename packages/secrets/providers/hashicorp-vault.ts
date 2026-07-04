@@ -37,6 +37,14 @@ export const hashicorpVaultProvider = (env: Env): SecretsProvider => {
 
   // Build the host-allowlisted boundary client for VAULT_ADDR's host, or null
   // when the backend is not configured / the address is unparseable.
+  //
+  // Deliberate remaining exception to the egress migration: Vault stays on a
+  // direct boundary client. VAULT_ADDR is per-deployment and dynamic — not a
+  // fixed host known at profile-authoring time — and this is a CREDENTIALED
+  // call (VAULT_TOKEN). A static egress profile would need either a wildcard
+  // host (a security regression for a credentialed egress, unlike
+  // media-download's uncredentialed wildcard) or a dynamic-per-deployment
+  // profile (out of scope). So there is no Vault egress profile.
   const boundary = (): { fetch: BoundaryFetch; base: string } | null => {
     if (!address || !token) {
       return null;

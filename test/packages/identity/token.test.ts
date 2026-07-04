@@ -33,9 +33,10 @@ const gatewayToWorkflows = async (now = 1_000) => {
     iss: "gateway",
     aud: "workflows",
     sub: "107426926909517824",
-    trustZone: "edge",
+    trustZone: "platform",
     envelopeBytes: bytes,
     now: now * 1000,
+    correlationId: "corr-1",
   });
   return { token: await mint(privateKey, context), resolver, bytes, context };
 };
@@ -52,8 +53,32 @@ test("a minted token verifies against the issuer's key and returns its context",
   if (result.ok) {
     assert.equal(result.context.sub, "107426926909517824");
     assert.deepEqual(result.context.act, ["gateway"]);
+    assert.equal(result.context.nbf, context.iat);
     assert.equal(result.context.jti, context.jti);
+    assert.equal(result.context.correlationId, "corr-1");
   }
+});
+
+test("a token before its not-before time is denied", async () => {
+  const bytes = envelope();
+  const { privateKey, resolver } = await keypairFor("gateway");
+  const context = await buildIdentityContext({
+    iss: "gateway",
+    aud: "workflows",
+    sub: "107426926909517824",
+    trustZone: "platform",
+    envelopeBytes: bytes,
+    now: 1_000_000,
+    notBefore: 1_030,
+  });
+  const token = await mint(privateKey, context);
+  const result = await verify(resolver, token, {
+    expectedAud: "workflows",
+    expectedIssuers: ["gateway"],
+    envelopeBytes: bytes,
+    now: 1_020,
+  });
+  assert.deepEqual(result, { ok: false, reason: "not_yet_valid" });
 });
 
 test("a token addressed to another worker is denied with aud_mismatch", async () => {
@@ -137,8 +162,9 @@ test("a token whose payload is edited after signing is denied", async () => {
       act: ["gateway"],
       iss: "gateway",
       aud: "workflows",
-      trustZone: "edge",
+      trustZone: "platform",
       iat: 1_000,
+      nbf: 1_000,
       exp: 1_060,
       jti: "forged",
       envelopeSha256: "x",

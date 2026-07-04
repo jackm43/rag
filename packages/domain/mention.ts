@@ -1,4 +1,4 @@
-import { serviceClients, SYSTEM_SUBJECT } from "../auth";
+import { createClient, createHopIntent, SYSTEM_SUBJECT } from "../auth";
 import { encodeAiJobEnvelope, isSnowflake, MAX_FREE_TEXT_LENGTH, MAX_MENTION_IDS } from "../contracts";
 import { fetchBotRoleIds } from "../discord";
 import { activeAiBanForUser } from "./bans";
@@ -116,11 +116,20 @@ export const handleGatewayMessageCreate = async (
     return;
   }
 
-  await serviceClients(env).gatewayToWorkflows.call({
+  await createClient({
+    env,
+    self: "gateway",
+    context: { subject: message.author?.id ?? SYSTEM_SUBJECT },
+  }).to("workflows", { transportTrust: "application" }).call({
     transport: "queue",
     queue: env.AI_JOBS,
     envelope: encodeAiJobEnvelope(gatewayMessageJob(message, botUserId), { source: "gateway" }),
-    subject: { sub: message.author?.id ?? SYSTEM_SUBJECT },
+    intent: createHopIntent({
+      action: "message.received",
+      resourceType: "Channel",
+      resourceId: message.channel_id,
+      method: "message.received",
+    }),
   });
 };
 
@@ -163,7 +172,7 @@ export const resolveGatewayMessage = async (
 
   let botRoleIds: string[] = [];
   if (job.mentionRoleIds.length > 0 && job.guildId) {
-    botRoleIds = await fetchBotRoleIds(env, job.guildId, job.botUserId);
+    botRoleIds = await fetchBotRoleIds(env, "workflows", job.guildId, job.botUserId);
   }
 
   const prompt = resolveChannelPrompt(

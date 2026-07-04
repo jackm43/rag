@@ -90,13 +90,25 @@ user id); dev-proxy `CF_ACCESS_TEAM_DOMAIN` = `jsmunro.cloudflareaccess.com`,
 
 | Worker (config) | Secrets |
 |---|---|
-| gateway `workers/public/gateway/wrangler.jsonc` | `DISCORD_PUBLIC_KEY`←PublicKey, `DISCORD_BOT_TOKEN`←bot_token, `GATEWAY_CONTROL_TOKEN`, `GATEWAY_SIGNING_KEY`, `DEV_PROXY_ALLOWED_SUBJECTS` (var, see below) |
-| workflows `workers/services/workflows/wrangler.jsonc` | `CF_AIG_TOKEN`, `DISCORD_BOT_TOKEN`←bot_token, `WORKFLOWS_SIGNING_KEY` |
-| responder `workers/services/responder/wrangler.jsonc` | `DISCORD_BOT_TOKEN`←bot_token |
-| spend `workers/services/spend/wrangler.jsonc` | `CLOUDFLARE_API_TOKEN` |
-| dev-proxy `workers/public/dev-proxy/wrangler.jsonc` | `DEV_PROXY_SIGNING_KEY` |
-| webhooks `workers/public/webhooks/wrangler.jsonc` | `WEBHOOKS_SIGNING_KEY` |
+| gateway `workers/applications/gateway/api/middleware_client/wrangler.jsonc` | `DISCORD_PUBLIC_KEY`←PublicKey, `DISCORD_BOT_TOKEN`←bot_token, `GATEWAY_CONTROL_TOKEN`, `GATEWAY_SIGNING_KEY`, `DEV_PROXY_ALLOWED_SUBJECTS` (var, see below) |
+| workflows `workers/services/workflows/wrangler.jsonc` | `WORKFLOWS_SIGNING_KEY` (Discord + AI Gateway HTTP now leave via the EGRESS binding, so `DISCORD_BOT_TOKEN`/`CF_AIG_TOKEN` move to the egress worker below — no longer set here) |
+| responder `workers/services/responder/wrangler.jsonc` | `RESPONDER_SIGNING_KEY` (Discord writes now leave via the EGRESS binding, so `DISCORD_BOT_TOKEN` moves to the egress worker below — no longer set here) |
+| spend `workers/services/spend/wrangler.jsonc` | `SPEND_SIGNING_KEY` (Cloudflare API now leaves via the EGRESS binding, so `CLOUDFLARE_API_TOKEN` moves to the egress worker below — no longer set here) |
+| egress `workers/services/egress/wrangler.jsonc` | `EGRESS_SIGNING_KEY`, `DISCORD_BOT_TOKEN`←bot_token, `CF_AIG_TOKEN`, `CLOUDFLARE_API_TOKEN` — the egress worker owns outbound provider credential injection; these tokens live HERE now, not on workflows/responder/spend |
+| registry `workers/applications/registry/api/middleware_client/wrangler.jsonc` | `REGISTRY_SIGNING_KEY`, Better Auth/Cloudflare Access secrets |
+| metadata `workers/applications/metadata/api/middleware_client/wrangler.jsonc` | `METADATA_QUERY_TOKEN`, `METADATA_SIGNING_KEY` |
+| attest `workers/applications/attest/api/middleware_client/wrangler.jsonc` | `ATTEST_SIGNING_KEY` |
+| dev-proxy `workers/applications/dev-proxy/api/middleware_client/wrangler.jsonc` | `DEV_PROXY_SIGNING_KEY` |
+| webhooks `workers/applications/webhooks/api/middleware_client/wrangler.jsonc` | `WEBHOOKS_SIGNING_KEY` |
 | connectors `workers/services/connectors/wrangler.jsonc` | `GITHUB_WEBHOOK_SECRET` (webhook ingress; plus the broker's own connector secrets per `CONNECTORS.md`) |
+
+**Deploy order for egress:** the egress worker (`ragbot-egress-worker`) owns
+outbound provider credentials and is bound (`EGRESS` service binding) by
+responder, connectors, workflows, and spend. Deploy it — with its
+`DISCORD_BOT_TOKEN`/`CF_AIG_TOKEN`/`CLOUDFLARE_API_TOKEN` secrets provisioned —
+**before** responder/connectors/workflows/spend, or their `EGRESS` binding will
+not resolve. Bundled default profiles ship in the worker, so no `EgressControl`
+DO seeding is required for a first deploy.
 
 **Config vars** (`[vars]` in each wrangler.jsonc, or `wrangler secret` if sensitive):
 - gateway + workflows: `ALLOWED_GUILD_IDS` = the home guild id (the bot's server).
@@ -116,30 +128,27 @@ user id); dev-proxy `CF_ACCESS_TEAM_DOMAIN` = `jsmunro.cloudflareaccess.com`,
    config). Commit.
 4. **Deploy the gateway to `ragbot-worker`** (defines `ServiceRegistry` +
    `DiscordGateway`; this is the cutover of `ragbot.jsmunro.me`):
-   `npx wrangler deploy -c workers/public/gateway/wrangler.jsonc`
+   `npx wrangler deploy -c workers/applications/gateway/api/middleware_client/wrangler.jsonc`
    then set its secrets, then redeploy once so they're present at boot.
 5. **Deploy the services** (now `ragbot-worker` exports `ServiceRegistry`):
    workflows, responder, spend, dev-proxy — `npx wrangler deploy -c <each>`; set each
    worker's secrets; redeploy each once.
-6. **D1 migrations:** `npx wrangler d1 migrations apply ragbot --remote`
-   (0001 only, non-destructive; the legacy insert shim stays).
+6. **D1 migrations:** `npx wrangler d1 migrations apply ragbot --remote`.
 7. **Push AI config to KV:** `npm run config:push`.
 8. **Start the gateway websocket:**
    `curl -X POST https://ragbot.jsmunro.me/gateway/start -H "Authorization: Bearer $GATEWAY_CONTROL_TOKEN"`
 9. **Smoke test** (see below).
-10. **Rollback if broken:** `npx wrangler rollback -c workers/public/gateway/wrangler.jsonc`
+10. **Rollback if broken:** `npx wrangler rollback -c workers/applications/gateway/api/middleware_client/wrangler.jsonc`
     (prior version, seconds) and likewise for spend; or `git checkout main` and
     redeploy the two old workers. D1 restore: `wrangler d1 execute ragbot --remote
     --file=backup.sql` or D1 Time Travel.
 
-## Option C — extract the registry first
+## Registry application
 
-1. New `workers/services/registry` worker owning `ServiceRegistry` (move the DO
-   class + its migration there). Repoint every `SERVICE_REGISTRY` binding's
-   `script_name` to `ragbot-registry`; remove the class def + v2 migration from
-   the gateway. Commit. `npm run check` + dry-run all six configs.
-2. Deploy `ragbot-registry` first, then the rest under `-next` names (duplicate
-   configs or use wrangler `--name`), on `ragbot-next.jsmunro.me`. Smoke-test.
+`workers/applications/registry/api/middleware_client/wrangler.jsonc` owns the
+`ragbot-registry-worker` script, including `ServiceRegistry` and
+`ApplicationRegistry`. Deploy it before workers that bind `SERVICE_REGISTRY`;
+the binding `script_name` remains `ragbot-registry-worker`.
 3. Cut over `ragbot.jsmunro.me` to the new gateway last.
 
 ## Webhook ingress (`webhooks.jsmunro.me`) — operator checklist
@@ -168,7 +177,7 @@ provider HMAC (verified in the broker) is the authentication. Order matters:
 4. **Redeploy the workflows worker** (`npm run deploy:workflows`) — it gains the
    `webhook-jobs`/`webhook-jobs-dlq` consumers and the `CONNECTORS` binding.
 5. **Deploy the webhooks worker:** `npm run deploy:webhooks`, then
-   `wrangler secret put WEBHOOKS_SIGNING_KEY -c workers/public/webhooks/wrangler.jsonc`
+   `wrangler secret put WEBHOOKS_SIGNING_KEY -c workers/applications/webhooks/api/middleware_client/wrangler.jsonc`
    (the private JWK from step 2), then redeploy once so it is present at boot.
    The `webhooks.jsmunro.me` custom domain is created by the deploy (the zone
    `jsmunro.me` is already in this account — no manual DNS record needed).

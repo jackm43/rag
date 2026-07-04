@@ -1,15 +1,18 @@
 // The single seam between application workflows and the model backends. This
-// module owns HOW a model call leaves the worker: the AI Gateway credential
-// (CF_AIG_TOKEN via a boundary client), account/gateway URL construction,
-// binding-vs-HTTP transport routing, and the per-transport request shape.
-// Callers (packages/ai, the command processors) own WHAT to ask and how to
-// interpret the raw response payloads — nothing outside this package touches
-// CF_AIG_TOKEN, gateway.ai.cloudflare.com, or env.AI directly.
-import { createBoundaryClient, type BoundaryFetch } from "../boundaries/outbound/boundary-client";
+// module owns HOW a model call leaves the worker: account/gateway URL
+// construction, binding-vs-HTTP transport routing, and the per-transport
+// request shape. Callers (packages/ai, the command processors) own WHAT to
+// ask and how to interpret the raw response payloads — nothing outside this
+// package touches gateway.ai.cloudflare.com or env.AI directly.
+//
+// The AI Gateway credential (CF_AIG_TOKEN) is NOT held here: the gateway-HTTP
+// path routes through the "ai-gateway" egress profile, so the token lives on
+// the egress worker and is injected there. env.AI (the Workers AI binding)
+// path is unaffected and still runs in-process.
+import type { BoundaryFetch } from "../boundaries/outbound/boundary-client";
+import { createEgressClient } from "../egress/client";
 import type { Env } from "../contracts/types";
 import { isRecord } from "../contracts/validation";
-
-const AI_GATEWAY_TIMEOUT_MS = 120_000;
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -109,18 +112,12 @@ const lazy = <T>(create: () => T) => {
 };
 
 const buildClient = (env: Env): InferenceClient => {
-  const gatewayFetch: () => BoundaryFetch = lazy(() => {
-    if (!env.CF_AIG_TOKEN) {
-      throw new Error("CF_AIG_TOKEN is required for AI Gateway requests");
-    }
-    return createBoundaryClient({
-      identity: "ai-gateway",
-      trustZone: "egress-ai-gateway",
-      credential: { header: "cf-aig-authorization", value: `Bearer ${env.CF_AIG_TOKEN}` },
-      allowedHosts: ["gateway.ai.cloudflare.com"],
-      defaultTimeoutMs: AI_GATEWAY_TIMEOUT_MS,
-    });
-  });
+  // The gateway-HTTP path routes through the "ai-gateway" egress profile
+  // (workflows caller): host allowlist, timeout and the CF_AIG_TOKEN
+  // credential all live on the egress worker's profile, injected there.
+  const gatewayFetch: () => BoundaryFetch = lazy(() =>
+    createEgressClient(env, "ai-gateway", "workflows"),
+  );
 
   const gatewayChatCompletions = async (
     gatewayId: string,

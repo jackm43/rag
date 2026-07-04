@@ -1,4 +1,4 @@
-import { serviceClients, SYSTEM_SUBJECT } from "../auth";
+import { createClient, SYSTEM_SUBJECT, type Subject, type VerifiedRequestContext } from "../auth";
 import { encodeReplyJobEnvelope, MAX_REPLY_CONTENT_LENGTH } from "../contracts";
 import type { Env, ResponderAttachment } from "../contracts/types";
 
@@ -12,28 +12,39 @@ import type { Env, ResponderAttachment } from "../contracts/types";
 
 const transportCap = (content: string) => content.slice(0, MAX_REPLY_CONTENT_LENGTH);
 
-const subjectOf = (requesterUserId: string | undefined) => ({
-  sub: requesterUserId ?? SYSTEM_SUBJECT,
-});
+export type ReplySubject = string | Subject | undefined;
+
+const contextOf = (subject: ReplySubject): VerifiedRequestContext =>
+  typeof subject === "object" && subject !== null
+    ? {
+        subject: subject.sub,
+        delegates: subject.delegates,
+        requestId: subject.requestId,
+        correlationId: subject.correlationId,
+      }
+    : { subject: subject ?? SYSTEM_SUBJECT };
 
 export const sendChannelReply = async (
   env: Env,
   channelId: string,
   content: string,
-  requesterUserId?: string,
+  requesterUserId?: ReplySubject,
 ) => {
   if (!env.DISCORD_OUTBOX) {
     throw new Error("DISCORD_OUTBOX binding is required to send channel replies");
   }
 
-  await serviceClients(env).workflowsToResponder.call({
+  await createClient({
+    env,
+    self: "workflows",
+    context: contextOf(requesterUserId),
+  }).to("responder", { transportTrust: "application" }).call({
     transport: "queue",
     queue: env.DISCORD_OUTBOX,
     envelope: encodeReplyJobEnvelope(
       { kind: "reply.channel_message", channelId, content: transportCap(content) },
       { source: "worker" },
     ),
-    subject: subjectOf(requesterUserId),
   });
 };
 
@@ -42,20 +53,23 @@ export const sendInteractionEdit = async (
   applicationId: string,
   interactionToken: string,
   content: string,
-  requesterUserId?: string,
+  requesterUserId?: ReplySubject,
 ) => {
   if (!env.DISCORD_OUTBOX) {
     throw new Error("DISCORD_OUTBOX binding is required to send interaction edits");
   }
 
-  await serviceClients(env).workflowsToResponder.call({
+  await createClient({
+    env,
+    self: "workflows",
+    context: contextOf(requesterUserId),
+  }).to("responder", { transportTrust: "application" }).call({
     transport: "queue",
     queue: env.DISCORD_OUTBOX,
     envelope: encodeReplyJobEnvelope(
       { kind: "reply.interaction_edit", applicationId, interactionToken, content: transportCap(content) },
       { source: "worker" },
     ),
-    subject: subjectOf(requesterUserId),
   });
 };
 
@@ -65,9 +79,13 @@ export const sendInteractionMediaEdit = async (
   interactionToken: string,
   content: string,
   attachment: ResponderAttachment,
-  requesterUserId?: string,
+  requesterUserId?: ReplySubject,
 ) => {
-  await serviceClients(env).workflowsToResponder.call({
+  await createClient({
+    env,
+    self: "workflows",
+    context: contextOf(requesterUserId),
+  }).to("responder", { transportTrust: "application" }).call({
     transport: "binding",
     env,
     envelope: encodeReplyJobEnvelope(
@@ -75,6 +93,5 @@ export const sendInteractionMediaEdit = async (
       { source: "worker" },
     ),
     attachment,
-    subject: subjectOf(requesterUserId),
   });
 };

@@ -10,6 +10,7 @@ import {
   encodeAiSpendJobEnvelope,
   encodeReplyJobEnvelope,
 } from "../../../packages/contracts/index.ts";
+import { signedServiceMessage } from "../../helpers.ts";
 
 const CHANNEL_ID = "200000000000000001";
 
@@ -41,7 +42,7 @@ const createDlqMessage = (body: unknown, attempts = 3) => {
   };
 };
 
-test("ai-jobs DLQ handler logs the envelope kind without content and acks", () => {
+test("ai-jobs DLQ handler logs the envelope kind without content and acks", async () => {
   const secretPrompt = "the launch codes are 0000";
   const body = encodeAiJobEnvelope(
     {
@@ -51,7 +52,9 @@ test("ai-jobs DLQ handler logs the envelope kind without content and acks", () =
     },
     { source: "gateway" },
   );
-  const { message, wasAcked } = createDlqMessage(body);
+  const { message, wasAcked } = createDlqMessage(
+    await signedServiceMessage(body, { iss: "gateway", aud: "workflows" }),
+  );
   const logs = captureErrorLogs();
 
   try {
@@ -85,9 +88,12 @@ test("ai-jobs DLQ handler marks undecodable bodies and still acks", () => {
   assert.equal(JSON.parse(logs.lines[0]).kind, "undecodable");
 });
 
-test("spend DLQ handler logs the spend kind and acks", () => {
+test("spend DLQ handler logs the spend kind and acks", async () => {
   const body = encodeAiSpendJobEnvelope({ spendEventId: "aigreq:test-event" }, { source: "worker" });
-  const { message, wasAcked } = createDlqMessage(body, 5);
+  const { message, wasAcked } = createDlqMessage(
+    await signedServiceMessage(body, { iss: "workflows", aud: "spend" }),
+    5,
+  );
   const logs = captureErrorLogs();
 
   try {
@@ -103,13 +109,15 @@ test("spend DLQ handler logs the spend kind and acks", () => {
   assert.equal(entry.kind, "spend");
 });
 
-test("outbox DLQ handler logs the reply kind without content and acks", () => {
+test("outbox DLQ handler logs the reply kind without content and acks", async () => {
   const secretReply = "confidential model output";
   const body = encodeReplyJobEnvelope(
     { kind: "reply.channel_message", channelId: CHANNEL_ID, content: secretReply },
     { source: "worker" },
   );
-  const { message, wasAcked } = createDlqMessage(body);
+  const { message, wasAcked } = createDlqMessage(
+    await signedServiceMessage(body, { iss: "workflows", aud: "responder" }),
+  );
   const logs = captureErrorLogs();
 
   try {

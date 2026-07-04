@@ -6,6 +6,7 @@ import {
   type BoundaryPolicy,
 } from "../../../../packages/boundaries/outbound/boundary-client.ts";
 import { boundaryClients } from "../../../../packages/boundaries/outbound/clients.ts";
+import { createEnv } from "../../../helpers.ts";
 
 const discordPolicy: BoundaryPolicy = {
   identity: "discord-rest",
@@ -222,8 +223,12 @@ test("discord-webhook egress failure logs carry no interaction token path segmen
   const warnings = captureWarnings();
   const mocked = captureFetch(() => new Response("nope", { status: 500 }));
   try {
-    const env = { DISCORD_BOT_TOKEN: "bot-token" } as never;
-    const response = await boundaryClients(env).discordWebhook(
+    // Routed through the real in-process egress path: the discord-webhook
+    // profile's logPath:false is what redacts the interaction-token path
+    // segment, and the egress server logs egress_request_failed from the
+    // profile identity when the upstream fetch fails.
+    const env = createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" });
+    const response = await boundaryClients(env, "responder").discordWebhook(
       "https://discord.com/api/v10/webhooks/500000000000000001/secret-interaction-token/messages/@original",
       { method: "PATCH" },
     );

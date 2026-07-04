@@ -24,7 +24,7 @@ export const bearerTokenMatches = (authorization: string, expectedToken: string)
 };
 
 export type OperatorPrincipal = {
-  principal: "operator";
+  principal: "gateway-control";
 };
 
 // Bearer auth with the dedicated GATEWAY_CONTROL_TOKEN secret for the
@@ -45,6 +45,6 @@ export const operatorControlGuard: InboundGuard<OperatorPrincipal> = {
       return guardDenial(operatorControlGuard, "invalid_bearer_token", unauthorized());
     }
 
-    return { ok: true, grant: { principal: "operator" } };
+    return { ok: true, grant: { principal: "gateway-control" } };
   },
 };

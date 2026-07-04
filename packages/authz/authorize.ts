@@ -16,8 +16,8 @@ import type { EntityJson } from "@cedar-policy/cedar-wasm/web";
 import { staticEntities } from "./entities";
 import commandPolicies from "./policies/commands.cedar";
 import connectorPolicies from "./policies/connectors.cedar";
-import devproxyPolicies from "./policies/devproxy.cedar";
-import operatorPolicies from "./policies/operator.cedar";
+import egressPolicies from "./policies/egress.cedar";
+import gatewayPolicies from "./policies/gateway.cedar";
 import servicePolicies from "./policies/services.cedar";
 
 // Centralised authorization: every boundary asks the Cedar engine instead of
@@ -26,15 +26,15 @@ import servicePolicies from "./policies/services.cedar";
 // D1-backed ban flag) as context, and may supply dynamic entities (the
 // service-registry snapshot) merged with the static store.
 
-// A principal is either a Human (a Discord user) or a Machine (a service or
-// the operator control plane).
+// A principal is either a Human (a Discord user) or an Application (a verified
+// worker/application identity).
 export type Principal = {
-  type: "Human" | "Machine";
+  type: "Human" | "Application";
   id: string;
 };
 
 export type Resource = {
-  type: "Guild" | "Gateway" | "Service" | "DevProxy" | "Connector";
+  type: "Guild" | "Gateway" | "Application" | "Service" | "Connector" | "EgressSidecar";
   id: string;
 };
 
@@ -83,7 +83,7 @@ const ensureEngine = () => {
   initSync({ module: cedarWasmModule });
   const parsed = preparsePolicySet(POLICY_SET_ID, {
     staticPolicies: namedPolicies(
-      [commandPolicies, connectorPolicies, devproxyPolicies, operatorPolicies, servicePolicies].join(
+      [commandPolicies, connectorPolicies, egressPolicies, gatewayPolicies, servicePolicies].join(
         "\n\n",
       ),
     ),
@@ -97,8 +97,8 @@ const ensureEngine = () => {
 // Deny-by-default: only an explicit permit (with no overriding forbid)
 // allows. reason names the forbid policies behind an explicit denial, or the
 // evaluation errors when the engine itself fails (which also denies).
-// dynamicEntities carries the service-registry snapshot when the caller has
-// one; absent, the static store and bootstrap policies still decide.
+// dynamicEntities carries control-plane snapshots (service registry, gateway
+// state, egress sidecar state) when the caller has one.
 export const authorize = (
   request: AuthorizationRequest,
   dynamicEntities: EntityJson[] = [],

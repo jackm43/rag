@@ -5,8 +5,8 @@ import type { Env } from "../contracts/types";
 import { isServiceManifest, manifestsToEntities, type ServiceManifest } from "./manifest";
 
 // Client side of the service registry: workers register their manifest with
-// the ServiceRegistry Durable Object (hosted by the gateway, the parent
-// application) and the authorizer consumes the registry's Cedar entity
+// the ServiceRegistry Durable Object (hosted by ragbot-registry-worker) and
+// the authorizer consumes the registry's Cedar entity
 // snapshot. Both RPC payloads are capnp bytes (service.capnp); the entity
 // derivation happens here on the decoded manifests. Both paths degrade
 // safely: with no binding or an unreachable registry, registration is a
@@ -14,7 +14,7 @@ import { isServiceManifest, manifestsToEntities, type ServiceManifest } from "./
 // static bootstrap policies (fail closed).
 
 const REGISTRY_NAME = "service-registry";
-const SNAPSHOT_TTL_MS = 30_000;
+const SNAPSHOT_TTL_MS = 5 * 60_000;
 
 const registryStub = (env: Env) => {
   const namespace = env.SERVICE_REGISTRY;
@@ -53,7 +53,7 @@ export const ensureRegistered = (env: Env, manifest: ServiceManifest): Promise<v
   return registration;
 };
 
-let snapshot: { at: number; entities: EntityJson[] } | null = null;
+let snapshots = new WeakMap<Env, { at: number; entities: EntityJson[] }>();
 
 // TTL-cached registry snapshot as Cedar entities: decode the capnp manifest
 // list, keep only semantically valid manifests, derive entities. Unreachable
@@ -65,6 +65,7 @@ export const registryEntities = async (env: Env): Promise<EntityJson[]> => {
     return [];
   }
   const now = Date.now();
+  const snapshot = snapshots.get(env);
   if (snapshot && now - snapshot.at < SNAPSHOT_TTL_MS) {
     return snapshot.entities;
   }
@@ -75,7 +76,7 @@ export const registryEntities = async (env: Env): Promise<EntityJson[]> => {
       isServiceManifest(manifest),
     );
     const entities = manifestsToEntities(valid);
-    snapshot = { at: now, entities };
+    snapshots.set(env, { at: now, entities });
     return entities;
   } catch (error) {
     logger.warn("service_registry_snapshot_failed", { error: errorMessage(error) });
@@ -86,5 +87,5 @@ export const registryEntities = async (env: Env): Promise<EntityJson[]> => {
 // Test seam: clears the per-isolate registration and snapshot memos.
 export const resetRegistryCaches = () => {
   registration = null;
-  snapshot = null;
+  snapshots = new WeakMap<Env, { at: number; entities: EntityJson[] }>();
 };

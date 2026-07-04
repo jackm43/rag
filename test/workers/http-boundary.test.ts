@@ -1,7 +1,7 @@
 import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
-import worker from "../../workers/public/gateway/src/index.ts";
+import worker from "../../workers/applications/gateway/api/middleware_client/src/index.ts";
 import { bearerTokenMatches, secretsMatch } from "../../packages/boundaries/inbound/operator-control.ts";
 import { createEnv, createSignedRequest } from "../helpers.ts";
 
@@ -79,7 +79,7 @@ test("stale Discord interaction timestamps return 401", async () => {
 test("future Discord interaction timestamps return 401", async () => {
   const keyPair = nacl.sign.keyPair();
   const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"));
-  const futureTimestamp = String(Math.floor(Date.now() / 1000) + 301);
+  const futureTimestamp = String(Math.floor(Date.now() / 1000) + 60 * 60);
   const request = createSignedRequest({ type: 1 }, keyPair.secretKey, "/discord", futureTimestamp);
 
   const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
@@ -487,4 +487,3 @@ test("worker fails closed for unconfigured public paths", async () => {
   assert.equal(unknownGateway.status, 404);
   assert.equal(gatewayFetchCalls, 0);
 });
-

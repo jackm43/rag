@@ -38,8 +38,7 @@ export const encodeServiceMessage = (envelope: Uint8Array, idToken: string): Uin
 };
 
 // A valid service message must carry a non-empty token and an inner envelope
-// that is itself a sanely framed capnp message; that requirement is what
-// disambiguates the wrapper from raw legacy envelope bytes.
+// that is itself a sanely framed capnp message.
 export const decodeServiceMessage = (value: unknown): WireServiceMessage | null => {
   const bytes = asFramedBytes(value);
   if (!bytes) {

@@ -1,0 +1,48 @@
+{
+  "name": "ragbot-egress-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  "rules": [
+    {
+      "type": "Text",
+      "globs": [
+        "**/*.cedar"
+      ],
+      "fallthrough": true
+    }
+  ],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true
+    }
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "EGRESS_CONTROL",
+        "class_name": "EgressControl"
+      },
+      {
+        "name": "SERVICE_REGISTRY",
+        "class_name": "ServiceRegistry",
+        "script_name": "ragbot-registry-worker"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "EgressControl"
+      ]
+    }
+  ]
+}

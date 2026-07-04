@@ -1,4 +1,5 @@
 #!/usr/bin/env -S npx tsx
+import { readFileSync } from "node:fs";
 import process from "node:process";
 
 import {
@@ -10,7 +11,7 @@ import {
 } from "./access";
 import { configPath, resolveConfig, tokenPath, type ConfigOverrides } from "./config";
 import { discover } from "./discover";
-import { createDevProxyClient, type CommandRequest } from "../packages/devproxy-client/index";
+import { createDevProxyClient, type CommandRequest, type GithubApiRequest } from "../packages/devproxy-client/index";
 
 // ragctl — a local CLI for the ragbot dev-proxy. Runs on a laptop (Node, not
 // workerd) and drives the deployed dev-proxy: it acquires a Cloudflare Access
@@ -101,6 +102,9 @@ Commands:
   discover                  List the dev-proxy operations from the OpenAPI spec
   cmd <name> [--opt k=v ...] [--channel <id>] [--json]
                             Run a slash command through the dev-proxy (typed call)
+  gh <route> [--installation <id>] [--param k=v ...] [--body <json>] [--json]
+                            Call GitHub through the GitHub App connector.
+                            Route is Octokit-style, e.g. "GET /repos/{owner}/{repo}/issues"
   config                    Show resolved config and where each value came from
 
 Global options:
@@ -166,40 +170,37 @@ const runDiscover = (): number => {
 // Human-readable hints for the fail-closed statuses the worker returns. The
 // worker never discloses which gate refused, so these are guidance, not claims.
 const STATUS_HINT: Record<number, string> = {
-  400: "malformed command request (check the command name / options)",
+  400: "malformed request (check the command name / options or GitHub route / params)",
   401: "Access token or Better Auth session rejected — run `ragctl login` and set RAGCTL_SESSION_COOKIE from a browser session",
   403: "the acting Discord subject is not allowed by the gateway (DEV_PROXY_ALLOWED_SUBJECTS)",
   502: "upstream gateway error",
 };
 
-const runCmd = async (args: Args): Promise<number> => {
-  const command = args.positionals[1];
-  if (!command) {
-    out("Usage: ragctl cmd <name> [--opt name=value ...] [--channel <id>] [--json]");
-    return 1;
-  }
-  if (!COMMAND_PATTERN.test(command)) {
-    out(`Invalid command name "${command}" — must match ${COMMAND_PATTERN}`);
-    return 1;
-  }
+const keyValueFlags = (args: Args, name: string): Record<string, string> =>
+  Object.fromEntries(
+    all(args, name).map((entry) => {
+      const eq = entry.indexOf("=");
+      if (eq <= 0) {
+        throw new Error(`--${name} expects name=value, got "${entry}"`);
+      }
+      return [entry.slice(0, eq), entry.slice(eq + 1)];
+    }),
+  );
 
-  const options = all(args, "opt").map((entry) => {
-    const eq = entry.indexOf("=");
-    if (eq <= 0) {
-      throw new Error(`--opt expects name=value, got "${entry}"`);
-    }
-    return { name: entry.slice(0, eq), value: entry.slice(eq + 1) };
-  });
-
-  const request: CommandRequest = { command };
-  const channelId = flag(args, "channel");
-  if (channelId !== undefined) {
-    request.channelId = channelId;
+const scalar = (value: string): string | number | boolean => {
+  if (value === "true") {
+    return true;
   }
-  if (options.length > 0) {
-    request.options = options;
+  if (value === "false") {
+    return false;
   }
+  if (/^-?\d+(\.\d+)?$/.test(value)) {
+    return Number(value);
+  }
+  return value;
+};
 
+const authenticatedClient = (args: Args): ReturnType<typeof createDevProxyClient> => {
   const { config } = resolveConfig(overridesFrom(args));
 
   const cached = readCachedToken();
@@ -217,24 +218,82 @@ const runCmd = async (args: Args): Promise<number> => {
     process.stderr.write("ragctl: RAGCTL_SESSION_COOKIE is unset — the worker will deny without a Better Auth session (sending anyway).\n");
   }
 
-  const client = createDevProxyClient({
+  return createDevProxyClient({
     baseUrl: config.baseUrl,
     ...(cached ? { accessToken: () => cached.token } : {}),
     ...(sessionCookie ? { sessionCookie: () => sessionCookie } : {}),
   });
+};
 
-  const response = await client.command(request);
-  if (has(args, "json")) {
-    out(JSON.stringify({ status: response.status, body: response.body }, null, 2));
+const printResponse = (response: { status: number; body: unknown; contentType?: string; json?: boolean }, json: boolean): number => {
+  const body =
+    typeof response.body === "string" && response.body.length > 2000
+      ? `${response.body.slice(0, 2000)}\n\n... truncated ${response.body.length - 2000} chars ...`
+      : response.body;
+  if (json) {
+    out(JSON.stringify({ status: response.status, contentType: response.contentType, body }, null, 2));
   } else {
     out(`HTTP ${response.status}`);
+    if (response.contentType && !response.json) {
+      out(`(non-JSON response: ${response.contentType})`);
+    }
     const hint = STATUS_HINT[response.status];
     if (hint) {
       out(`(${hint})`);
     }
-    out(typeof response.body === "string" ? response.body : JSON.stringify(response.body, null, 2));
+    out(typeof body === "string" ? body : JSON.stringify(body, null, 2));
   }
-  return response.status >= 200 && response.status < 300 ? 0 : 1;
+  return response.status >= 200 && response.status < 300 && response.json !== false ? 0 : 1;
+};
+
+const runCmd = async (args: Args): Promise<number> => {
+  const command = args.positionals[1];
+  if (!command) {
+    out("Usage: ragctl cmd <name> [--opt name=value ...] [--channel <id>] [--json]");
+    return 1;
+  }
+  if (!COMMAND_PATTERN.test(command)) {
+    out(`Invalid command name "${command}" — must match ${COMMAND_PATTERN}`);
+    return 1;
+  }
+
+  const options = Object.entries(keyValueFlags(args, "opt")).map(([name, value]) => ({ name, value }));
+
+  const request: CommandRequest = { command };
+  const channelId = flag(args, "channel");
+  if (channelId !== undefined) {
+    request.channelId = channelId;
+  }
+  if (options.length > 0) {
+    request.options = options;
+  }
+
+  return printResponse(await authenticatedClient(args).command(request), has(args, "json"));
+};
+
+const runGh = async (args: Args): Promise<number> => {
+  const installationId = flag(args, "installation") ?? flag(args, "installation-id") ?? "144201662";
+  const first = args.positionals[1];
+  const second = args.positionals[2];
+  if (!first) {
+    out('Usage: ragctl gh "GET /repos/{owner}/{repo}/issues" --param owner=jsmunro --param repo=rag [--installation <id>] [--json]');
+    return 1;
+  }
+
+  const route = second && /^[A-Z]+$/.test(first) ? `${first} ${second}` : first;
+  const paramsJson = flag(args, "params-json");
+  const params =
+    paramsJson !== undefined
+      ? JSON.parse(paramsJson)
+      : Object.fromEntries(Object.entries(keyValueFlags(args, "param")).map(([key, value]) => [key, scalar(value)]));
+  const body = flag(args, "body-file") !== undefined ? readFileSync(flag(args, "body-file")!, "utf8") : flag(args, "body");
+  const request: GithubApiRequest = {
+    installationId,
+    route,
+    ...(Object.keys(params).length > 0 ? { params } : {}),
+    ...(body !== undefined ? { body } : {}),
+  };
+  return printResponse(await authenticatedClient(args).github(request), has(args, "json"));
 };
 
 const runConfig = (args: Args): number => {
@@ -265,6 +324,8 @@ const main = async (): Promise<number> => {
       return runDiscover();
     case "cmd":
       return runCmd(args);
+    case "gh":
+      return runGh(args);
     case "config":
       return runConfig(args);
     default:

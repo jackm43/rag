@@ -1,22 +1,25 @@
 import nacl from "tweetnacl";
 
 import {
-  decodeServiceMessage,
   encodeAiJobEnvelope,
+  encodeManifestSnapshot,
   encodeServiceMessage,
   type EnvelopeOptions,
 } from "../packages/contracts";
-import type { AiJob, ServiceMessageBytes } from "../packages/contracts/types";
+import type { AiJob, Env, ServiceMessageBytes } from "../packages/contracts/types";
 import {
   SERVICE_ZONE,
   SYSTEM_SUBJECT,
   type MachinePrincipal,
 } from "../packages/auth/principal";
+import { ensureRequestPlacement, serviceHopIntent } from "../packages/auth/control-plane";
+import { serviceEnvelopeBytes } from "../packages/auth/message";
 import {
   buildIdentityContext,
   importSigningKey,
   mint,
 } from "../packages/identity";
+import { handleEgressRequest } from "../packages/egress/server";
 
 const encoder = new TextEncoder();
 
@@ -50,6 +53,24 @@ export const SIGNING_KEY_JWKS: Record<MachinePrincipal, JsonWebKey> = {
     x: "RHa6T_vqdx5v_bttgMzenwtdLII_Ud6_aP5CB6h7BSk",
     d: "uJn1_O-H6bTLEUvYzqSHupb9veb9BM_36Z_pKLjNXyY",
   },
+  registry: {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "zwCQ4h35aDsQDr2aofod8QhE4u4uww4KaCZ0GEcZcYU",
+    d: "CuSGcaxzaV7vi2ne2KLd7-bBZL5QwG_S2HX7In_RR0k",
+  },
+  attest: {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "QbSbr-8d158rIxcFofS4AvtgO3A76D7E9FwRy1ak4ls",
+    d: "3_7SfQiUyql_PSltf5dpOUCKqJyUIB7sJLl_fTOlyhQ",
+  },
+  metadata: {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "QoTuiYTuWxzFJEBrMNz6v-FeEvolJn8LRkzApyo_Hkc",
+    d: "rJZPpJDKLLdoj4UPIsCTAfHY4kusSL1npboKh4GNymw",
+  },
   "dev-proxy": {
     kty: "OKP",
     crv: "Ed25519",
@@ -71,6 +92,12 @@ export const SIGNING_KEY_JWKS: Record<MachinePrincipal, JsonWebKey> = {
     x: "hYMdAmVmhbs_L4wEZVJRUtp8stUdIPCliYyjA2zdbUY",
     d: "NHQW5FI6wxkbQiVsVh7ub8Ex_DX-NxAktpaWjfU5BFE",
   },
+  egress: {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "OnAOWD6mg9DgW-k3_TzvUYJ6VzoVMEHcebPTYiUb8Tk",
+    d: "7GkFG9GME0CNsZ1pb5nMf5CxVb2UUQR_A6PiVw7mHY8",
+  },
 };
 
 export type ServiceHopSpec = {
@@ -78,21 +105,48 @@ export type ServiceHopSpec = {
   aud: MachinePrincipal;
   sub?: string;
   act?: MachinePrincipal[];
+  // Optional: when a test's receiving env has a SERVICE_REGISTRY binding
+  // (a working control plane, e.g. via createServiceRegistryMock), pass it
+  // here so the minted token carries a real requestId/placementId exactly
+  // like the production client (ensureRequestPlacement) would. Tests that
+  // exercise a receiving env with a control plane but mint through this
+  // helper without an env would otherwise always fail placement
+  // consumption — not because anything is misconfigured, but because the
+  // token itself never carried placement fields. Omit env (the default) for
+  // tests that intentionally exercise the no-control-plane (case a) path.
+  env?: Env;
 };
 
 // Mint a service identity-context token bound to the given envelope bytes.
+// When `hop.env` is supplied, this mirrors the production client path
+// (packages/auth/client.ts mintToken): it first calls ensureRequestPlacement
+// against the same control plane the receiving server will consume against,
+// so placement enforcement is exercised end to end instead of bypassed.
 export const mintServiceToken = async (
   envelope: Uint8Array,
   hop: ServiceHopSpec,
 ): Promise<string> => {
   const key = await importSigningKey(SIGNING_KEY_JWKS[hop.iss]);
+  const sub = hop.sub ?? SYSTEM_SUBJECT;
+  const placement = hop.env
+    ? await ensureRequestPlacement({
+        env: hop.env,
+        subject: { sub },
+        source: hop.iss,
+        target: hop.aud,
+        intent: serviceHopIntent(hop.aud, envelope),
+      })
+    : {};
   const context = await buildIdentityContext({
     iss: hop.iss,
     aud: hop.aud,
-    sub: hop.sub ?? SYSTEM_SUBJECT,
+    sub,
     act: hop.act,
     trustZone: SERVICE_ZONE[hop.iss],
     envelopeBytes: envelope,
+    requestId: placement.requestId,
+    placementId: placement.placementId,
+    correlationId: placement.correlationId,
   });
   return mint(key, context);
 };
@@ -110,22 +164,267 @@ const subjectOf = (job: AiJob): string => {
 };
 
 // Encode an AI job and wrap it as a gateway->workflows service message, the shape
-// the workflows worker consumer receives in production.
-export const gatewayAiJob = (job: AiJob, options: EnvelopeOptions): Promise<ServiceMessageBytes> =>
+// the workflows worker consumer receives in production. Pass `env` (the same
+// env the queue consumer under test will receive) when that env has a
+// SERVICE_REGISTRY control-plane binding, so the minted token carries a real
+// placement instead of being denied by the receiving server's placement
+// enforcement.
+export const gatewayAiJob = (job: AiJob, options: EnvelopeOptions, env?: Env): Promise<ServiceMessageBytes> =>
   signedServiceMessage(encodeAiJobEnvelope(job, options), {
     iss: "gateway",
     aud: "workflows",
     sub: subjectOf(job),
+    env,
   });
 
 // Extract the envelope bytes from a captured service message (what a producer
 // handed the queue), for decoding in assertions.
 export const sentEnvelope = (sent: unknown): Uint8Array => {
-  const wire = decodeServiceMessage(sent);
-  if (!wire) {
-    throw new Error("Captured queue body is not a capnp ServiceMessage");
+  const envelope = serviceEnvelopeBytes(sent);
+  if (!envelope) {
+    throw new Error("Captured queue body does not contain envelope bytes");
   }
-  return wire.envelope;
+  return envelope;
+};
+
+export const serviceRegistrySnapshot = () =>
+  encodeManifestSnapshot([
+    {
+      service: "gateway",
+      zone: "platform",
+      targets: ["workflows"],
+      operations: ["devproxy.command"],
+      scopes: ["gateway:control:control-plane", "gateway:devproxy:management"],
+    },
+    {
+      service: "workflows",
+      zone: "application",
+      targets: ["responder", "spend", "connectors"],
+      operations: [
+        "thread_start",
+        "thread_reply",
+        "channel_reply",
+        "ask",
+        "ragjam",
+        "bicture",
+        "message.received",
+        "webhook.event",
+      ],
+      scopes: [],
+    },
+    {
+      service: "responder",
+      zone: "application",
+      targets: [],
+      operations: ["reply.channel_message", "reply.interaction_edit"],
+      scopes: [],
+    },
+    {
+      service: "spend",
+      zone: "application",
+      targets: [],
+      operations: ["spend"],
+      scopes: [],
+    },
+    {
+      service: "registry",
+      zone: "control-plane",
+      targets: ["registry", "connectors"],
+      operations: ["registry.invoke"],
+      scopes: [],
+    },
+    {
+      service: "metadata",
+      zone: "application",
+      targets: ["metadata", "registry", "attest"],
+      operations: ["metadata.query"],
+      scopes: [],
+    },
+    {
+      service: "attest",
+      zone: "platform",
+      targets: ["attest", "connectors"],
+      operations: ["attest.invoke"],
+      scopes: [],
+    },
+    {
+      service: "dev-proxy",
+      zone: "platform",
+      targets: ["gateway", "connectors"],
+      operations: [],
+      scopes: [],
+    },
+    {
+      service: "connectors",
+      zone: "application",
+      targets: [],
+      operations: ["connector.invoke"],
+      scopes: [],
+    },
+    {
+      service: "webhooks",
+      zone: "platform",
+      targets: ["connectors", "workflows"],
+      operations: [],
+      scopes: [],
+    },
+    {
+      service: "egress",
+      zone: "platform",
+      targets: [],
+      operations: ["egress.request"],
+      scopes: [],
+    },
+  ]);
+
+// A minimal but fully functional in-memory control plane: it implements the
+// same createIntent/createPlacement/consumePlacement RPCs the real
+// SERVICE_REGISTRY Durable Object exposes (packages/auth/control-plane.ts),
+// so tests that build an env with this mock exercise the real placement
+// enforcement path end to end (mint on the client side, consume on the
+// server side) rather than tripping the "misconfigured registry" fail-closed
+// path. It intentionally skips the TTL/versioning edge cases the dedicated
+// control-plane tests (test/packages/auth/client.test.ts) cover directly —
+// every intent/placement created here is valid until the test process ends.
+type MockIntent = {
+  id: string;
+  correlationId: string;
+  subject: string;
+  target: string;
+  revoked: boolean;
+};
+
+type MockPlacement = {
+  id: string;
+  requestId: string;
+  correlationId: string;
+  subject: string;
+  source: string;
+  target: string;
+  action: string;
+  resource: string;
+  method: string;
+  consumed: boolean;
+};
+
+const createControlPlaneStub = () => {
+  const intents = new Map<string, MockIntent>();
+  const placements = new Map<string, MockPlacement>();
+  let intentSeq = 0;
+  let placementSeq = 0;
+
+  return {
+    register: async () => undefined,
+    snapshot: async () => serviceRegistrySnapshot(),
+    createIntent: async (record: {
+      correlationId: string;
+      subject: string;
+      target?: string;
+      aud: string;
+    }) => {
+      const id = `request-${++intentSeq}`;
+      intents.set(id, {
+        id,
+        correlationId: record.correlationId,
+        subject: record.subject,
+        target: record.aud,
+        revoked: false,
+      });
+      return {
+        id,
+        correlationId: record.correlationId,
+        expiresAt: Date.now() + 5 * 60_000,
+        version: 1,
+      };
+    },
+    createPlacement: async (record: {
+      requestId: string;
+      correlationId: string;
+      subject: string;
+      source: string;
+      target: string;
+      action: string;
+      resource: string;
+      method: string;
+    }) => {
+      const intent = intents.get(record.requestId);
+      if (!intent || intent.revoked) {
+        return null;
+      }
+      const id = `placement-${++placementSeq}`;
+      placements.set(id, {
+        id,
+        requestId: record.requestId,
+        correlationId: record.correlationId,
+        subject: record.subject,
+        source: record.source,
+        target: record.target,
+        action: record.action,
+        resource: record.resource,
+        method: record.method,
+        consumed: false,
+      });
+      return {
+        id,
+        correlationId: record.correlationId,
+        expiresAt: Date.now() + 90_000,
+        intentVersion: 1,
+      };
+    },
+    consumePlacement: async (input: {
+      placementId: string;
+      requestId: string;
+      correlationId?: string;
+      subject: string;
+      source: string;
+      target: string;
+      action: string;
+      resource: string;
+      method: string;
+    }) => {
+      const placement = placements.get(input.placementId);
+      if (!placement || placement.consumed) {
+        return false;
+      }
+      placement.consumed = true;
+      const intent = intents.get(input.requestId);
+      return (
+        !!intent &&
+        !intent.revoked &&
+        placement.requestId === input.requestId &&
+        (input.correlationId === undefined || placement.correlationId === input.correlationId) &&
+        placement.subject === input.subject &&
+        placement.source === input.source &&
+        placement.target === input.target &&
+        placement.action === input.action &&
+        placement.resource === input.resource &&
+        placement.method === input.method
+      );
+    },
+    revokeIntent: async (requestId: string) => {
+      const intent = intents.get(requestId);
+      if (!intent) {
+        return null;
+      }
+      intent.revoked = true;
+      return { id: requestId, revokedAt: Date.now(), version: 2 };
+    },
+    bumpIntentVersion: async (requestId: string) => {
+      const intent = intents.get(requestId);
+      if (!intent) {
+        return null;
+      }
+      return { id: requestId, version: 2 };
+    },
+  };
+};
+
+export const createServiceRegistryMock = () => {
+  const stub = createControlPlaneStub();
+  return {
+    idFromName: (name: string) => name,
+    get: () => stub,
+  };
 };
 
 export const createSignedRequest = (
@@ -150,14 +449,26 @@ export const createSignedRequest = (
   });
 };
 
-export const createEnv = (publicKeyHex: string, overrides: Record<string, unknown> = {}) =>
-  ({
+export const createEnv = (publicKeyHex: string, overrides: Record<string, unknown> = {}) => {
+  const env: Record<string, unknown> = {
     DISCORD_PUBLIC_KEY: publicKeyHex,
     DISCORD_APPLICATION_ID: "application-id",
     DISCORD_BOT_TOKEN: "bot-token",
+    // Outbound credentials the in-process EGRESS stub (below) injects from the
+    // bundled default profiles. In production these live only on the egress
+    // worker; here they let the real egress path run under the suite's global
+    // fetch mocks and produce byte-identical injected headers.
+    CF_AIG_TOKEN: "gateway-token",
+    CLOUDFLARE_API_TOKEN: "cf-token",
     // Signing keys for the workers that mint peer tokens (gateway, workflows).
     GATEWAY_SIGNING_KEY: JSON.stringify(SIGNING_KEY_JWKS.gateway),
     WORKFLOWS_SIGNING_KEY: JSON.stringify(SIGNING_KEY_JWKS.workflows),
+    RESPONDER_SIGNING_KEY: JSON.stringify(SIGNING_KEY_JWKS.responder),
+    CONNECTORS_SIGNING_KEY: JSON.stringify(SIGNING_KEY_JWKS.connectors),
+    // The spend worker signs its own egress hops (cloudflare-api profile).
+    SPEND_SIGNING_KEY: JSON.stringify(SIGNING_KEY_JWKS.spend),
+    METADATA_SIGNING_KEY: JSON.stringify(SIGNING_KEY_JWKS.metadata),
+    ATTEST_SIGNING_KEY: JSON.stringify(SIGNING_KEY_JWKS.attest),
     DB: {
       prepare: () => {
         throw new Error("DB should not be used in this test");
@@ -186,8 +497,24 @@ export const createEnv = (publicKeyHex: string, overrides: Record<string, unknow
         throw new Error("RESPONDER should not be used in this test");
       },
     },
+    SERVICE_REGISTRY: createServiceRegistryMock(),
     ...overrides,
-  }) as never;
+  };
+  // Realistic in-process EGRESS binding: fetchProfile runs the REAL egress
+  // server (packages/egress/server.ts) against this SAME env object. There is
+  // no EGRESS_CONTROL binding, so the server falls back to the bundled default
+  // profiles (packages/egress/profiles.ts); credentials come from this env's
+  // own vars (DISCORD_BOT_TOKEN, CF_AIG_TOKEN, CLOUDFLARE_API_TOKEN). This
+  // makes every application outbound HTTP path run the true egress hop under
+  // the suite's global-fetch mocks. Overridable via `overrides.EGRESS`.
+  if (env.EGRESS === undefined) {
+    env.EGRESS = {
+      fetchProfile: (message: unknown, body?: ArrayBuffer) =>
+        handleEgressRequest(env as never, message, body),
+    };
+  }
+  return env as never;
+};
 
 // DB mock that supports prepare().run(), prepare().bind().run(), and first().
 export const createDbMock = (options: {

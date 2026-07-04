@@ -5,7 +5,7 @@ import { runInDurableObject } from "cloudflare:test";
 import {
   extractBotMentionPrompt,
   handleGatewayMessageCreate,
-} from "../../workers/public/gateway/src/index.ts";
+} from "../../workers/applications/gateway/api/middleware_client/src/index.ts";
 import workflowsWorker from "../../workers/services/workflows/src/index.ts";
 import { resolveGatewayMessage } from "../../packages/domain/mention.ts";
 import responderWorker from "../../workers/services/responder/src/index.ts";
@@ -25,6 +25,20 @@ const SOURCE_MESSAGE_ID = "300000000000000004";
 const ALICE_ID = "400000000000000001";
 const BOB_ID = "400000000000000002";
 const BOT_ROLE_ID = "800000000000000001";
+
+// Outbound HTTP bodies now travel through the egress hop as raw bytes, so a
+// captured init.body is an ArrayBuffer rather than the original string. The
+// bytes are byte-identical to before; decode them to assert on content.
+const bodyText = (init: RequestInit | undefined): string => {
+  const body = init?.body;
+  if (typeof body === "string") {
+    return body;
+  }
+  if (body instanceof ArrayBuffer) {
+    return new TextDecoder().decode(body);
+  }
+  return String(body);
+};
 
 test("bot mention parser accepts prompts after the bot mention", () => {
   assert.equal(extractBotMentionPrompt("<@bot-user-id> Explain queues", "bot-user-id"), "Explain queues");
@@ -376,6 +390,7 @@ test("queue handler processes message.received mentions in-process without re-en
               mentionRoleIds: [],
             },
             { source: "gateway" },
+            env,
           ),
           ack: () => {
             acked = true;
@@ -389,7 +404,7 @@ test("queue handler processes message.received mentions in-process without re-en
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
-    const input = JSON.parse(String(gatewayCall.init?.body)) as { messages: Array<{ role: string; content: string }> };
+    const input = JSON.parse(bodyText(gatewayCall.init)) as { messages: Array<{ role: string; content: string }> };
     assert.deepEqual(input.messages.slice(1), [{ role: "user", content: "alice: Explain queues" }]);
 
     assert.equal(outboxJobs.length, 1);
@@ -425,6 +440,7 @@ test("queue handler acknowledges irrelevant message.received events without side
             mentionRoleIds: [],
           },
           { source: "gateway" },
+          env,
         ),
         ack: () => {
           acked = true;
@@ -458,7 +474,7 @@ test("fetchChannelMessages drops malformed Discord messages", async () => {
 
   try {
     const env = createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" });
-    const messages = await fetchChannelMessages(env, "channel-id");
+    const messages = await fetchChannelMessages(env, "workflows", "channel-id");
 
     assert.equal(messages.length, 1);
     assert.equal(messages[0].id, "message-id");
@@ -615,6 +631,7 @@ test("queue handler posts channel reply jobs without creating a thread", async (
           prompt: "and what about retries",
         },
         { source: "gateway" },
+        env,
       ),
       ack: () => {
         ackedMessages.push(message.body);
@@ -631,7 +648,7 @@ test("queue handler posts channel reply jobs without creating a thread", async (
 
     const gatewayCalls = fetchCalls.filter((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.equal(gatewayCalls.length, 1);
-    const input = JSON.parse(String(gatewayCalls[0].init?.body)) as { messages: Array<{ role: string; content: string }> };
+    const input = JSON.parse(bodyText(gatewayCalls[0].init)) as { messages: Array<{ role: string; content: string }> };
     assert.deepEqual(input.messages.slice(1), [
       { role: "user", content: "metro goonin: and what about retries" },
     ]);
@@ -711,6 +728,7 @@ test("queue handler treats a thread-start job as fresh, creates a thread, and po
           prompt: "and what about retries",
         },
         { source: "gateway" },
+        env,
       ),
       ack: () => {
         ackedMessages.push(message.body);
@@ -727,7 +745,7 @@ test("queue handler treats a thread-start job as fresh, creates a thread, and po
 
     const gatewayCalls = fetchCalls.filter((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.equal(gatewayCalls.length, 1);
-    const input = JSON.parse(String(gatewayCalls[0].init?.body)) as { messages: Array<{ role: string; content: string }> };
+    const input = JSON.parse(bodyText(gatewayCalls[0].init)) as { messages: Array<{ role: string; content: string }> };
     assert.match(input.messages[0].content, /Use only the provided thread conversation context/);
     assert.deepEqual(input.messages.slice(1), [
       { role: "user", content: "metro goonin: and what about retries" },
@@ -737,7 +755,7 @@ test("queue handler treats a thread-start job as fresh, creates a thread, and po
       (call) => call.url === `https://discord.com/api/v10/channels/${CHANNEL_ID}/messages/${TRIGGER_ID}/threads`,
     );
     assert.ok(threadCall);
-    assert.deepEqual(JSON.parse(String(threadCall.init?.body)), {
+    assert.deepEqual(JSON.parse(bodyText(threadCall.init)), {
       name: "and what about retries",
       auto_archive_duration: 1440,
     });
@@ -833,6 +851,7 @@ test("queue handler builds a conversation from tracked thread history and posts 
           prompt: "and what about retries",
         },
         { source: "gateway" },
+        env,
       ),
       ack: () => {
         ackedMessages.push(message.body);
@@ -853,7 +872,7 @@ test("queue handler builds a conversation from tracked thread history and posts 
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
-    const input = JSON.parse(String(gatewayCall.init?.body)) as { messages: Array<{ role: string; content: string }> };
+    const input = JSON.parse(bodyText(gatewayCall.init)) as { messages: Array<{ role: string; content: string }> };
     assert.equal(input.messages[0].role, "system");
     assert.deepEqual(input.messages.slice(1), [
       { role: "user", content: "metro goonin: Explain queues" },
@@ -928,6 +947,7 @@ test("queue handler keeps non-search replies inside /ask thread mode", async () 
           prompt: "how is that different from a cron trigger?",
         },
         { source: "gateway" },
+        env,
       ),
       ack: () => undefined,
       retry: () => {
@@ -939,7 +959,7 @@ test("queue handler keeps non-search replies inside /ask thread mode", async () 
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
-    const input = JSON.parse(String(gatewayCall.init?.body)) as { messages: Array<{ role: string; content: string }> };
+    const input = JSON.parse(bodyText(gatewayCall.init)) as { messages: Array<{ role: string; content: string }> };
     assert.match(input.messages[0].content, /This is a \/ask thread/);
     assert.equal(/normal chat reply/.test(input.messages[0].content), false);
     assert.deepEqual(input.messages.slice(1), [
@@ -1026,6 +1046,7 @@ test("queue handler uses web search for current follow-ups in /ask threads", asy
           prompt: "what is the latest pricing?",
         },
         { source: "gateway" },
+        env,
       ),
       ack: () => undefined,
       retry: () => {
@@ -1037,7 +1058,7 @@ test("queue handler uses web search for current follow-ups in /ask threads", asy
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
-    const body = JSON.parse(String(gatewayCall.init?.body));
+    const body = JSON.parse(bodyText(gatewayCall.init));
     assert.equal(body.model, "openai/gpt-4o-search-preview");
     assert.match(body.messages[0].content, /careful web research assistant/);
     assert.match(body.messages[1].content, /Thread conversation context/);
@@ -1115,6 +1136,7 @@ test("queue handler excludes rag command bot output from thread history", async 
           prompt: "who was in paris",
         },
         { source: "gateway" },
+        env,
       ),
       ack: () => undefined,
       retry: () => {
@@ -1126,7 +1148,7 @@ test("queue handler excludes rag command bot output from thread history", async 
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
-    const input = JSON.parse(String(gatewayCall.init?.body)) as { messages: Array<{ role: string; content: string }> };
+    const input = JSON.parse(bodyText(gatewayCall.init)) as { messages: Array<{ role: string; content: string }> };
     assert.match(input.messages[0].content, /normal chat reply, not the \/rag command/);
     assert.deepEqual(input.messages.slice(1), [
       { role: "user", content: "alice: who was in paris" },
@@ -1193,6 +1215,7 @@ test("queue handler fetches replied-to context from Discord REST", async () => {
           replyChannelId: REFERENCED_CHANNEL_ID,
         },
         { source: "gateway" },
+        env,
       ),
       ack: () => undefined,
       retry: () => {
@@ -1210,7 +1233,7 @@ test("queue handler fetches replied-to context from Discord REST", async () => {
     );
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
-    const input = JSON.parse(String(gatewayCall.init?.body)) as { messages: Array<{ role: string; content: string }> };
+    const input = JSON.parse(bodyText(gatewayCall.init)) as { messages: Array<{ role: string; content: string }> };
     assert.deepEqual(input.messages.slice(1), [
       {
         role: "user",
@@ -1255,6 +1278,7 @@ test("raw model output crosses the outbox and the responder sanitizes it on egre
           prompt: "Say hello",
         },
         { source: "gateway" },
+        env,
       ),
       ack: () => undefined,
       retry: () => {
@@ -1281,7 +1305,7 @@ test("raw model output crosses the outbox and the responder sanitizes it on egre
       (call) => call.url === `https://discord.com/api/v10/channels/${THREAD_ID}/messages`,
     );
     assert.ok(postCall);
-    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
+    assert.deepEqual(JSON.parse(bodyText(postCall.init)), {
       content: "Hello there",
       allowed_mentions: {
         parse: [],
@@ -1324,6 +1348,7 @@ test("queue handler uses the source-controlled partner model", async () => {
           prompt: "Say hello",
         },
         { source: "gateway" },
+        env,
       ),
       ack: () => undefined,
       retry: () => {
@@ -1335,7 +1360,7 @@ test("queue handler uses the source-controlled partner model", async () => {
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
-    const gatewayBody = JSON.parse(String(gatewayCall.init?.body));
+    const gatewayBody = JSON.parse(bodyText(gatewayCall.init));
     assert.equal(gatewayBody.model, "grok/grok-4.3");
     assert.equal(gatewayBody.max_tokens, 1000);
     assert.equal(gatewayBody.max_completion_tokens, undefined);
@@ -1408,6 +1433,7 @@ test("queue handler records partner AI Gateway usage", async () => {
           prompt: "Say hello",
         },
         { source: "gateway" },
+        env,
       ),
       ack: () => undefined,
       retry: () => {
@@ -1419,7 +1445,7 @@ test("queue handler records partner AI Gateway usage", async () => {
 
     const gatewayCall = fetchCalls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
     assert.ok(gatewayCall);
-    const gatewayBody = JSON.parse(String(gatewayCall.init?.body));
+    const gatewayBody = JSON.parse(bodyText(gatewayCall.init));
     assert.equal(gatewayBody.model, "grok/grok-4.3");
     assert.equal(gatewayBody.messages[0].role, "system");
     assert.match(gatewayBody.messages[0].content, /normal chat reply, not the \/rag command/);

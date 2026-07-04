@@ -38,13 +38,13 @@ export const handleDeferredInteraction = (
         const { data, files } = "data" in result
           ? result
           : { data: result, files: [] as InteractionResponseFile[] };
-        await editOriginalInteractionResponse(env, applicationId, interactionToken, data, files);
+        await editOriginalInteractionResponse(env, "workflows", applicationId, interactionToken, data, files);
       } catch (error) {
         logger.error(options.logEvent, {
           error: errorMessage(error),
           ...options.logContext?.(error),
         });
-        await editOriginalInteractionResponse(env, applicationId, interactionToken, {
+        await editOriginalInteractionResponse(env, "workflows", applicationId, interactionToken, {
           content: options.failureMessage,
           allowed_mentions: { parse: [] },
         }).catch(() => undefined);

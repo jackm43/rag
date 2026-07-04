@@ -68,6 +68,18 @@
       "binding": "CONNECTORS",
       "service": "ragbot-connectors-worker",
       "entrypoint": "Connectors"
+    },
+    // Generic egress sidecar. Discord (rest + webhook), media downloads, and
+    // AI Gateway HTTP all leave the worker through here now; the egress worker
+    // owns credential injection and host policy per profile.
+    // DISCORD_BOT_TOKEN and CF_AIG_TOKEN must be provisioned on the EGRESS
+    // worker (ragbot-egress-worker), NOT here — after this migration workflows
+    // no longer needs DISCORD_BOT_TOKEN or CF_AIG_TOKEN directly. The egress
+    // worker must be deployed before this binding can resolve.
+    {
+      "binding": "EGRESS",
+      "service": "ragbot-egress-worker",
+      "entrypoint": "Egress"
     }
   ],
   // Service registry hosted by the standalone ragbot-registry-worker.

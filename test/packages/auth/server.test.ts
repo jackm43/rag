@@ -1,11 +1,12 @@
 import { assert, test } from "vitest";
 
+import type { EntityJson } from "@cedar-policy/cedar-wasm/web";
 import { createServiceServer } from "../../../packages/auth/server.ts";
-import { serviceClients } from "../../../packages/auth/client.ts";
+import { createServiceClientFromEnv } from "../../../packages/auth/client.ts";
 import {
   decodeAiSpendJobEnvelope,
+  encodeManifestSnapshot,
   decodeReplyJobEnvelope,
-  decodeServiceMessage,
   encodeAiSpendJobEnvelope,
   encodeReplyJobEnvelope,
   encodeServiceMessage,
@@ -34,12 +35,139 @@ const replyEnvelope = () =>
 const workflowsEnv = () =>
   ({
     WORKFLOWS_SIGNING_KEY: JSON.stringify(SIGNING_KEY_JWKS.workflows),
+    SERVICE_REGISTRY: {
+      idFromName: (name: string) => name,
+      get: () => ({
+        register: async () => undefined,
+        createIntent: async (record: {
+          subject: string;
+          initiatingApplication: string;
+          action: string;
+          resource: string;
+          method: string;
+          allowedApplications: string[];
+        }) => ({
+          id: "request-1",
+          iss: record.iss,
+          sub: record.sub,
+          aud: record.aud,
+          iat: 1,
+          nbf: 1,
+          exp: 61,
+          jti: record.jti,
+          correlationId: record.correlationId,
+          subject: record.subject,
+          initiatingApplication: record.initiatingApplication,
+          action: record.action,
+          resource: record.resource,
+          method: record.method,
+          allowedApplications: record.allowedApplications,
+          expiresAt: Date.now() + 60_000,
+          version: 1,
+        }),
+        createPlacement: async (record: {
+          requestId: string;
+          subject: string;
+          source: string;
+          target: string;
+          action: string;
+          resource: string;
+          method: string;
+        }) => ({
+          id: "placement-1",
+          iss: record.iss,
+          sub: record.sub,
+          aud: record.aud,
+          iat: 1,
+          nbf: 1,
+          exp: 61,
+          jti: record.jti,
+          correlationId: record.correlationId,
+          requestId: record.requestId,
+          subject: record.subject,
+          source: record.source,
+          target: record.target,
+          action: record.action,
+          resource: record.resource,
+          method: record.method,
+          expiresAt: Date.now() + 60_000,
+          intentVersion: 1,
+        }),
+        consumePlacement: async () => true,
+        snapshot: async () =>
+          encodeManifestSnapshot([
+            {
+              service: "workflows",
+              zone: "application",
+              targets: ["responder"],
+              operations: [],
+              scopes: [],
+            },
+            {
+              service: "responder",
+              zone: "application",
+              targets: [],
+              operations: ["reply.channel_message", "reply.interaction_edit"],
+              scopes: [],
+            },
+          ]),
+      }),
+    },
   }) as never;
 
-const responderServer = () =>
-  createServiceServer({ self: "responder", expectedIssuers: ["workflows"] });
+const workflowsResponderEntities = (): EntityJson[] => [
+  {
+    uid: { type: "Application", id: "workflows" },
+    attrs: {
+      zone: "application",
+      plane: "data",
+      targets: [{ __entity: { type: "Application", id: "responder" } }],
+      operations: [],
+    },
+    parents: [],
+  },
+  {
+    uid: { type: "Application", id: "responder" },
+    attrs: {
+      zone: "application",
+      plane: "data",
+      operations: ["reply.channel_message", "reply.interaction_edit"],
+      targets: [],
+    },
+    parents: [],
+  },
+  {
+    uid: { type: "Service", id: "responder:reply.channel_message" },
+    attrs: {
+      application: { __entity: { type: "Application", id: "responder" } },
+      zone: "application",
+      plane: "data",
+      operation: "reply.channel_message",
+      clients: [{ __entity: { type: "Application", id: "workflows" } }],
+    },
+    parents: [],
+  },
+  {
+    uid: { type: "Service", id: "responder:reply.interaction_edit" },
+    attrs: {
+      application: { __entity: { type: "Application", id: "responder" } },
+      zone: "application",
+      plane: "data",
+      operation: "reply.interaction_edit",
+      clients: [{ __entity: { type: "Application", id: "workflows" } }],
+    },
+    parents: [],
+  },
+];
 
-test("a client mints a token beside the envelope and the server verifies it into a request context", async () => {
+const responderServer = () =>
+  createServiceServer({
+    self: "responder",
+    expectedIssuers: ["workflows"],
+    entities: async () => workflowsResponderEntities(),
+  });
+
+test("an application-trusted client sends a signed envelope and preserves subject context", async () => {
   const sent: Array<{ body: ServiceMessageBytes; options?: { delaySeconds?: number } }> = [];
   const queue = {
     send: async (body: ServiceMessageBytes, options?: { delaySeconds?: number }) => {
@@ -48,18 +176,18 @@ test("a client mints a token beside the envelope and the server verifies it into
   } as never;
   const envelope = replyEnvelope();
 
-  await serviceClients(workflowsEnv()).workflowsToResponder.call({
+  await createServiceClientFromEnv(workflowsEnv(), {
+    self: "workflows",
+    target: "responder",
+    transportTrust: "application",
+  }).call({
     transport: "queue",
     queue,
     envelope,
     subject: { sub: "user-1" },
   });
   assert.equal(sent.length, 1);
-  // The queue body is capnp ServiceMessage bytes framing the envelope + JWS.
-  const wire = decodeServiceMessage(sent[0].body);
-  assert.ok(wire);
-  assert.deepEqual(wire.envelope, envelope);
-  assert.isString(wire.idToken);
+  assert.notDeepEqual(sent[0].body, envelope);
 
   const received = await responderServer().receive(sent[0].body, decodeReplyJobEnvelope);
   assert.ok(received);
@@ -68,7 +196,6 @@ test("a client mints a token beside the envelope and the server verifies it into
     channelId: CHANNEL_ID,
     content: "hello",
   });
-  // The verified context carries the subject and delegation chain.
   assert.equal(received.context.subject, "user-1");
   assert.deepEqual(received.context.delegates, ["workflows"]);
   assert.equal(received.context.source, "workflows");
@@ -77,7 +204,7 @@ test("a client mints a token beside the envelope and the server verifies it into
   assert.equal(received.context.transport, "queue");
 });
 
-test("receive denies a message with no identity token", async () => {
+test("receive denies a raw or object-shaped message before identity verification", async () => {
   const warnings = captureWarnings();
   try {
     const denied = await responderServer().receive({ envelope: replyEnvelope() }, decodeReplyJobEnvelope);
@@ -86,28 +213,25 @@ test("receive denies a message with no identity token", async () => {
     assert.ok(denial);
     assert.equal(denial.zone, "application");
     assert.equal(denial.transport, "queue");
-    assert.equal(denial.reason, "identity_missing");
+    assert.equal(denial.reason, "body_unparseable");
   } finally {
     warnings.restore();
   }
 });
 
-test("receive denies an invalid envelope even under a valid token", async () => {
+test("receive denies an invalid inner envelope even under a valid token", async () => {
   const warnings = captureWarnings();
   try {
-    // Legacy object wrapper (still accepted for in-flight messages).
     const garbage = new Uint8Array([1, 2, 3, 4, 5]);
-    const message = {
-      envelope: garbage,
-      idToken: await mintServiceToken(garbage, { iss: "workflows", aud: "responder" }),
-    };
+    const message = encodeServiceMessage(
+      garbage,
+      await mintServiceToken(garbage, { iss: "workflows", aud: "responder" }),
+    );
     const invalid = await responderServer().receive(message, decodeReplyJobEnvelope);
     assert.equal(invalid, null);
     const denial = warnings.lines.find((line) => line.message === "service_denied");
     assert.ok(denial);
-    // Malformed bytes carry no readable operation, so the registration gate
-    // refuses them before any decode runs.
-    assert.equal(denial.reason, "operation_unregistered");
+    assert.equal(denial.reason, "body_unparseable");
   } finally {
     warnings.restore();
   }
@@ -184,7 +308,7 @@ test("binding transport verifies the token then re-validates the envelope kind",
     { source: "worker" },
   );
   const received = await responderServer().receive(
-    { envelope, idToken: await mintServiceToken(envelope, { iss: "workflows", aud: "responder" }) },
+    encodeServiceMessage(envelope, await mintServiceToken(envelope, { iss: "workflows", aud: "responder" })),
     decodeInteractionEdit,
     "binding",
   );
@@ -197,7 +321,7 @@ test("binding transport verifies the token then re-validates the envelope kind",
   try {
     const channel = replyEnvelope();
     const wrongKind = await responderServer().receive(
-      { envelope: channel, idToken: await mintServiceToken(channel, { iss: "workflows", aud: "responder" }) },
+      encodeServiceMessage(channel, await mintServiceToken(channel, { iss: "workflows", aud: "responder" })),
       decodeInteractionEdit,
       "binding",
     );

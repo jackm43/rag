@@ -1,6 +1,11 @@
 import { errorMessage, logger } from "../../logger";
+import type { Subject } from "../../auth";
 
-export type TrustZone =
+// Named EgressIdentityZone (not TrustZone) to avoid confusion with the
+// unrelated auth TrustZone in packages/auth/principal.ts, which describes a
+// worker's runtime domain position (platform/application/...). This is a
+// per-outbound-identity egress label used only for boundary-client logging.
+export type EgressIdentityZone =
   | "egress-discord"
   | "egress-ai-gateway"
   | "egress-cloudflare-api"
@@ -9,8 +14,8 @@ export type TrustZone =
   // One boundary client per connector, host-allowlisted to that provider only.
   | "egress-connector"
   // The secrets module's egress to a remote secrets backend, host-allowlisted to
-  // exactly that backend: HashiCorp Vault (egress-vault) and 1Password Connect
-  // (egress-onepassword). See packages/secrets/providers/*.
+  // exactly that backend: HashiCorp Vault (egress-vault). The 1Password SDK
+  // backend does not route through this boundary client.
   | "egress-vault"
   | "egress-onepassword";
 
@@ -21,7 +26,7 @@ export type BoundaryCredential = {
 
 export type BoundaryPolicy = {
   identity: string;
-  trustZone: TrustZone;
+  trustZone: EgressIdentityZone;
   credential?: BoundaryCredential;
   allowedHosts: string[] | "*";
   defaultTimeoutMs: number;
@@ -32,18 +37,18 @@ export type BoundaryPolicy = {
   logPath?: boolean;
 };
 
-export type RequestOutcome = "ok" | "denied" | "http_error" | "timeout" | "network_error";
+type RequestOutcome = "ok" | "denied" | "http_error" | "timeout" | "network_error";
 
-export type RequestContext = {
+type RequestContext = {
   identity: string;
-  trustZone: TrustZone;
+  trustZone: EgressIdentityZone;
   method: string;
   host: string;
   outcome: RequestOutcome;
   status?: number;
 };
 
-export type PolicyViolationReason =
+type PolicyViolationReason =
   | "invalid_url"
   | "insecure_scheme"
   | "host_not_allowed"
@@ -51,7 +56,7 @@ export type PolicyViolationReason =
 
 export class PolicyViolationError extends Error {
   readonly identity: string;
-  readonly trustZone: TrustZone;
+  readonly trustZone: EgressIdentityZone;
   readonly reason: PolicyViolationReason;
 
   constructor(policy: BoundaryPolicy, reason: PolicyViolationReason, detail: string) {
@@ -63,7 +68,11 @@ export class PolicyViolationError extends Error {
   }
 }
 
-export type BoundaryFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
+export type BoundaryFetch = (
+  input: string | URL,
+  init?: RequestInit,
+  options?: { subject?: Subject },
+) => Promise<Response>;
 
 const requestContext = (
   policy: BoundaryPolicy,

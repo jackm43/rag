@@ -7,6 +7,8 @@ import { sendInteractionEdit, sendInteractionMediaEdit } from "../outbox";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../../ai/spend";
 import { type BictureJob, type Env } from "../../contracts/types";
 import { isRecord } from "../../contracts/validation";
+import type { RequestContext } from "../../auth/context";
+import type { Subject } from "../../auth";
 
 const BICTURE_FILENAME_PREFIX = "bicture";
 const DEFAULT_IMAGE_CONTENT_TYPE = "image/jpeg";
@@ -63,7 +65,7 @@ const filenameForContentType = (contentType: string) =>
 
 const imageFileFromString = async (env: Env, value: string) => {
   if (/^https:\/\//i.test(value)) {
-    const response = await boundaryClients(env).mediaDownload(value);
+    const response = await boundaryClients(env, "workflows").mediaDownload(value);
     if (!response.ok) {
       throw new Error(`Generated image download failed (${response.status}): ${response.statusText}`);
     }
@@ -157,7 +159,7 @@ const runBictureImageGeneration = async (
   );
 };
 
-const buildBictureResponse = async (job: BictureJob, env: Env) => {
+const buildBictureResponse = async (job: BictureJob & { subject?: Subject }, env: Env) => {
   const spendSourceId = createAiSpendSourceId();
   const result = await runBictureImageGeneration(
     env,
@@ -176,6 +178,7 @@ const buildBictureResponse = async (job: BictureJob, env: Env) => {
     model: activeBictureProfile.model,
     unitCount: 1,
     sourceId: spendSourceId,
+    subject: job.subject,
   });
   const imageFile = await imageFileFrom(env, result);
   const filename = filenameForContentType(imageFile.contentType);
@@ -190,10 +193,18 @@ const buildBictureResponse = async (job: BictureJob, env: Env) => {
   };
 };
 
-export const processBictureJob = async (job: BictureJob, env: Env) => {
+const subjectFromContext = (context: RequestContext | undefined, fallback?: string) => context
+  ? { sub: context.subject, delegates: context.delegates, requestId: context.requestId, correlationId: context.correlationId }
+  : fallback;
+
+export const processBictureJob = async (job: BictureJob, env: Env, context?: RequestContext) => {
+  const subject = subjectFromContext(context, job.requesterUserId);
   try {
-    const response = await buildBictureResponse(job, env);
-    await sendInteractionMediaEdit(env, job.applicationId, job.interactionToken, response.content, response.file, job.requesterUserId);
+    const response = await buildBictureResponse(
+      { ...job, ...(typeof subject === "object" ? { subject } : {}) },
+      env,
+    );
+    await sendInteractionMediaEdit(env, job.applicationId, job.interactionToken, response.content, response.file, subject);
   } catch (error) {
     logger.error("bicture_command_failed", {
       error: errorMessage(error),
@@ -207,7 +218,7 @@ export const processBictureJob = async (job: BictureJob, env: Env) => {
       job.applicationId,
       job.interactionToken,
       "Could not generate that image. Try a different prompt.",
-      job.requesterUserId,
+      subject,
     ).catch(() => undefined);
   }
 };

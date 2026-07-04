@@ -28,6 +28,18 @@
       "migrations_dir": "../../../migrations"
     }
   ],
+  // Generic egress sidecar. The spend worker's only outbound HTTP (Cloudflare
+  // AI Gateway logs API) now leaves through here. CLOUDFLARE_API_TOKEN must be
+  // provisioned on the EGRESS worker (ragbot-egress-worker), NOT here — after
+  // this migration spend no longer needs CLOUDFLARE_API_TOKEN directly. The
+  // egress worker must be deployed before this binding can resolve.
+  "services": [
+    {
+      "binding": "EGRESS",
+      "service": "ragbot-egress-worker",
+      "entrypoint": "Egress"
+    }
+  ],
   // Service registry hosted by the standalone ragbot-registry-worker.
   "durable_objects": {
     "bindings": [

@@ -8,11 +8,32 @@ import {
 } from "../../packages/domain/responder.ts";
 import { appendSourceFallback } from "../../packages/ai/ask-mode.ts";
 import { editOriginalInteractionResponse } from "../../packages/discord/index.ts";
-import { encodeReplyJobEnvelope } from "../../packages/contracts/index.ts";
+import { encodeReplyJobEnvelope, encodeServiceMessage } from "../../packages/contracts/index.ts";
 import { createEnv, mintServiceToken, signedServiceMessage } from "../helpers.ts";
 
 const CHANNEL_ID = "200000000000000001";
 const APPLICATION_ID = "500000000000000001";
+
+// Outbound bodies now travel through the egress hop as raw bytes (the egress
+// server re-fetches with an ArrayBuffer body), so captured init.body is an
+// ArrayBuffer rather than the original string/FormData. The bytes and the
+// content-type header are preserved, so decode them back to assert on the
+// same observable content as before.
+const bodyText = (init: RequestInit | undefined): string => {
+  const body = init?.body;
+  if (typeof body === "string") {
+    return body;
+  }
+  if (body instanceof ArrayBuffer) {
+    return new TextDecoder().decode(body);
+  }
+  return String(body);
+};
+
+const bodyFormData = async (
+  url: string,
+  init: RequestInit | undefined,
+): Promise<FormData> => new Request(url, { method: "POST", ...init }).formData();
 
 test("finalizeAiReplyText sanitizes mentions, truncates, and falls back on empty output", () => {
   assert.equal(
@@ -84,7 +105,7 @@ test("editOriginalInteractionResponse logs rejected edits without the token and 
   try {
     const env = createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" });
 
-    const rejectedOk = await editOriginalInteractionResponse(env, APPLICATION_ID, "interaction-token", {
+    const rejectedOk = await editOriginalInteractionResponse(env, "responder", APPLICATION_ID, "interaction-token", {
       content: "hello",
     });
     assert.isFalse(rejectedOk);
@@ -98,7 +119,7 @@ test("editOriginalInteractionResponse logs rejected edits without the token and 
 
     warnLines.length = 0;
     globalThis.fetch = async () => new Response("{}", { status: 200 });
-    const acceptedOk = await editOriginalInteractionResponse(env, APPLICATION_ID, "interaction-token", {
+    const acceptedOk = await editOriginalInteractionResponse(env, "responder", APPLICATION_ID, "interaction-token", {
       content: "hello",
     });
     assert.isTrue(acceptedOk);
@@ -134,7 +155,7 @@ test("responder posts sanitized channel messages with allowed_mentions locked do
               },
               { source: "worker" },
             ),
-            { iss: "workflows", aud: "responder" },
+            { iss: "workflows", aud: "responder", env },
           ),
           ack: () => {
             acked = true;
@@ -154,7 +175,7 @@ test("responder posts sanitized channel messages with allowed_mentions locked do
       (postCall.init?.headers as Record<string, string>).authorization,
       "Bot bot-token",
     );
-    assert.deepEqual(JSON.parse(String(postCall.init?.body)), {
+    assert.deepEqual(JSON.parse(bodyText(postCall.init)), {
       content: "Ping and everyone",
       allowed_mentions: {
         parse: [],
@@ -192,7 +213,7 @@ test("responder edits interactions with text-only content through the outbox", a
               },
               { source: "worker" },
             ),
-            { iss: "workflows", aud: "responder" },
+            { iss: "workflows", aud: "responder", env },
           ),
           ack: () => {
             acked = true;
@@ -209,7 +230,7 @@ test("responder edits interactions with text-only content through the outbox", a
     );
     assert.ok(editCall);
     assert.equal(editCall.init?.method, "PATCH");
-    const body = JSON.parse(String(editCall.init?.body));
+    const body = JSON.parse(bodyText(editCall.init));
     // Interaction-edit content is command feedback, not model output: it keeps
     // its format (no speaker-line stripping) but is capped at the Discord hard
     // limit and locked down with allowed_mentions.
@@ -245,8 +266,10 @@ test("responder delivers media interaction edits over the RPC path", async () =>
     );
     await deliverInteractionEdit(
       env,
-      mediaEnvelope,
-      await mintServiceToken(mediaEnvelope, { iss: "workflows", aud: "responder" }),
+      encodeServiceMessage(
+        mediaEnvelope,
+        await mintServiceToken(mediaEnvelope, { iss: "workflows", aud: "responder", env }),
+      ),
       {
         name: "bicture.png",
         contentType: "image/png",
@@ -259,9 +282,9 @@ test("responder delivers media interaction edits over the RPC path", async () =>
     );
     assert.ok(editCall);
     assert.equal(editCall.init?.method, "PATCH");
-    assert.ok(editCall.init?.body instanceof FormData);
-
-    const form = editCall.init.body as FormData;
+    // The multipart body rode through egress as raw bytes with its
+    // content-type boundary header preserved; reconstruct the FormData.
+    const form = await bodyFormData(editCall.url, editCall.init);
     assert.deepEqual(JSON.parse(String(form.get("payload_json"))), {
       content: "a tiny jpeg test image",
       allowed_mentions: { parse: [] },
@@ -295,13 +318,21 @@ test("responder rejects RPC envelopes that are not interaction edits", async () 
   await rejects(async () =>
     deliverInteractionEdit(
       env,
-      channelEnvelope,
-      await mintServiceToken(channelEnvelope, { iss: "workflows", aud: "responder" }),
+      encodeServiceMessage(
+        channelEnvelope,
+        await mintServiceToken(channelEnvelope, { iss: "workflows", aud: "responder", env }),
+      ),
       { name: "bicture.png", contentType: "image/png", data: new ArrayBuffer(4) },
     ),
   );
   // A garbage token fails verification, so the edit is denied before decoding.
-  await rejects(() => deliverInteractionEdit(env, new Uint8Array([1, 2, 3, 4, 5]), "not-a-token", null));
+  await rejects(() =>
+    deliverInteractionEdit(
+      env,
+      encodeServiceMessage(new Uint8Array([1, 2, 3, 4, 5]), "not-a-token"),
+      null,
+    ),
+  );
 });
 
 test("responder acknowledges malformed outbox messages without egress", async () => {
@@ -345,20 +376,18 @@ test("responder retries channel posts on retryable Discord errors and acks termi
 
   try {
     const env = createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" });
-    const body = await signedServiceMessage(
+    const replyEnvelope = () =>
       encodeReplyJobEnvelope(
         { kind: "reply.channel_message", channelId: CHANNEL_ID, content: "hello" },
         { source: "worker" },
-      ),
-      { iss: "workflows", aud: "responder" },
-    );
+      );
 
     let retried = false;
     await responderWorker.queue({
       queue: "discord-outbox",
       messages: [
         {
-          body,
+          body: await signedServiceMessage(replyEnvelope(), { iss: "workflows", aud: "responder", env }),
           ack: () => {
             throw new Error("message should not be acked");
           },
@@ -370,13 +399,18 @@ test("responder retries channel posts on retryable Discord errors and acks termi
     } as never, env);
     assert.equal(retried, true);
 
+    // A placement is one-time-use, so the terminal-status case below mints a
+    // fresh signed message (a real retry re-sends, it does not replay the
+    // same placement) rather than reusing the body above — otherwise this
+    // would exercise placement replay rejection instead of the intended
+    // Discord-403-acks-terminal behavior.
     status = 403;
     let acked = false;
     await responderWorker.queue({
       queue: "discord-outbox",
       messages: [
         {
-          body,
+          body: await signedServiceMessage(replyEnvelope(), { iss: "workflows", aud: "responder", env }),
           ack: () => {
             acked = true;
           },
