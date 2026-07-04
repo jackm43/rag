@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
-import type { DiscordInteraction, Env } from "../../../contracts";
+import type { DiscordInteraction, Env, MessageReceivedJob } from "../../../contracts";
 import { runDeferredCommandByName, runInteractionSession } from "../../../lib/domain/commands/session-run";
+import { processMessageReceivedJob } from "../../../lib/domain/consumer";
 
 // Matches the Discord interaction-token follow-up window: past this the token
 // is dead (a replay could never produce a real edit), so the dedupe marker is
@@ -26,6 +27,17 @@ export class InteractionSession extends DurableObject<Env> {
       return;
     }
     await runInteractionSession(interaction, this.env);
+  }
+
+  // Mentions share this processor DO, keyed by idFromName(messageId). claim() is
+  // the durable, per-message idempotency guard: a MESSAGE_CREATE that Discord
+  // redelivers on a gateway reconnect/resume addresses the same DO and is
+  // dropped, so a mention replies exactly once regardless of reconnect churn.
+  async runMention(job: MessageReceivedJob): Promise<void> {
+    if (!(await this.claim())) {
+      return;
+    }
+    await processMessageReceivedJob(job, this.env, Date.now());
   }
 
   // Legacy path: the gateway pre-flights the command and kicks a single

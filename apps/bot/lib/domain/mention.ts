@@ -1,5 +1,5 @@
-import { createClient, createHopIntent, SYSTEM_SUBJECT } from "@rag/service-kit";
-import { encodeAiJobEnvelope, MAX_MENTION_IDS } from "../../contracts";
+import { SYSTEM_SUBJECT } from "@rag/service-kit";
+import { MAX_MENTION_IDS } from "../../contracts";
 import { isSnowflake, MAX_FREE_TEXT_LENGTH } from "@rag/contracts-core";
 import { fetchBotRoleIds } from "../discord";
 import { activeAiBanForUser } from "./bans";
@@ -93,11 +93,16 @@ const gatewayMessageJob = (message: DiscordMessage, botUserId: string): MessageR
     : {}),
 });
 
-// Durable Object entry point: validate → encode → enqueue, nothing else.
-// Whether a message is relevant can depend on D1 thread tracking, which the
-// DO deliberately cannot see, so every non-bot message with a usable prompt
-// is enqueued and the workflows worker filters. The only pre-filter is pure and local:
-// both reply paths require a non-empty prompt after mention stripping.
+// Gateway websocket entry point: validate → kick the processor DO, nothing
+// else. The InteractionSession DO is addressed by idFromName(message.id), so its
+// claim() is the single, DURABLE idempotency authority — a MESSAGE_CREATE that
+// Discord redelivers on a reconnect/resume reaches the same DO and is dropped,
+// however long after the first delivery (the old 60s gateway dedupe could not
+// span a reconnect gap and produced double replies). Whether a message is
+// actually relevant can depend on D1 thread tracking the gateway cannot see, so
+// every non-bot message with a usable prompt is forwarded and the DO resolves +
+// filters. The only pre-filters are pure and local: skip bots, non-allowed
+// guilds (and DMs), and empty prompts after mention stripping.
 export const handleGatewayMessageCreate = async (
   message: DiscordMessage,
   env: Env,
@@ -107,8 +112,6 @@ export const handleGatewayMessageCreate = async (
     return;
   }
 
-  // Guild allowlist gate: drop events from non-allowed guilds (and DMs,
-  // which carry no guild_id) before anything reaches the queue.
   if (!isGuildAllowed(env, message.guild_id)) {
     return;
   }
@@ -117,21 +120,9 @@ export const handleGatewayMessageCreate = async (
     return;
   }
 
-  await createClient({
-    env,
-    self: "gateway",
-    context: { subject: message.author?.id ?? SYSTEM_SUBJECT },
-  }).to("workflows", { transportTrust: "trusted" }).call({
-    transport: "queue",
-    queue: env.AI_JOBS,
-    envelope: encodeAiJobEnvelope(gatewayMessageJob(message, botUserId), { source: "gateway" }),
-    intent: createHopIntent({
-      action: "message.received",
-      resourceType: "Channel",
-      resourceId: message.channel_id,
-      method: "message.received",
-    }),
-  });
+  await env.INTERACTION_SESSION
+    .get(env.INTERACTION_SESSION.idFromName(message.id))
+    .runMention(gatewayMessageJob(message, botUserId));
 };
 
 // Workflows-side resolution: everything the DO used to do that needs D1 or

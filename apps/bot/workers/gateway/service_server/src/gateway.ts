@@ -42,12 +42,6 @@ const GATEWAY_ENABLED_KEY = "gatewayEnabled";
 // kill switch. A manual start() clears it.
 const GATEWAY_STOPPED_KEY = "gatewayStopped";
 const GATEWAY_WATCHDOG_INTERVAL_MS = 5 * 60_000;
-// Message-dedupe window: Discord (or a briefly overlapping session after a
-// reconnect) can deliver the same MESSAGE_CREATE more than once. Enqueue each
-// message id at most once within this window so a mention never double-replies.
-// Duplicates always arrive within seconds; entries are swept in alarm().
-const MESSAGE_DEDUPE_TTL_MS = 60_000;
-const MESSAGE_SEEN_PREFIX = "msg:";
 
 const isGatewayPayload = (value: unknown): value is DiscordGatewayPayload =>
   isRecord(value) &&
@@ -168,7 +162,6 @@ export class DiscordGateway extends DurableObject<Env> {
   }
 
   async alarm() {
-    await this.sweepSeenMessages();
     if (!(await this.isGatewayEnabled())) {
       return;
     }
@@ -293,43 +286,17 @@ export class DiscordGateway extends DurableObject<Env> {
     }
 
     if (payload.t === "MESSAGE_CREATE" && isDiscordMessage(payload.d)) {
-      // Idempotency across duplicate deliveries: enqueue each message id once.
-      if (!(await this.firstSeenMessage(payload.d.id))) {
-        return;
-      }
+      // Idempotency lives downstream: handleGatewayMessageCreate kicks the
+      // InteractionSession DO keyed by idFromName(messageId), whose claim() drops
+      // duplicate deliveries durably. Discord's at-least-once resume can redeliver
+      // the same MESSAGE_CREATE across a reconnect, so the guard must outlive any
+      // in-DO window — which the DO's per-message claim does and a short gateway
+      // TTL did not.
       try {
         await handleGatewayMessageCreate(payload.d, this.env, this.botUserId);
       } catch (error) {
         logger.error("gateway_message_create_failed", { error: errorMessage(error) });
       }
-    }
-  }
-
-  // Records a message id with a short TTL; returns false when already seen (a
-  // duplicate delivery). One DiscordGateway DO instance handles every gateway
-  // event, so this dedupes across overlapping sockets/sessions too.
-  private async firstSeenMessage(messageId: string): Promise<boolean> {
-    const key = `${MESSAGE_SEEN_PREFIX}${messageId}`;
-    const now = Date.now();
-    const expiresAt = await this.ctx.storage.get<number>(key);
-    if (expiresAt !== undefined && expiresAt > now) {
-      return false;
-    }
-    await this.ctx.storage.put(key, now + MESSAGE_DEDUPE_TTL_MS);
-    return true;
-  }
-
-  private async sweepSeenMessages(): Promise<void> {
-    const now = Date.now();
-    const entries = await this.ctx.storage.list<number>({ prefix: MESSAGE_SEEN_PREFIX });
-    const expired: string[] = [];
-    for (const [key, expiresAt] of entries) {
-      if (expiresAt <= now) {
-        expired.push(key);
-      }
-    }
-    for (let i = 0; i < expired.length; i += 128) {
-      await this.ctx.storage.delete(expired.slice(i, i + 128));
     }
   }
 

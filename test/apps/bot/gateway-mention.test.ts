@@ -9,7 +9,7 @@ import {
 import workflowsWorker from "@rag/bot/workers/workflows/src";
 import { resolveGatewayMessage } from "@rag/bot/lib/domain/mention";
 import responderWorker from "@rag/bot/workers/responder/src";
-import { decodeAiJobEnvelope, decodeReplyJobEnvelope } from "@rag/bot/contracts";
+import { decodeReplyJobEnvelope } from "@rag/bot/contracts";
 import { fetchChannelMessages } from "@rag/bot/lib/discord";
 import { createDbMock, createEnv, gatewayAiJob, sentEnvelope } from "../../helpers";
 
@@ -54,21 +54,32 @@ test("bot mention parser accepts prompts after the bot mention", () => {
   assert.equal(extractBotMentionPrompt("<@bot-user-id>   ", "bot-user-id"), null);
 });
 
-test("gateway message create encodes a validated message.received event with no lookups", async () => {
+// Capture the InteractionSession DO kicks (idFromName + the forwarded job)
+// without running the full mention resolution.
+const captureMentionKicks = (overrides: Record<string, unknown> = {}) => {
+  const kicks: Array<{ id: unknown; job: Record<string, unknown> }> = [];
+  const env = createEnv("unused", {
+    INTERACTION_SESSION: {
+      idFromName: (name: string) => ({ name }),
+      get: (id: unknown) => ({
+        runMention: async (job: Record<string, unknown>) => {
+          kicks.push({ id, job });
+        },
+      }),
+    },
+    ...overrides,
+  });
+  return { kicks, env };
+};
+
+test("gateway message create kicks the processor DO keyed by message id with no lookups", async () => {
   const originalFetch = globalThis.fetch;
   const fetchCalls: string[] = [];
   globalThis.fetch = async (url) => {
     fetchCalls.push(String(url));
     return Response.json({});
   };
-  const queuedJobs: unknown[] = [];
-  const env = createEnv("unused", {
-    AI_JOBS: {
-      send: async (job: unknown) => {
-        queuedJobs.push(job);
-      },
-    },
-  });
+  const { kicks, env } = captureMentionKicks();
 
   try {
     await handleGatewayMessageCreate(
@@ -86,11 +97,13 @@ test("gateway message create encodes a validated message.received event with no 
       BOT_USER_ID,
     );
 
-    // No D1 (createEnv's DB throws) and no Discord REST from the DO path.
+    // No D1 (createEnv's DB throws) and no Discord REST from the gateway path.
     assert.deepEqual(fetchCalls, []);
-    assert.equal(queuedJobs.length, 1);
-    assert.ok(sentEnvelope(queuedJobs[0]) instanceof Uint8Array);
-    assert.deepEqual(decodeAiJobEnvelope(sentEnvelope(queuedJobs[0])), {
+    assert.equal(kicks.length, 1);
+    // Keyed idFromName(messageId): Discord redelivering the same MESSAGE_CREATE
+    // addresses the same DO, whose claim() drops the duplicate.
+    assert.deepEqual(kicks[0].id, { name: MESSAGE_ID });
+    assert.deepEqual(kicks[0].job, {
       kind: "message.received",
       messageId: MESSAGE_ID,
       channelId: CHANNEL_ID,
@@ -108,14 +121,7 @@ test("gateway message create encodes a validated message.received event with no 
 });
 
 test("gateway message create carries only replied-to message metadata", async () => {
-  const queuedJobs: unknown[] = [];
-  const env = createEnv("unused", {
-    AI_JOBS: {
-      send: async (job: unknown) => {
-        queuedJobs.push(job);
-      },
-    },
-  });
+  const { kicks, env } = captureMentionKicks();
 
   await handleGatewayMessageCreate(
     {
@@ -134,8 +140,8 @@ test("gateway message create carries only replied-to message metadata", async ()
     BOT_USER_ID,
   );
 
-  assert.equal(queuedJobs.length, 1);
-  assert.deepEqual(decodeAiJobEnvelope(sentEnvelope(queuedJobs[0])), {
+  assert.equal(kicks.length, 1);
+  assert.deepEqual(kicks[0].job, {
     kind: "message.received",
     messageId: MESSAGE_ID,
     channelId: CHANNEL_ID,
@@ -150,15 +156,8 @@ test("gateway message create carries only replied-to message metadata", async ()
   });
 });
 
-test("gateway message create skips bots and empty prompts but enqueues everything else", async () => {
-  const queuedJobs: unknown[] = [];
-  const env = createEnv("unused", {
-    AI_JOBS: {
-      send: async (job: unknown) => {
-        queuedJobs.push(job);
-      },
-    },
-  });
+test("gateway message create skips bots and empty prompts but forwards everything else", async () => {
+  const { kicks, env } = captureMentionKicks();
 
   await handleGatewayMessageCreate(
     {
@@ -180,10 +179,10 @@ test("gateway message create skips bots and empty prompts but enqueues everythin
     env,
     BOT_USER_ID,
   );
-  assert.deepEqual(queuedJobs, []);
+  assert.deepEqual(kicks, []);
 
-  // Thread relevance needs D1, which the DO cannot see, so non-mention
-  // messages are still enqueued and filtered by the workflows worker.
+  // Thread relevance needs D1, which the gateway cannot see, so non-mention
+  // messages are still forwarded and filtered by the processor DO.
   await handleGatewayMessageCreate(
     {
       id: MESSAGE_ID,
@@ -194,8 +193,8 @@ test("gateway message create skips bots and empty prompts but enqueues everythin
     env,
     BOT_USER_ID,
   );
-  assert.equal(queuedJobs.length, 1);
-  assert.equal(decodeAiJobEnvelope(sentEnvelope(queuedJobs[0]))?.kind, "message.received");
+  assert.equal(kicks.length, 1);
+  assert.equal(kicks[0].job.kind, "message.received");
 });
 
 test("resolveGatewayMessage resolves channel mentions into channel replies", async () => {

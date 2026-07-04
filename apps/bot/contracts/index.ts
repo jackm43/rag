@@ -254,6 +254,7 @@ export type BotEnv = {
     idFromName: (name: string) => DurableObjectId;
     get: (id: DurableObjectId) => {
       run: (interaction: DiscordInteraction) => Promise<void>;
+      runMention: (job: MessageReceivedJob) => Promise<void>;
       runDeferredCommand: (interaction: DiscordInteraction, commandName: string) => Promise<void>;
     };
   };

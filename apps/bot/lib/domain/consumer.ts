@@ -62,8 +62,12 @@ const recordAiInteraction = async (
 };
 
 // Raw gateway messages resolve (thread lookup, mention/role resolution,
-// limits) into a chat job processed in-process — no re-enqueue.
-const processMessageReceivedJob = async (
+// limits) into a chat job processed in-process — no re-enqueue. Exported so the
+// InteractionSession DO runs the identical resolution for a mention it was
+// kicked with (the live path); the ai-jobs consumer entry below is retained
+// only to drain any message.received jobs still in flight from the retired
+// queue path.
+export const processMessageReceivedJob = async (
   decoded: MessageReceivedJob,
   env: Env,
   startedAt: number,

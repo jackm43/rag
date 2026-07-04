@@ -115,36 +115,35 @@ const gatewayMessage = (guildId?: string) => ({
   mentions: [{ id: BOT_USER_ID }],
 });
 
-test("the DO drops MESSAGE_CREATE events from non-allowed guilds and DMs before enqueueing", async () => {
-  const queuedJobs: unknown[] = [];
-  const env = allowlistEnv({
-    AI_JOBS: {
-      send: async (job: unknown) => {
-        queuedJobs.push(job);
-      },
+// Capture the processor-DO kicks without running the full mention resolution.
+const mentionKickSpy = (base: Record<string, unknown>) => {
+  const kicks: unknown[] = [];
+  const env = createEnv("unused", {
+    ...base,
+    INTERACTION_SESSION: {
+      idFromName: (name: string) => ({ name }),
+      get: () => ({ runMention: async (job: unknown) => { kicks.push(job); } }),
     },
   });
+  return { kicks, env };
+};
+
+test("the gateway drops MESSAGE_CREATE events from non-allowed guilds and DMs before kicking the DO", async () => {
+  const { kicks, env } = mentionKickSpy({ ALLOWED_GUILD_IDS: ALLOWED_GUILD_ID });
 
   await handleGatewayMessageCreate(gatewayMessage(OTHER_GUILD_ID), env, BOT_USER_ID);
   await handleGatewayMessageCreate(gatewayMessage(), env, BOT_USER_ID);
-  assert.deepEqual(queuedJobs, []);
+  assert.deepEqual(kicks, []);
 
   await handleGatewayMessageCreate(gatewayMessage(ALLOWED_GUILD_ID), env, BOT_USER_ID);
-  assert.equal(queuedJobs.length, 1);
+  assert.equal(kicks.length, 1);
 });
 
-test("the DO enqueues MESSAGE_CREATE events when the allowlist is unset", async () => {
-  const queuedJobs: unknown[] = [];
-  const env = createEnv("unused", {
-    AI_JOBS: {
-      send: async (job: unknown) => {
-        queuedJobs.push(job);
-      },
-    },
-  });
+test("the gateway kicks the DO for MESSAGE_CREATE events when the allowlist is unset", async () => {
+  const { kicks, env } = mentionKickSpy({});
 
   await handleGatewayMessageCreate(gatewayMessage(OTHER_GUILD_ID), env, BOT_USER_ID);
-  assert.equal(queuedJobs.length, 1);
+  assert.equal(kicks.length, 1);
 });
 
 test("workflows message.received resolution repeats the allowlist check", async () => {
