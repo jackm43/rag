@@ -2,7 +2,7 @@ import { assert, test } from "vitest";
 
 import { runInteractionSession } from "@rag/bot/lib/domain/commands/session-run";
 import { RAG_ADMIN_USER_IDS } from "@rag/authz/entities";
-import { createEnv } from "../../../helpers";
+import { createDbMock, createEnv } from "../../../helpers";
 
 // The Phase-2 processor dispatch: a verified interaction handed to the
 // InteractionSession DO runs the FULL pre-flight + handler with EVERY outcome
@@ -149,6 +149,56 @@ test("a disallowed guild is surfaced as an edited reply", async () => {
 
   assert.deepEqual(body, {
     content: "This bot only works in its home server.",
+    allowed_mentions: { parse: [] },
+  });
+});
+
+// Content-shape coverage for the admin/read commands that used to be asserted
+// through the retired gateway /discord path — now exercised on the all-deferred
+// processor path so the rendered messages stay pinned.
+test("an admin /undorag edits the reply with the decremented total", async () => {
+  const env = createEnv("unused-public-key", {
+    DB: createDbMock({ latestRagEventId: 123, ragCount: 6 }),
+  });
+
+  const body = await captureEdit(
+    env,
+    command(
+      { name: "undorag", options: [{ name: "user", value: "2" }] },
+      { nick: "Admin", user: { id: RAG_ADMIN_USER_IDS[0], username: "admin", global_name: "Admin" } },
+    ),
+  );
+
+  assert.deepEqual(body, {
+    content: "Undid the last rag for <@2>. Total: 6",
+    allowed_mentions: { parse: [], users: ["2"] },
+  });
+});
+
+test("/ragspendboard edits the reply with the precomputed leaderboard", async () => {
+  const env = createEnv("unused-public-key", {
+    DB: {
+      prepare: (sql: string) => ({
+        bind: () => {
+          throw new Error("bind should not be used");
+        },
+        run: async () => {
+          assert.match(sql, /FROM rag_ai_spend_totals/);
+          return {
+            results: [
+              { requester_user_id: "2", requester_username: "Bob", estimated_cost_micros: 2500000, event_count: 2 },
+              { requester_user_id: "1", requester_username: "Alice", estimated_cost_micros: 10000, event_count: 1 },
+            ],
+          };
+        },
+      }),
+    },
+  });
+
+  const body = await captureEdit(env, command({ name: "ragspendboard" }, { user: { id: "1", username: "alice" } }));
+
+  assert.deepEqual(body, {
+    content: "Ragspendboard\n1. Bob - $2.50\n2. Alice - $0.01",
     allowed_mentions: { parse: [] },
   });
 });

@@ -1,4 +1,4 @@
-export type GatewaySecurityScheme = "discordSignature" | "controlToken";
+export type GatewaySecurityScheme = "controlToken";
 
 export type GatewayRouteBinding = {
   path: string;
@@ -20,13 +20,6 @@ export const GATEWAY_APPLICATION = {
 } as const;
 
 export const GATEWAY_SECURITY_SCHEMES = {
-  discordSignature: {
-    type: "apiKey",
-    in: "header",
-    name: "X-Signature-Ed25519",
-    description:
-      "Discord interaction signing: X-Signature-Ed25519 plus X-Signature-Timestamp, verified against the application's public key.",
-  },
   controlToken: {
     type: "http",
     scheme: "bearer",
@@ -35,27 +28,6 @@ export const GATEWAY_SECURITY_SCHEMES = {
 } as const satisfies Record<GatewaySecurityScheme, unknown>;
 
 export const GATEWAY_SCHEMAS = {
-  DiscordInteraction: {
-    type: "object",
-    description: "Discord interaction payload (subset validated by the worker).",
-    required: ["type"],
-    properties: {
-      type: { type: "integer" },
-      application_id: { type: "string" },
-      guild_id: { type: "string" },
-      channel_id: { type: "string" },
-      token: { type: "string" },
-      data: { type: "object", additionalProperties: true },
-    },
-  },
-  InteractionResponse: {
-    type: "object",
-    required: ["type"],
-    properties: {
-      type: { type: "integer" },
-      data: { type: "object", additionalProperties: true },
-    },
-  },
   GatewayControlResult: {
     type: "object",
     additionalProperties: true,
@@ -112,35 +84,6 @@ export const GATEWAY_ROUTE_BINDINGS = [
       "Ed25519 (EdDSA) signed identity-context tokens minted by ragbot workers.",
     responses: {
       "200": jsonObjectResponse("JWK Set document."),
-    },
-  },
-  {
-    path: "/discord",
-    method: "POST",
-    operationId: "discordInteraction",
-    summary: "Discord interactions endpoint",
-    description:
-      "Receives Discord interaction callbacks. Every request must carry a valid Ed25519 signature over timestamp+body, signed with the Discord application's key.",
-    security: "discordSignature",
-    requestBody: {
-      required: true,
-      content: {
-        "application/json": {
-          schema: { $ref: "#/components/schemas/DiscordInteraction" },
-        },
-      },
-    },
-    responses: {
-      "200": {
-        description: "Interaction response payload.",
-        content: {
-          "application/json": {
-            schema: { $ref: "#/components/schemas/InteractionResponse" },
-          },
-        },
-      },
-      "401": { description: "Missing, malformed, stale, or invalid request signature." },
-      "405": { description: "Method other than POST." },
     },
   },
   {

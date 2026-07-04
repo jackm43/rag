@@ -18,8 +18,8 @@ test("the router is constructed from the OpenAPI route table and fails closed on
 
   // A spec operation without a handler cannot construct (and so cannot deploy).
   const incomplete = allHandlers();
-  delete incomplete.discordInteraction;
-  assert.throws(() => createGatewayRouter(incomplete), /discordInteraction/);
+  delete incomplete.startGateway;
+  assert.throws(() => createGatewayRouter(incomplete), /startGateway/);
 });
 
 test("paths and methods outside the spec are refused with the spec's Allow set", async () => {
@@ -35,7 +35,7 @@ test("paths and methods outside the spec are refused with the spec's Allow set",
   assert.equal(unknownPath.status, 404);
 
   const wrongMethod = await router.handle(
-    new Request("https://example.com/discord", { method: "DELETE" }),
+    new Request("https://example.com/gateway/start", { method: "DELETE" }),
     env,
     ctx,
   );

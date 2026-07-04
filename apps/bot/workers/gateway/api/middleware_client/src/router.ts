@@ -1,4 +1,3 @@
-import { discordInteractionGuard } from "../../../../../lib/ingress/discord-interaction";
 import { operatorControlGuard } from "@rag/ingress/operator-control";
 import type { InboundGuard } from "@rag/ingress/guard";
 import type { Env } from "../../../../../contracts";
@@ -19,7 +18,6 @@ export type OperationHandler = (
 ) => Response | Promise<Response>;
 
 const GUARDS: Record<GatewaySecurityScheme, InboundGuard<unknown>> = {
-  discordSignature: discordInteractionGuard,
   controlToken: operatorControlGuard,
 };
 

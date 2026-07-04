@@ -91,46 +91,6 @@ export const OPENAPI = {
         }
       }
     },
-    "/discord": {
-      "post": {
-        "operationId": "discordInteraction",
-        "summary": "Discord interactions endpoint",
-        "description": "Receives Discord interaction callbacks. Every request must carry a valid Ed25519 signature over timestamp+body, signed with the Discord application's key.",
-        "security": [
-          {
-            "discordSignature": []
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DiscordInteraction"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Interaction response payload.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InteractionResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing, malformed, stale, or invalid request signature."
-          },
-          "405": {
-            "description": "Method other than POST."
-          }
-        }
-      }
-    },
     "/gateway/start": {
       "post": {
         "operationId": "startGateway",
@@ -230,12 +190,6 @@ export const OPENAPI = {
   },
   "components": {
     "securitySchemes": {
-      "discordSignature": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "X-Signature-Ed25519",
-        "description": "Discord interaction signing: X-Signature-Ed25519 plus X-Signature-Timestamp, verified against the application's public key."
-      },
       "controlToken": {
         "type": "http",
         "scheme": "bearer",
@@ -243,49 +197,6 @@ export const OPENAPI = {
       }
     },
     "schemas": {
-      "DiscordInteraction": {
-        "type": "object",
-        "description": "Discord interaction payload (subset validated by the worker).",
-        "required": [
-          "type"
-        ],
-        "properties": {
-          "type": {
-            "type": "integer"
-          },
-          "application_id": {
-            "type": "string"
-          },
-          "guild_id": {
-            "type": "string"
-          },
-          "channel_id": {
-            "type": "string"
-          },
-          "token": {
-            "type": "string"
-          },
-          "data": {
-            "type": "object",
-            "additionalProperties": true
-          }
-        }
-      },
-      "InteractionResponse": {
-        "type": "object",
-        "required": [
-          "type"
-        ],
-        "properties": {
-          "type": {
-            "type": "integer"
-          },
-          "data": {
-            "type": "object",
-            "additionalProperties": true
-          }
-        }
-      },
       "GatewayControlResult": {
         "type": "object",
         "additionalProperties": true

@@ -1,10 +1,18 @@
 import { assert, test } from "vitest";
-import nacl from "tweetnacl";
 
-import worker from "@rag/bot/workers/gateway/api/middleware_client/src";
 import { activeAiBanForUser, aiBanMessage } from "@rag/bot/lib/domain/bans";
+import { runInteractionSession } from "@rag/bot/lib/domain/commands/session-run";
 import { resolveGatewayMessage } from "@rag/bot/lib/domain/mention";
-import { createDbMock, createEnv, createSignedRequest } from "../../../helpers";
+import { createDbMock, createEnv } from "../../../helpers";
+
+const EDIT_URL =
+  "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original";
+
+const editBody = (init: RequestInit | undefined): unknown => {
+  const body = init?.body;
+  const text = typeof body === "string" ? body : new TextDecoder().decode(body as ArrayBuffer);
+  return JSON.parse(text);
+};
 
 const BOT_USER_ID = "100000000000000001";
 const CHANNEL_ID = "200000000000000001";
@@ -31,105 +39,43 @@ test("activeAiBanForUser fails open when D1 errors", async () => {
   assert.isNull(await activeAiBanForUser(env, ALICE_ID, new Date()));
 });
 
-test("/ask is denied for a raghammer-banned user before deferring", async () => {
-  const keyPair = nacl.sign.keyPair();
-  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+test("a raghammer-banned user's AI command is refused with the ban message on the deferred reply", async () => {
+  // All commands defer now: the processor DO runs the same authorize+limit gate
+  // and edits the deferred reply with the ban message instead of a synchronous
+  // type-4. The ban still short-circuits before any AI work.
+  const env = createEnv("unused-public-key", {
     DB: createDbMock({ ragBan: { expires_at: BAN_EXPIRES_AT } }),
   });
-  const request = createSignedRequest(
-    {
-      application_id: "application-id",
-      channel_id: "channel-id",
-      token: "interaction-token",
-      type: 2,
-      data: {
-        name: "ask",
-        options: [{ name: "prompt", value: "How do queue retries work?" }],
-      },
-      user: { id: ALICE_ID, username: "alice" },
-    },
-    keyPair.secretKey,
-  );
 
-  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), init });
+    return new Response("{}", { status: 200 });
+  };
+  try {
+    await runInteractionSession(
+      {
+        type: 2,
+        application_id: "application-id",
+        token: "interaction-token",
+        data: { name: "ask", options: [{ name: "prompt", value: "How do queue retries work?" }] },
+        member: { user: { id: ALICE_ID, username: "alice" } },
+      } as never,
+      env as never,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    type: 4,
-    data: { content: BAN_DENIAL_MESSAGE, allowed_mentions: { parse: [] } },
+  const edit = calls.find((call) => call.url === EDIT_URL);
+  assert.ok(edit, "the ban denial is delivered as an edit");
+  assert.deepEqual(editBody(edit.init), {
+    content: BAN_DENIAL_MESSAGE,
+    allowed_mentions: { parse: [] },
   });
-});
-
-test("/bicture does not enqueue a job for a raghammer-banned user", async () => {
-  const keyPair = nacl.sign.keyPair();
-  const enqueuedJobs: unknown[] = [];
-  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
-    DB: createDbMock({ ragBan: { expires_at: BAN_EXPIRES_AT } }),
-    AI_JOBS: {
-      send: async (job: unknown) => {
-        enqueuedJobs.push(job);
-      },
-    },
-  });
-  const request = createSignedRequest(
-    {
-      application_id: "application-id",
-      channel_id: "channel-id",
-      token: "interaction-token",
-      type: 2,
-      data: {
-        name: "bicture",
-        options: [{ name: "prompt", value: "a tiny jpeg test image" }],
-      },
-      user: { id: ALICE_ID, username: "alice" },
-    },
-    keyPair.secretKey,
-  );
-
-  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    type: 4,
-    data: { content: BAN_DENIAL_MESSAGE, allowed_mentions: { parse: [] } },
-  });
-  assert.deepEqual(enqueuedJobs, []);
-});
-
-test("/ragjam is denied for a raghammer-banned user", async () => {
-  const keyPair = nacl.sign.keyPair();
-  const enqueuedJobs: unknown[] = [];
-  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
-    DB: createDbMock({ ragBan: { expires_at: BAN_EXPIRES_AT } }),
-    AI_JOBS: {
-      send: async (job: unknown) => {
-        enqueuedJobs.push(job);
-      },
-    },
-  });
-  const request = createSignedRequest(
-    {
-      application_id: "application-id",
-      channel_id: "channel-id",
-      token: "interaction-token",
-      type: 2,
-      data: {
-        name: "ragjam",
-        options: [{ name: "prompt", value: "A warm acoustic folk ballad" }],
-      },
-      user: { id: ALICE_ID, username: "alice" },
-    },
-    keyPair.secretKey,
-  );
-
-  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    type: 4,
-    data: { content: BAN_DENIAL_MESSAGE, allowed_mentions: { parse: [] } },
-  });
-  assert.deepEqual(enqueuedJobs, []);
+  // No AI Gateway call: the ban gate runs before any model work.
+  assert.isUndefined(calls.find((call) => call.url.includes("gateway.ai.cloudflare.com")));
 });
 
 test("gateway mentions from a banned user are ignored with no notice", async () => {

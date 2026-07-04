@@ -1,10 +1,8 @@
 import { assert, test } from "vitest";
-import nacl from "tweetnacl";
 
-import worker from "@rag/bot/workers/gateway/api/middleware_client/src";
-import { GUILD_NOT_ALLOWED_MESSAGE, isGuildAllowed } from "@rag/bot/lib/domain/guilds";
+import { isGuildAllowed } from "@rag/bot/lib/domain/guilds";
 import { handleGatewayMessageCreate, resolveGatewayMessage } from "@rag/bot/lib/domain/mention";
-import { createEnv, createSignedRequest } from "../../../helpers";
+import { createEnv } from "../../../helpers";
 
 const BOT_USER_ID = "100000000000000001";
 const ALLOWED_GUILD_ID = "100000000000000002";
@@ -40,71 +38,10 @@ test("isGuildAllowed parses defensively and drops non-snowflake entries", () => 
   assert.isFalse(isGuildAllowed(garbageOnly, OTHER_GUILD_ID), "garbage config denies, never allows");
 });
 
-test("interactions from a non-allowed guild get a friendly refusal", async () => {
-  const keyPair = nacl.sign.keyPair();
-  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
-    ALLOWED_GUILD_IDS: ALLOWED_GUILD_ID,
-  });
-  const request = createSignedRequest(
-    {
-      application_id: "application-id",
-      channel_id: "channel-id",
-      guild_id: OTHER_GUILD_ID,
-      token: "interaction-token",
-      type: 2,
-      data: { name: "ragboard" },
-      user: { id: ALICE_ID, username: "alice" },
-    },
-    keyPair.secretKey,
-  );
-
-  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    type: 4,
-    data: { content: GUILD_NOT_ALLOWED_MESSAGE, allowed_mentions: { parse: [] } },
-  });
-});
-
-test("PING interactions stay exempt from the guild allowlist", async () => {
-  const keyPair = nacl.sign.keyPair();
-  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
-    ALLOWED_GUILD_IDS: ALLOWED_GUILD_ID,
-  });
-  const request = createSignedRequest({ type: 1 }, keyPair.secretKey);
-
-  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { type: 1 });
-});
-
-test("interactions from an allowed guild pass the gate", async () => {
-  const keyPair = nacl.sign.keyPair();
-  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
-    ALLOWED_GUILD_IDS: ALLOWED_GUILD_ID,
-  });
-  const request = createSignedRequest(
-    {
-      application_id: "application-id",
-      guild_id: ALLOWED_GUILD_ID,
-      token: "interaction-token",
-      type: 2,
-      data: { name: "not-a-real-command" },
-      user: { id: ALICE_ID, username: "alice" },
-    },
-    keyPair.secretKey,
-  );
-
-  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    type: 4,
-    data: { content: "Unknown command." },
-  });
-});
+// The all-deferred equivalents — a disallowed guild and an unknown command are
+// surfaced as edited replies from the processor DO — live in session-dispatch;
+// PING exemption lives in webhooks-interactions. This file keeps the guild
+// allowlist unit + the gateway→DO mention path.
 
 const gatewayMessage = (guildId?: string) => ({
   id: MESSAGE_ID,

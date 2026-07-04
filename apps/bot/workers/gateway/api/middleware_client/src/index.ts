@@ -1,7 +1,5 @@
 import { ensureRegistered, registryEntities } from "@rag/service-kit";
 import { authorize } from "@rag/authz/authorize";
-import type { DiscordInteractionPrincipal } from "../../../../../lib/ingress/discord-interaction";
-import { routeInteraction } from "../../../../../lib/domain/commands/router";
 import {
   extractBotMentionPrompt,
   handleGatewayMessageCreate,
@@ -69,8 +67,6 @@ const router = createGatewayRouter({
     Response.json(publicJwks(), {
       headers: { "Cache-Control": "public, max-age=3600" },
     }),
-  discordInteraction: (_request, env, ctx, grant) =>
-    routeInteraction((grant as DiscordInteractionPrincipal).interaction, env, ctx),
   startGateway: async (_request, env) =>
     (await gatewayControlForbidden(env, "gateway.start")) ?? Response.json(await startGateway(env)),
   stopGateway: async (_request, env) =>
@@ -79,23 +75,17 @@ const router = createGatewayRouter({
     (await gatewayControlForbidden(env, "gateway.health")) ?? Response.json(await getGatewayHealth(env)),
 });
 
-const DISCORD_INTERACTIONS_PATH = "/discord";
-
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     await ensureRegistered(env, GATEWAY_MANIFEST);
-    // Opportunistic wake-up (B): an incoming interaction webhook arrives over
-    // HTTP independently of the gateway websocket, so use it to ensure the
-    // socket is up. This brings the connection back the instant a command is
-    // used after a deploy, without waiting for the cron tick.
-    if (request.method === "POST" && new URL(request.url).pathname === DISCORD_INTERACTIONS_PATH) {
-      ctx.waitUntil(ensureGatewayConnected(env));
-    }
     return router.handle(request, env, ctx);
   },
-  // Cron trigger (A): the platform wakes the gateway on a schedule so the
-  // websocket self-establishes after any deploy and self-heals, with no manual
+  // Cron trigger: the platform wakes the gateway on a schedule so the websocket
+  // self-establishes after any deploy and self-heals, with no manual
   // /gateway/start. ensureConnected() is a no-op if the operator stopped it.
+  // (Discord interactions now arrive at the webhooks worker, not here, so the
+  // former opportunistic HTTP wake-up is gone; the cron plus the DiscordGateway
+  // DO's own watchdog alarm keep the socket up.)
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(ensureGatewayConnected(env));
   },

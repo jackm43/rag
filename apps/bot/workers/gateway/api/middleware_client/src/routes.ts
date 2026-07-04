@@ -1,7 +1,7 @@
 // AUTO-GENERATED from gateway application bindings by
 // scripts/generate-gateway-routes.ts (`pnpm run routes:build`). Do not edit.
 
-export type GatewaySecurityScheme = "controlToken" | "discordSignature";
+export type GatewaySecurityScheme = "controlToken";
 
 export type GatewayRoute = {
   method: string;
@@ -18,9 +18,6 @@ export const GATEWAY_ROUTES: Record<string, readonly GatewayRoute[]> = {
   ],
   "/.well-known/openid-configuration": [
     { method: "GET", operationId: "openidConfiguration", security: null },
-  ],
-  "/discord": [
-    { method: "POST", operationId: "discordInteraction", security: "discordSignature" },
   ],
   "/gateway/health": [
     { method: "GET", operationId: "gatewayHealth", security: "controlToken" },

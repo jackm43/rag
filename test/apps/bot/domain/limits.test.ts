@@ -1,11 +1,19 @@
 import { assert, test } from "vitest";
-import nacl from "tweetnacl";
 
-import worker from "@rag/bot/workers/gateway/api/middleware_client/src";
 import { checkAiUsageAllowed } from "@rag/bot/lib/domain/limits";
+import { runInteractionSession } from "@rag/bot/lib/domain/commands/session-run";
 import { resolveGatewayMessage } from "@rag/bot/lib/domain/mention";
 import { decodeReplyJobEnvelope } from "@rag/bot/contracts";
-import { createEnv, createSignedRequest, sentEnvelope } from "../../../helpers";
+import { createEnv, sentEnvelope } from "../../../helpers";
+
+const EDIT_URL =
+  "https://discord.com/api/v10/webhooks/application-id/interaction-token/messages/@original";
+
+const editBody = (init: RequestInit | undefined): unknown => {
+  const body = init?.body;
+  const text = typeof body === "string" ? body : new TextDecoder().decode(body as ArrayBuffer);
+  return JSON.parse(text);
+};
 
 const BOT_USER_ID = "100000000000000001";
 const GUILD_ID = "100000000000000002";
@@ -161,106 +169,41 @@ test("checkAiUsageAllowed allows requests without a user id and never touches D1
   assert.equal(prepareCalls, 0);
 });
 
-test("/ask replies immediately without deferring when the requester is burst limited", async () => {
-  const keyPair = nacl.sign.keyPair();
-  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
+test("a burst-limited AI command is refused with the limit message on the deferred reply", async () => {
+  // All commands defer: the processor DO runs the usage-limit gate and edits the
+  // deferred reply with the denial instead of a synchronous type-4.
+  const env = createEnv("unused-public-key", {
     DB: createLimitsDbMock({ requestCount: 8 }),
   });
-  const request = createSignedRequest(
-    {
-      application_id: "application-id",
-      channel_id: "channel-id",
-      token: "interaction-token",
-      type: 2,
-      data: {
-        name: "ask",
-        options: [{ name: "prompt", value: "How do queue retries work?" }],
-      },
-      member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
-    },
-    keyPair.secretKey,
-  );
 
-  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), init });
+    return new Response("{}", { status: 200 });
+  };
+  try {
+    await runInteractionSession(
+      {
+        type: 2,
+        application_id: "application-id",
+        token: "interaction-token",
+        data: { name: "ask", options: [{ name: "prompt", value: "How do queue retries work?" }] },
+        member: { nick: "Alice", user: { id: "1", username: "alice", global_name: "Alice" } },
+      } as never,
+      env as never,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    type: 4,
-    data: {
-      content: BURST_DENIAL_MESSAGE,
-      allowed_mentions: { parse: [] },
-    },
+  const edit = calls.find((call) => call.url === EDIT_URL);
+  assert.ok(edit, "the limit denial is delivered as an edit");
+  assert.deepEqual(editBody(edit.init), {
+    content: BURST_DENIAL_MESSAGE,
+    allowed_mentions: { parse: [] },
   });
-});
-
-test("/bicture replies immediately without deferring when the global daily budget is spent", async () => {
-  const keyPair = nacl.sign.keyPair();
-  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
-    DB: createLimitsDbMock({ spendMicros: 10_000_000 }),
-  });
-  const request = createSignedRequest(
-    {
-      application_id: "application-id",
-      token: "interaction-token",
-      type: 2,
-      data: {
-        name: "bicture",
-        options: [{ name: "prompt", value: "a tiny jpeg test image" }],
-      },
-      user: { id: "1", username: "alice" },
-    },
-    keyPair.secretKey,
-  );
-
-  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    type: 4,
-    data: {
-      content: BUDGET_DENIAL_MESSAGE,
-      allowed_mentions: { parse: [] },
-    },
-  });
-});
-
-test("/ragjam does not enqueue a job when the requester is burst limited", async () => {
-  const keyPair = nacl.sign.keyPair();
-  const enqueuedJobs: unknown[] = [];
-  const env = createEnv(Buffer.from(keyPair.publicKey).toString("hex"), {
-    DB: createLimitsDbMock({ requestCount: 8 }),
-    AI_JOBS: {
-      send: async (job: unknown) => {
-        enqueuedJobs.push(job);
-      },
-    },
-  });
-  const request = createSignedRequest(
-    {
-      application_id: "application-id",
-      channel_id: "channel-id",
-      token: "interaction-token",
-      type: 2,
-      data: {
-        name: "ragjam",
-        options: [{ name: "prompt", value: "A warm acoustic folk ballad" }],
-      },
-      user: { id: "1", username: "alice" },
-    },
-    keyPair.secretKey,
-  );
-
-  const response = await worker.fetch(request, env, { waitUntil: () => undefined } as never);
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    type: 4,
-    data: {
-      content: BURST_DENIAL_MESSAGE,
-      allowed_mentions: { parse: [] },
-    },
-  });
-  assert.deepEqual(enqueuedJobs, []);
+  assert.isUndefined(calls.find((call) => call.url.includes("gateway.ai.cloudflare.com")));
 });
 
 test("gateway mention resolution sends a burst limit notice through the outbox", async () => {
