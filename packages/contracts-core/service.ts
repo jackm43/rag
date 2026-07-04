@@ -10,7 +10,7 @@ export class ServiceMessage extends $.Struct {
   static readonly _capnp = {
     displayName: "ServiceMessage",
     id: "e7489163d7cb756a",
-    size: new $.ObjectSize(0, 2),
+    size: new $.ObjectSize(0, 3),
   };
   _adoptEnvelope(value: $.Orphan<$.Data>): void {
     $.utils.adopt(value, $.utils.getPointer(0, this));
@@ -30,11 +30,24 @@ export class ServiceMessage extends $.Struct {
   set envelope(value: $.Data) {
     $.utils.copyFrom(value, $.utils.getPointer(0, this));
   }
+  /**
+* Optional act-as token: the per-application authority's envelope-bound proof
+* that the caller may act as an application (identity/act-as-token.ts). Empty
+* on hops that carry no act-as claim; a backward-compatible added field, so old
+* senders omit it and receivers that do not opt into act-as ignore it.
+*
+*/
   get idToken(): string {
     return $.utils.getText(1, this);
   }
   set idToken(value: string) {
     $.utils.setText(1, value, this);
+  }
+  get actAsToken(): string {
+    return $.utils.getText(2, this);
+  }
+  set actAsToken(value: string) {
+    $.utils.setText(2, value, this);
   }
   toString(): string { return "ServiceMessage_" + super.toString(); }
 }

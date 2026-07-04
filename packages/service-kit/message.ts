@@ -11,10 +11,15 @@ import type { MachinePrincipal, Transport, TrustZone } from "./principal";
 export type ParsedServiceMessage = {
   envelope: Uint8Array;
   idToken: string;
+  // Present only when the hop carries an act-as claim (opt-in on both ends).
+  actAsToken?: string;
 };
 
-export const wrapServiceMessage = (envelope: Uint8Array, idToken: string): Uint8Array =>
-  encodeServiceMessage(envelope, idToken);
+export const wrapServiceMessage = (
+  envelope: Uint8Array,
+  idToken: string,
+  actAsToken?: string,
+): Uint8Array => encodeServiceMessage(envelope, idToken, actAsToken);
 
 // Parse a received body into envelope bytes + token. The service boundary only
 // accepts the capnp ServiceMessage wrapper; callers must not send raw envelopes

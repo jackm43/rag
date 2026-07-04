@@ -1,6 +1,6 @@
 import type { EntityJson } from "@cedar-policy/cedar-wasm/web";
 import { authorizeAndForward } from "@rag/authz/forward";
-import { buildIdentityContext, importSigningKey, mint, mintClaims } from "./identity";
+import { buildIdentityContext, envelopeSha256, importSigningKey, mint, mintClaims } from "./identity";
 import { errorMessage, logger } from "@rag/logger";
 import { logServiceDenial, wrapServiceMessage } from "./message";
 import { SERVICE_ZONE, SYSTEM_SUBJECT, type MachinePrincipal, type Subject, type Transport } from "./principal";
@@ -32,6 +32,30 @@ type ResponderBinding = {
     attachment: DeliveryAttachment,
   ) => Promise<void>;
 };
+
+// Structural double of the APPLICATION_AUTHORITY DO binding's mint path — only
+// what the act-as opt-in needs, so service-kit stays app-agnostic (it never
+// imports the platform contracts). Matches the ApplicationAuthority.mint shape.
+type ActAsMintResult =
+  | { ok: true; token: string; expiresIn: number }
+  | { ok: false; reason: string };
+type ActAsAuthorityBinding = {
+  idFromName: (name: string) => unknown;
+  get: (id: unknown) => {
+    mint: (input: {
+      appId: string;
+      member: string;
+      audience: string;
+      envelopeSha256: string;
+      subject?: string;
+    }) => Promise<ActAsMintResult>;
+  };
+};
+
+// Opt-in act-as: mint an envelope-bound token asserting `self` may act as
+// `appId` (optionally on behalf of `subject`) and carry it beside the hop. Only
+// set on hops that need it — absent, the wire and every receiver are unchanged.
+export type ActAsRequest = { appId: string; subject?: string };
 
 export type ServiceCall =
   | {
@@ -102,6 +126,10 @@ export type ServiceClientConfig = {
   // Registry snapshot loader for Cedar; absent in tests.
   env?: Env;
   entities?: () => Promise<EntityJson[]>;
+  // Opt-in: when set, the client mints an act-as token from the application
+  // authority DO (via env.APPLICATION_AUTHORITY) and carries it beside the
+  // identity token. Unset on every ordinary hop.
+  actAs?: ActAsRequest;
 };
 
 // Memoise a lazily-computed promise.
@@ -207,6 +235,35 @@ export const createServiceClient = (config: ServiceClientConfig): ServiceClient 
     return token;
   };
 
+  // Opt-in act-as: ask the application authority DO to mint an envelope-bound
+  // token proving `self` may act as `actAs.appId`. Fails the hop closed with a
+  // logged denial if the authority is unbound or refuses — the caller asked to
+  // act as an application, so an unobtainable proof must not silently proceed.
+  const mintActAsToken = async (
+    envelope: Uint8Array,
+    transport: Transport,
+  ): Promise<string | undefined> => {
+    if (!config.actAs) {
+      return undefined;
+    }
+    const authority = (config.env as unknown as { APPLICATION_AUTHORITY?: ActAsAuthorityBinding } | undefined)
+      ?.APPLICATION_AUTHORITY;
+    if (!authority) {
+      throw denyCall(transport, "actas_authority_unbound");
+    }
+    const result = await authority.get(authority.idFromName(config.actAs.appId)).mint({
+      appId: config.actAs.appId,
+      member: config.self,
+      audience: config.target,
+      envelopeSha256: await envelopeSha256(envelope),
+      ...(config.actAs.subject ? { subject: config.actAs.subject } : {}),
+    });
+    if (!result.ok) {
+      throw denyCall(transport, `actas_${result.reason}`);
+    }
+    return result.token;
+  };
+
   const prepareBody = async (
     envelope: Uint8Array,
     subject: Subject,
@@ -214,7 +271,8 @@ export const createServiceClient = (config: ServiceClientConfig): ServiceClient 
     session?: HopSession,
     intent?: HopIntent,
   ): Promise<ServiceMessageBytes> => {
-    return wrapServiceMessage(envelope, await authorizeAndMint(envelope, subject, transport, session, intent));
+    const idToken = await authorizeAndMint(envelope, subject, transport, session, intent);
+    return wrapServiceMessage(envelope, idToken, await mintActAsToken(envelope, transport));
   };
 
   return {
@@ -274,6 +332,7 @@ export type EnvServiceClientConfig = {
   signingSecret?: string;
   transportTrust?: TransportTrust;
   authorizeExchange?: boolean;
+  actAs?: ActAsRequest;
 };
 
 type QueueServiceCall = Extract<ServiceCall, { transport: "queue" }>;
@@ -327,7 +386,10 @@ export const createClient = (config: ClientConfig) => {
     context: config.context,
     to: (
       target: MachinePrincipal,
-      options: Pick<EnvServiceClientConfig, "signingSecret" | "transportTrust" | "authorizeExchange"> = {},
+      options: Pick<
+        EnvServiceClientConfig,
+        "signingSecret" | "transportTrust" | "authorizeExchange" | "actAs"
+      > = {},
     ): ClientTarget => {
       const service = createServiceClientFromEnv(config.env, {
         self: config.self,
@@ -335,6 +397,7 @@ export const createClient = (config: ClientConfig) => {
         signingSecret: options.signingSecret ?? config.signingSecret,
         transportTrust: options.transportTrust ?? config.transportTrust,
         authorizeExchange: options.authorizeExchange,
+        ...(options.actAs ? { actAs: options.actAs } : {}),
       });
       return {
         service,
@@ -365,7 +428,8 @@ export const createServiceClientFromEnv = (
     configuredClients.set(env, byConfig);
   }
   const secret = config.signingSecret ?? signingSecretFor(config.self);
-  const key = `${config.self}->${config.target}:${secret}:${config.transportTrust ?? "identity"}:${config.authorizeExchange ?? true}`;
+  const actAsKey = config.actAs ? `${config.actAs.appId}/${config.actAs.subject ?? ""}` : "";
+  const key = `${config.self}->${config.target}:${secret}:${config.transportTrust ?? "identity"}:${config.authorizeExchange ?? true}:${actAsKey}`;
   const cached = byConfig.get(key);
   if (cached) {
     return cached;
@@ -381,6 +445,7 @@ export const createServiceClientFromEnv = (
     authorizeExchange: config.authorizeExchange,
     env,
     entities: () => registryEntities(env),
+    ...(config.actAs ? { actAs: config.actAs } : {}),
   });
   byConfig.set(key, client);
   return client;

@@ -11,6 +11,8 @@ import { ManifestSnapshot, ServiceManifest, ServiceMessage } from "./service";
 export type WireServiceMessage = {
   envelope: Uint8Array;
   idToken: string;
+  // Optional act-as token carried beside the identity token (empty when absent).
+  actAsToken?: string;
 };
 
 export type WireServiceManifest = {
@@ -29,11 +31,18 @@ const setTextList = (init: (length: number) => capnp.List<string>, values: strin
   values.forEach((value, index) => list.set(index, value));
 };
 
-export const encodeServiceMessage = (envelope: Uint8Array, idToken: string): Uint8Array => {
+export const encodeServiceMessage = (
+  envelope: Uint8Array,
+  idToken: string,
+  actAsToken?: string,
+): Uint8Array => {
   const message = new capnp.Message();
   const root = message.initRoot(ServiceMessage);
   root._initEnvelope(envelope.byteLength).copyBuffer(envelope);
   root.idToken = idToken;
+  if (actAsToken) {
+    root.actAsToken = actAsToken;
+  }
   return new Uint8Array(message.toArrayBuffer());
 };
 
@@ -53,7 +62,8 @@ export const decodeServiceMessage = (value: unknown): WireServiceMessage | null 
     if (!asFramedBytes(envelope)) {
       return null;
     }
-    return { envelope, idToken: root.idToken };
+    const actAsToken = root.actAsToken;
+    return { envelope, idToken: root.idToken, ...(actAsToken.length > 0 ? { actAsToken } : {}) };
   } catch {
     return null;
   }

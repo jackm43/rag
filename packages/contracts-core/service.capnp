@@ -13,6 +13,11 @@ struct ServiceMessage {
   # signed identity-context token bound to their hash.
   envelope @0 :Data;
   idToken @1 :Text;
+  # Optional act-as token: the per-application authority's envelope-bound proof
+  # that the caller may act as an application (identity/act-as-token.ts). Empty
+  # on hops that carry no act-as claim; a backward-compatible added field, so old
+  # senders omit it and receivers that do not opt into act-as ignore it.
+  actAsToken @2 :Text;
 }
 
 struct ServiceManifest {

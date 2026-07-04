@@ -363,7 +363,7 @@ export class DevProxyCommandPayload extends $.Struct {
   toString(): string { return "DevProxyCommandPayload_" + super.toString(); }
 }
 /**
-* A single operation against the credential broker (apps/connectors/workers/broker).
+* A single operation against the credential broker (workers/services/connectors).
 * The uniform phantom-token model: `grant` exchanges the caller's authenticated
 * identity for an opaque handle (the real credential is prepared server-side and
 * never returned); `fetch`/`token`/`introspect` present that handle to use the
@@ -683,7 +683,7 @@ export class MetadataQueryPayload extends $.Struct {
 export class AttestInvokePayload extends $.Struct {
   static readonly _capnp = {
     displayName: "AttestInvokePayload",
-    id: "37f05d09d1c91cee",
+    id: "8d231e3969cf4fbe",
     size: new $.ObjectSize(0, 3),
   };
   get operation(): string {

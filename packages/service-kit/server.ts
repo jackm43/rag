@@ -1,7 +1,18 @@
 import { authorizeAndForward } from "@rag/authz/forward";
 import type { EntityJson } from "@cedar-policy/cedar-wasm/web";
 import { peekEnvelopeOperation } from "@rag/contracts-core";
-import { decodeIdentityClaims, resolverFromEnv, verify, type IdentityContext, type PublicKeyResolver } from "./identity";
+import {
+  actAsResolverFromAuthority,
+  decodeIdentityClaims,
+  resolverFromEnv,
+  verify,
+  verifyActAs,
+  type ActAsContext,
+  type ActAsPublicKeyResolver,
+  type ApplicationAuthorityEnv,
+  type IdentityContext,
+  type PublicKeyResolver,
+} from "./identity";
 import type { ServiceKitEnv as Env } from "./env";
 import type { RequestContext, ServiceRequest } from "./context";
 import { logServiceDenial, parseServiceMessage } from "./message";
@@ -50,6 +61,17 @@ export type ServiceServerConfig = {
   transportTrust?: Partial<Record<Transport, "identity" | "application" | "trusted">>;
   authorizeInvoke?: boolean;
   now?: number;
+  // Opt-in act-as verification. Off by default, so an ordinary receiver ignores
+  // any act-as token entirely (no behaviour change on hops that don't need it).
+  // When set, a hop that carries an act-as token has it verified (signature via
+  // the issuer application's JWKS, aud == self, expiry, envelope binding) and
+  // the verified ActAsContext is attached to the request context; a present-but-
+  // invalid token denies. An absent token is allowed unless requireActAs is set.
+  verifyActAs?: boolean;
+  requireActAs?: boolean;
+  // Resolver for act-as issuer keys; defaults to actAsResolverFromAuthority(env)
+  // (runtime JWKS fetch from the issuer application's authority DO).
+  actAsResolver?: ActAsPublicKeyResolver;
 };
 
 export type ServiceServer = {
@@ -158,6 +180,32 @@ export const createServiceServer = (config: ServiceServerConfig): ServiceServer 
         return null;
       }
 
+      // Opt-in act-as verification: off by default, so ordinary receivers never
+      // look at the act-as token. When enabled, verify it against the issuer
+      // application's JWKS (aud == self, expiry, envelope binding) and carry the
+      // verified context; a present-but-invalid token denies.
+      let verifiedActAs: ActAsContext | undefined;
+      if (config.verifyActAs || config.requireActAs) {
+        if (!parsed.actAsToken) {
+          if (config.requireActAs) {
+            deny(transport, source, "actas_missing");
+            return null;
+          }
+        } else {
+          const actAsResult = await verifyActAs(
+            config.actAsResolver ??
+              actAsResolverFromAuthority(config.env as unknown as ApplicationAuthorityEnv | undefined),
+            parsed.actAsToken,
+            { expectedAud: config.self, envelopeBytes: envelope, now: config.now },
+          );
+          if (!actAsResult.ok) {
+            deny(transport, source, `actas_${actAsResult.reason}`);
+            return null;
+          }
+          verifiedActAs = actAsResult.context;
+        }
+      }
+
       const finish = () => {
           const payload = decode(envelope);
           if (payload === null) {
@@ -179,6 +227,7 @@ export const createServiceServer = (config: ServiceServerConfig): ServiceServer 
             ...(identity.action !== undefined ? { action: identity.action } : {}),
             ...(identity.resource !== undefined ? { resource: identity.resource } : {}),
             ...(identity.method !== undefined ? { method: identity.method } : {}),
+            ...(verifiedActAs !== undefined ? { actAs: verifiedActAs } : {}),
           };
           return { context, payload };
       };
