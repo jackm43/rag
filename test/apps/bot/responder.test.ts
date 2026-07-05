@@ -5,9 +5,9 @@ import {
   deliverInteractionEdit,
   finalizeAiReplyText,
   suppressUrlEmbeds,
-} from "@rag/discord/lib/domain/responder";
-import { appendSourceFallback } from "@rag/discord/lib/ai/ask-mode";
-import { editOriginalInteractionResponse } from "@rag/discord/lib/discord";
+} from "@rag/discord/domain/responder";
+import { appendSourceFallback } from "@rag/discord/ai/ask-mode";
+import { editOriginalInteractionResponse } from "@rag/discord/discord";
 import { encodeReplyJobEnvelope } from "@rag/discord/contracts";
 import { createEnv } from "../../helpers";
 

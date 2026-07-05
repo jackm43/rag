@@ -1,7 +1,7 @@
 import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
-import { discordInteractionGuard } from "@rag/discord/lib/ingress/discord-interaction";
+import { discordInteractionGuard } from "@rag/discord/ingress/discord-interaction";
 import { operatorControlGuard } from "@rag/auth-kit/native";
 import { createEnv, createSignedRequest } from "../../helpers";
 

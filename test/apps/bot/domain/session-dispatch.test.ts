@@ -1,7 +1,7 @@
 import { assert, test } from "vitest";
 
-import { runInteractionSession } from "@rag/discord/lib/domain/commands/session-run";
-import { RAG_ADMIN_USER_IDS } from "@rag/discord/lib/domain/commands/registry";
+import { runInteractionSession } from "@rag/discord/domain/commands/session-run";
+import { RAG_ADMIN_USER_IDS } from "@rag/discord/domain/commands/registry";
 import { createDbMock, createEnv } from "../../../helpers";
 
 // The Phase-2 processor dispatch: a verified interaction handed to the

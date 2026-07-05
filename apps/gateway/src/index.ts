@@ -1,7 +1,7 @@
 import {
   extractBotMentionPrompt,
   handleGatewayMessageCreate,
-} from "@rag/discord/lib/domain/mention";
+} from "@rag/discord/domain/mention";
 import type { Env } from "@rag/discord/contracts";
 import {
   DiscordGateway,

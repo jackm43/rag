@@ -1,10 +1,10 @@
 import { assert, test } from "vitest";
 
-import { loadConfig, resetConfigCache } from "@rag/discord/lib/ai/config";
-import responseConfig from "@rag/discord/lib/ai/ai-config/discord-response.json";
-import askWebSearchConfig from "@rag/discord/lib/ai/ai-config/ask-web-search.json";
-import responseSystemPrompt from "@rag/discord/lib/ai/ai-config/discord-response-system-prompt.md";
-import askWebSearchSystemPrompt from "@rag/discord/lib/ai/ai-config/ask-web-search-system-prompt.md";
+import { loadConfig, resetConfigCache } from "@rag/discord/ai/config";
+import responseConfig from "@rag/discord/ai/ai-config/discord-response.json";
+import askWebSearchConfig from "@rag/discord/ai/ai-config/ask-web-search.json";
+import responseSystemPrompt from "@rag/discord/ai/ai-config/discord-response-system-prompt.md";
+import askWebSearchSystemPrompt from "@rag/discord/ai/ai-config/ask-web-search-system-prompt.md";
 
 const KV_VALUES: Record<string, string> = {
   "discord-response.json": JSON.stringify({

@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { DiscordInteraction, Env, MessageReceivedJob } from "@rag/discord/contracts";
-import { runDeferredCommandByName, runInteractionSession } from "@rag/discord/lib/domain/commands/session-run";
-import { processMessageReceivedJob } from "@rag/discord/lib/domain/consumer";
+import { runDeferredCommandByName, runInteractionSession } from "@rag/discord/domain/commands/session-run";
+import { processMessageReceivedJob } from "@rag/discord/domain/consumer";
 
 // Matches the Discord interaction-token follow-up window: past this the token
 // is dead (a replay could never produce a real edit), so the dedupe marker is

@@ -1,7 +1,7 @@
 import { createQueueWorker } from "@rag/queue-kit";
 import type { Env } from "@rag/discord/contracts";
-import { processAiQueueMessage } from "@rag/discord/lib/domain/consumer";
-import { processAiJobsDlqMessage, processWebhookJobsDlqMessage } from "@rag/discord/lib/domain/dlq";
+import { processAiQueueMessage } from "@rag/discord/domain/consumer";
+import { processAiJobsDlqMessage, processWebhookJobsDlqMessage } from "@rag/discord/domain/dlq";
 import { processWebhookQueueMessage } from "./webhooks";
 
 // The per-interaction processor DO. Defined here; the gateway ingress binds it

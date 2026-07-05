@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 
 import { errorMessage, logger } from "@rag/logger";
-import { handleGatewayMessageCreate } from "@rag/discord/lib/domain/mention";
+import { handleGatewayMessageCreate } from "@rag/discord/domain/mention";
 import type { Env } from "@rag/discord/contracts";
 import { isDiscordMessage } from "@rag/discord/contracts";
 import { isRecord } from "@rag/contracts-core";

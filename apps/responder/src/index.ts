@@ -4,8 +4,8 @@ import { createQueueWorker } from "@rag/queue-kit";
 import {
   deliverInteractionEdit,
   processOutboxMessage,
-} from "@rag/discord/lib/domain/responder";
-import { processOutboxDlqMessage } from "@rag/discord/lib/domain/dlq";
+} from "@rag/discord/domain/responder";
+import { processOutboxDlqMessage } from "@rag/discord/domain/dlq";
 import type { Env, ResponderAttachment } from "@rag/discord/contracts";
 
 // Service-binding RPC entrypoint for media-bearing interaction edits. Queue

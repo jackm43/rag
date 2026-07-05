@@ -5,8 +5,8 @@
   "type": "module",
   "exports": {
     "./contracts": "./contracts/index.ts",
-    "./lib/ai/inference": "./lib/ai/inference/index.ts",
-    "./lib/discord": "./lib/discord/index.ts",
+    "./ai/inference": "./ai/inference/index.ts",
+    "./discord": "./discord/index.ts",
     "./*": "./*.ts",
     "./*.json": "./*.json",
     "./*.md": "./*.md"

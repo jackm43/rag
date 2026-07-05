@@ -1,8 +1,8 @@
 import { assert, test } from "vitest";
 
-import { checkAiUsageAllowed } from "@rag/discord/lib/domain/limits";
-import { runInteractionSession } from "@rag/discord/lib/domain/commands/session-run";
-import { resolveGatewayMessage } from "@rag/discord/lib/domain/mention";
+import { checkAiUsageAllowed } from "@rag/discord/domain/limits";
+import { runInteractionSession } from "@rag/discord/domain/commands/session-run";
+import { resolveGatewayMessage } from "@rag/discord/domain/mention";
 import { decodeReplyJobEnvelope } from "@rag/discord/contracts";
 import { createEnv, sentEnvelope } from "../../../helpers";
 

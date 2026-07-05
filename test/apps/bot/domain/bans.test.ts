@@ -1,8 +1,8 @@
 import { assert, test } from "vitest";
 
-import { activeAiBanForUser, aiBanMessage } from "@rag/discord/lib/domain/bans";
-import { runInteractionSession } from "@rag/discord/lib/domain/commands/session-run";
-import { resolveGatewayMessage } from "@rag/discord/lib/domain/mention";
+import { activeAiBanForUser, aiBanMessage } from "@rag/discord/domain/bans";
+import { runInteractionSession } from "@rag/discord/domain/commands/session-run";
+import { resolveGatewayMessage } from "@rag/discord/domain/mention";
 import { createDbMock, createEnv } from "../../../helpers";
 
 const EDIT_URL =
