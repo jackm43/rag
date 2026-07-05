@@ -15,7 +15,7 @@ import { DEFAULT_EGRESS_PROFILES } from "./profiles";
 // resolved from THIS worker's env. Trust is that the worker only builds profiles
 // it is an allowed caller of; a profile it doesn't own throws.
 
-export type EgressCaller = "responder" | "connectors" | "workflows" | "spend";
+export type EgressCaller = "responder" | "workflows" | "spend";
 
 // Retained for call-site compatibility (an optional acting subject); unused now
 // that outbound is in-process and carries no identity token.

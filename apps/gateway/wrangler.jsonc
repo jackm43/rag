@@ -6,8 +6,7 @@
     {
       "type": "Text",
       "globs": [
-        "**/*.md",
-        "**/*.cedar"
+        "**/*.md"
       ],
       "fallthrough": true
     }

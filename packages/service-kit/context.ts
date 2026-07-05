@@ -37,9 +37,3 @@ export type RequestContext = VerifiedRequestContext & {
   resource?: string;
   method?: string;
 };
-
-// A received, verified, authorized, and decoded service request.
-export type ServiceRequest<T> = {
-  context: RequestContext;
-  payload: T;
-};

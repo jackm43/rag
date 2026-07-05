@@ -4,12 +4,9 @@
   "compatibility_date": "2026-04-23",
   "rules": [
     {
-      // The auth/authz packages this worker imports load
-      // Cedar policy files as Text, exactly like the other workers.
       "type": "Text",
       "globs": [
-        "**/*.md",
-        "**/*.cedar"
+        "**/*.md"
       ],
       "fallthrough": true
     }

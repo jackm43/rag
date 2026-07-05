@@ -4,194 +4,21 @@ import { encodeAiJobEnvelope } from "@rag/discord/contracts";
 import type { EnvelopeOptions } from "@rag/contracts-core";
 import type { AiJob } from "@rag/discord/contracts";
 import type { Env } from "@rag/discord/contracts";
-import {
-  SERVICE_ZONE,
-  SYSTEM_SUBJECT,
-  type MachinePrincipal,
-} from "@rag/service-kit/principal";
 import { runInteractionSession } from "@rag/discord/commands/session-run";
 import { processMessageReceivedJob } from "@rag/discord/domain/consumer";
 import type { DiscordInteraction, MessageReceivedJob } from "@rag/discord/contracts";
 
 const encoder = new TextEncoder();
 
-// Test signing keys: the private halves of the committed PUBLIC_KEYRING, so a
-// token minted here verifies against the real keyring in the workers under
-// test. In production these live in per-worker secrets, never the repo — these
-// are test fixtures only. (No `alg` field: workerd's importKey rejects
-// alg:"Ed25519" on an OKP JWK.)
-export type ServiceHopSpec = {
-  iss: MachinePrincipal;
-  aud: MachinePrincipal;
-  sub?: string;
-  act?: MachinePrincipal[];
-  // Optional: when a test's receiving env has a SERVICE_REGISTRY binding
-  // (a working control plane, e.g. via createServiceRegistryMock), pass it
-  // here so the minted token carries a real requestId/placementId exactly
-  // like the production client (ensureRequestPlacement) would. Tests that
-  // exercise a receiving env with a control plane but mint through this
-  // helper without an env would otherwise always fail placement
-  // consumption — not because anything is misconfigured, but because the
-  // token itself never carried placement fields. Omit env (the default) for
-  // tests that intentionally exercise the no-control-plane (case a) path.
-  env?: Env;
-};
-
-// Mint a service identity-context token bound to the given envelope bytes.
-// When `hop.env` is supplied, this mirrors the production client path
-// (packages/service-kit/client.ts mintToken): it first calls ensureRequestPlacement
-// against the same control plane the receiving server will consume against,
-// so placement enforcement is exercised end to end instead of bypassed.
-const subjectOf = (job: AiJob): string => {
-  const candidate = job as { requesterUserId?: string; authorId?: string };
-  return candidate.requesterUserId ?? candidate.authorId ?? SYSTEM_SUBJECT;
-};
-
-// Encode an AI job and wrap it as a gateway->workflows service message, the shape
-// the workflows worker consumer receives in production. Pass `env` (the same
-// env the queue consumer under test will receive) when that env has a
-// SERVICE_REGISTRY control-plane binding, so the minted token carries a real
-// placement instead of being denied by the receiving server's placement
-// enforcement.
+// Encode an AI job as the plain capnp envelope the workflows worker consumer
+// receives in production (producers hand the queue the raw envelope bytes — no
+// signed wrapper). `_env` is retained for call-site compatibility and ignored.
 export const gatewayAiJob = async (job: AiJob, options: EnvelopeOptions, _env?: Env): Promise<Uint8Array> =>
   encodeAiJobEnvelope(job, options);
 
 // A producer now hands the queue the raw capnp envelope bytes directly (no
 // signed ServiceMessage wrapper), so the captured body IS the envelope.
 export const sentEnvelope = (sent: unknown): Uint8Array => sent as Uint8Array;
-
-type MockIntent = {
-  id: string;
-  correlationId: string;
-  subject: string;
-  target: string;
-  revoked: boolean;
-};
-
-type MockPlacement = {
-  id: string;
-  requestId: string;
-  correlationId: string;
-  subject: string;
-  source: string;
-  target: string;
-  action: string;
-  resource: string;
-  method: string;
-  consumed: boolean;
-};
-
-const createControlPlaneStub = () => {
-  const intents = new Map<string, MockIntent>();
-  const placements = new Map<string, MockPlacement>();
-  let intentSeq = 0;
-  let placementSeq = 0;
-
-  return {
-    register: async () => undefined,
-    snapshot: async () => serviceRegistrySnapshot(),
-    createIntent: async (record: {
-      correlationId: string;
-      subject: string;
-      target?: string;
-      aud: string;
-    }) => {
-      const id = `request-${++intentSeq}`;
-      intents.set(id, {
-        id,
-        correlationId: record.correlationId,
-        subject: record.subject,
-        target: record.aud,
-        revoked: false,
-      });
-      return {
-        id,
-        correlationId: record.correlationId,
-        expiresAt: Date.now() + 5 * 60_000,
-        version: 1,
-      };
-    },
-    createPlacement: async (record: {
-      requestId: string;
-      correlationId: string;
-      subject: string;
-      source: string;
-      target: string;
-      action: string;
-      resource: string;
-      method: string;
-    }) => {
-      const intent = intents.get(record.requestId);
-      if (!intent || intent.revoked) {
-        return null;
-      }
-      const id = `placement-${++placementSeq}`;
-      placements.set(id, {
-        id,
-        requestId: record.requestId,
-        correlationId: record.correlationId,
-        subject: record.subject,
-        source: record.source,
-        target: record.target,
-        action: record.action,
-        resource: record.resource,
-        method: record.method,
-        consumed: false,
-      });
-      return {
-        id,
-        correlationId: record.correlationId,
-        expiresAt: Date.now() + 90_000,
-        intentVersion: 1,
-      };
-    },
-    consumePlacement: async (input: {
-      placementId: string;
-      requestId: string;
-      correlationId?: string;
-      subject: string;
-      source: string;
-      target: string;
-      action: string;
-      resource: string;
-      method: string;
-    }) => {
-      const placement = placements.get(input.placementId);
-      if (!placement || placement.consumed) {
-        return false;
-      }
-      placement.consumed = true;
-      const intent = intents.get(input.requestId);
-      return (
-        !!intent &&
-        !intent.revoked &&
-        placement.requestId === input.requestId &&
-        (input.correlationId === undefined || placement.correlationId === input.correlationId) &&
-        placement.subject === input.subject &&
-        placement.source === input.source &&
-        placement.target === input.target &&
-        placement.action === input.action &&
-        placement.resource === input.resource &&
-        placement.method === input.method
-      );
-    },
-    revokeIntent: async (requestId: string) => {
-      const intent = intents.get(requestId);
-      if (!intent) {
-        return null;
-      }
-      intent.revoked = true;
-      return { id: requestId, revokedAt: Date.now(), version: 2 };
-    },
-    bumpIntentVersion: async (requestId: string) => {
-      const intent = intents.get(requestId);
-      if (!intent) {
-        return null;
-      }
-      return { id: requestId, version: 2 };
-    },
-  };
-};
 
 export const createSignedRequest = (
   payload: unknown,

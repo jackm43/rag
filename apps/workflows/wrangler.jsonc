@@ -6,8 +6,7 @@
     {
       "type": "Text",
       "globs": [
-        "**/*.md",
-        "**/*.cedar"
+        "**/*.md"
       ],
       "fallthrough": true
     }
@@ -63,20 +62,20 @@
   ],
   "durable_objects": {
     "bindings": [
-      // Per-interaction processor DO, defined by this worker. The gateway
-      // ingress binds the same class cross-script to run deferred commands here
-      // (where EGRESS lives). One instance per Discord
-      // interaction token; state is a short-lived dedupe marker swept by alarm.
+      // Per-interaction processor DO, defined by this worker. The webhooks
+      // ingress binds the same class cross-script to run verified interactions
+      // here (where the outbound edit credentials live), and the gateway binds it
+      // to kick mention processing. One instance per Discord interaction/message;
+      // state is a short-lived dedupe marker swept by alarm.
       {
         "name": "INTERACTION_SESSION",
         "class_name": "InteractionSession"
       }
     ]
   },
-  // First local DO class for this worker (SERVICE_REGISTRY above is cross-script
-  // and carries no migration here). The gateway's cross-script binding to
-  // InteractionSession must NOT declare a migration — only the defining worker
-  // (this one) does.
+  // InteractionSession is this worker's local DO class, so its migration lives
+  // here. The gateway's and webhooks worker's cross-script bindings to it must
+  // NOT declare a migration — only the defining worker (this one) does.
   "migrations": [
     {
       "tag": "v1",
