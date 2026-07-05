@@ -8,5 +8,6 @@ export * from "./web";
 export * from "./native";
 export * from "./oauth2";
 export * from "./discord";
+export * from "./webhook";
 export * from "./strategies";
 export { timingSafeEqual } from "./timing-safe-equal";

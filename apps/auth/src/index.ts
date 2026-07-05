@@ -9,7 +9,7 @@ import type {
   Principal,
   VerifyResult,
 } from "@rag/edge-kit";
-import { authenticateNative, authenticateWeb, type AuthEnv } from "@rag/auth-kit";
+import { authenticateNative, authenticateWeb, verifyWebhook, type AuthEnv, type WebhookVerifyInput } from "@rag/auth-kit";
 import { logger } from "@rag/logger";
 import { evaluate, POLICY, type PolicyEnv } from "./policy";
 
@@ -43,6 +43,13 @@ export class AuthGateway extends WorkerEntrypoint<Env> implements AuthGatewayBin
         // app edge; it is never delegated here.
         return deny(401, "webhook_local_only");
     }
+  }
+
+  // Inbound provider-webhook verification (HMAC). The secret lives here; the
+  // caller (webhooks worker) learns only whether it was valid + the event id.
+  async verifyWebhook(input: WebhookVerifyInput): Promise<{ valid: boolean; eventId?: string }> {
+    const result = await verifyWebhook(this.env, input);
+    return { valid: result.valid, ...(result.eventId !== undefined ? { eventId: result.eventId } : {}) };
   }
 
   // Freshness / revocation hook. A stub today (sessions/tokens are validated at

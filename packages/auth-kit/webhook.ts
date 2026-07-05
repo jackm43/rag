@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "@rag/auth-kit/timing-safe-equal";
+import { timingSafeEqual } from "./timing-safe-equal";
 
 // Inbound webhook signature verification — the broker-side half of the webhook
 // ingress design (AGENTS.md "A new webhook ingress").
@@ -196,4 +196,37 @@ export const verifyWebhookSignature = async (input: {
     default:
       return { valid: false };
   }
+};
+
+// The per-provider webhook secret env var. The auth service holds these (moved
+// off the credential broker); a provider with no configured secret fails closed.
+const WEBHOOK_SECRET_ENV: Record<string, string> = {
+  github: "GITHUB_WEBHOOK_SECRET",
+  stripe: "STRIPE_WEBHOOK_SECRET",
+};
+
+export type WebhookVerifyInput = {
+  provider: string;
+  signatureHeaders: Record<string, string>;
+  bodyBase64: string;
+};
+
+// Resolve the provider's webhook secret from env and verify the signature. This
+// is the auth service's inbound-webhook authn: the secret and the HMAC never
+// leave the auth worker; the caller (webhooks) learns only { valid, eventId? }.
+export const verifyWebhook = async (
+  env: Record<string, unknown>,
+  input: WebhookVerifyInput,
+): Promise<WebhookVerification> => {
+  const secretVar = WEBHOOK_SECRET_ENV[input.provider];
+  const secret = secretVar ? env[secretVar] : undefined;
+  if (typeof secret !== "string" || secret.length === 0) {
+    return { valid: false };
+  }
+  const binary = atob(input.bodyBase64);
+  const body = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    body[index] = binary.charCodeAt(index);
+  }
+  return verifyWebhookSignature({ provider: input.provider, secret, signatureHeaders: input.signatureHeaders, body });
 };

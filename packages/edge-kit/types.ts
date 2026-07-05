@@ -56,6 +56,13 @@ export interface AuthGatewayBinding {
   authenticateClient(request: AuthRequest): Promise<AuthDecision>;
   verify(principal: Principal): Promise<VerifyResult>;
   authorize(input: AuthorizeInput): Promise<AuthorizeResult>;
+  // Inbound provider-webhook verification (HMAC): the secret + computation stay
+  // on the auth worker; the caller learns only { valid, eventId? }.
+  verifyWebhook(input: {
+    provider: string;
+    signatureHeaders: Record<string, string>;
+    bodyBase64: string;
+  }): Promise<{ valid: boolean; eventId?: string }>;
 }
 
 // The minimum env every edge app carries: the auth binding.

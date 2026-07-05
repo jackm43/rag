@@ -5,9 +5,9 @@ import {
   DISCORD_INTERACTION_PONG,
   verifyDiscordSignature,
 } from "@rag/auth-kit/discord";
-import { connectorsClient } from "@rag/connectors-core/lib";
-import { CONNECTOR_ID_PATTERN, encodeWebhookEventEnvelope, MAX_WEBHOOK_BODY_BYTES, MAX_WEBHOOK_EVENT_TYPE_LENGTH } from "@rag/connectors-core/contracts";
-import type { Env, WebhookEventProvider } from "@rag/connectors-core/contracts";
+import { CONNECTOR_ID_PATTERN, encodeWebhookEventEnvelope, MAX_WEBHOOK_BODY_BYTES, MAX_WEBHOOK_EVENT_TYPE_LENGTH } from "@rag/discord/contracts";
+import type { WebhookEventProvider } from "@rag/discord/contracts";
+import type { Env } from "../contracts";
 import { errorMessage, logger } from "@rag/logger";
 import { WebhookDedupe } from "./dedupe";
 import { OPENAPI } from "./openapi";
@@ -16,11 +16,10 @@ export { WebhookDedupe };
 
 // The centralised webhook-ingress worker (webhooks.jsmunro.me): the inbound
 // mirror of authorizedFetch. Third-party providers POST signed deliveries to
-// /{provider}/{id}; this worker reads the RAW body, hands the broker the
-// signature headers + exact bytes over the CONNECTORS binding
-// (connector.webhook.verify), and gets back only a boolean — it NEVER sees a
+// /{provider}/{id}; this worker reads the RAW body, hands the AUTH service the
+// signature headers + exact bytes (verifyWebhook), and gets back only a boolean — it NEVER sees a
 // webhook secret. A valid, first-seen event is framed as a webhook.event
-// ServiceMessage and enqueued to the workflows worker; everything else exits with a bare
+// envelope and enqueued to the workflows worker; everything else exits with a bare
 // status. The handler is enqueue-only and fast: providers retry on
 // non-2xx/timeout, so no slow work runs inline, and no raw body or signature
 // material is ever logged.
@@ -53,8 +52,7 @@ const INTERACTIONS_PATH_PATTERN = /^\/([A-Za-z0-9._-]{1,128})\/interactions$/;
 
 const notFound = () => new Response("Not found", { status: 404 });
 // Invalid or unverifiable deliveries all exit here with no detail — the broker
-// audit-logged the actual reason (bad signature, unknown connector, denied
-// caller); a forger learns only that it failed.
+// logged the actual reason (bad signature, no configured secret); a forger learns only that it failed.
 const unauthorized = () => new Response("Bad request signature", { status: 401 });
 
 const collectSignatureHeaders = (
@@ -86,25 +84,17 @@ const handleWebhook = async (
   }
   const bodyBase64 = base64Of(body);
 
-  // The identity subject for both hops. There is no human behind a provider
-  // delivery, so the on-behalf-of subject is a synthetic ORIGIN subject naming
-  // the connector the event arrived for — "webhook:{connectorId}" — the same
-  // shape as SYSTEM_SUBJECT for the workflows worker's self-initiated flows, but
-  // attributable per connector in the broker's and workflows worker's audit logs.
-  const subject = { sub: `webhook:${connectorId}` };
-
-  // Signature verification is the broker's connector.webhook.verify: the
-  // secret and the HMAC computation stay broker-side; this worker learns only
-  // { valid, eventId? }. ANY failure — a broker denial, an invalid signature,
-  // or a failed hop (e.g. missing signing material) — exits 401, fail closed.
+  // Signature verification is delegated to the AUTH service (verifyWebhook): the
+  // provider secret and the HMAC computation stay on the auth worker; this worker
+  // learns only { valid, eventId? }. ANY failure — an invalid signature or a
+  // failed hop — exits 401, fail closed.
   let verification: { valid: boolean; eventId?: string } | undefined;
   try {
-    const result = await connectorsClient(env, "webhooks").verifyWebhook(connectorId, {
+    verification = await env.AUTH.verifyWebhook({
       provider,
       signatureHeaders: collectSignatureHeaders(request, provider),
       bodyBase64,
     });
-    verification = result.status === 200 ? result.webhook : undefined;
   } catch (error) {
     // Never the body or headers — only that the hop itself failed.
     logger.error("webhook_verify_hop_failed", { connectorId, provider, error: errorMessage(error) });

@@ -1,4 +1,4 @@
-import { decodeWebhookEventEnvelope } from "@rag/connectors-core/contracts";
+import { decodeWebhookEventEnvelope } from "@rag/discord/contracts";
 import type { Env } from "@rag/discord/contracts";
 import { logger } from "@rag/logger";
 

@@ -1,6 +1,9 @@
 // The env slice the ingress guards read: Cloudflare Access verification,
 // the Better Auth session module, and the operator control token.
 export type AuthEnv = {
+  // Inbound-webhook signing secrets, resolved per provider by verifyWebhook.
+  GITHUB_WEBHOOK_SECRET?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
   // OAuth2 client-credentials registry: JSON map of clientId -> shared secret
   // (or token) for machine clients using the oauth2 client kind.
   OAUTH2_CLIENTS?: string;

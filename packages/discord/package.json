@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@rag/auth-kit": "workspace:*",
-    "@rag/connectors-core": "workspace:*",
     "@rag/contracts-core": "workspace:*",
     "@rag/logger": "workspace:*",
     "@rag/outbound": "workspace:*",

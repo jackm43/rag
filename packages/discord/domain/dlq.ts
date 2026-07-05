@@ -1,5 +1,5 @@
 import { decodeAiJobEnvelope, decodeAiSpendJobEnvelope, decodeReplyJobEnvelope } from "../contracts";
-import { decodeWebhookEventEnvelope } from "@rag/connectors-core/contracts";
+import { decodeWebhookEventEnvelope } from "../contracts";
 import { logger } from "@rag/logger";
 
 // Dead-letter consumers: a message landing here has exhausted its retries,

@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 
-import type { Env } from "@rag/connectors-core/contracts";
+import type { Env } from "../contracts";
 
 // TTL'd webhook-replay dedupe store. One Durable Object per connector
 // (idFromName(connectorId)), keyed by the BROKER-RETURNED provider event id —

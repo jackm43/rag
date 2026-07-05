@@ -105,9 +105,9 @@
   // reaches this worker (the phantom-token philosophy, applied inbound).
   "services": [
     {
-      "binding": "CONNECTORS",
-      "service": "ragbot-connectors-worker",
-      "entrypoint": "Connectors"
+      "binding": "AUTH",
+      "service": "ragbot-auth-worker",
+      "entrypoint": "AuthGateway"
     }
   ]
 }

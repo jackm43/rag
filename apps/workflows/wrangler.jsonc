@@ -59,15 +59,6 @@
       "binding": "RESPONDER",
       "service": "ragbot-responder-worker",
       "entrypoint": "Responder"
-    },
-    // The credential broker's Connectors entrypoint (CONNECTORS.md §"Binding +
-    // deploying"): the workflows worker is the first credential caller (grant/fetch/token
-    // via the connectorsClient). The
-    // broker must be deployed before this binding can resolve.
-    {
-      "binding": "CONNECTORS",
-      "service": "ragbot-connectors-worker",
-      "entrypoint": "Connectors"
     }
   ],
   "durable_objects": {
