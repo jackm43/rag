@@ -6,7 +6,6 @@ import {
   processSpendJobsDlqMessage,
 } from "@rag/discord/lib/domain/dlq";
 import { encodeAiJobEnvelope, encodeAiSpendJobEnvelope, encodeReplyJobEnvelope } from "@rag/discord/contracts";
-import { signedServiceMessage } from "../../../helpers";
 
 const CHANNEL_ID = "200000000000000001";
 
@@ -49,7 +48,7 @@ test("ai-jobs DLQ handler logs the envelope kind without content and acks", asyn
     { source: "gateway" },
   );
   const { message, wasAcked } = createDlqMessage(
-    await signedServiceMessage(body, { iss: "gateway", aud: "workflows" }),
+    body,
   );
   const logs = captureErrorLogs();
 
@@ -87,7 +86,7 @@ test("ai-jobs DLQ handler marks undecodable bodies and still acks", () => {
 test("spend DLQ handler logs the spend kind and acks", async () => {
   const body = encodeAiSpendJobEnvelope({ spendEventId: "aigreq:test-event" }, { source: "worker" });
   const { message, wasAcked } = createDlqMessage(
-    await signedServiceMessage(body, { iss: "workflows", aud: "spend" }),
+    body,
     5,
   );
   const logs = captureErrorLogs();
@@ -112,7 +111,7 @@ test("outbox DLQ handler logs the reply kind without content and acks", async ()
     { source: "worker" },
   );
   const { message, wasAcked } = createDlqMessage(
-    await signedServiceMessage(body, { iss: "workflows", aud: "responder" }),
+    body,
   );
   const logs = captureErrorLogs();
 

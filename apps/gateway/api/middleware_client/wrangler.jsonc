@@ -51,11 +51,6 @@
         "name": "DISCORD_GATEWAY",
         "class_name": "DiscordGateway"
       },
-      {
-        "name": "SERVICE_REGISTRY",
-        "class_name": "ServiceRegistry",
-        "script_name": "ragbot-registry-worker"
-      },
       // Per-interaction processor DO, defined by ragbot-workflows-worker. The
       // gateway verifies the Discord signature, returns the type-5 ack, then
       // kicks this DO to run the deferred command and edit the response as

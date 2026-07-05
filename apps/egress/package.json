@@ -1,0 +1,10 @@
+{
+  "name": "@rag/egress-worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@rag/egress": "workspace:*",
+    "@rag/logger": "workspace:*"
+  }
+}

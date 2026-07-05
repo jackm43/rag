@@ -1,6 +1,5 @@
 import { decodeAiJobEnvelope, decodeAiSpendJobEnvelope, decodeReplyJobEnvelope } from "../../contracts";
 import { decodeWebhookEventEnvelope } from "@rag/connectors-core/contracts";
-import { serviceEnvelopeBytes } from "@rag/service-kit";
 import { logger } from "@rag/logger";
 
 // Dead-letter consumers: a message landing here has exhausted its retries,
@@ -17,10 +16,9 @@ const logAndAck = (queue: string, message: Message<unknown>, kind: string | unde
   message.ack();
 };
 
-// Dead letters carry the wrapped service message; unwrap to the capnp
-// envelope bytes before decoding the kind (falls back to raw bytes for
-// resilience).
-const envelopeOf = (message: Message<unknown>) => serviceEnvelopeBytes(message.body);
+// Dead letters carry the plain capnp envelope bytes (producers no longer wrap
+// them in a signed service message); decode the kind directly.
+const envelopeOf = (message: Message<unknown>) => message.body;
 
 export const processAiJobsDlqMessage = (message: Message<unknown>) =>
   logAndAck("ai-jobs-dlq", message, decodeAiJobEnvelope(envelopeOf(message))?.kind);

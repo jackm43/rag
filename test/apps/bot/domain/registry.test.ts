@@ -1,6 +1,6 @@
 import { assert, test } from "vitest";
 
-import { RAG_ADMIN_USER_IDS } from "@rag/authz/entities";
+import { RAG_ADMIN_USER_IDS } from "@rag/discord/lib/domain/commands/registry";
 import { routeInteraction } from "@rag/discord/lib/domain/commands/router";
 import { executeCommand, type CommandSpec } from "@rag/discord/lib/domain/commands/registry";
 import { APPLICATION_COMMAND, type Env } from "@rag/discord/contracts";
@@ -92,35 +92,6 @@ test("registry pre-flight lets rag-admins through to admin-only commands", async
   );
 
   assert.equal(await response.text(), "ran");
-});
-
-test("registry pre-flight denies commands the policy set does not know", async () => {
-  const spec: CommandSpec = {
-    name: "spec-unknown-test",
-    kind: "inline",
-    run: () => {
-      throw new Error("run should not be reached");
-    },
-  };
-
-  const response = await executeCommand(
-    spec,
-    {
-      type: APPLICATION_COMMAND,
-      data: { name: "spec-unknown-test" },
-      member: { user: { id: "1", username: "alice" } },
-    },
-    {} as Env,
-    executionCtx,
-  );
-
-  assert.deepEqual(await response.json(), {
-    type: 4,
-    data: {
-      content: "You are not allowed to use /spec-unknown-test.",
-      allowed_mentions: { parse: [] },
-    },
-  });
 });
 
 test("registry pre-flight refuses to enqueue without interaction credentials", async () => {

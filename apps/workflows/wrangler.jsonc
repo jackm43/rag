@@ -84,12 +84,6 @@
   ],
   "durable_objects": {
     "bindings": [
-      // Service registry hosted by the standalone ragbot-registry-worker.
-      {
-        "name": "SERVICE_REGISTRY",
-        "class_name": "ServiceRegistry",
-        "script_name": "ragbot-registry-worker"
-      },
       // Per-interaction processor DO, defined by this worker. The gateway
       // ingress binds the same class cross-script to run deferred commands here
       // (where EGRESS + WORKFLOWS_SIGNING_KEY live). One instance per Discord

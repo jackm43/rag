@@ -1,8 +1,6 @@
 import type { InteractionMessageData, InteractionResponseFile } from "../../discord";
-import { createClient, createHopIntent, SYSTEM_SUBJECT } from "@rag/service-kit";
 import { encodeAiJobEnvelope } from "../../../contracts";
 import { CHANNEL_MESSAGE_WITH_SOURCE, DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, type AiJob, type DiscordInteraction, type Env } from "../../../contracts";
-import { authorize } from "@rag/authz/authorize";
 import { activeAiBanForUser, aiBanMessage } from "../bans";
 import { jsonResponse } from "../http";
 import { checkAiUsageAllowed } from "../limits";
@@ -62,33 +60,36 @@ const inlineMessage = (content: string) =>
 const hasCredentials = (ctx: CommandContext): ctx is CredentialedCommandContext =>
   Boolean(ctx.applicationId && ctx.interactionToken);
 
-// One policy decision per command: Cedar evaluates the admin gate and the
-// raghammer ban together, then AI-limited commands pay the usage lookup. The
-// ban state itself comes from D1, and only AI-limited commands pay for it,
-// exactly as before. Shared verbatim by the synchronous gateway path
-// (executeCommand) and the all-deferred processor path (runInteractionSession)
-// so there is a single authorization authority; a denial returns the message
-// each path renders its own way (inline type-4, or an edited deferred reply).
+// The command authorization gate, now plain data (Cedar removed). It mirrors the
+// former policy exactly: admin commands need admin membership; a raghammer AI ban
+// forbids the AI commands; AI-limited commands then pay the usage lookup. Public
+// commands are open. Shared by the synchronous gateway path (executeCommand) and
+// the all-deferred processor path so there is a single authorization authority.
+const ADMIN_COMMANDS = new Set(["raghammer", "ragunban", "undorag"]);
+// Admin membership is data, not code — the rag-admins list. This file (not a
+// policy engine) is what changes when an admin is added or removed.
+export const RAG_ADMIN_USER_IDS = [
+  "107426926909517824",
+  "116163000339136518",
+  "102637456385392640",
+  "114128631474683907",
+];
+const ADMIN_SET = new Set(RAG_ADMIN_USER_IDS);
+
 export const authorizeAndLimit = async (
   spec: CommandSpec,
   ctx: CommandContext,
   env: Env,
 ): Promise<{ allowed: true } | { allowed: false; message: string }> => {
-  const activeBan =
-    spec.limitKind && ctx.invoker
-      ? await activeAiBanForUser(env, ctx.invoker.id, new Date())
-      : null;
-  const decision = authorize({
-    principal: { type: "Human", id: ctx.invoker?.id ?? "unknown" },
-    action: `command.${spec.name}`,
-    resource: { type: "Guild", id: ctx.guildId ?? "unknown" },
-    context: { banned: activeBan !== null },
-  });
-  if (!decision.allowed) {
-    return {
-      allowed: false,
-      message: activeBan ? aiBanMessage(activeBan.expires_at) : `You are not allowed to use /${spec.name}.`,
-    };
+  if (ADMIN_COMMANDS.has(spec.name) && !ADMIN_SET.has(ctx.invoker?.id ?? "")) {
+    return { allowed: false, message: `You are not allowed to use /${spec.name}.` };
+  }
+
+  if (spec.limitKind && ctx.invoker) {
+    const activeBan = await activeAiBanForUser(env, ctx.invoker.id, new Date());
+    if (activeBan) {
+      return { allowed: false, message: aiBanMessage(activeBan.expires_at) };
+    }
   }
 
   if (spec.limitKind) {

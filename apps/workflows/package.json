@@ -13,6 +13,7 @@
     "@rag/connectors-core": "workspace:*",
     "@rag/discord": "workspace:*",
     "@rag/logger": "workspace:*",
+    "@rag/queue-kit": "workspace:*",
     "@rag/service-kit": "workspace:*"
   }
 }

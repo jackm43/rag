@@ -1,7 +1,7 @@
-// Centralised auth service client library. Workers verify/authenticate at
-// ingress, construct a request, and forward it through a client built here;
-// zones, credentials, token exchange, authorization, and denial logging are
-// implemented behind this surface.
+// Shared identity vocabulary: the machine-principal names, trust zones, and the
+// request-context shapes. The signing/transport implementation (client, server,
+// identity tokens, Cedar authorization, registry placement) has been removed —
+// worker-to-worker calls are now plain, capability-gated service-binding RPC.
 export {
   isMachinePrincipal,
   SERVICE_OPERATIONS,
@@ -13,39 +13,5 @@ export {
   type Transport,
   type TrustZone,
 } from "./principal";
-export type { CorrelatedJwtClaims, JwtClaims } from "./claims";
 export type { RequestContext, ServiceRequest, VerifiedRequestContext } from "./context";
-export {
-  bumpRequestIntentVersion,
-  createHopIntent,
-  type HopIntent,
-  type HopIntentInput,
-  revokeRequestIntent,
-} from "./control-plane";
-export {
-  createClient,
-  createServiceClient,
-  createServiceClientFromEnv,
-  type ClientConfig,
-  type ClientPrepareOptions,
-  type ClientServiceCall,
-  type ClientTarget,
-  type HopSession,
-  type EnvServiceClientConfig,
-  type ServiceCall,
-  type ServiceClient,
-  type ServiceClientConfig,
-} from "./client";
-export {
-  createServiceServer,
-  type ServiceServer,
-  type ServiceServerConfig,
-} from "./server";
-export { serviceEnvelopeBytes, wrapServiceMessage } from "./message";
-export {
-  ensureRegistered,
-  registryEntities,
-  resetRegistryCaches,
-} from "./registry";
-export { createQueueWorker, type QueueMessageHandler } from "./queue-worker";
 export type { ServiceManifest } from "./manifest";

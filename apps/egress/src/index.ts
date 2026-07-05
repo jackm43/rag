@@ -1,7 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 
 import type { EgressFetchInput, EgressResult } from "@rag/egress/contracts";
-import type { Env } from "../../../contracts";
+import type { Env } from "../contracts";
 import { handleEgressRequest } from "@rag/egress/server";
 export { EgressControl } from "./control";
 

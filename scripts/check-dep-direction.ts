@@ -14,7 +14,12 @@ const workspaceRoots: Array<[string, string]> = [];
 for (const top of ["packages", "apps"]) {
   for (const name of fs.readdirSync(top)) {
     const dir = path.join(top, name);
-    if (fs.existsSync(path.join(dir, "package.json"))) workspaceRoots.push([dir, `@rag/${name}`]);
+    const manifest = path.join(dir, "package.json");
+    if (!fs.existsSync(manifest)) continue;
+    // Use the real package name, not the directory name — they can differ (e.g.
+    // apps/egress is @rag/egress-worker, distinct from packages/egress).
+    const pkg = JSON.parse(fs.readFileSync(manifest, "utf8")).name as string;
+    workspaceRoots.push([dir, pkg]);
   }
 }
 

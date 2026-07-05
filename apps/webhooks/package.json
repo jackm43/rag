@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@rag/connectors-core": "workspace:*",
+    "@rag/edge-kit": "workspace:*",
     "@rag/ingress": "workspace:*",
     "@rag/logger": "workspace:*",
     "@rag/service-kit": "workspace:*"

@@ -72,12 +72,6 @@
         "name": "WEBHOOK_DEDUPE",
         "class_name": "WebhookDedupe"
       },
-      // Service registry hosted by the standalone ragbot-registry-worker.
-      {
-        "name": "SERVICE_REGISTRY",
-        "class_name": "ServiceRegistry",
-        "script_name": "ragbot-registry-worker"
-      },
       // The bot's InteractionSession processor DO, defined by the workflows
       // worker. Bound cross-script (no migration on the binding side) so the
       // interactions route can kick run() after verifying the Discord

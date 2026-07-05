@@ -50,16 +50,7 @@
     }
   },
   "durable_objects": {
-    "bindings": [
-      // Service registry hosted by the standalone ragbot-registry-worker. The
-      // edge harness registers this worker's manifest and the client derives the
-      // dev-proxy -> connectors exchange authorization from the registry snapshot.
-      {
-        "name": "SERVICE_REGISTRY",
-        "class_name": "ServiceRegistry",
-        "script_name": "ragbot-registry-worker"
-      }
-    ]
+    "bindings": []
   },
   // The credential broker's Connectors entrypoint: this worker's sole egress, a
   // service-binding hop (never a public route). A service binding is invocable

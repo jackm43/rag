@@ -1,4 +1,3 @@
-import { createClient, createHopIntent, SYSTEM_SUBJECT } from "@rag/service-kit";
 import { encodeAiJobEnvelope } from "../../../contracts";
 import { fallbackThreadTitle } from "../conversation";
 import { createThreadWithoutMessage, fetchChannel, isThreadChannel } from "../../discord";

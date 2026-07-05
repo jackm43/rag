@@ -1,9 +1,9 @@
-import { createQueueWorker } from "@rag/service-kit";
+import { createQueueWorker } from "@rag/queue-kit";
+import type { Env } from "@rag/discord/contracts";
 import { processSpendQueueMessage } from "@rag/discord/lib/ai/spend";
 import { processSpendJobsDlqMessage } from "@rag/discord/lib/domain/dlq";
-import { SPEND_MANIFEST } from "./manifest";
 
-export default createQueueWorker(SPEND_MANIFEST, {
+export default createQueueWorker<Env>("spend", {
   "ai-spend-jobs": processSpendQueueMessage,
   "ai-spend-jobs-dlq": processSpendJobsDlqMessage,
 });

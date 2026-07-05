@@ -1,5 +1,4 @@
-import { createClient, createHopIntent } from "@rag/service-kit";
-import { base64Of, createEdgeWorker, jsonResponse, pathPattern, readCappedBody } from "@rag/service-kit/edge";
+import { base64Of, createEdgeWorker, jsonResponse, pathPattern, readCappedBody } from "@rag/edge-kit";
 import {
   DISCORD_INTERACTION_DEFERRED_MESSAGE,
   DISCORD_INTERACTION_PING,
@@ -10,7 +9,7 @@ import { connectorsClient } from "@rag/connectors-core/lib";
 import { CONNECTOR_ID_PATTERN, encodeWebhookEventEnvelope, MAX_WEBHOOK_BODY_BYTES, MAX_WEBHOOK_EVENT_TYPE_LENGTH } from "@rag/connectors-core/contracts";
 import type { Env, WebhookEventProvider } from "@rag/connectors-core/contracts";
 import { errorMessage, logger } from "@rag/logger";
-import { WEBHOOKS_MANIFEST, WebhookDedupe } from "../../../service_server/src";
+import { WebhookDedupe } from "../../../service_server/src";
 import { OPENAPI } from "./openapi";
 
 export { WebhookDedupe };
@@ -244,7 +243,6 @@ const handleInteractions = async (
 
 export default createEdgeWorker<Env>({
   service: "webhooks",
-  manifest: WEBHOOKS_MANIFEST,
   openapi: OPENAPI,
   routes: [
     {

@@ -1,4 +1,3 @@
-import type { ActAsContext } from "./identity";
 import type { MachinePrincipal, Transport, TrustZone } from "./principal";
 
 // The minimum verified context a service client needs to create the next hop.
@@ -37,15 +36,6 @@ export type RequestContext = VerifiedRequestContext & {
   action?: string;
   resource?: string;
   method?: string;
-  // The verified act-as context, present only on a hop that carried an act-as
-  // token AND at a receiver that opted into verifying it (config.verifyActAs).
-  // Absent on every ordinary hop.
-  actAs?: ActAsContext;
-  // Session-binding claims present only on a dev-proxy edge hop (the token was
-  // minted for a Cloudflare Access + DPoP browser session). Absent on every
-  // service-to-service hop. dpopJkt is the RFC 9449 thumbprint of the browser
-  // key that sender-constrained the session; sid is an opaque session id for
-  // audit correlation.
 };
 
 // A received, verified, authorized, and decoded service request.

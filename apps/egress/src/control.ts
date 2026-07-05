@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 
-import type { Env } from "../../../contracts";
+import type { Env } from "../contracts";
 import {
   isEgressProfileName,
   isEgressProfileConfig,

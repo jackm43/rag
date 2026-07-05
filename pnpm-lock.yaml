@@ -255,6 +255,9 @@ importers:
       '@rag/discord':
         specifier: workspace:*
         version: link:../../packages/discord
+      '@rag/queue-kit':
+        specifier: workspace:*
+        version: link:../../packages/queue-kit
       '@rag/service-kit':
         specifier: workspace:*
         version: link:../../packages/service-kit
@@ -264,6 +267,9 @@ importers:
       '@rag/connectors-core':
         specifier: workspace:*
         version: link:../../packages/connectors-core
+      '@rag/edge-kit':
+        specifier: workspace:*
+        version: link:../../packages/edge-kit
       '@rag/ingress':
         specifier: workspace:*
         version: link:../../packages/ingress
@@ -285,6 +291,9 @@ importers:
       '@rag/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      '@rag/queue-kit':
+        specifier: workspace:*
+        version: link:../../packages/queue-kit
       '@rag/service-kit':
         specifier: workspace:*
         version: link:../../packages/service-kit

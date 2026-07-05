@@ -9,8 +9,7 @@ import {
 import { appendSourceFallback } from "@rag/discord/lib/ai/ask-mode";
 import { editOriginalInteractionResponse } from "@rag/discord/lib/discord";
 import { encodeReplyJobEnvelope } from "@rag/discord/contracts";
-import { encodeServiceMessage } from "@rag/contracts-core";
-import { createEnv, mintServiceToken, signedServiceMessage } from "../../helpers";
+import { createEnv } from "../../helpers";
 
 const CHANNEL_ID = "200000000000000001";
 const APPLICATION_ID = "500000000000000001";
@@ -303,24 +302,17 @@ test("responder rejects RPC envelopes that are not interaction edits", async () 
     { kind: "reply.channel_message", channelId: CHANNEL_ID, content: "hello" },
     { source: "worker" },
   );
+  // A channel-message envelope is the wrong kind for the interaction-edit
+  // entrypoint, so it is rejected before applying.
   await rejects(async () =>
-    deliverInteractionEdit(
-      env,
-      encodeServiceMessage(
-        channelEnvelope,
-        await mintServiceToken(channelEnvelope, { iss: "workflows", aud: "responder", env }),
-      ),
-      { name: "bicture.png", contentType: "image/png", data: new ArrayBuffer(4) },
-    ),
+    deliverInteractionEdit(env, channelEnvelope, {
+      name: "bicture.png",
+      contentType: "image/png",
+      data: new ArrayBuffer(4),
+    }),
   );
-  // A garbage token fails verification, so the edit is denied before decoding.
-  await rejects(() =>
-    deliverInteractionEdit(
-      env,
-      encodeServiceMessage(new Uint8Array([1, 2, 3, 4, 5]), "not-a-token"),
-      null,
-    ),
-  );
+  // Garbage bytes fail to decode, so the edit is denied.
+  await rejects(() => deliverInteractionEdit(env, new Uint8Array([1, 2, 3, 4, 5]), null));
 });
 
 test("responder acknowledges malformed outbox messages without egress", async () => {

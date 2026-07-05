@@ -1,5 +1,4 @@
 import type { InteractionMessageData } from "../../discord";
-import { authorize } from "@rag/authz/authorize";
 import { activeRagBanForUser, formatBanExpiry } from "../bans";
 import { jsonResponse } from "../http";
 import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../../../contracts";
@@ -19,21 +18,12 @@ export const runRagCommand = async (
   const invoker = requireInvoker(ctx);
   const targetId = idOption(ctx, "user");
 
-  // The ban lookup deliberately stays in the deferred window (the registry
-  // authorized command.rag before the ban state was known); Cedar makes the
-  // actual decision once D1 has answered.
+  // /rag is a public command; a raghammer ban is the only thing that forbids it.
+  // The ban lookup stays in the deferred window (D1 answers here).
   const activeBan = await activeRagBanForUser(env, invoker.id, new Date());
-  const decision = authorize({
-    principal: { type: "Human", id: invoker.id },
-    action: "command.rag",
-    resource: { type: "Guild", id: ctx.guildId ?? "unknown" },
-    context: { banned: activeBan !== null },
-  });
-  if (!decision.allowed) {
+  if (activeBan) {
     return {
-      content: activeBan
-        ? `You cannot use /rag until ${formatBanExpiry(activeBan.expires_at)}.`
-        : "You are not allowed to use /rag.",
+      content: `You cannot use /rag until ${formatBanExpiry(activeBan.expires_at)}.`,
       allowed_mentions: { parse: [] },
     };
   }

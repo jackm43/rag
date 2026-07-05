@@ -34,12 +34,6 @@
   },
   "durable_objects": {
     "bindings": [
-      // Service registry hosted by the standalone ragbot-registry-worker.
-      {
-        "name": "SERVICE_REGISTRY",
-        "class_name": "ServiceRegistry",
-        "script_name": "ragbot-registry-worker"
-      },
       // The broker's own grant/token store, defined in THIS worker.
       {
         "name": "CONNECTOR_STORE",

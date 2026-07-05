@@ -16,7 +16,6 @@ import { sendChannelReply } from "./outbox";
 import { finalizeAiReplyText } from "./responder";
 import { recordAiThread } from "./threads";
 import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "../ai/tracked-ai";
-import { createServiceServer } from "@rag/service-kit";
 import type { RequestContext } from "@rag/service-kit/context";
 import { decodeAiJobEnvelope } from "../../contracts";
 import { type AiAskJob, type AiChatJob, type AiJob, type Env, type MessageReceivedJob } from "../../contracts";

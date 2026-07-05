@@ -2,15 +2,6 @@
   "name": "ragbot-egress-worker",
   "main": "src/index.ts",
   "compatibility_date": "2026-04-23",
-  "rules": [
-    {
-      "type": "Text",
-      "globs": [
-        "**/*.cedar"
-      ],
-      "fallthrough": true
-    }
-  ],
   "compatibility_flags": [
     "nodejs_compat"
   ],
@@ -29,11 +20,6 @@
       {
         "name": "EGRESS_CONTROL",
         "class_name": "EgressControl"
-      },
-      {
-        "name": "SERVICE_REGISTRY",
-        "class_name": "ServiceRegistry",
-        "script_name": "ragbot-registry-worker"
       }
     ]
   },

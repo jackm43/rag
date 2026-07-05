@@ -1,15 +1,15 @@
-import { createQueueWorker } from "@rag/service-kit";
+import { createQueueWorker } from "@rag/queue-kit";
+import type { Env } from "@rag/discord/contracts";
 import { processAiQueueMessage } from "@rag/discord/lib/domain/consumer";
 import { processAiJobsDlqMessage, processWebhookJobsDlqMessage } from "@rag/discord/lib/domain/dlq";
-import { WORKFLOWS_MANIFEST } from "./manifest";
 import { processWebhookQueueMessage } from "./webhooks";
 
 // The per-interaction processor DO. Defined here; the gateway ingress binds it
 // cross-script (script_name: ragbot-workflows-worker) to run deferred commands
-// where EGRESS + WORKFLOWS_SIGNING_KEY are available.
+// where EGRESS is available.
 export { InteractionSession } from "./session";
 
-export default createQueueWorker(WORKFLOWS_MANIFEST, {
+export default createQueueWorker<Env>("workflows", {
   "ai-jobs": processAiQueueMessage,
   "ai-jobs-dlq": processAiJobsDlqMessage,
   "webhook-jobs": processWebhookQueueMessage,

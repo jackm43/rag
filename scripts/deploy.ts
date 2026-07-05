@@ -23,11 +23,6 @@ const DEPLOY_ORDER = [
   // CONNECTORS entrypoint, so the defining worker must exist first.
   "ragbot-connectors-api-worker",
   "ragbot-responder-worker",
-  // attest before registry: registry binds attest's AttestationStore DO, so the
-  // defining worker must exist first on a fresh deploy (circular DO dependency).
-  "ragbot-attest-worker",
-  "ragbot-registry-worker",
-  "ragbot-metadata-worker",
   // workflows before the gateway: the gateway binds workflows' InteractionSession
   // DO cross-script, so the defining worker must exist first.
   "ragbot-workflows-worker",
