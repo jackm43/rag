@@ -9,28 +9,25 @@ import type {
   Principal,
   VerifyResult,
 } from "@rag/edge-kit";
-import { cloudflareAccessGuard } from "@rag/ingress/cf-access";
-import { createAuth, resolveDiscordSubject } from "@rag/ingress/better-auth";
-import { operatorControlGuard } from "@rag/ingress/operator-control";
-import type { IngressEnv } from "@rag/ingress/env";
+import { authenticateNative, authenticateWeb, type AuthEnv } from "@rag/auth-kit";
 import { logger } from "@rag/logger";
 import { evaluate, POLICY, type PolicyEnv } from "./policy";
 
 // The auth worker: the single API Gateway every public app authenticates
 // through. It is binding-only (no public route) and exposes the three-step
 // pipeline the shared edge middleware calls per request. It owns the real edge
-// credentials — the Cloudflare Access JWKS, the Better Auth D1, the operator
-// token — so no other worker needs them, and it is the one place authorization
-// is decided. Backends trust its verdict.
+// credentials — the Cloudflare Access JWKS, the Better Auth D1, the operator +
+// oauth2 client secrets — so no other worker needs them, and it is the one place
+// authorization is decided. Backends trust its verdict. The per-client-kind
+// authentication strategies live in @rag/auth-kit.
 
-type Env = IngressEnv & PolicyEnv;
+type Env = AuthEnv & PolicyEnv;
 
 const deny = (status: number, reason: string): AuthDecision => ({ ok: false, status, reason });
 
-// The ingress guards take a Request. The middleware forwards a bodyless
-// AuthRequest (method/url/headers); rebuild a Request so the guards read the
-// same headers/cookies they would at a live edge. No body is needed — every
-// header-based guard authenticates from headers alone.
+// The strategies take a Request. The middleware forwards a bodyless AuthRequest
+// (method/url/headers); rebuild a Request so the header/cookie-based strategies
+// read the same headers they would at a live edge.
 const asRequest = (request: AuthRequest): Request =>
   new Request(request.url, { method: "GET", headers: request.headers });
 
@@ -38,68 +35,14 @@ export class AuthGateway extends WorkerEntrypoint<Env> implements AuthGatewayBin
   async authenticateClient(request: AuthRequest): Promise<AuthDecision> {
     switch (request.clientKind) {
       case "native":
-        return this.authenticateNative(asRequest(request));
+        return authenticateNative(asRequest(request), this.env);
       case "web":
-        return this.authenticateWeb(asRequest(request));
+        return authenticateWeb(asRequest(request), this.env);
       case "webhook":
         // Signature-based webhook auth needs the raw body and is verified at the
         // app edge; it is never delegated here.
         return deny(401, "webhook_local_only");
     }
-  }
-
-  private async authenticateNative(request: Request): Promise<AuthDecision> {
-    // A programmatic caller: either the operator bearer token (gateway control
-    // plane) or a Cloudflare Access machine grant (service token / Access JWT
-    // fronting a machine-facing API like connectors.jsmunro.me).
-    if (request.headers.get("authorization")) {
-      const op = await operatorControlGuard.verify(request, this.env);
-      if (op.ok) {
-        return { ok: true, principal: { subject: op.grant.principal, kind: "native", roles: ["operator"] } };
-      }
-    }
-    const access = await cloudflareAccessGuard.verify(request, this.env);
-    if (access.ok) {
-      const principal: Principal = {
-        subject: access.grant.identity.sub,
-        kind: "native",
-        roles: ["machine"],
-        ...(access.grant.identity.email ? { claims: { email: access.grant.identity.email } } : {}),
-      };
-      return { ok: true, principal };
-    }
-    return deny(401, "native_unauthenticated");
-  }
-
-  private async authenticateWeb(request: Request): Promise<AuthDecision> {
-    // Perimeter: the request must genuinely have passed Cloudflare Access.
-    const access = await cloudflareAccessGuard.verify(request, this.env);
-    if (!access.ok) {
-      return deny(401, access.reason);
-    }
-    let auth;
-    try {
-      auth = createAuth(this.env);
-    } catch (error) {
-      logger.error("auth_unconfigured", { reason: String((error as Error).message ?? error) });
-      return deny(500, "auth_unconfigured");
-    }
-    const subject = await resolveDiscordSubject(auth, request.headers);
-    if (!subject) {
-      return deny(401, "no_session");
-    }
-    // The session was bound to an Access identity at creation; a session
-    // presented under a different Access identity is refused (leaked-cookie
-    // defence).
-    if (subject.accessSub !== access.grant.identity.sub) {
-      return deny(401, "session_access_mismatch");
-    }
-    const principal: Principal = {
-      subject: subject.discordId,
-      kind: "web",
-      claims: { accessSub: subject.accessSub, ...(subject.email ? { email: subject.email } : {}) },
-    };
-    return { ok: true, principal };
   }
 
   // Freshness / revocation hook. A stub today (sessions/tokens are validated at

@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "@rag/ingress/timing-safe-equal";
+import { timingSafeEqual } from "@rag/auth-kit/timing-safe-equal";
 
 // Inbound webhook signature verification — the broker-side half of the webhook
 // ingress design (AGENTS.md "A new webhook ingress").

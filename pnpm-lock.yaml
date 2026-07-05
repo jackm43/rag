@@ -17,6 +17,9 @@ importers:
       '@rag/auth':
         specifier: workspace:*
         version: link:apps/auth
+      '@rag/auth-kit':
+        specifier: workspace:*
+        version: link:packages/auth-kit
       '@rag/broker':
         specifier: workspace:*
         version: link:apps/broker
@@ -38,9 +41,6 @@ importers:
       '@rag/gateway':
         specifier: workspace:*
         version: link:apps/gateway
-      '@rag/ingress':
-        specifier: workspace:*
-        version: link:packages/ingress
       '@rag/logger':
         specifier: workspace:*
         version: link:packages/logger
@@ -135,12 +135,12 @@ importers:
 
   apps/auth:
     dependencies:
+      '@rag/auth-kit':
+        specifier: workspace:*
+        version: link:../../packages/auth-kit
       '@rag/edge-kit':
         specifier: workspace:*
         version: link:../../packages/edge-kit
-      '@rag/ingress':
-        specifier: workspace:*
-        version: link:../../packages/ingress
       '@rag/logger':
         specifier: workspace:*
         version: link:../../packages/logger
@@ -174,15 +174,15 @@ importers:
 
   apps/gateway:
     dependencies:
+      '@rag/auth-kit':
+        specifier: workspace:*
+        version: link:../../packages/auth-kit
       '@rag/contracts-core':
         specifier: workspace:*
         version: link:../../packages/contracts-core
       '@rag/discord':
         specifier: workspace:*
         version: link:../../packages/discord
-      '@rag/ingress':
-        specifier: workspace:*
-        version: link:../../packages/ingress
       '@rag/logger':
         specifier: workspace:*
         version: link:../../packages/logger
@@ -219,15 +219,15 @@ importers:
 
   apps/webhooks:
     dependencies:
+      '@rag/auth-kit':
+        specifier: workspace:*
+        version: link:../../packages/auth-kit
       '@rag/connectors-core':
         specifier: workspace:*
         version: link:../../packages/connectors-core
       '@rag/edge-kit':
         specifier: workspace:*
         version: link:../../packages/edge-kit
-      '@rag/ingress':
-        specifier: workspace:*
-        version: link:../../packages/ingress
       '@rag/logger':
         specifier: workspace:*
         version: link:../../packages/logger
@@ -253,14 +253,29 @@ importers:
         specifier: workspace:*
         version: link:../../packages/service-kit
 
+  packages/auth-kit:
+    dependencies:
+      '@rag/edge-kit':
+        specifier: workspace:*
+        version: link:../edge-kit
+      '@rag/logger':
+        specifier: workspace:*
+        version: link:../logger
+      better-auth:
+        specifier: ^1.6.23
+        version: 1.6.23(react-dom@19.2.7)(react@19.2.7)(vitest@4.1.9)
+      tweetnacl:
+        specifier: ^1.0.3
+        version: 1.0.3
+
   packages/connectors-core:
     dependencies:
+      '@rag/auth-kit':
+        specifier: workspace:*
+        version: link:../auth-kit
       '@rag/contracts-core':
         specifier: workspace:*
         version: link:../contracts-core
-      '@rag/ingress':
-        specifier: workspace:*
-        version: link:../ingress
       '@rag/logger':
         specifier: workspace:*
         version: link:../logger
@@ -288,15 +303,15 @@ importers:
 
   packages/discord:
     dependencies:
+      '@rag/auth-kit':
+        specifier: workspace:*
+        version: link:../auth-kit
       '@rag/connectors-core':
         specifier: workspace:*
         version: link:../connectors-core
       '@rag/contracts-core':
         specifier: workspace:*
         version: link:../contracts-core
-      '@rag/ingress':
-        specifier: workspace:*
-        version: link:../ingress
       '@rag/logger':
         specifier: workspace:*
         version: link:../logger
@@ -321,18 +336,6 @@ importers:
       '@rag/logger':
         specifier: workspace:*
         version: link:../logger
-
-  packages/ingress:
-    dependencies:
-      '@rag/logger':
-        specifier: workspace:*
-        version: link:../logger
-      better-auth:
-        specifier: ^1.6.23
-        version: 1.6.23(react-dom@19.2.7)(react@19.2.7)(vitest@4.1.9)
-      tweetnacl:
-        specifier: ^1.0.3
-        version: 1.0.3
 
   packages/logger: {}
 

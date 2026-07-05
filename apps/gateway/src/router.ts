@@ -1,5 +1,5 @@
-import { operatorControlGuard } from "@rag/ingress/operator-control";
-import type { InboundGuard } from "@rag/ingress/guard";
+import { operatorControlGuard } from "@rag/auth-kit/native";
+import type { InboundGuard } from "@rag/auth-kit/guard";
 import type { Env } from "@rag/discord/contracts";
 import { GATEWAY_ROUTES, type GatewaySecurityScheme } from "./routes";
 

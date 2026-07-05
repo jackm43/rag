@@ -1,6 +1,6 @@
 import { guardDenial, type InboundGuard } from "./guard";
 import { errorMessage, logger } from "@rag/logger";
-import type { IngressEnv as Env } from "./env";
+import type { AuthEnv as Env } from "./env";
 
 // Cloudflare Access application-token verification (the first ingress gate of
 // the dev-proxy worker). Access sits in front of the worker and, once a user

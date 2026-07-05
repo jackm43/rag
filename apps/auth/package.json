@@ -8,8 +8,8 @@
     "./src": "./src/index.ts"
   },
   "dependencies": {
+    "@rag/auth-kit": "workspace:*",
     "@rag/edge-kit": "workspace:*",
-    "@rag/ingress": "workspace:*",
     "@rag/logger": "workspace:*"
   }
 }

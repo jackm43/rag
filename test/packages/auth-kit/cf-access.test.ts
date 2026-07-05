@@ -3,7 +3,7 @@ import { assert, test } from "vitest";
 import {
   verifyAccessJwt,
   type AccessKeyResolver,
-} from "@rag/ingress/cf-access";
+} from "@rag/auth-kit/access";
 
 // Focused crypto tests: the Access verifier is a security gate, so each way it
 // must fail closed is proven, not assumed. Tokens are signed here with real

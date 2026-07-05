@@ -1,9 +1,9 @@
-import { guardDenial, type InboundGuard } from "@rag/ingress/guard";
-import { verifyDiscordSignature } from "@rag/ingress/discord";
+import { guardDenial, type InboundGuard } from "@rag/auth-kit/guard";
+import { verifyDiscordSignature } from "@rag/auth-kit/discord";
 import type { DiscordInteraction } from "../../contracts";
 import { isDiscordInteraction } from "../../contracts";
 
-// Verifies Discord's Ed25519 signature (neutral, in @rag/ingress) and then
+// Verifies Discord's Ed25519 signature (neutral, in @rag/auth-kit) and then
 // applies the bot's interaction-shape validation, so callers get a fully-typed
 // DiscordInteraction or null.
 export const verifyDiscordRequest = async (

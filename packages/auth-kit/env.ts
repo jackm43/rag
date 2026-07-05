@@ -1,6 +1,9 @@
 // The env slice the ingress guards read: Cloudflare Access verification,
 // the Better Auth session module, and the operator control token.
-export type IngressEnv = {
+export type AuthEnv = {
+  // OAuth2 client-credentials registry: JSON map of clientId -> shared secret
+  // (or token) for machine clients using the oauth2 client kind.
+  OAUTH2_CLIENTS?: string;
   // Discord interaction-webhook signature verification (ed25519 public key).
   // Required, matching Cloudflare.Env — the interaction guard fails closed
   // without it.

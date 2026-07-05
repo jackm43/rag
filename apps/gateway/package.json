@@ -10,9 +10,9 @@
     "./*.md": "./*.md"
   },
   "dependencies": {
+    "@rag/auth-kit": "workspace:*",
     "@rag/contracts-core": "workspace:*",
     "@rag/discord": "workspace:*",
-    "@rag/ingress": "workspace:*",
     "@rag/logger": "workspace:*",
     "@rag/outbound": "workspace:*",
     "@rag/service-kit": "workspace:*"

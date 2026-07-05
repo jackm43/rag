@@ -1,5 +1,5 @@
 import { logger } from "@rag/logger";
-import type { IngressEnv as Env } from "./env";
+import type { AuthEnv as Env } from "./env";
 
 // Inbound boundary: every request entering a platform worker from the public
 // internet crosses a named guard. Denials log the same

@@ -1,14 +1,16 @@
 {
-  "name": "@rag/ingress",
+  "name": "@rag/auth-kit",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": {
+    ".": "./index.ts",
     "./*": "./*.ts",
     "./*.json": "./*.json",
     "./*.md": "./*.md"
   },
   "dependencies": {
+    "@rag/edge-kit": "workspace:*",
     "@rag/logger": "workspace:*",
     "better-auth": "^1.6.23",
     "tweetnacl": "^1.0.3"

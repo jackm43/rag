@@ -2,7 +2,7 @@ import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
 import { discordInteractionGuard } from "@rag/discord/lib/ingress/discord-interaction";
-import { operatorControlGuard } from "@rag/ingress/operator-control";
+import { operatorControlGuard } from "@rag/auth-kit/native";
 import { createEnv, createSignedRequest } from "../../helpers";
 
 const captureWarnings = () => {

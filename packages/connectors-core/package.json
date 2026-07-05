@@ -11,8 +11,8 @@
     "./*.md": "./*.md"
   },
   "dependencies": {
+    "@rag/auth-kit": "workspace:*",
     "@rag/contracts-core": "workspace:*",
-    "@rag/ingress": "workspace:*",
     "@rag/logger": "workspace:*",
     "@rag/outbound": "workspace:*",
     "@rag/secrets": "workspace:*",

@@ -2,7 +2,7 @@ import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
 import worker from "@rag/gateway/src";
-import { bearerTokenMatches, secretsMatch } from "@rag/ingress/operator-control";
+import { bearerTokenMatches, secretsMatch } from "@rag/auth-kit/native";
 import { createEnv, createSignedRequest } from "../../helpers";
 
 test("secretsMatch compares bearer tokens without string equality", () => {

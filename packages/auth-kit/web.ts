@@ -1,7 +1,7 @@
 import { betterAuth } from "better-auth";
 
-import { cloudflareAccessGuard } from "./cf-access";
-import type { IngressEnv as Env } from "./env";
+import { cloudflareAccessGuard } from "./access";
+import type { AuthEnv as Env } from "./env";
 
 // The dev-proxy's application-identity layer: Better Auth with Discord OAuth,
 // running BEHIND Cloudflare Access. Access is the perimeter (does the request

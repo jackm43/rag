@@ -4,7 +4,7 @@ import {
   DISCORD_INTERACTION_PING,
   DISCORD_INTERACTION_PONG,
   verifyDiscordSignature,
-} from "@rag/ingress/discord";
+} from "@rag/auth-kit/discord";
 import { connectorsClient } from "@rag/connectors-core/lib";
 import { CONNECTOR_ID_PATTERN, encodeWebhookEventEnvelope, MAX_WEBHOOK_BODY_BYTES, MAX_WEBHOOK_EVENT_TYPE_LENGTH } from "@rag/connectors-core/contracts";
 import type { Env, WebhookEventProvider } from "@rag/connectors-core/contracts";
