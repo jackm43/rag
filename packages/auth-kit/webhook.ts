@@ -19,20 +19,16 @@ import { timingSafeEqual } from "./timing-safe-equal";
 // transient. Digest comparisons are constant-time (timingSafeEqual) so a forger
 // learns nothing from response timing.
 
-export type WebhookProvider = "github" | "stripe";
+export type WebhookProvider = "github";
 
 export type WebhookVerification = {
   valid: boolean;
   // The provider's event id when one travels with the request (GitHub's
-  // X-GitHub-Delivery header; Stripe's body `id`), for the receiver's
-  // idempotency/replay dedupe. Populated ONLY on a valid signature so an
-  // unverified value is never propagated.
+  // X-GitHub-Delivery header), for the receiver's idempotency/replay dedupe.
+  // Populated ONLY on a valid signature so an unverified value is never
+  // propagated.
   eventId?: string;
 };
-
-// Stripe's documented default tolerance for the signed timestamp: a signature
-// older (or claiming to be newer) than this is treated as a replay.
-export const STRIPE_TIMESTAMP_TOLERANCE_SECONDS = 300;
 
 const encoder = new TextEncoder();
 
@@ -97,112 +93,27 @@ const verifyGithub = async (
   return { valid: true, ...(deliveryId ? { eventId: deliveryId } : {}) };
 };
 
-// The Stripe event id rides in the (now verified) body, not a header. Parsed
-// only AFTER the signature checks out, and only for the dedupe hint — a body
-// that is not JSON simply yields no eventId, not a failure.
-const stripeEventId = (body: Uint8Array): string | undefined => {
-  try {
-    const parsed = JSON.parse(new TextDecoder().decode(body)) as { id?: unknown };
-    return parsed && typeof parsed === "object" && typeof parsed.id === "string"
-      ? parsed.id
-      : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
-// stripe scheme: `Stripe-Signature: t=<epoch-seconds>,v1=<hex>[,v1=<hex>…]`.
-// The signed payload is `<t>.<raw body>`; ANY v1 candidate may match (Stripe
-// sends several during a secret rotation). The timestamp must sit inside the
-// tolerance window in BOTH directions — a correctly-signed-but-stale message is
-// a replay and verifies false.
-const verifyStripe = async (
-  secret: string,
-  headers: Record<string, string>,
-  body: Uint8Array,
-  nowMs: number,
-  toleranceSeconds: number,
-): Promise<WebhookVerification> => {
-  const header = headerValue(headers, "stripe-signature");
-  if (!header) {
-    return { valid: false };
-  }
-  let timestamp: number | null = null;
-  const candidates: Uint8Array[] = [];
-  for (const element of header.split(",")) {
-    const separator = element.indexOf("=");
-    if (separator === -1) {
-      continue;
-    }
-    const key = element.slice(0, separator).trim();
-    const value = element.slice(separator + 1).trim();
-    if (key === "t" && /^\d{1,12}$/.test(value)) {
-      timestamp = Number(value);
-    } else if (key === "v1") {
-      const bytes = bytesFromHex(value);
-      if (bytes) {
-        candidates.push(bytes);
-      }
-    }
-  }
-  if (timestamp === null || candidates.length === 0) {
-    return { valid: false };
-  }
-  if (Math.abs(Math.floor(nowMs / 1000) - timestamp) > toleranceSeconds) {
-    return { valid: false };
-  }
-  const prefix = encoder.encode(`${timestamp}.`);
-  const signed = new Uint8Array(prefix.length + body.length);
-  signed.set(prefix, 0);
-  signed.set(body, prefix.length);
-  const expected = await hmacSha256(secret, signed);
-  // Check every candidate (no early exit) so the comparison count does not
-  // reveal which position matched.
-  let matched = false;
-  for (const candidate of candidates) {
-    if (timingSafeEqual(candidate, expected)) {
-      matched = true;
-    }
-  }
-  if (!matched) {
-    return { valid: false };
-  }
-  const eventId = stripeEventId(body);
-  return { valid: true, ...(eventId ? { eventId } : {}) };
-};
-
 // Verify a provider's webhook signature over the exact body bytes. `provider`
 // is typed as string because it arrives from the wire; anything but a known
-// scheme fails closed. `nowMs`/`toleranceSeconds` are injectable for tests.
+// scheme fails closed.
 export const verifyWebhookSignature = async (input: {
   provider: string;
   secret: string;
   signatureHeaders: Record<string, string>;
   body: Uint8Array;
-  nowMs?: number;
-  toleranceSeconds?: number;
 }): Promise<WebhookVerification> => {
   switch (input.provider) {
     case "github":
       return verifyGithub(input.secret, input.signatureHeaders, input.body);
-    case "stripe":
-      return verifyStripe(
-        input.secret,
-        input.signatureHeaders,
-        input.body,
-        input.nowMs ?? Date.now(),
-        input.toleranceSeconds ?? STRIPE_TIMESTAMP_TOLERANCE_SECONDS,
-      );
     default:
       return { valid: false };
   }
 };
 
-// The per-provider webhook secret env var. The auth service holds these (moved
-// off the credential broker); a provider with no configured secret fails closed.
+// The per-provider webhook secret env var. The auth service holds these; a
+// provider with no configured secret fails closed.
 const WEBHOOK_SECRET_ENV: Record<string, string> = {
   github: "GITHUB_WEBHOOK_SECRET",
-  stripe: "STRIPE_WEBHOOK_SECRET",
 };
 
 export type WebhookVerifyInput = {

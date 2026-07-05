@@ -51,7 +51,7 @@ export const WEBHOOKS_ROUTE_BINDINGS = [
         description: "The signature scheme and provider.",
         schema: {
           type: "string",
-          enum: ["github", "stripe"],
+          enum: ["github"],
         },
       },
       {

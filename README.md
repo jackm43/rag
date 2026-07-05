@@ -128,7 +128,7 @@ Secrets go on the worker that needs them:
      the processor.
 
    The host is behind Cloudflare Access (service-token only), but the
-   `/github/*`, `/stripe/*`, and `*/interactions` paths carry a Bypass=Everyone
+   `/github/*` and `*/interactions` paths carry a Bypass=Everyone
    Access policy so providers and Discord can POST — the signature at the edge
    is the authentication there. All other paths require the `ragbot-webhooks`
    service token.

@@ -24,24 +24,21 @@ export { WebhookDedupe };
 // non-2xx/timeout, so no slow work runs inline, and no raw body or signature
 // material is ever logged.
 //
-// How long a broker-returned event id blocks redelivery. Stripe replays are
-// additionally bounded broker-side by the signed-timestamp tolerance; GitHub
-// has no signed timestamp, so this dedupe window IS the GitHub replay control
-// (see dedupe.ts for the honest caveats).
+// How long a returned event id blocks redelivery. GitHub has no signed
+// timestamp, so this dedupe window IS the GitHub replay control (see dedupe.ts
+// for the honest caveats).
 const DEDUPE_TTL_MS = 24 * 60 * 60 * 1000;
 
-// The headers each scheme consumes (apps/connectors/lib/webhooks.ts) plus the
-// event-id/type carriers, lowercased. ONLY these are forwarded to the broker —
-// a filtered set, so arbitrary caller headers never ride into the verify hop.
+// The headers the github scheme consumes plus the event-id/type carriers,
+// lowercased. ONLY these are forwarded to the auth service — a filtered set, so
+// arbitrary caller headers never ride into the verify hop.
 const SIGNATURE_HEADERS: Record<WebhookEventProvider, readonly string[]> = {
   github: ["x-hub-signature-256", "x-github-delivery", "x-github-event"],
-  stripe: ["stripe-signature"],
 };
 
-// POST /{provider}/{id}: {provider} is the signature-scheme allowlist (the
-// broker re-checks it against the connector's own webhook config), {id} the
+// POST /{provider}/{id}: {provider} is the signature-scheme allowlist, {id} the
 // connector slug. Anything else on this hostname does not exist.
-const WEBHOOK_PATH_PATTERN = /^\/(github|stripe)\/([a-z][a-z0-9-]{0,63})$/;
+const WEBHOOK_PATH_PATTERN = /^\/(github)\/([a-z][a-z0-9-]{0,63})$/;
 
 // POST /{clientId}/interactions: the platform ingress for Discord interaction
 // callbacks (commands, components, modals). {clientId} is the registered
@@ -107,8 +104,8 @@ const handleWebhook = async (
   // Idempotency: dedupe on the BROKER-RETURNED event id (present only on a
   // valid signature, so an attacker-chosen id can never mask a real event).
   // A duplicate is acked 200 without re-enqueueing — providers treat it as
-  // delivered and stop retrying. An event with no id (e.g. a Stripe body with
-  // no parseable id) cannot be deduped and is enqueued as-is. A missing store
+  // delivered and stop retrying. An event with no id cannot be deduped and is
+  // enqueued as-is. A missing store
   // binding is a deploy misconfiguration and fails CLOSED (500, retryable)
   // rather than silently dropping the replay control.
   if (verification.eventId !== undefined) {
@@ -122,9 +119,8 @@ const handleWebhook = async (
     }
   }
 
-  // GitHub names the event kind in a header; Stripe's rides in the body and
-  // is left to the consumer to parse.
-  const eventTypeHeader = provider === "github" ? request.headers.get("x-github-event") : null;
+  // GitHub names the event kind in a header.
+  const eventTypeHeader = request.headers.get("x-github-event");
   const eventType =
     eventTypeHeader !== null &&
     eventTypeHeader.length > 0 &&

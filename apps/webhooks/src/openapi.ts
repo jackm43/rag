@@ -52,8 +52,7 @@ export const OPENAPI = {
             "schema": {
               "type": "string",
               "enum": [
-                "github",
-                "stripe"
+                "github"
               ]
             }
           },

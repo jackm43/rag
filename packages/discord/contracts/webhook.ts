@@ -16,7 +16,7 @@ import { EventEnvelope_Payload_Which, type WebhookEventPayload } from "@rag/cont
 // auth service confirmed the provider signature, and consumed off the
 // webhook-jobs queue by the workflows worker.
 
-export type WebhookEventProvider = "github" | "stripe";
+export type WebhookEventProvider = "github";
 
 export type WebhookEventJob = {
   kind: "webhook.event";
@@ -29,7 +29,7 @@ export type WebhookEventJob = {
 };
 
 export const CONNECTOR_ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
-export const WEBHOOK_PROVIDERS: readonly WebhookEventProvider[] = ["github", "stripe"];
+export const WEBHOOK_PROVIDERS: readonly WebhookEventProvider[] = ["github"];
 export const MAX_WEBHOOK_BODY_BYTES = 64 * 1024;
 export const MAX_WEBHOOK_BODY_BASE64_LENGTH = Math.ceil(MAX_WEBHOOK_BODY_BYTES / 3) * 4;
 export const MAX_WEBHOOK_EVENT_ID_LENGTH = 200;

@@ -31,12 +31,12 @@
   // The centralised webhook-ingress hostname (CONNECTORS.md "URL conventions":
   // a connector's inbound webhook is webhooks.jsmunro.me/{provider}/{id}).
   // The host is behind Cloudflare Access (service-token-only Allow policy), but
-  // the provider hook paths /github/* and /stripe/* carry a Bypass=Everyone
+  // the provider hook paths /github/* carry a Bypass=Everyone
   // Access policy — third-party providers POST there and cannot pass an Access
-  // ceremony, so the provider's HMAC signature (verified broker-side via
-  // connector.webhook.verify) remains the authentication for those paths. Every
+  // ceremony, so the provider's HMAC signature (verified by the auth service via
+  // AUTH.verifyWebhook) remains the authentication for those paths. Every
   // other path (e.g. /openapi.json) requires the ragbot-webhooks service token.
-  // Access apps: "ragbot webhooks" (host), "ragbot webhooks — github/stripe
+  // Access apps: "ragbot webhooks" (host), "ragbot webhooks — github
   // (public)" (path bypass).
   //
   // The Discord interactions path /{clientId}/interactions ALSO needs a

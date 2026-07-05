@@ -3,20 +3,17 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../contracts";
 
 // TTL'd webhook-replay dedupe store. One Durable Object per connector
-// (idFromName(connectorId)), keyed by the BROKER-RETURNED provider event id —
-// the id is trusted only because it came back from a valid signature, never
-// read from the raw request. Strongly consistent and single-threaded per
+// (idFromName(connectorId)), keyed by the auth-service-returned provider event
+// id — the id is trusted only because it came back from a valid signature,
+// never read from the raw request. Strongly consistent and single-threaded per
 // object, so concurrent redeliveries of the same event serialize and exactly
 // one wins.
 //
-// Replay honesty: Stripe replays are additionally bounded broker-side by the
-// signed-timestamp tolerance (a correctly-signed-but-stale delivery already
-// verifies false), so this store only needs to cover the tolerance window
-// there. GitHub sends NO signed timestamp — a captured delivery replays with a
-// valid signature forever — so this dedupe, over the X-GitHub-Delivery id and
-// this TTL, IS the replay control for GitHub. A replay older than the TTL is
-// accepted again; that residual window is a deliberate storage/robustness
-// trade-off, documented rather than hidden.
+// Replay honesty: GitHub sends NO signed timestamp — a captured delivery
+// replays with a valid signature forever — so this dedupe, over the
+// X-GitHub-Delivery id and this TTL, IS the replay control for GitHub. A replay
+// older than the TTL is accepted again; that residual window is a deliberate
+// storage/robustness trade-off, documented rather than hidden.
 //
 // DO storage has no per-key expiry, so entries store their own expiresAt and
 // an alarm sweeps expired keys (rescheduling itself to the next expiry) so the

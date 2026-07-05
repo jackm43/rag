@@ -433,11 +433,11 @@ export class ConnectorInvokePayload extends $.Struct {
 }
 /**
 * A verified third-party webhook delivery, enqueued by the webhooks edge
-* worker (webhooks.jsmunro.me) AFTER the broker's webhook_verify confirmed the
-* provider signature over the exact body bytes. `connectorId` names the
+* worker (webhooks.jsmunro.me) AFTER the auth service's verifyWebhook confirmed
+* the provider signature over the exact body bytes. `connectorId` names the
 * connector whose secret verified it; `provider` is the signature scheme
-* ("github"/"stripe"); `eventId` is the broker-returned provider event id
-* (GitHub's X-GitHub-Delivery, Stripe's body id) — present only when the
+* ("github"); `eventId` is the provider event id
+* (GitHub's X-GitHub-Delivery) — present only when the
 * provider sent one; `eventType` is the provider's event name (e.g. GitHub's
 * X-GitHub-Event) when one travels in a header; `receivedAt` is the edge
 * receipt time (ISO 8601). The body rides base64 because the signature was

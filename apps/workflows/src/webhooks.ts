@@ -24,8 +24,8 @@ export const processWebhookQueueMessage = async (message: Message<unknown>, env:
   });
 
   // SEAM: real webhook processing lands here (dispatch on connectorId/
-  // eventType into domain handlers, e.g. reacting to a GitHub push or a
-  // Stripe payment event). Receipt-and-ack is deliberate for now: the
+  // eventType into domain handlers, e.g. reacting to a GitHub push).
+  // Receipt-and-ack is deliberate for now: the
   // envelope, verification, dedupe, and this consumer are the durable
   // contract; the handlers are a later feature.
   message.ack();
