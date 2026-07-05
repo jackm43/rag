@@ -41,7 +41,6 @@
     "@rag/auth": "workspace:*",
     "@rag/auth-kit": "workspace:*",
     "@rag/broker": "workspace:*",
-    "@rag/connectors-api": "workspace:*",
     "@rag/connectors-core": "workspace:*",
     "@rag/contracts-core": "workspace:*",
     "@rag/discord": "workspace:*",

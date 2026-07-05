@@ -18,9 +18,6 @@ const DEPLOY_ORDER = [
   // The auth worker (API Gateway) first: every public app binds it as AUTH.
   "ragbot-auth-worker",
   "ragbot-connectors-worker",
-  // connectors-api after the broker: it is the broker's HTTP face and binds the
-  // CONNECTORS entrypoint, so the defining worker must exist first.
-  "ragbot-connectors-api-worker",
   "ragbot-responder-worker",
   // workflows before the gateway: the gateway binds workflows' InteractionSession
   // DO cross-script, so the defining worker must exist first.

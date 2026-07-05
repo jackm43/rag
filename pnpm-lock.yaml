@@ -23,9 +23,6 @@ importers:
       '@rag/broker':
         specifier: workspace:*
         version: link:apps/broker
-      '@rag/connectors-api':
-        specifier: workspace:*
-        version: link:apps/connectors-api
       '@rag/connectors-core':
         specifier: workspace:*
         version: link:packages/connectors-core
@@ -153,21 +150,6 @@ importers:
       '@rag/contracts-core':
         specifier: workspace:*
         version: link:../../packages/contracts-core
-      '@rag/service-kit':
-        specifier: workspace:*
-        version: link:../../packages/service-kit
-
-  apps/connectors-api:
-    dependencies:
-      '@rag/connectors-core':
-        specifier: workspace:*
-        version: link:../../packages/connectors-core
-      '@rag/edge-kit':
-        specifier: workspace:*
-        version: link:../../packages/edge-kit
-      '@rag/logger':
-        specifier: workspace:*
-        version: link:../../packages/logger
       '@rag/service-kit':
         specifier: workspace:*
         version: link:../../packages/service-kit

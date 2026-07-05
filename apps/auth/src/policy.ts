@@ -43,10 +43,6 @@ export const POLICY: PolicyTable = {
     // Operator control plane (start/stop/health) via the native bearer token.
     "gateway.control": { kinds: ["native"], roles: ["operator"] },
   },
-  "connectors-api": {
-    // Machine-facing connector listing behind CF Access.
-    "connector.list": { kinds: ["web", "native"], allowAdmin: true },
-  },
   webhooks: {
     // Provider webhooks + Discord interactions authenticate by signature at the
     // edge; any signature-verified webhook principal may enqueue.
