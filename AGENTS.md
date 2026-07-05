@@ -35,8 +35,9 @@ never import other apps. There is no product grouping and no per-worker
   (`connectors.jsmunro.me`).
 - `apps/webhooks` — provider-webhook + Discord-interaction ingress
   (`webhooks.jsmunro.me`); the `WebhookDedupe` DO.
-- `apps/egress` (`@rag/egress-worker`) — the egress sidecar (`Egress` RPC +
-  `EgressControl` DO); binding-only, owns host allowlists + credential injection.
+
+There is no egress worker: outbound HTTP happens **in-process** in the RPC method
+that needs it (see `@rag/outbound`).
 
 **Packages** (shared):
 - `edge-kit` — the single shared middleware. `createAppWorker({service, routes,
@@ -45,19 +46,25 @@ never import other apps. There is no product grouping and no per-worker
   **authenticate → verify → authorize** through the `AUTH` binding before
   dispatching. Ships the `web` / `native` / `webhook` client handlers, plus the
   generic `createEdgeWorker` harness for inline-signature workers (webhooks).
-- `discord` — the bot domain: commands, discord helpers, ai/inference, and the
-  bot message contracts. Shared by gateway/workflows/responder/spend.
+- `auth-kit` — the auth library: verification primitives (CF Access JWT, Better
+  Auth Discord session, native/operator token, oauth2 client-credentials, Discord
+  Ed25519) + per-client-kind strategies (`authenticateWeb`/`authenticateNative`).
+  Used by the auth worker and the webhooks worker (Discord verify).
+- `discord` — the bot domain, laid out by concern: `api` (Discord REST client),
+  `ai` (inference/config/spend), `commands` (specs + dispatch), `domain` (bans,
+  limits, mention, outbox, responder policy, consumer, dlq, …), `ingress`,
+  `contracts`. Shared by gateway/workflows/responder/spend.
 - `connectors-core` — the broker internals (providers, handler, webhook signature
   schemes, connector registry) + connector contracts. Shared by
   broker/connectors-api/webhooks (and `discord` for the webhook.event contract).
+- `outbound` — in-process outbound HTTP: the boundary client (host allowlist,
+  credential injection, caps) + profiles. `createEgressClient(env, profile,
+  caller)` returns a boundary `fetch`; the credential is resolved from the calling
+  worker's env. No worker, no hop.
 - `contracts-core` — the capnp `EventEnvelope` kernel: schemas, framing,
   encode/decode. Queue payloads are plain capnp envelopes.
 - `rpc` — the uniform `RpcResult` shape for trusted service-binding calls.
 - `queue-kit` — `createQueueWorker(service, handlers)` (no signing).
-- `egress` — the egress client/server + profiles + the outbound boundary client
-  (host allowlist, credential injection, caps).
-- `ingress` — the external-edge verifiers consumed by the auth worker and the
-  webhooks worker: CF Access JWT, Better Auth, Discord Ed25519, operator token.
 - `secrets` — pluggable secret backends; `logger`; `service-kit` — the residual
   identity **types** only (`MachinePrincipal`, `Subject`, `RequestContext`); its
   signing/Cedar/registry implementation has been removed.
@@ -88,9 +95,11 @@ never import apps; an app never imports another app; the graph stays acyclic.
   never be dropped): Discord Ed25519 (`apps/webhooks`), provider HMAC
   (broker-side, secret never leaves the broker), CF Access + Better Auth
   (`apps/auth`).
-- **Credentials live at the edge of the system only.** Outbound HTTP goes through
-  the egress sidecar (`createEgressClient` → `EGRESS.fetchProfile`; profiles in
-  `packages/egress/profiles.ts`). Provider secrets live only in the broker
+- **Outbound HTTP is in-process.** The RPC method that needs it builds a boundary
+  client (`createEgressClient` from `@rag/outbound`; profiles in
+  `packages/outbound/profiles.ts`) and fetches directly — host allowlist +
+  credential injection are enforced by the boundary client, and the credential is
+  the calling worker's own secret. Provider secrets live only in the broker
   (phantom-token: callers get opaque handles, `authorizedFetch` runs broker-side).
 - **Fail closed, disclose nothing**: denials return a bare status; the reason is
   logged, never echoed. Never log request bodies, headers, tokens, or secrets.
@@ -110,7 +119,7 @@ authenticated route + RPC handler, `src/openapi.ts`, a registration in
 `scripts/deploy.ts` `DEPLOY_ORDER`, and a seeded auth policy entry. Then
 `pnpm install && pnpm run check && pnpm test`. Give it a subdomain by adding a
 `routes` entry to its wrangler; implement your route handler (it receives the
-authenticated `principal`) and call `env.EGRESS` for any outbound HTTP.
+authenticated `principal`) and use `@rag/outbound` for any outbound HTTP.
 
 **A new webhook provider:** add its HMAC scheme + `WebhookEventProvider` union
 entry in `packages/connectors-core/lib/webhooks.ts`, a webhook config on the
@@ -134,9 +143,9 @@ and the secret on the broker. A genuinely new auth shape adds a
 
 ```
 Public request → app worker (createAppWorker) → AUTH.authenticateClient/verify/
-        authorize → route handler → RPC to a backend → env.EGRESS.fetchProfile
+        authorize → route handler → RPC to a backend → in-process outbound fetch
 Discord interaction → webhooks (verify Ed25519, type-5 ack, kick InteractionSession)
-        → processor DO (pre-flight + handler) → edit reply → egress
+        → processor DO (pre-flight + handler) → edit reply → outbound
 Discord mention (gateway ws) → InteractionSession.runMention → AI + D1 → responder
 ai/spend/webhook jobs → plain capnp envelopes over trusted queues → consumers
 ```

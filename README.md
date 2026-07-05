@@ -16,15 +16,15 @@ top-level `apps/<worker>` application** and all shared code lives in
   (`connectors.jsmunro.me`). Broker internals in `packages/connectors-core`.
 - **The edge** — `apps/auth` is the **API Gateway**: every public app binds it as
   `AUTH` and it owns all public authentication (Cloudflare Access, Better Auth
-  Discord sessions, operator token) and the authorization policy table.
-  `apps/egress` is the sidecar that owns all outbound-HTTP credentials.
+  Discord sessions, operator token) and the authorization policy table. Outbound
+  HTTP is in-process (`@rag/outbound`) in the RPC method that needs it.
 
 External edges are verified (Discord Ed25519, Cloudflare Access, provider
 webhook HMAC); public requests are authenticated and authorized by the auth
 worker, which backends trust and don't re-check. Worker-to-worker calls are
 plain, capability-gated Cloudflare service-binding RPC — no signing, no Cedar
 (only a worker whose wrangler declares a binding can make the call). Credentials
-live only at the broker and egress sidecar. Architecture, conventions, and how
+live only at the broker. Architecture, conventions, and how
 to build things live in [AGENTS.md](AGENTS.md).
 
 ## Repository layout
@@ -32,11 +32,11 @@ to build things live in [AGENTS.md](AGENTS.md).
 ```
 apps/           one top-level dir per deployed worker:
                 auth, gateway, workflows, responder, spend,
-                broker, connectors-api, webhooks, egress
+                broker, connectors-api, webhooks
 packages/       shared (may never import apps):
-                edge-kit (the middleware), discord, connectors-core,
-                contracts-core, egress, ingress, rpc, queue-kit,
-                secrets, service-kit (types only), logger
+                edge-kit (the middleware), auth-kit (auth library),
+                discord, connectors-core, contracts-core, outbound,
+                rpc, queue-kit, secrets, service-kit (types only), logger
 scripts/        deploy, codegen, scaffold, dependency-direction check
 migrations/     D1 schema (schema.sql is a read-only mirror)
 test/           vitest (@cloudflare/vitest-pool-workers)
@@ -74,7 +74,7 @@ pnpm scaffold <name>      # generate a complete new top-level application
 
 `pnpm run deploy` (what deploy.sh calls) discovers every `wrangler.jsonc`
 under `apps/` and deploys in binding-safe order: **auth first** (every public
-app binds it) → egress → broker → connectors-api → responder → **workflows →
+app binds it) → broker → connectors-api → responder → **workflows →
 gateway** (the gateway binds workflows' `InteractionSession` processor DO
 cross-script) → spend. A discovered worker missing from `DEPLOY_ORDER` in
 [scripts/deploy.ts](scripts/deploy.ts) fails the deploy loudly. The webhooks
@@ -138,13 +138,13 @@ Secrets go on the worker that needs them:
 
 ## Configuration
 
-- **AI config** is checked into `packages/discord/lib/ai/ai-config` (models, prompts,
+- **AI config** is checked into `packages/discord/ai/ai-config` (models, prompts,
   temperature, budgets per feature). The workflows worker reads each file
   from the `AI_CONFIG` KV first (keyed by basename) and falls back to the
   bundled copy, so an empty namespace or KV outage never bricks the bot.
   Values are memoized per isolate: publish a prompt change with
   `pnpm run config:push` (new isolates pick it up) or a redeploy.
-- **AI usage limits** (`packages/discord/lib/domain/limits.ts`): per-user burst
+- **AI usage limits** (`packages/discord/domain/limits.ts`): per-user burst
   (`AI_BURST_LIMIT_PER_MINUTE`, default 8/min) and a global daily budget
   (`AI_GLOBAL_DAILY_BUDGET_USD`, default 10.00) across all AI ingresses.
   Spend truth is AI Gateway log cost, reconciled by the spend worker.

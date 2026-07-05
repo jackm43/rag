@@ -2,10 +2,8 @@
 set -euo pipefail
 
 # Deploys the core set via `pnpm run deploy` (scripts/deploy.ts discovers the
-# wrangler configs under apps/ and deploys in binding-safe order): egress ->
-# connectors -> responder -> registry -> attest -> metadata -> gateway ->
-# workflows -> spend. The dev-proxy and webhooks workers are deployed
-# individually per the README's one-time bootstrap checklist (they have
+# wrangler configs under apps/ and deploys in binding-safe order). The webhooks
+# worker deploys individually (bootstrap steps): pnpm run deploy:webhooks.
 # one-time bootstrap steps — queues, bindings, Access apps).
 #   pnpm run deploy:webhooks   # after `wrangler queues create webhook-jobs{,-dlq}`
 #   pnpm run deploy:dev-proxy  # after its Access app + assets bootstrap
