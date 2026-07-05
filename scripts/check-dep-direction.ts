@@ -1,15 +1,14 @@
 // Enforces the workspace dependency rules that keep the repo's shape honest:
-//   1. packages/* (shared) never import app packages (@rag/bot|connectors|platform).
-//   2. Apps may import another app only through its published surfaces
-//      (lib/, contracts/, devproxy-client/) — never another app's workers/.
+//   1. packages/* (shared) never import an app package (apps/* are deployed
+//      workers, not libraries).
+//   2. An app never imports another app — all shared code lives in packages/*,
+//      so a top-level worker-app depends only on packages, never on a sibling
+//      app. (Intra-app imports within a multi-worker app like platform are fine.)
 //   3. The workspace import graph is acyclic.
-// Run via `pnpm run check`. Root-owned code (test/, scripts/, cli/) is exempt
-// from 1-2 (tests exercise worker internals directly).
+// Run via `pnpm run check`. Root-owned code (test/, scripts/) is exempt from
+// 1-2 (tests exercise worker internals directly).
 import fs from "node:fs";
 import path from "node:path";
-
-const APP_PKGS = new Set(["@rag/bot", "@rag/connectors", "@rag/platform"]);
-const CROSS_APP_SURFACES = /^@rag\/(bot|connectors|platform)\/(lib|contracts)(\/|$)/;
 
 const workspaceRoots: Array<[string, string]> = [];
 for (const top of ["packages", "apps"]) {
@@ -18,6 +17,12 @@ for (const top of ["packages", "apps"]) {
     if (fs.existsSync(path.join(dir, "package.json"))) workspaceRoots.push([dir, `@rag/${name}`]);
   }
 }
+
+// App packages: every workspace root under apps/. Nothing shared imports these,
+// and no app imports another.
+const APP_PKGS = new Set(
+  workspaceRoots.filter(([dir]) => dir.startsWith("apps/")).map(([, pkg]) => pkg),
+);
 
 function* walk(dir: string): Generator<string> {
   for (const entry of fs.readdirSync(dir)) {
@@ -44,8 +49,8 @@ for (const [dir, pkg] of workspaceRoots) {
       if (isShared && APP_PKGS.has(target)) {
         failures.push(`${file}: shared package imports app code (${spec})`);
       }
-      if (!isShared && APP_PKGS.has(target) && target !== pkg && !CROSS_APP_SURFACES.test(spec)) {
-        failures.push(`${file}: cross-app import outside lib/contracts surfaces (${spec})`);
+      if (!isShared && APP_PKGS.has(target) && target !== pkg) {
+        failures.push(`${file}: app imports another app (${spec}); shared code belongs in packages/`);
       }
     }
   }

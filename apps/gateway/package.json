@@ -1,0 +1,22 @@
+{
+  "name": "@rag/gateway",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./api/middleware_client/src": "./api/middleware_client/src/index.ts",
+    "./service_server/src": "./service_server/src/index.ts",
+    "./*": "./*.ts",
+    "./*.json": "./*.json",
+    "./*.md": "./*.md"
+  },
+  "dependencies": {
+    "@rag/authz": "workspace:*",
+    "@rag/contracts-core": "workspace:*",
+    "@rag/discord": "workspace:*",
+    "@rag/egress": "workspace:*",
+    "@rag/ingress": "workspace:*",
+    "@rag/logger": "workspace:*",
+    "@rag/service-kit": "workspace:*"
+  }
+}

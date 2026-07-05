@@ -1,7 +1,7 @@
 import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
-import worker from "@rag/connectors/workers/webhooks/api/middleware_client/src";
+import worker from "@rag/webhooks/api/middleware_client/src";
 import { createEnv, createSignedRequest } from "../../helpers";
 
 // The platform Discord-interactions ingress (webhooks.jsmunro.me/{clientId}/

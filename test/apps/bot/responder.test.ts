@@ -1,6 +1,6 @@
 import { assert, test } from "vitest";
 
-import responderWorker from "@rag/bot/workers/responder/src";
+import responderWorker from "@rag/responder/src";
 import {
   deliverInteractionEdit,
   finalizeAiReplyText,

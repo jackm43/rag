@@ -1,7 +1,7 @@
 import { assert, test } from "vitest";
 
-import { createGatewayRouter } from "@rag/bot/workers/gateway/api/middleware_client/src/router";
-import { GATEWAY_ROUTES } from "@rag/bot/workers/gateway/api/middleware_client/src/routes";
+import { createGatewayRouter } from "@rag/gateway/api/middleware_client/src/router";
+import { GATEWAY_ROUTES } from "@rag/gateway/api/middleware_client/src/routes";
 
 const ok = async () => new Response("ok");
 

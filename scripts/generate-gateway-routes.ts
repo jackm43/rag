@@ -9,7 +9,7 @@ import {
   GATEWAY_SCHEMAS,
   GATEWAY_SECURITY_SCHEMES,
   type GatewayRouteBinding,
-} from "@rag/bot/workers/gateway/api/middleware_client/src/application-bindings";
+} from "@rag/gateway/api/middleware_client/src/application-bindings";
 
 // Generates the gateway OpenAPI document and route table from application
 // bindings. This keeps the gateway aligned with generated application

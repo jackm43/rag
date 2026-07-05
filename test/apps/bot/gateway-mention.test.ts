@@ -5,10 +5,10 @@ import { runInDurableObject } from "cloudflare:test";
 import {
   extractBotMentionPrompt,
   handleGatewayMessageCreate,
-} from "@rag/bot/workers/gateway/api/middleware_client/src";
-import workflowsWorker from "@rag/bot/workers/workflows/src";
+} from "@rag/gateway/api/middleware_client/src";
+import workflowsWorker from "@rag/workflows/src";
 import { resolveGatewayMessage } from "@rag/discord/lib/domain/mention";
-import responderWorker from "@rag/bot/workers/responder/src";
+import responderWorker from "@rag/responder/src";
 import { decodeReplyJobEnvelope } from "@rag/discord/contracts";
 import { fetchChannelMessages } from "@rag/discord/lib/discord";
 import { createDbMock, createEnv, gatewayAiJob, sentEnvelope } from "../../helpers";

@@ -1,0 +1,19 @@
+{
+  "name": "@rag/webhooks",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./api/middleware_client/src": "./api/middleware_client/src/index.ts",
+    "./service_server/src": "./service_server/src/index.ts",
+    "./*": "./*.ts",
+    "./*.json": "./*.json",
+    "./*.md": "./*.md"
+  },
+  "dependencies": {
+    "@rag/connectors-core": "workspace:*",
+    "@rag/ingress": "workspace:*",
+    "@rag/logger": "workspace:*",
+    "@rag/service-kit": "workspace:*"
+  }
+}

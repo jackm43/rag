@@ -17,7 +17,8 @@
     "./*.md": "./*.md"
   },
   "dependencies": {
-    "@rag/connectors": "workspace:*",
+    "@rag/authz": "workspace:*",
+    "@rag/connectors-core": "workspace:*",
     "@rag/contracts-core": "workspace:*",
     "@rag/egress": "workspace:*",
     "@rag/ingress": "workspace:*",

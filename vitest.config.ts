@@ -4,9 +4,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   plugins: [
     cloudflareTest({
-      main: "./apps/bot/workers/gateway/api/middleware_client/src/index.ts",
+      main: "./apps/gateway/api/middleware_client/src/index.ts",
       remoteBindings: false,
-      wrangler: { configPath: "./apps/bot/workers/gateway/api/middleware_client/wrangler.jsonc" },
+      wrangler: { configPath: "./apps/gateway/api/middleware_client/wrangler.jsonc" },
       // The gateway now binds ServiceRegistry as an EXTERNAL Durable Object
       // (script_name: ragbot-registry-worker). Provide a stub of that worker so
       // miniflare can resolve the binding. register() is a no-op and snapshot()
