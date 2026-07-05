@@ -13,10 +13,6 @@
     "test": "vitest run",
     "contracts:build": "capnp-es packages/contracts-core/envelope.capnp packages/contracts-core/service.capnp -ots",
     "routes:build": "tsx scripts/generate-gateway-routes.ts && tsx scripts/generate-openapi.ts",
-    "devproxy:page:build": "vite build --config apps/connectors/workers/dev-proxy/web/vite.config.ts && tsx scripts/embed-devproxy-page.ts",
-    "devproxy:github-routes:sync": "tsx scripts/sync-github-rest-routes.ts && wrangler r2 object put ragbot-devproxy-assets/github/rest-routes.json --file dist/github-rest-routes.json --content-type application/json --cache-control \"public, max-age=3600\" --remote",
-    "devproxy:types": "openapi-typescript apps/connectors/workers/dev-proxy/api/middleware_client/openapi.yaml -o apps/connectors/devproxy-client/api-types.ts",
-    "ragctl": "tsx cli/ragctl.ts",
     "register:commands": "tsx scripts/register-commands.ts",
     "linked-app-token:hash": "node scripts/hash-linked-app-token.mjs",
     "config:push": "tsx scripts/push-config.ts",
@@ -24,7 +20,6 @@
     "d1:migrate:local": "wrangler d1 migrations apply ragbot -c apps/bot/workers/gateway/api/middleware_client/wrangler.jsonc --local",
     "d1:migrate:remote": "wrangler d1 migrations apply ragbot -c apps/bot/workers/gateway/api/middleware_client/wrangler.jsonc --remote",
     "deploy:webhooks": "tsx scripts/deploy.ts --only webhooks",
-    "deploy:dev-proxy": "tsx scripts/deploy.ts --only dev-proxy",
     "scaffold": "tsx scripts/scaffold.ts"
   },
   "devDependencies": {

@@ -48,11 +48,13 @@ export type AppWorkerConfig<Env extends EdgeEnv> = {
   guard?: (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response | null>;
 };
 
-const json = (status: number, body: unknown): Response =>
+export const jsonResponse = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" },
   });
+
+const json = jsonResponse;
 
 // Compile "/api/x/{id}" into a matcher capturing named params. Anchored, exact
 // segment count — no accidental prefix matches.

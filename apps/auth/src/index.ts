@@ -49,12 +49,26 @@ export class AuthGateway extends WorkerEntrypoint<Env> implements AuthGatewayBin
   }
 
   private async authenticateNative(request: Request): Promise<AuthDecision> {
-    const result = await operatorControlGuard.verify(request, this.env);
-    if (!result.ok) {
-      return deny(401, result.reason);
+    // A programmatic caller: either the operator bearer token (gateway control
+    // plane) or a Cloudflare Access machine grant (service token / Access JWT
+    // fronting a machine-facing API like connectors.jsmunro.me).
+    if (request.headers.get("authorization")) {
+      const op = await operatorControlGuard.verify(request, this.env);
+      if (op.ok) {
+        return { ok: true, principal: { subject: op.grant.principal, kind: "native", roles: ["operator"] } };
+      }
     }
-    const principal: Principal = { subject: result.grant.principal, kind: "native", roles: ["operator"] };
-    return { ok: true, principal };
+    const access = await cloudflareAccessGuard.verify(request, this.env);
+    if (access.ok) {
+      const principal: Principal = {
+        subject: access.grant.identity.sub,
+        kind: "native",
+        roles: ["machine"],
+        ...(access.grant.identity.email ? { claims: { email: access.grant.identity.email } } : {}),
+      };
+      return { ok: true, principal };
+    }
+    return deny(401, "native_unauthenticated");
   }
 
   private async authenticateWeb(request: Request): Promise<AuthDecision> {

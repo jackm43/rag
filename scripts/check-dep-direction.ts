@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const APP_PKGS = new Set(["@rag/bot", "@rag/connectors", "@rag/platform"]);
-const CROSS_APP_SURFACES = /^@rag\/(bot|connectors|platform)\/(lib|contracts|devproxy-client)(\/|$)/;
+const CROSS_APP_SURFACES = /^@rag\/(bot|connectors|platform)\/(lib|contracts)(\/|$)/;
 
 const workspaceRoots: Array<[string, string]> = [];
 for (const top of ["packages", "apps"]) {

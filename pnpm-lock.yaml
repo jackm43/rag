@@ -177,6 +177,9 @@ importers:
       '@rag/contracts-core':
         specifier: workspace:*
         version: link:../../packages/contracts-core
+      '@rag/edge-kit':
+        specifier: workspace:*
+        version: link:../../packages/edge-kit
       '@rag/egress':
         specifier: workspace:*
         version: link:../../packages/egress

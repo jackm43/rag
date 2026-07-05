@@ -5,12 +5,9 @@
   "type": "module",
   "exports": {
     "./contracts": "./contracts/index.ts",
-    "./devproxy-client": "./devproxy-client/index.ts",
     "./lib": "./lib/index.ts",
     "./workers/api/api/middleware_client/src": "./workers/api/api/middleware_client/src/index.ts",
     "./workers/broker/src": "./workers/broker/src/index.ts",
-    "./workers/dev-proxy/api/middleware_client/src": "./workers/dev-proxy/api/middleware_client/src/index.ts",
-    "./workers/dev-proxy/service_server/src": "./workers/dev-proxy/service_server/src/index.ts",
     "./workers/webhooks/api/middleware_client/src": "./workers/webhooks/api/middleware_client/src/index.ts",
     "./workers/webhooks/service_server/src": "./workers/webhooks/service_server/src/index.ts",
     "./*": "./*.ts",
@@ -20,6 +17,7 @@
   "dependencies": {
     "@rag/authz": "workspace:*",
     "@rag/contracts-core": "workspace:*",
+    "@rag/edge-kit": "workspace:*",
     "@rag/egress": "workspace:*",
     "@rag/ingress": "workspace:*",
     "@rag/logger": "workspace:*",

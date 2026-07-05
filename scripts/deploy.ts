@@ -5,16 +5,18 @@
 // the deploy loudly instead of silently never deploying.
 //
 //   pnpm run deploy                 — the core set, in order
-//   pnpm run deploy -- --only dev-proxy,webhooks   — named workers only
+//   pnpm run deploy -- --only webhooks   — named workers only
 //
-// dev-proxy and webhooks are excluded from the core set (see the README's
-// one-time bootstrap checklist): they have bootstrap steps (queues, Access apps)
-// and deploy individually via --only.
+// webhooks is excluded from the core set (see the README's one-time bootstrap
+// checklist): it has bootstrap steps (queues) and deploys individually via
+// --only.
 import { execSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const DEPLOY_ORDER = [
+  // The auth worker (API Gateway) first: every public app binds it as AUTH.
+  "ragbot-auth-worker",
   "ragbot-egress-worker",
   "ragbot-connectors-worker",
   // connectors-api after the broker: it is the broker's HTTP face and binds the
@@ -33,7 +35,7 @@ const DEPLOY_ORDER = [
   "ragbot-spend-worker",
 ];
 
-const MANUAL_BOOTSTRAP = new Set(["ragbot-dev-proxy-worker", "ragbot-webhooks-worker"]);
+const MANUAL_BOOTSTRAP = new Set(["ragbot-webhooks-worker"]);
 
 const discover = (dir: string, found: Map<string, string>): void => {
   for (const entry of readdirSync(dir)) {

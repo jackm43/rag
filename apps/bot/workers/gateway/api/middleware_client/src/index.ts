@@ -7,7 +7,6 @@ import {
 import type { Env } from "../../../../../contracts";
 import {
   ApplicationMiddleware,
-  DevProxy,
   DiscordGateway,
   GATEWAY_MANIFEST,
   ensureGatewayConnected,
@@ -19,7 +18,7 @@ import { publicJwks } from "@rag/service-kit/identity";
 import { OPENAPI } from "./openapi";
 import { createGatewayRouter } from "./router";
 
-export { ApplicationMiddleware, DevProxy, DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
+export { ApplicationMiddleware, DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
 
 // The bearer-token guard (wired by the router from the spec's security scheme)
 // authenticates the gateway-control application; Cedar decides what that

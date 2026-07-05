@@ -1,5 +1,4 @@
 export { ApplicationMiddleware } from "./application-entrypoint";
-export { DevProxy } from "./devproxy-entrypoint";
 export {
   DiscordGateway,
   ensureGatewayConnected,

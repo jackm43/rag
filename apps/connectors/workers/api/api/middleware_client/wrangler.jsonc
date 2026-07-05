@@ -71,6 +71,14 @@
       "binding": "CONNECTORS",
       "service": "ragbot-connectors-worker",
       "entrypoint": "Connectors"
+    },
+    {
+      // The auth worker (API Gateway): the shared edge middleware calls it to
+      // authenticate (Cloudflare Access), verify, and authorize every request
+      // before a handler runs.
+      "binding": "AUTH",
+      "service": "ragbot-auth-worker",
+      "entrypoint": "AuthGateway"
     }
   ]
 }

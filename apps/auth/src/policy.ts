@@ -7,9 +7,11 @@ import type { ClientKind, Principal } from "@rag/edge-kit";
 // This is plain data — no wasm engine, no .cedar files — so a new app's routes
 // are authorized by adding a table entry (the scaffolder seeds one).
 
+// The admin-id var is fixed; any other key is an app-defined subject allowlist
+// (comma-separated ids) a rule can reference via `subjectsFrom`.
 export type PolicyEnv = {
   RAG_ADMIN_USER_IDS?: string;
-  DEV_PROXY_ALLOWED_SUBJECTS?: string;
+  [allowlistVar: string]: string | undefined;
 };
 
 export type PolicyRule = {
@@ -18,7 +20,7 @@ export type PolicyRule = {
   // Principal roles, any of which satisfies the rule.
   roles?: string[];
   // Env var (comma-separated ids) whose set the subject must be in.
-  subjectsFrom?: keyof PolicyEnv;
+  subjectsFrom?: string;
   // Admins (RAG_ADMIN_USER_IDS) are allowed regardless of the above.
   allowAdmin?: boolean;
   // Any authenticated principal is allowed (still authenticated + verified).
@@ -37,12 +39,6 @@ export const isAdmin = (env: PolicyEnv, subject: string): boolean =>
 // scaffolder adds a `<app>` block for its sample route). Keep this the single
 // source of authorization truth for public routes.
 export const POLICY: PolicyTable = {
-  "dev-proxy": {
-    // The admin workbench: a logged-in Discord user on the allowlist.
-    "command.dispatch": { kinds: ["web"], subjectsFrom: "DEV_PROXY_ALLOWED_SUBJECTS", allowAdmin: true },
-    "connector.admin": { kinds: ["web"], subjectsFrom: "DEV_PROXY_ALLOWED_SUBJECTS", allowAdmin: true },
-    "github.proxy": { kinds: ["web"], subjectsFrom: "DEV_PROXY_ALLOWED_SUBJECTS", allowAdmin: true },
-  },
   gateway: {
     // Operator control plane (start/stop/health) via the native bearer token.
     "gateway.control": { kinds: ["native"], roles: ["operator"] },

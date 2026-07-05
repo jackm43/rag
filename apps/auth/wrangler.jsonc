@@ -13,11 +13,10 @@
   // needs them.
   "vars": {
     "CF_ACCESS_TEAM_DOMAIN": "jsmunro.cloudflareaccess.com",
-    "BETTER_AUTH_URL": "https://ragbot-dev.jsmunro.me",
-    "DEV_PROXY_ALLOWED_SUBJECTS": "116163000339136518",
     "RAG_ADMIN_USER_IDS": "116163000339136518"
-    // Secrets (never commit) — set with `wrangler secret put <NAME>`:
-    //   CF_ACCESS_AUD          (the dev-proxy Access application AUD tag)
+    // BETTER_AUTH_URL is set when a web-client app is added (the origin Access
+    // fronts). Secrets (never commit) — set with `wrangler secret put <NAME>`:
+    //   CF_ACCESS_AUD          (the Access application AUD tag)
     //   DISCORD_CLIENT_ID      (Discord OAuth application client id)
     //   DISCORD_CLIENT_SECRET  (Discord OAuth application client secret)
     //   BETTER_AUTH_SECRET     (random 32+ byte secret; signs sessions/cookies)
