@@ -1,6 +1,6 @@
 import { sanitizeAiText } from "../ai/ai";
 import { decodeReplyJobEnvelope } from "../contracts";
-import { editOriginalInteractionResponse, postChannelMessageForSubject } from "../discord";
+import { editOriginalInteractionResponse, postChannelMessageForSubject } from "../api";
 import { errorMessage, logger } from "@rag/logger";
 import { MAX_DISCORD_MESSAGE_LENGTH, type Env, type InteractionEditReplyJob, type ResponderAttachment } from "../contracts";
 

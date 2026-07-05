@@ -1,12 +1,12 @@
-import { encodeAiJobEnvelope } from "../../contracts";
-import { fallbackThreadTitle } from "../conversation";
-import { createThreadWithoutMessage, fetchChannel, isThreadChannel } from "../../discord";
+import { encodeAiJobEnvelope } from "../contracts";
+import { fallbackThreadTitle } from "../domain/conversation";
+import { createThreadWithoutMessage, fetchChannel, isThreadChannel } from "../api";
 import { errorMessage, logger } from "@rag/logger";
-import { recordAiThread } from "../threads";
-import type { Env } from "../../contracts";
+import { recordAiThread } from "../domain/threads";
+import type { Env } from "../contracts";
 import { stringOption, type CommandContext } from "./context";
 
-export { shouldUseAskWebSearch } from "../../ai/ask-mode";
+export { shouldUseAskWebSearch } from "../ai/ask-mode";
 
 const resolveThreadParentChannelId = async (env: Env, channelId: string) => {
   const channel = await fetchChannel(env, "workflows", channelId);

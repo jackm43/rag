@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { DiscordInteraction, Env, MessageReceivedJob } from "@rag/discord/contracts";
-import { runDeferredCommandByName, runInteractionSession } from "@rag/discord/domain/commands/session-run";
+import { runDeferredCommandByName, runInteractionSession } from "@rag/discord/commands/session-run";
 import { processMessageReceivedJob } from "@rag/discord/domain/consumer";
 
 // Matches the Discord interaction-token follow-up window: past this the token

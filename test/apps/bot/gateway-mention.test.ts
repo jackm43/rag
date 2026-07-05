@@ -10,7 +10,7 @@ import workflowsWorker from "@rag/workflows/src";
 import { resolveGatewayMessage } from "@rag/discord/domain/mention";
 import responderWorker from "@rag/responder/src";
 import { decodeReplyJobEnvelope } from "@rag/discord/contracts";
-import { fetchChannelMessages } from "@rag/discord/discord";
+import { fetchChannelMessages } from "@rag/discord/api";
 import { createDbMock, createEnv, gatewayAiJob, sentEnvelope } from "../../helpers";
 
 const BOT_USER_ID = "100000000000000001";

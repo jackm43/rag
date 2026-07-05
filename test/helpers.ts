@@ -9,7 +9,7 @@ import {
   SYSTEM_SUBJECT,
   type MachinePrincipal,
 } from "@rag/service-kit/principal";
-import { runDeferredCommandByName, runInteractionSession } from "@rag/discord/domain/commands/session-run";
+import { runDeferredCommandByName, runInteractionSession } from "@rag/discord/commands/session-run";
 import { processMessageReceivedJob } from "@rag/discord/domain/consumer";
 import type { DiscordInteraction, MessageReceivedJob } from "@rag/discord/contracts";
 

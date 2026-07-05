@@ -1,5 +1,5 @@
-import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../../contracts";
-import { jsonResponse } from "../http";
+import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../contracts";
+import { jsonResponse } from "../domain/http";
 
 type RagboardRow = {
   ragged_user_id: string;

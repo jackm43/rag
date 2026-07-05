@@ -1,7 +1,7 @@
 import { SYSTEM_SUBJECT } from "@rag/service-kit";
 import { MAX_MENTION_IDS } from "../contracts";
 import { isSnowflake, MAX_FREE_TEXT_LENGTH } from "@rag/contracts-core";
-import { fetchBotRoleIds } from "../discord";
+import { fetchBotRoleIds } from "../api";
 import { activeAiBanForUser } from "./bans";
 import { isGuildAllowed } from "./guilds";
 import { checkAiUsageAllowed } from "./limits";

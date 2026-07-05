@@ -1,7 +1,7 @@
-import { GUILD_NOT_ALLOWED_MESSAGE, isGuildAllowed } from "../guilds";
-import { jsonResponse } from "../http";
+import { GUILD_NOT_ALLOWED_MESSAGE, isGuildAllowed } from "../domain/guilds";
+import { jsonResponse } from "../domain/http";
 import { errorMessage, logger } from "@rag/logger";
-import { APPLICATION_COMMAND, CHANNEL_MESSAGE_WITH_SOURCE, PING, type DiscordInteraction, type Env } from "../../contracts";
+import { APPLICATION_COMMAND, CHANNEL_MESSAGE_WITH_SOURCE, PING, type DiscordInteraction, type Env } from "../contracts";
 import { executeCommand, type CommandExecution, type CommandSpec } from "./registry";
 import { commandSpecs } from "./specs";
 

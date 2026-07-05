@@ -1,7 +1,7 @@
 import { assert, test } from "vitest";
 
 import workflowsWorker from "@rag/workflows/src";
-import { shouldUseAskWebSearch } from "@rag/discord/domain/commands/ask";
+import { shouldUseAskWebSearch } from "@rag/discord/commands/ask";
 import { decodeReplyJobEnvelope } from "@rag/discord/contracts";
 import { createDbMock, createEnv, gatewayAiJob, sentEnvelope } from "../../helpers";
 

@@ -2,9 +2,9 @@ import {
   editOriginalInteractionResponse,
   type InteractionMessageData,
   type InteractionResponseFile,
-} from "../../discord";
+} from "../api";
 import { errorMessage, logger } from "@rag/logger";
-import type { DiscordInteraction, Env } from "../../contracts";
+import type { DiscordInteraction, Env } from "../contracts";
 
 type DeferredResult =
   | InteractionMessageData

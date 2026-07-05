@@ -1,6 +1,6 @@
-import { jsonResponse } from "../http";
-import { formatUsdMicros } from "../../ai/spend";
-import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../../contracts";
+import { jsonResponse } from "../domain/http";
+import { formatUsdMicros } from "../ai/spend";
+import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../contracts";
 import { requireInvoker, type CommandContext } from "./context";
 
 type SpendTotalRow = {

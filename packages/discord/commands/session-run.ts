@@ -1,9 +1,9 @@
-import { editOriginalInteractionResponse, type InteractionMessageData } from "../../discord";
+import { editOriginalInteractionResponse, type InteractionMessageData } from "../api";
 import { errorMessage, logger } from "@rag/logger";
-import { APPLICATION_COMMAND, type AiJob, type DiscordInteraction, type Env } from "../../contracts";
+import { APPLICATION_COMMAND, type AiJob, type DiscordInteraction, type Env } from "../contracts";
 import { processBictureJob } from "./bicture";
 import { processRagjamJob } from "./ragjam";
-import { GUILD_NOT_ALLOWED_MESSAGE, isGuildAllowed } from "../guilds";
+import { GUILD_NOT_ALLOWED_MESSAGE, isGuildAllowed } from "../domain/guilds";
 import { buildCommandContext, hasOption } from "./context";
 import { authorizeAndLimit, type CredentialedCommandContext } from "./registry";
 import { runDeferredReply } from "./deferred";

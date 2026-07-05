@@ -1,4 +1,4 @@
-import type { DiscordInteraction } from "../../contracts";
+import type { DiscordInteraction } from "../contracts";
 import { getInvokerDisplayName } from "./rag-utils";
 
 export type CommandOptionValue = string | number | boolean;

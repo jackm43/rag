@@ -1,5 +1,5 @@
-import { jsonResponse } from "../http";
-import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../../contracts";
+import { jsonResponse } from "../domain/http";
+import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../contracts";
 import { idOption, type CommandContext } from "./context";
 
 type DeleteResult = {

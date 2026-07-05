@@ -1,8 +1,8 @@
 import { assert, test } from "vitest";
 
-import { RAG_ADMIN_USER_IDS } from "@rag/discord/domain/commands/registry";
-import { routeInteraction } from "@rag/discord/domain/commands/router";
-import { executeCommand, type CommandSpec } from "@rag/discord/domain/commands/registry";
+import { RAG_ADMIN_USER_IDS } from "@rag/discord/commands/registry";
+import { routeInteraction } from "@rag/discord/commands/router";
+import { executeCommand, type CommandSpec } from "@rag/discord/commands/registry";
 import { APPLICATION_COMMAND, type Env } from "@rag/discord/contracts";
 
 const executionCtx = {} as ExecutionContext;

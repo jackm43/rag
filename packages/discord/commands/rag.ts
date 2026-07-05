@@ -1,7 +1,7 @@
-import type { InteractionMessageData } from "../../discord";
-import { activeRagBanForUser, formatBanExpiry } from "../bans";
-import { jsonResponse } from "../http";
-import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../../contracts";
+import type { InteractionMessageData } from "../api";
+import { activeRagBanForUser, formatBanExpiry } from "../domain/bans";
+import { jsonResponse } from "../domain/http";
+import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../contracts";
 import { idOption, requireInvoker, type CommandContext } from "./context";
 import { getTargetUsername } from "./rag-utils";
 

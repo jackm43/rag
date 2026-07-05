@@ -7,7 +7,7 @@ import {
   suppressUrlEmbeds,
 } from "@rag/discord/domain/responder";
 import { appendSourceFallback } from "@rag/discord/ai/ask-mode";
-import { editOriginalInteractionResponse } from "@rag/discord/discord";
+import { editOriginalInteractionResponse } from "@rag/discord/api";
 import { encodeReplyJobEnvelope } from "@rag/discord/contracts";
 import { createEnv } from "../../helpers";
 

@@ -1,9 +1,9 @@
-import type { InteractionMessageData, InteractionResponseFile } from "../../discord";
-import { encodeAiJobEnvelope } from "../../contracts";
-import { CHANNEL_MESSAGE_WITH_SOURCE, DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, type AiJob, type DiscordInteraction, type Env } from "../../contracts";
-import { activeAiBanForUser, aiBanMessage } from "../bans";
-import { jsonResponse } from "../http";
-import { checkAiUsageAllowed } from "../limits";
+import type { InteractionMessageData, InteractionResponseFile } from "../api";
+import { encodeAiJobEnvelope } from "../contracts";
+import { CHANNEL_MESSAGE_WITH_SOURCE, DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, type AiJob, type DiscordInteraction, type Env } from "../contracts";
+import { activeAiBanForUser, aiBanMessage } from "../domain/bans";
+import { jsonResponse } from "../domain/http";
+import { checkAiUsageAllowed } from "../domain/limits";
 import { buildCommandContext, hasOption, type CommandContext } from "./context";
 
 // A context whose interaction credentials have been verified by the shared

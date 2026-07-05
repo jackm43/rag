@@ -1,7 +1,7 @@
 import { assert, test } from "vitest";
 
 import { activeAiBanForUser, aiBanMessage } from "@rag/discord/domain/bans";
-import { runInteractionSession } from "@rag/discord/domain/commands/session-run";
+import { runInteractionSession } from "@rag/discord/commands/session-run";
 import { resolveGatewayMessage } from "@rag/discord/domain/mention";
 import { createDbMock, createEnv } from "../../../helpers";
 

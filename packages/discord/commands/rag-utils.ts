@@ -1,5 +1,5 @@
-import { fetchUsername } from "../../discord";
-import type { DiscordInteraction, Env } from "../../contracts";
+import { fetchUsername } from "../api";
+import type { DiscordInteraction, Env } from "../contracts";
 
 export const getInvokerDisplayName = (interaction: DiscordInteraction) =>
   interaction.member?.nick?.trim() ||

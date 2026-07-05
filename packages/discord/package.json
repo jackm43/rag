@@ -6,7 +6,7 @@
   "exports": {
     "./contracts": "./contracts/index.ts",
     "./ai/inference": "./ai/inference/index.ts",
-    "./discord": "./discord/index.ts",
+    "./api": "./api/index.ts",
     "./*": "./*.ts",
     "./*.json": "./*.json",
     "./*.md": "./*.md"

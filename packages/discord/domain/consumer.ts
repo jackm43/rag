@@ -5,11 +5,11 @@ import {
   buildAskWebSearchInput,
   shouldUseAskWebSearch,
 } from "../ai/ask-mode";
-import { processBictureJob } from "./commands/bicture";
-import { processRagjamJob } from "./commands/ragjam";
+import { processBictureJob } from "../commands/bicture";
+import { processRagjamJob } from "../commands/ragjam";
 import { loadConfig } from "../ai/config";
 import { buildNormalThreadConversation, fallbackThreadTitle, isAskThread } from "./conversation";
-import { createThreadFromMessage } from "../discord";
+import { createThreadFromMessage } from "../api";
 import { errorMessage, logger } from "@rag/logger";
 import { resolveGatewayMessage } from "./mention";
 import { sendChannelReply } from "./outbox";

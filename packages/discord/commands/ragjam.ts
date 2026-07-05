@@ -1,12 +1,12 @@
-import ragjamMusicConfig from "../../ai/ai-config/ragjam-music.json";
-import { buildAiGatewayMetadata } from "../../ai/ai-metadata";
+import ragjamMusicConfig from "../ai/ai-config/ragjam-music.json";
+import { buildAiGatewayMetadata } from "../ai/ai-metadata";
 import { errorDetails, errorMessage, logger } from "@rag/logger";
 import { PolicyViolationError } from "@rag/outbound/boundary-client";
 import { boundaryClients } from "@rag/outbound/clients";
-import { inferenceClient } from "../../ai/inference";
-import { sendInteractionEdit, sendInteractionMediaEdit } from "../outbox";
-import { createAiSpendSourceId, recordAiSpendEvent } from "../../ai/spend";
-import { type Env, type RagjamJob, type ResponderAttachment } from "../../contracts";
+import { inferenceClient } from "../ai/inference";
+import { sendInteractionEdit, sendInteractionMediaEdit } from "../domain/outbox";
+import { createAiSpendSourceId, recordAiSpendEvent } from "../ai/spend";
+import { type Env, type RagjamJob, type ResponderAttachment } from "../contracts";
 import { isRecord } from "@rag/contracts-core";
 import type { RequestContext } from "@rag/service-kit/context";
 import type { Subject } from "@rag/service-kit";

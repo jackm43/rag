@@ -1,6 +1,6 @@
 import { sanitizeAiText, type ChatMessage } from "../ai/ai";
 import type { BotConfig } from "../ai/config";
-import { fetchChannelMessages, fetchMessage } from "../discord";
+import { fetchChannelMessages, fetchMessage } from "../api";
 import { errorMessage, logger } from "@rag/logger";
 import { getMessageAuthorDisplayName, stripMentionTokens } from "./mention";
 import { findAiThread } from "./threads";
