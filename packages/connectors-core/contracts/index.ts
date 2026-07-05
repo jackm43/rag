@@ -16,38 +16,16 @@ import {
   readEnvelope,
   textListToArray,
   type EnvelopeOptions,
-  type ServiceMessageBytes,
 } from "@rag/contracts-core";
 import {
   EventEnvelope_Payload_Which,
   type ConnectorInvokePayload,
-  type DevProxyCommandPayload,
   type WebhookEventPayload,
 } from "@rag/contracts-core/envelope";
 import type { IngressEnv } from "@rag/ingress/env";
 import type { EgressEnv } from "@rag/egress/contracts";
 import type { SecretsEnv } from "@rag/secrets/env";
 import type { ServiceKitEnv } from "@rag/service-kit/env";
-
-export type DevProxyCommandOption = { name: string; value: string };
-
-// A slash-command invocation proxied by the dev-proxy worker. Encoded as a
-// devproxy.command EventEnvelope and carried over the gateway's DevProxy
-// service binding; the gateway rebuilds a synthetic Discord interaction from it
-// and runs the ordinary command pre-flight. subjectUserId is the Discord user
-// the command is authorized as (validated against DEV_PROXY_ALLOWED_SUBJECTS at
-// the gateway before it is trusted).
-export type DevProxyCommandJob = {
-  kind: "devproxy.command";
-  command: string;
-  subjectUserId: string;
-  subjectUsername?: string;
-  guildId?: string;
-  channelId?: string;
-  applicationId?: string;
-  interactionToken?: string;
-  options: DevProxyCommandOption[];
-};
 
 // The uniform operations the credential broker exposes. `grant` performs the
 // token exchange (returns an opaque handle, never a credential); `fetch` uses a
@@ -129,16 +107,6 @@ export type WebhookEventJob = {
   eventType?: string;
   receivedAt: string;
   bodyBase64: string;
-};
-
-// The result the gateway's DevProxy service-binding entrypoint returns to the
-// dev-proxy worker: an HTTP-shaped triple the dev-proxy relays to the browser
-// verbatim. It carries no internal detail on a denial (fail closed to a bare
-// status), so the service boundary never leaks why a call was refused.
-export type DevProxyResult = {
-  status: number;
-  contentType: string;
-  body: string;
 };
 
 // The credential broker's fail-closed result surface. Every operation returns a
@@ -280,8 +248,8 @@ export type ConnectorResult = {
 export type ConnectorsEnv = {
   // Verified webhook events from the webhooks edge worker to the workflows worker
   // (producer on apps/connectors/workers/webhooks, consumer on the workflows worker), carrying
-  // wrapped ServiceMessage bytes exactly like AI_JOBS.
-  WEBHOOK_JOBS?: Queue<ServiceMessageBytes>;
+  // plain capnp EventEnvelope bytes exactly like AI_JOBS.
+  WEBHOOK_JOBS?: Queue<Uint8Array>;
   // The webhooks worker's TTL'd dedupe store, a Durable Object it defines and
   // binds (apps/connectors/workers/webhooks). One object per connector; firstSeen()
   // atomically records a provider event id and reports whether it was new
@@ -311,15 +279,6 @@ export type ConnectorsEnv = {
   // wrangler var (not a secret). Resolved per {clientId} on the interactions
   // route; a future Phase-3 authority DO can supersede this static map.
   DISCORD_INTERACTION_PUBLIC_KEYS?: string;
-  // Gateway DevProxy service-binding entrypoint, bound on the dev-proxy worker
-  // ONLY (apps/connectors/workers/dev-proxy). A service binding can be invoked solely by
-  // a worker configured with it, so this RPC surface is reachable only from the
-  // dev-proxy — the platform guarantee that gates the dev application's
-  // strong-identity hop into the gateway. Typed structurally so contracts does
-  // not import worker code (mirrors RESPONDER / SERVICE_REGISTRY).
-  GATEWAY_DEVPROXY?: {
-    invokeCommand: (message: ServiceMessageBytes) => Promise<DevProxyResult>;
-  };
   // The credential broker's service-binding entrypoint (apps/*/workers/
   // connectors). Bound only on the workers permitted to use a connector — no
   // worker binds it in this task; a future caller (e.g. the workflows worker) declares it.
@@ -365,25 +324,10 @@ export type ConnectorsEnv = {
   // encrypted at rest by the platform; this adds envelope encryption for the
   // stored user refresh/access tokens where an operator wants defence in depth.
   CONNECTORS_TOKEN_ENC_KEY?: string;
-  // The guild the dev-proxy's commands target. The acting Discord subject is no
-  // longer an env default — it is the Discord id of the authenticated Better Auth
-  // session (see apps/connectors/workers/dev-proxy). The gateway independently enforces
-  // DEV_PROXY_ALLOWED_SUBJECTS, so guild is a convenience default, not a trust
-  // boundary.
-  DEV_PROXY_GUILD?: string;
-  DEV_PROXY_ALLOWED_SUBJECTS?: string;
-  // R2 bucket for dev-proxy runtime assets that should not be embedded into the
-  // SPA bundle, such as the generated GitHub REST API route catalog.
-  DEVPROXY_ASSETS?: R2Bucket;
 };
 
 export type Env = Cloudflare.Env & ServiceKitEnv & IngressEnv & EgressEnv & SecretsEnv & ConnectorsEnv;
 
-// A dev-proxy command names a slash command (lowercase identifier) and carries
-// at most Discord's per-command option count, each a short name + capped value.
-export const DEVPROXY_COMMAND_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
-export const MAX_DEVPROXY_OPTIONS = 25;
-export const MAX_DEVPROXY_OPTION_NAME_LENGTH = 32;
 // Credential-broker envelope constraints. A connector id is a short lowercase
 // slug; an opaque handle is a high-entropy url-safe string; params is a JSON
 // blob capped well below the 128 KiB framed-message ceiling so an
@@ -500,37 +444,6 @@ export const validateWebhookEventJob = (value: unknown): value is WebhookEventJo
   value.bodyBase64.length % 4 === 0 &&
   BASE64_PATTERN.test(value.bodyBase64);
 
-const isDevProxyOption = (value: unknown): value is DevProxyCommandOption =>
-  isRecord(value) &&
-  isString(value.name) &&
-  value.name.length > 0 &&
-  value.name.length <= MAX_DEVPROXY_OPTION_NAME_LENGTH &&
-  isCappedText(value.value);
-
-const isDevProxyOptionList = (value: unknown): value is DevProxyCommandOption[] =>
-  Array.isArray(value) && value.length <= MAX_DEVPROXY_OPTIONS && value.every(isDevProxyOption);
-
-export const validateDevProxyCommandJob = (value: unknown): value is DevProxyCommandJob =>
-  isRecord(value) &&
-  value.kind === "devproxy.command" &&
-  isString(value.command) &&
-  DEVPROXY_COMMAND_PATTERN.test(value.command) &&
-  // The acting Discord subject is mandatory and must be a real snowflake; the
-  // gateway further constrains it to DEV_PROXY_ALLOWED_SUBJECTS.
-  isSnowflake(value.subjectUserId) &&
-  isOptionalUsername(value.subjectUsername) &&
-  isOptionalSnowflake(value.guildId) &&
-  isOptionalSnowflake(value.channelId) &&
-  isOptionalSnowflake(value.applicationId) &&
-  (value.interactionToken === undefined || isInteractionToken(value.interactionToken)) &&
-  isDevProxyOptionList(value.options);
-
-// The envelope `type` for a proxied dev-proxy command. Mirrors
-// DEVPROXY_COMMAND_OPERATION in packages/service-kit/principal.ts (the gateway's
-// registered service operation) — kept as a literal here to avoid a
-// contracts→auth import cycle, exactly like SPEND_EVENT_TYPE mirrors the
-// spend service operation.
-const DEVPROXY_COMMAND_TYPE = "devproxy.command";
 // The envelope `type` for a credential-broker operation. Mirrors
 // CONNECTOR_INVOKE_OPERATION in packages/service-kit/principal.ts (the broker's single
 // registered service operation) — kept as a literal here to avoid a
@@ -540,75 +453,6 @@ const CONNECTOR_INVOKE_TYPE = "connector.invoke";
 // enqueue to the workflows worker). Mirrors the entry in SERVICE_OPERATIONS.workflows
 // (packages/service-kit/principal.ts) — a literal here for the same no-cycle reason.
 const WEBHOOK_EVENT_TYPE = "webhook.event";
-
-export const encodeDevProxyCommandEnvelope = (
-  job: DevProxyCommandJob,
-  options: EnvelopeOptions,
-): Uint8Array => {
-  if (!validateDevProxyCommandJob(job)) {
-    throw new Error("Invalid dev-proxy command for event envelope");
-  }
-  const message = new capnp.Message();
-  const envelope = initEnvelope(message, DEVPROXY_COMMAND_TYPE, options);
-  const payload = envelope.payload._initDevproxyCommand();
-  payload.command = job.command;
-  payload.subjectUserId = job.subjectUserId;
-  if (job.subjectUsername !== undefined) {
-    payload.subjectUsername = job.subjectUsername;
-  }
-  if (job.guildId !== undefined) {
-    payload.guildId = job.guildId;
-  }
-  if (job.channelId !== undefined) {
-    payload.channelId = job.channelId;
-  }
-  if (job.applicationId !== undefined) {
-    payload.applicationId = job.applicationId;
-  }
-  if (job.interactionToken !== undefined) {
-    payload.interactionToken = job.interactionToken;
-  }
-  const optionList = payload._initOptions(job.options.length);
-  job.options.forEach((option, index) => {
-    const entry = optionList.get(index);
-    entry.name = option.name;
-    entry.value = option.value;
-  });
-  return new Uint8Array(message.toArrayBuffer());
-};
-
-const devProxyOptionsToArray = (payload: DevProxyCommandPayload): DevProxyCommandOption[] =>
-  Array.from({ length: payload.options.length }, (_, index) => {
-    const entry = payload.options.get(index);
-    return { name: entry.name, value: entry.value };
-  });
-
-export const decodeDevProxyCommandEnvelope = (bytes: unknown): DevProxyCommandJob | null => {
-  const envelope = readEnvelope(bytes);
-  if (!envelope) {
-    return null;
-  }
-  try {
-    if (envelope.payload.which() !== EventEnvelope_Payload_Which.DEVPROXY_COMMAND) {
-      return null;
-    }
-    const payload = envelope.payload.devproxyCommand;
-    const job: DevProxyCommandJob = compact({
-      kind: "devproxy.command",
-      command: payload.command,
-      subjectUserId: payload.subjectUserId,
-      subjectUsername: optionalText(payload.subjectUsername),
-      guildId: optionalText(payload.guildId),
-      channelId: optionalText(payload.channelId),
-      applicationId: optionalText(payload.applicationId),
-      interactionToken: optionalText(payload.interactionToken),
-      options: devProxyOptionsToArray(payload),
-    });
-    return validateDevProxyCommandJob(job) && envelope.type === DEVPROXY_COMMAND_TYPE ? job : null;
-  } catch {
-    return null;
-  }
-};
 
 export const encodeConnectorInvokeEnvelope = (
   job: ConnectorInvokeJob,

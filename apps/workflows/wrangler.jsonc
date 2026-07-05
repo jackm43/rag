@@ -62,7 +62,7 @@
     },
     // The credential broker's Connectors entrypoint (CONNECTORS.md §"Binding +
     // deploying"): the workflows worker is the first credential caller (grant/fetch/token
-    // via the workflowsToConnectors client, signed with WORKFLOWS_SIGNING_KEY). The
+    // via the connectorsClient). The
     // broker must be deployed before this binding can resolve.
     {
       "binding": "CONNECTORS",
@@ -86,7 +86,7 @@
     "bindings": [
       // Per-interaction processor DO, defined by this worker. The gateway
       // ingress binds the same class cross-script to run deferred commands here
-      // (where EGRESS + WORKFLOWS_SIGNING_KEY live). One instance per Discord
+      // (where EGRESS lives). One instance per Discord
       // interaction token; state is a short-lived dedupe marker swept by alarm.
       {
         "name": "INTERACTION_SESSION",

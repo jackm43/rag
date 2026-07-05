@@ -1,26 +1,14 @@
-// The envelope kernel: framed capnp EventEnvelope plumbing, the signed
-// ServiceMessage transport, and the validation primitives. App message types
-// and their encoders/decoders live with the owning app (apps/*/contracts) or
-// package (@rag/egress/contracts) — this package must stay a leaf.
+// The envelope kernel: framed capnp EventEnvelope plumbing and the validation
+// primitives. App message types and their encoders/decoders live with the
+// owning app (apps/*/contracts) or package (@rag/egress/contracts) — this
+// package must stay a leaf. Queue payloads are plain EventEnvelope bytes.
 import * as capnp from "capnp-es";
 import { EventEnvelope } from "./envelope";
 import { asFramedBytes } from "./framing";
 import { isOptionalSnowflake } from "./validate";
 
-export {
-  decodeManifestSnapshot,
-  decodeServiceManifest,
-  decodeServiceMessage,
-  encodeManifestSnapshot,
-  encodeServiceManifest,
-  encodeServiceMessage,
-  type WireServiceManifest,
-  type WireServiceMessage,
-} from "./service-transport";
-
 export * from "./validate";
 export { isRecord } from "./validation";
-export type { ServiceMessageBytes } from "./types";
 export { asFramedBytes, isSaneFramedMessage, MAX_MESSAGE_BYTES } from "./framing";
 
 export const ENVELOPE_VERSION = 1;

@@ -51,10 +51,6 @@
       "custom_domain": true
     }
   ],
-  // Secret (never commit) — set with `wrangler secret put <NAME> -c <this config>`:
-  //   WEBHOOKS_SIGNING_KEY  (private Ed25519 JWK from scripts/generate-keys.ts
-  //                          webhooks; signs the webhook_verify hop into the
-  //                          broker and the enqueue hop to the workflows worker)
   "observability": {
     "logs": {
       "enabled": true,

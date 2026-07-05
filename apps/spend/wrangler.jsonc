@@ -40,10 +40,6 @@
       "entrypoint": "Egress"
     }
   ],
-  // Service registry hosted by the standalone ragbot-registry-worker.
-  "durable_objects": {
-    "bindings": []
-  },
   "observability": {
     "logs": {
       "enabled": true,

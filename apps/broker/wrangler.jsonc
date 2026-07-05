@@ -59,10 +59,6 @@
   // Secrets (set with `wrangler secret put -c this-file`), NOT committed:
   //   GITHUB_APP_ID            — the numeric GitHub App id (JWT iss)
   //   GITHUB_APP_PRIVATE_KEY   — the App's RSA private-key PEM (PKCS#8 or PKCS#1)
-  //   SERVICE_PUBLIC_KEYS      — production verifying keyring (JSON; a var, but
-  //                              set as a secret to keep it out of the config)
-  //   CONNECTORS_SIGNING_KEY   — required once provider HTTP calls are routed
-  //                              through the bound EGRESS worker
   //   CONNECTORS_TOKEN_ENC_KEY — optional AES-GCM key (base64url 32 bytes) for
   //                              3LO token values-at-rest
   //   OP_SERVICE_ACCOUNT_TOKEN — 1Password service account token for the SDK

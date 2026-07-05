@@ -25,7 +25,6 @@ import {
   type ChatPayload,
   type EventEnvelope,
 } from "@rag/contracts-core/envelope";
-import type { ServiceMessageBytes } from "@rag/contracts-core";
 import type { IngressEnv } from "@rag/ingress/env";
 import type { EgressEnv } from "@rag/egress/contracts";
 import type { SecretsEnv } from "@rag/secrets/env";
@@ -236,12 +235,12 @@ export type BotEnv = {
   // allowlist (fail closed); the dev-proxy carries its own copy in
   // ConnectorsEnv.
   DEV_PROXY_ALLOWED_SUBJECTS?: string;
-  AI_JOBS: Queue<ServiceMessageBytes>;
-  SPEND_JOBS?: Queue<ServiceMessageBytes>;
-  DISCORD_OUTBOX?: Queue<ServiceMessageBytes>;
+  AI_JOBS: Queue<Uint8Array>;
+  SPEND_JOBS?: Queue<Uint8Array>;
+  DISCORD_OUTBOX?: Queue<Uint8Array>;
   RESPONDER?: {
     deliverInteractionEdit: (
-      message: ServiceMessageBytes,
+      message: Uint8Array,
       attachment: ResponderAttachment,
     ) => Promise<void>;
   };

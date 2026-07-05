@@ -4,7 +4,6 @@ import { encodeAiJobEnvelope } from "@rag/discord/contracts";
 import type { EnvelopeOptions } from "@rag/contracts-core";
 import type { AiJob } from "@rag/discord/contracts";
 import type { Env } from "@rag/discord/contracts";
-import type { ServiceMessageBytes } from "@rag/contracts-core";
 import {
   SERVICE_ZONE,
   SYSTEM_SUBJECT,

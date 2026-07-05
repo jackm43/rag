@@ -31,7 +31,9 @@ const credentialFor = (env: Env, config: EgressProfileConfig): BoundaryCredentia
   if (!config.credential) {
     return undefined;
   }
-  const value = env[config.credential.env as keyof Env];
+  // Credentials come from the egress worker's env vars/secrets (Cloudflare.Env),
+  // resolved by name from the profile config.
+  const value = (env as Record<string, unknown>)[config.credential.env];
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(`Egress credential ${config.credential.env} is not configured`);
   }

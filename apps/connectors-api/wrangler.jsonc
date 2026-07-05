@@ -56,7 +56,7 @@
   // service-binding hop (never a public route). A service binding is invocable
   // solely by a worker configured with it, so the broker's HTTP face is reachable
   // only from here; the broker stays binding-only. The hop is minted as the
-  // dev-proxy management principal over this trusted transport (no signing key).
+  // dev-proxy management principal over the trusted CONNECTORS binding.
   "services": [
     {
       "binding": "CONNECTORS",
