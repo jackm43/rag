@@ -3,12 +3,12 @@ import { betterAuth } from "better-auth";
 import { cloudflareAccessGuard } from "./access";
 import type { AuthEnv as Env } from "./env";
 
-// The dev-proxy's application-identity layer: Better Auth with Discord OAuth,
+// The web client's application-identity layer: Better Auth with Discord OAuth,
 // running BEHIND Cloudflare Access. Access is the perimeter (does the request
 // come from someone in the team?); Better Auth answers the app-level question
 // (which Discord user is acting?), and the logged-in user's Discord account id
-// becomes the subject the gateway command runs as. Better Auth is authN only —
-// Cedar remains the authZ engine on the gateway side.
+// becomes the request's subject. Better Auth is authN only — the auth worker's
+// data-driven policy table is the authZ authority.
 //
 // Per-request instance pattern: a Worker has no module-scope access to its
 // bindings (env arrives per fetch), so the instance is built per request from
@@ -20,9 +20,8 @@ import type { AuthEnv as Env } from "./env";
 // with batch/exec/prepare) and uses its built-in D1SqliteDialect, resolving the
 // database type as sqlite. So we pass the AUTH_DB binding directly — no Kysely
 // dialect dependency. The schema is applied out-of-band as a committed D1
-// migration (apps/connectors/workers/dev-proxy/api/middleware_client/migrations); Better Auth never introspects
-// at runtime (D1 forbids reading sqlite_master, which is why runtime migration
-// is not used).
+// migration on the `ragbot-auth` D1; Better Auth never introspects at runtime
+// (D1 forbids reading sqlite_master, which is why runtime migration is not used).
 
 // Config presence is a deploy-time invariant, not a request-time branch: without
 // the auth database, secret, base URL, and Discord credentials the app-identity
@@ -96,7 +95,7 @@ export const createAuth = (env: Env) => {
 
 // The concrete Better Auth instance type, inferred from createAuth so it carries
 // this worker's exact options (not the wide BetterAuthOptions default).
-export type DevProxyAuth = ReturnType<typeof createAuth>;
+export type WebAuth = ReturnType<typeof createAuth>;
 
 // Resolve the acting identity from a request's Better Auth session. The session
 // identifies a Better Auth user; the Discord *account id* (the snowflake the
@@ -112,7 +111,7 @@ export type ResolvedSubject = {
 };
 
 export const resolveDiscordSubject = async (
-  auth: DevProxyAuth,
+  auth: WebAuth,
   headers: Headers,
 ): Promise<ResolvedSubject | null> => {
   const session = await auth.api.getSession({ headers });

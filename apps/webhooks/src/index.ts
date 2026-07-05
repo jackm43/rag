@@ -14,15 +14,14 @@ import { OPENAPI } from "./openapi";
 
 export { WebhookDedupe };
 
-// The centralised webhook-ingress worker (webhooks.jsmunro.me): the inbound
-// mirror of authorizedFetch. Third-party providers POST signed deliveries to
-// /{provider}/{id}; this worker reads the RAW body, hands the AUTH service the
-// signature headers + exact bytes (verifyWebhook), and gets back only a boolean — it NEVER sees a
-// webhook secret. A valid, first-seen event is framed as a webhook.event
-// envelope and enqueued to the workflows worker; everything else exits with a bare
-// status. The handler is enqueue-only and fast: providers retry on
-// non-2xx/timeout, so no slow work runs inline, and no raw body or signature
-// material is ever logged.
+// The centralised webhook-ingress worker (webhooks.jsmunro.me). Third-party
+// providers POST signed deliveries to /{provider}/{id}; this worker reads the
+// RAW body, hands the AUTH service the signature headers + exact bytes
+// (verifyWebhook), and gets back only a boolean — it NEVER sees a webhook
+// secret. A valid, first-seen event is framed as a webhook.event envelope and
+// enqueued to the workflows worker; everything else exits with a bare status.
+// The handler is enqueue-only and fast: providers retry on non-2xx/timeout, so
+// no slow work runs inline, and no raw body or signature material is ever logged.
 //
 // How long a returned event id blocks redelivery. GitHub has no signed
 // timestamp, so this dedupe window IS the GitHub replay control (see dedupe.ts
@@ -48,8 +47,9 @@ const WEBHOOK_PATH_PATTERN = /^\/(github)\/([a-z][a-z0-9-]{0,63})$/;
 const INTERACTIONS_PATH_PATTERN = /^\/([A-Za-z0-9._-]{1,128})\/interactions$/;
 
 const notFound = () => new Response("Not found", { status: 404 });
-// Invalid or unverifiable deliveries all exit here with no detail — the broker
-// logged the actual reason (bad signature, no configured secret); a forger learns only that it failed.
+// Invalid or unverifiable deliveries all exit here with no detail — the auth
+// service logged the actual reason (bad signature, no configured secret); a
+// forger learns only that it failed.
 const unauthorized = () => new Response("Bad request signature", { status: 401 });
 
 const collectSignatureHeaders = (
@@ -101,7 +101,7 @@ const handleWebhook = async (
     return unauthorized();
   }
 
-  // Idempotency: dedupe on the BROKER-RETURNED event id (present only on a
+  // Idempotency: dedupe on the AUTH-service-returned event id (present only on a
   // valid signature, so an attacker-chosen id can never mask a real event).
   // A duplicate is acked 200 without re-enqueueing — providers treat it as
   // delivered and stop retrying. An event with no id cannot be deduped and is
@@ -132,10 +132,9 @@ const handleWebhook = async (
     logger.error("webhook_jobs_unbound", { connectorId, provider });
     return new Response("Internal error", { status: 500 });
   }
-  // Frame the verified event and enqueue it to the workflows worker over the SAME
-  // on-behalf-of hop shape as gateway→workflows (edge → application, Cedar-gated,
-  // token bound to the envelope bytes). Enqueue failures are 500 so the
-  // provider retries the delivery.
+  // Frame the verified event as a plain capnp envelope and enqueue it to the
+  // workflows worker over the webhook-jobs queue (same shape as the gateway's
+  // ai-jobs hop). Enqueue failures are 500 so the provider retries the delivery.
   try {
     await env.WEBHOOK_JOBS.send(
       encodeWebhookEventEnvelope(

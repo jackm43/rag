@@ -42,8 +42,8 @@ const runEnqueueJob = async (job: AiJob, env: Env): Promise<void> => {
 // the ack is already public, a rejection (guild gate, authz, limits, missing
 // option) is surfaced as an edited reply rather than a synchronous type-4 —
 // none of the inline commands reply ephemerally, so no visibility is lost.
-// Mirrors executeCommand's chain (option validation -> Cedar authz + limits ->
-// dispatch) and shares its authorizeAndLimit authority.
+// The pre-flight chain is option validation -> authorizeAndLimit (admin gate +
+// ban + usage limits) -> dispatch, the single command authorization authority.
 export const runInteractionSession = async (
   interaction: DiscordInteraction,
   env: Env,

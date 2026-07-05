@@ -229,10 +229,6 @@ export const DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE = 5;
 
 // The bot's own bindings; the composed Env below is what bot worker code sees.
 export type BotEnv = {
-  // The gateway independently enforces the dev-proxy's acting-subject
-  // allowlist (fail closed); the dev-proxy carries its own copy in
-  // ConnectorsEnv.
-  DEV_PROXY_ALLOWED_SUBJECTS?: string;
   AI_JOBS: Queue<Uint8Array>;
   SPEND_JOBS?: Queue<Uint8Array>;
   DISCORD_OUTBOX?: Queue<Uint8Array>;

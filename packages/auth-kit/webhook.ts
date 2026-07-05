@@ -1,17 +1,16 @@
 import { timingSafeEqual } from "./timing-safe-equal";
 
-// Inbound webhook signature verification — the broker-side half of the webhook
-// ingress design (AGENTS.md "A new webhook ingress").
+// Inbound webhook signature verification — the auth-service half of the webhook
+// ingress (AGENTS.md "A new webhook provider").
 // The edge receiver (the webhooks worker) reads the RAW request body and hands
-// the broker the provider's signature headers plus the exact body bytes; the
-// broker resolves the per-connector webhook secret, computes the provider's
-// scheme, and returns a boolean. The secret never leaves the broker — the same
-// phantom-token philosophy as authorizedFetch, applied inbound.
+// the auth service the provider's signature headers plus the exact body bytes;
+// the auth service resolves the provider webhook secret from its env, computes
+// the provider's scheme, and returns a boolean. The secret never leaves the auth
+// worker.
 //
-// This module is pure scheme code (which header, which HMAC construction); it
-// knows nothing of connectors, Cedar, or the grant store — that is the broker
-// infra (handler.ts), which looks up the connector's webhook config and
-// resolves the secret before calling in here.
+// This module is pure scheme code (which header, which HMAC construction); the
+// secret resolution + env wiring lives in verifyWebhook below, called by the
+// auth worker's AuthGateway.verifyWebhook over its AUTH binding.
 //
 // Everything fails CLOSED to { valid: false }: a missing header, a malformed
 // signature, a non-hex digest, an unknown provider, or a stale timestamp are

@@ -2,8 +2,8 @@ import { guardDenial, type InboundGuard } from "./guard";
 import { errorMessage, logger } from "@rag/logger";
 import type { AuthEnv as Env } from "./env";
 
-// Cloudflare Access application-token verification (the first ingress gate of
-// the dev-proxy worker). Access sits in front of the worker and, once a user
+// Cloudflare Access application-token verification (the `web` client's first
+// ingress gate). Access sits in front of the worker and, once a user
 // has authenticated with the team's IdP, forwards the request carrying a signed
 // JWT (the "application token") in the `Cf-Access-Jwt-Assertion` header (and a
 // `CF_Authorization` cookie). Access itself is a network gate; this module is
