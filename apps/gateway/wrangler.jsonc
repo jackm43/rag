@@ -1,0 +1,86 @@
+{
+  "name": "ragbot-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  "rules": [
+    {
+      "type": "Text",
+      "globs": [
+        "**/*.md"
+      ],
+      "fallthrough": true
+    }
+  ],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "ragbot.jsmunro.me",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "DISCORD_APPLICATION_ID": "1496842508251172895",
+    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
+    "ALLOWED_GUILD_IDS": "457689460096630794"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ragbot",
+      "database_id": "5833b0bb-7806-483e-9015-32e209ce2fb0",
+      "migrations_dir": "../../../../../../migrations"
+    }
+  ],
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true
+    }
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DISCORD_GATEWAY",
+        "class_name": "DiscordGateway"
+      },
+      // Per-interaction processor DO, defined by ragbot-workflows-worker. The
+      // gateway verifies the Discord signature, returns the type-5 ack, then
+      // kicks this DO to run the deferred command and edit the response as
+      // `workflows`. Cross-script binding — no migration here (the workflows
+      // worker owns the class + migration). ragbot-workflows-worker must be
+      // deployed before this binding resolves (see scripts/deploy.ts order).
+      {
+        "name": "INTERACTION_SESSION",
+        "class_name": "InteractionSession",
+        "script_name": "ragbot-workflows-worker"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": [
+        "DiscordGateway"
+      ]
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "AI_JOBS",
+        "queue": "ai-jobs"
+      }
+    ]
+  },
+  "triggers": {
+    "crons": [
+      "*/15 * * * *"
+    ]
+  }
+}

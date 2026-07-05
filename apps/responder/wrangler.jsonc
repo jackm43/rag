@@ -1,0 +1,37 @@
+{
+  "name": "ragbot-responder-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true
+    }
+  },
+  "services": [
+  ],
+  "queues": {
+    "consumers": [
+      {
+        "queue": "discord-outbox",
+        "max_batch_size": 10,
+        "max_batch_timeout": 1,
+        "max_retries": 3,
+        "dead_letter_queue": "discord-outbox-dlq"
+      },
+      {
+        "queue": "discord-outbox-dlq",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 1
+      }
+    ]
+  }
+}

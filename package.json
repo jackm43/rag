@@ -3,32 +3,65 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@8.15.9",
   "scripts": {
-    "dev": "wrangler dev",
-    "dev:all": "wrangler dev -c wrangler.jsonc -c wrangler.spend.jsonc",
-    "deploy": "wrangler deploy && wrangler deploy -c wrangler.spend.jsonc",
-    "deploy:main": "wrangler deploy",
-    "deploy:spend": "wrangler deploy -c wrangler.spend.jsonc",
-    "check": "tsc --noEmit",
+    "dev": "wrangler dev -c apps/gateway/wrangler.jsonc",
+    "dev:all": "wrangler dev -c apps/gateway/wrangler.jsonc -c apps/workflows/wrangler.jsonc -c apps/responder/wrangler.jsonc -c apps/spend/wrangler.jsonc",
+    "deploy": "tsx scripts/deploy.ts",
+    "deploy:main": "wrangler deploy -c apps/gateway/wrangler.jsonc",
+    "check": "tsc --noEmit && tsx scripts/check-dep-direction.ts",
     "test": "vitest run",
+    "contracts:build": "capnp-es packages/contracts-core/envelope.capnp -ots",
+    "routes:build": "tsx scripts/generate-gateway-routes.ts && tsx scripts/generate-openapi.ts",
     "register:commands": "tsx scripts/register-commands.ts",
+    "config:push": "tsx scripts/push-config.ts",
     "backfill:spend": "tsx scripts/backfill-spend.ts",
-    "d1:migrate:local": "wrangler d1 execute ragbot --local --file=./schema.sql",
-    "d1:migrate:remote": "wrangler d1 execute ragbot --remote --file=./schema.sql"
+    "d1:migrate:local": "wrangler d1 migrations apply ragbot -c apps/gateway/wrangler.jsonc --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply ragbot -c apps/gateway/wrangler.jsonc --remote",
+    "deploy:webhooks": "tsx scripts/deploy.ts --only webhooks",
+    "scaffold": "tsx scripts/scaffold.ts"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.18",
     "@types/node": "^25.6.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "discord.js": "^14.26.4",
+    "openapi-typescript": "^7.13.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
+    "vite": "^8.1.3",
     "vitest": "^4.1.9",
-    "wrangler": "^4.13.2"
+    "wrangler": "^4.13.2",
+    "yaml": "^2.9.0"
   },
   "dependencies": {
-    "discord.js": "^14.26.4",
-    "tweetnacl": "^1.0.3"
+    "@1password/sdk": "^0.4.0",
+    "@rag/auth": "workspace:*",
+    "@rag/auth-kit": "workspace:*",
+    "@rag/contracts-core": "workspace:*",
+    "@rag/discord": "workspace:*",
+    "@rag/edge-kit": "workspace:*",
+    "@rag/gateway": "workspace:*",
+    "@rag/logger": "workspace:*",
+    "@rag/queue-kit": "workspace:*",
+    "@rag/responder": "workspace:*",
+    "@rag/secrets": "workspace:*",
+    "@rag/spend": "workspace:*",
+    "@rag/webhooks": "workspace:*",
+    "@rag/workflows": "workspace:*",
+    "better-auth": "^1.6.23",
+    "capnp-es": "^0.0.14",
+    "lucide-react": "^1.23.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tweetnacl": "^1.0.3",
+    "zod": "^3.25.76"
   },
-  "overrides": {
-    "undici": "6.27.0"
+  "pnpm": {
+    "overrides": {
+      "undici": "6.27.0"
+    }
   }
 }

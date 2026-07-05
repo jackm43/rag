@@ -1,137 +1,161 @@
-# Running With 1Password
+# Working in this repo
 
-## Required Secrets
+Read the [README](README.md) first for what the system is and how to run it.
+This file is the developer/agent guide: the architecture, the invariants you
+must not regress, and the checklists for adding things.
 
-This project expects these environment variables:
-- `DISCORD_APPLICATION_ID`
-- `DISCORD_PUBLIC_KEY`
-- `DISCORD_BOT_TOKEN`
+Run `pnpm run check` (tsc + dependency-direction check) and `pnpm test` before
+calling anything done. Wrangler needs Node 22+. Commands that touch secrets go
+through `op run --env-file=.env --`.
 
-`.env` is set to 1Password references (`op://...`), so run project commands through `op run`.
+## Architecture
 
-## Current Runtime Shape
+pnpm workspace. **One deployed worker = one top-level `apps/<worker>`
+application.** Shared code lives only in `packages/*` (named `@rag/*`); apps
+never import other apps. There is no product grouping and no per-worker
+`api/middleware_client` + `service_server` split beyond intra-app folders.
 
-- Cloudflare Worker entrypoints:
-  - `src/index.ts` Discord routing, gateway controls, and AI response queue consumer
-  - `src/spend-worker.ts` AI spend aggregation queue consumer
-- Modules:
-  - `src/http.ts` Discord signature verification, JSON responses, constant-time compare
-  - `src/discord.ts` Discord REST helpers
-  - `src/gateway.ts` `DiscordGateway` Durable Object (`DISCORD_GATEWAY` binding)
-  - `src/mention.ts` mention handling, thread tracking, AI title generation, and AI queue consumer (thread conversation context)
-  - `src/commands/ask.ts` `/ask` thread creation, normal AI response handling, and web-search research mode
-  - `src/commands/ragspend.ts` `/ragspend` personal AI spend lookup and `/ragspendboard` spend leaderboard
-  - `src/ai.ts` model-agnostic chat calls through the Workers AI binding (`env.AI.run`) or AI Gateway REST. Workers AI `@cf/...` models use binding options (`gateway: { id }`), Unified Billing partner chat models use AI Gateway compat chat completions, and `/ask` research mode uses an OpenAI search model such as `openai/gpt-4o-search-preview` via AI Gateway.
-  - `src/spend.ts` raw spend event recording, AI Gateway log cost reconciliation, spend queue consumer helper, and dollar formatting
-  - `src/config.ts` loads source-controlled AI config from `src/ai-config`
-  - `src/logger.ts` structured logging
-- Discord interactions route: `POST /discord`
-- Gateway control routes: `POST /gateway/start`, `GET /gateway/health` (both require `Authorization: Bearer $DISCORD_BOT_TOKEN`)
-- Public routes are allowlisted. Any path not listed here returns `404`.
-- Database: D1 (`DB` binding) using `schema.sql`
-- AI model binding: `AI`
-- Queue bindings:
- - producer: `AI_JOBS` -> `ai-jobs`
- - producer: `SPEND_JOBS` -> `ai-spend-jobs`
- - consumer: `ai-jobs` with dead-letter queue `ai-jobs-dlq`
- - spend worker consumer: `ai-spend-jobs` with dead-letter queue `ai-spend-jobs-dlq`
+**Apps** (each is a deployed worker):
+- `apps/auth` — the **auth worker / API Gateway** (binding-only, no route). Owns
+  all public-ingress authentication (Cloudflare Access, Better Auth Discord
+  sessions + the `ragbot-auth` D1, operator token) and the data-driven
+  authorization policy table. Every public app binds it as `AUTH`.
+- `apps/gateway` — the Discord bot edge (`ragbot.jsmunro.me`): the
+  `DiscordGateway` websocket Durable Object + cron, and the operator control
+  routes (start/stop/health). Control-only — no public discovery surface.
+- `apps/workflows` — the AI job consumer + the `InteractionSession` processor DO
+  (deferred commands / mentions run to completion here). Consumes `ai-jobs` and
+  `webhook-jobs`.
+- `apps/responder` — Discord write policy: the `discord-outbox` queue consumer +
+  the `Responder` media-edit RPC entrypoint.
+- `apps/spend` — AI Gateway cost reconciliation (`ai-spend-jobs` consumer).
+- `apps/webhooks` — provider-webhook + Discord-interaction ingress
+  (`webhooks.jsmunro.me`); the `WebhookDedupe` DO. Provider webhooks are verified
+  by the auth service (`AUTH.verifyWebhook`); Discord interactions are verified
+  inline (Ed25519).
 
-## Runtime Configuration
+There is no egress worker and no shared egress package: outbound HTTP is a plain
+**in-process** `fetch` in the method that needs it, with the credential and a
+timeout injected at the call site (Discord REST + media in
+`packages/discord/api/http.ts`; AI Gateway in `discord/ai/inference`; Cloudflare
+API in `discord/ai/spend`; Vault in `secrets`). Hosts are fixed and known at the
+call site, so there is no host-allowlist layer.
 
-AI config lives in `src/ai-config`:
-- `discord-response.json`: mention and `/ask` response model, max tokens, temperature, thread history limit, AI Gateway id used by the AI binding
-- `discord-response-system-prompt.md`: mention response system prompt
-- `ask-web-search.json`: `/ask` web-search model, max output tokens, temperature, search turns, search context size, AI Gateway id used by the AI binding
-- `ask-web-search-system-prompt.md`: neutral `/ask` web research system prompt
-- AI Gateway log cost is the source of truth for spend. AI requests include metadata for exact cost reconciliation.
+**Packages** (shared):
+- `edge-kit` — the single shared middleware. `createAppWorker({service, routes,
+  openapi, clients})` is the fetch handler for every public app: serve discovery
+  (`/health`, `/openapi.json`, `/.well-known/*`), match a route, then
+  **authenticate → verify → authorize** through the `AUTH` binding before
+  dispatching. Ships the `web` / `native` / `webhook` client handlers, plus the
+  generic `createEdgeWorker` harness for inline-signature workers (webhooks).
+- `auth-kit` — the auth library: verification primitives (CF Access JWT, Better
+  Auth Discord session, native/operator token, oauth2 client-credentials, Discord
+  Ed25519, provider webhook HMAC) + per-client-kind strategies
+  (`authenticateWeb`/`authenticateNative`) and `verifyWebhook`. Used by the auth
+  worker and the webhooks worker.
+- `discord` — the bot domain, laid out by concern: `api` (Discord REST client +
+  the `http` outbound helpers), `ai` (inference/config/spend), `commands` (specs +
+  dispatch), `domain` (bans, limits, mention, outbox, responder policy, consumer,
+  dlq, …), `ingress`, `contracts`. Shared by gateway/workflows/responder/spend.
+- `contracts-core` — the capnp `EventEnvelope` kernel: schemas, framing,
+  encode/decode. Queue payloads are plain capnp envelopes.
+- `queue-kit` — `createQueueWorker(service, handlers)` (no signing).
+- `secrets` — pluggable secret backends. `logger` — structured logging.
 
-## Setup and Run Commands
+**Dependency rules** — enforced by `scripts/check-dep-direction.ts`: packages
+never import apps; an app never imports another app; the graph stays acyclic.
 
-Install dependencies:
+## Trust model (do not regress)
 
-```bash
-op run --env-file=.env -- npm install
+- **Worker-to-worker calls are plain Cloudflare service-binding RPC.** No signed
+  envelopes, no identity tokens, no Cedar. Trust is structural: only a worker
+  whose wrangler declares a binding (or is a queue producer/consumer) can make
+  the call, so the binding graph authenticates the caller. Callers that need a
+  principal pass it as a plain argument.
+- **The auth worker is the single API Gateway for public ingress.** Every public
+  app's middleware calls `AUTH.authenticateClient → verify → authorize` before a
+  handler runs; backends trust the verdict and never re-check it (API-Gateway
+  trust centralization — colocated service-binding hops are sub-1ms). The three
+  public client kinds: `web` (Access + Better Auth session), `native` (operator
+  bearer token or CF Access machine grant), `webhook` (signature verified at the
+  edge with the app's own verifier).
+- **Authorization is a data-driven policy table** (`apps/auth/src/policy.ts`):
+  `(app, action) → rule` keyed on client kind / role / subject-allowlist / admin.
+  Deny by default. It replaces the former Cedar engine. Domain rules that don't
+  cross the edge (Discord command admin/ban gating) are plain data checks next
+  to the domain.
+- **External edges always verify** (this is the real authentication and must
+  never be dropped): Discord Ed25519 (`apps/webhooks`), provider webhook HMAC
+  (the auth worker, secret never leaves it), CF Access + Better Auth (`apps/auth`).
+- **Outbound HTTP is in-process.** The method that needs it fetches directly,
+  injecting the credential (from the calling worker's own env) and a timeout at
+  the call site — Discord REST/media via `packages/discord/api/http.ts`, the AI
+  Gateway in `discord/ai/inference`, the Cloudflare API in `discord/ai/spend`,
+  Vault in `secrets`. Hosts are fixed and known at the call site. Webhook signing
+  secrets live only on the auth worker (verifyWebhook resolves them per provider).
+- **Fail closed, disclose nothing**: denials return a bare status; the reason is
+  logged, never echoed. Never log request bodies, headers, tokens, or secrets.
+- **Wire hygiene**: queue sends use `contentType: "bytes"` (JSON mangles
+  Uint8Array); messages are capped below 128 KiB; validators run on encode and
+  re-run on decode.
+- Decided and settled: the `DiscordGateway` DO stays in the gateway worker and
+  `InteractionSession` stays in the workflows worker (moving a DO class between
+  scripts needs a risky transfer migration — keep worker names stable).
+
+## How to add things
+
+**A new application:** `pnpm scaffold <name>` generates a complete, compiling,
+test-green `apps/<name>`: a `wrangler.jsonc` (with the `AUTH` binding),
+`package.json`, an `src/index.ts` on `createAppWorker` with a sample
+authenticated route + RPC handler, `src/openapi.ts`, a registration in
+`scripts/deploy.ts` `DEPLOY_ORDER`, and a seeded auth policy entry. Then
+`pnpm install && pnpm run check && pnpm test`. Give it a subdomain by adding a
+`routes` entry to its wrangler; implement your route handler (it receives the
+authenticated `principal`) and fetch directly (credential + timeout at the call
+site) for any outbound HTTP.
+
+**A new webhook provider:** add its HMAC scheme to `packages/auth-kit/webhook.ts`
+(+ the `WebhookEventProvider` union in `packages/discord/contracts`) and its
+secret env var to the auth worker's `WEBHOOK_SECRET_ENV` map. The webhooks worker
+calls `AUTH.verifyWebhook` (never sees the secret), dedupes, and enqueues a
+`webhook.event` to workflows.
+
+**A new internal service worker (no route):** scaffold or hand-write a worker
+whose `src/index.ts` exports a `WorkerEntrypoint` (RPC) and/or a
+`createQueueWorker(service, handlers)` default. Callers bind it and call its
+methods directly.
+
+## Key flows (mental model)
+
+```
+Public request → app worker (createAppWorker) → AUTH.authenticateClient/verify/
+        authorize → route handler → RPC to a backend → in-process outbound fetch
+Discord interaction → webhooks (verify Ed25519, type-5 ack, kick InteractionSession)
+        → processor DO (pre-flight + handler) → edit reply → outbound
+Discord mention (gateway ws) → InteractionSession.runMention → AI + D1 → responder
+ai/spend/webhook jobs → plain capnp envelopes over trusted queues → consumers
 ```
 
-Create D1 database:
+## Testing
 
-```bash
-op run --env-file=.env -- npx wrangler d1 create ragbot
-```
+`pnpm test` runs vitest inside workerd (`@cloudflare/vitest-pool-workers`; config
+boots the gateway worker). Tests live in `test/packages/*` and `test/apps/*`;
+`test/helpers.ts` has the env + Discord-signed-request builders. Worker HTTP
+surfaces are tested through their fetch handlers / RPC entrypoints, not by
+mocking internals. Auth-path tests drive `createAppWorker` against a stubbed
+`AUTH` binding; RPC-path tests call `WorkerEntrypoint` methods directly.
 
-Copy generated IDs into `wrangler.jsonc`:
-- `database_id`
-- `preview_database_id`
+## Gotchas
 
-Apply D1 schema locally:
-
-```bash
-op run --env-file=.env -- npm run d1:migrate:local
-```
-
-Create queues:
-
-```bash
-op run --env-file=.env -- npx wrangler queues create ai-jobs
-op run --env-file=.env -- npx wrangler queues create ai-jobs-dlq
-op run --env-file=.env -- npx wrangler queues create ai-spend-jobs
-op run --env-file=.env -- npx wrangler queues create ai-spend-jobs-dlq
-```
-
-Register slash commands:
-
-```bash
-op run --env-file=.env -- npm run register:commands
-```
-
-Run local Worker dev server:
-
-```bash
-op run --env-file=.env -- npm run dev
-```
-
-Run local Worker dev server with both worker configs:
-
-```bash
-op run --env-file=.env -- npm run dev:all
-```
-
-Typecheck and test:
-
-```bash
-npm run check
-npm test
-```
-
-Deploy Worker:
-
-```bash
-op run --env-file=.env -- npm run deploy
-```
-
-Start Gateway connection (after deploy):
-
-```bash
-op run --env-file=.env -- sh -c 'curl -X POST "https://ragbot-worker.jsmunro.workers.dev/gateway/start" -H "Authorization: Bearer $DISCORD_BOT_TOKEN"'
-```
-
-Or run the helper:
-
-```bash
-./deploy.sh
-```
-
-## Discord App Configuration
-
-Bot scopes:
-- `bot`
-- `applications.commands`
-
-Bot permissions:
-- `Send Messages`
-- `Create Public Threads`
-- `Send Messages in Threads`
-- `Use Slash Commands`
-- `Read Message History` (required for thread conversation context)
-
-Use the deployed Worker URL plus `/discord` as the Discord interactions endpoint.
+- Node 22+ for wrangler; `pnpm install` (never npm — `workspace:*` deps). The
+  better-auth/zod peer warning on install is upstream noise.
+- `pnpm run contracts:build` needs the native capnp compiler (`brew install
+  capnp`); generated modules are committed.
+- Generated files (`openapi.yaml`, `src/openapi.ts`, `packages/contracts-core/
+  envelope.ts`) are committed — regenerate via scripts, never hand-edit.
+- D1: change schema via `migrations/` only. Never point `preview_database_id` at
+  prod. The AI usage guard fails open on D1 errors (deliberate); guild allowlist
+  and every security boundary fails closed.
+- Deploy order: `pnpm run deploy` follows `DEPLOY_ORDER` (auth first; workflows
+  before gateway for the InteractionSession cross-script DO). `apps/webhooks`
+  bootstraps separately via `--only webhooks`.

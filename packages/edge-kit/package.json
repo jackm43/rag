@@ -1,0 +1,13 @@
+{
+  "name": "@rag/edge-kit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@rag/logger": "workspace:*"
+  }
+}

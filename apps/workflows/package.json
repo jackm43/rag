@@ -1,0 +1,17 @@
+{
+  "name": "@rag/workflows",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./src": "./src/index.ts",
+    "./*": "./*.ts",
+    "./*.json": "./*.json",
+    "./*.md": "./*.md"
+  },
+  "dependencies": {
+    "@rag/discord": "workspace:*",
+    "@rag/logger": "workspace:*",
+    "@rag/queue-kit": "workspace:*"
+  }
+}

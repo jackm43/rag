@@ -1,0 +1,15 @@
+{
+  "name": "@rag/auth",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./*.ts",
+    "./src": "./src/index.ts"
+  },
+  "dependencies": {
+    "@rag/auth-kit": "workspace:*",
+    "@rag/edge-kit": "workspace:*",
+    "@rag/logger": "workspace:*"
+  }
+}
