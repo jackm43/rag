@@ -1,4 +1,3 @@
-export { ApplicationMiddleware } from "./application-entrypoint";
 export {
   DiscordGateway,
   ensureGatewayConnected,
@@ -7,4 +6,3 @@ export {
   stopGateway,
   type DiscordGatewayHealth,
 } from "./gateway";
-export { GATEWAY_MANIFEST } from "./manifest";
