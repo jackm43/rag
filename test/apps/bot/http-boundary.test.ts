@@ -1,7 +1,7 @@
 import { assert, test } from "vitest";
 import nacl from "tweetnacl";
 
-import worker from "@rag/gateway/api/middleware_client/src";
+import worker from "@rag/gateway/src";
 import { bearerTokenMatches, secretsMatch } from "@rag/ingress/operator-control";
 import { createEnv, createSignedRequest } from "../../helpers";
 

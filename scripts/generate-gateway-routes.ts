@@ -9,7 +9,7 @@ import {
   GATEWAY_SCHEMAS,
   GATEWAY_SECURITY_SCHEMES,
   type GatewayRouteBinding,
-} from "@rag/gateway/api/middleware_client/src/application-bindings";
+} from "@rag/gateway/src/application-bindings";
 
 // Generates the gateway OpenAPI document and route table from application
 // bindings. This keeps the gateway aligned with generated application
@@ -17,9 +17,9 @@ import {
 // are build artifacts (`pnpm run routes:build` after editing bindings).
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const specPath = join(root, "apps/bot/workers/gateway/api/middleware_client/openapi.yaml");
-const openApiModulePath = join(root, "apps/bot/workers/gateway/api/middleware_client/src/openapi.ts");
-const routesPath = join(root, "apps/bot/workers/gateway/api/middleware_client/src/routes.ts");
+const specPath = join(root, "apps/gateway/openapi.yaml");
+const openApiModulePath = join(root, "apps/gateway/src/openapi.ts");
+const routesPath = join(root, "apps/gateway/src/routes.ts");
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"] as const;
 type HttpMethod = typeof HTTP_METHODS[number];

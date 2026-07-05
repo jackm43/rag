@@ -131,19 +131,14 @@ export const OPENAPI = ${JSON.stringify(openapi, null, 2)} as const;
   process.stdout.write(`${specPath}\n${openApiModulePath}\n`);
 };
 
+// Flat layout: each app is apps/<app>/src/application-bindings.ts.
 for (const app of readdirSync(join(root, "apps"))) {
-  const workersDir = join(root, "apps", app, "workers");
-  if (!existsSync(workersDir)) {
-    continue;
+  if (app === "gateway") {
+    continue; // generate-gateway-routes.ts owns the gateway's document
   }
-  for (const worker of readdirSync(workersDir)) {
-    if (app === "bot" && worker === "gateway") {
-      continue; // generate-gateway-routes.ts owns the gateway's document
-    }
-    const workerDir = join(workersDir, worker, "api", "middleware_client");
-    const bindingsPath = join(workerDir, "src", "application-bindings.ts");
-    if (existsSync(bindingsPath)) {
-      await generate(bindingsPath, workerDir);
-    }
+  const workerDir = join(root, "apps", app);
+  const bindingsPath = join(workerDir, "src", "application-bindings.ts");
+  if (existsSync(bindingsPath)) {
+    await generate(bindingsPath, workerDir);
   }
 }

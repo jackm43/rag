@@ -5,7 +5,7 @@ import { runInDurableObject } from "cloudflare:test";
 import {
   extractBotMentionPrompt,
   handleGatewayMessageCreate,
-} from "@rag/gateway/api/middleware_client/src";
+} from "@rag/gateway/src";
 import workflowsWorker from "@rag/workflows/src";
 import { resolveGatewayMessage } from "@rag/discord/lib/domain/mention";
 import responderWorker from "@rag/responder/src";

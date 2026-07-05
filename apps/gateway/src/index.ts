@@ -9,7 +9,7 @@ import {
   getGatewayHealth,
   startGateway,
   stopGateway,
-} from "../../../service_server/src";
+} from "./gateway";
 import { OPENAPI } from "./openapi";
 import { createGatewayRouter } from "./router";
 

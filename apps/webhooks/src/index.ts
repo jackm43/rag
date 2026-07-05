@@ -9,7 +9,7 @@ import { connectorsClient } from "@rag/connectors-core/lib";
 import { CONNECTOR_ID_PATTERN, encodeWebhookEventEnvelope, MAX_WEBHOOK_BODY_BYTES, MAX_WEBHOOK_EVENT_TYPE_LENGTH } from "@rag/connectors-core/contracts";
 import type { Env, WebhookEventProvider } from "@rag/connectors-core/contracts";
 import { errorMessage, logger } from "@rag/logger";
-import { WebhookDedupe } from "../../../service_server/src";
+import { WebhookDedupe } from "./dedupe";
 import { OPENAPI } from "./openapi";
 
 export { WebhookDedupe };
