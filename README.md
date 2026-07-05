@@ -31,8 +31,7 @@ to build things live in [AGENTS.md](AGENTS.md).
 
 ```
 apps/           one top-level dir per deployed worker:
-                auth, gateway, workflows, responder, spend,
-                broker, connectors-api, webhooks
+                auth, gateway, workflows, responder, spend, webhooks
 packages/       shared (may never import apps):
                 edge-kit (the middleware), auth-kit (auth library),
                 discord, contracts-core, outbound,
@@ -133,10 +132,6 @@ Secrets go on the worker that needs them:
    Access policy so providers and Discord can POST — the signature at the edge
    is the authentication there. All other paths require the `ragbot-webhooks`
    service token.
-7. Webhook secrets: the auth worker verifies provider webhook signatures, so put
-   each provider's secret on it — e.g.
-   `wrangler secret put GITHUB_WEBHOOK_SECRET -c apps/auth/wrangler.jsonc`.
-   Verification fails closed until the secret is set.
 
 ## Configuration
 

@@ -85,12 +85,11 @@ never import apps; an app never imports another app; the graph stays acyclic.
 - **Authorization is a data-driven policy table** (`apps/auth/src/policy.ts`):
   `(app, action) → rule` keyed on client kind / role / subject-allowlist / admin.
   Deny by default. It replaces the former Cedar engine. Domain rules that don't
-  cross the edge (Discord command admin/ban gating, broker per-connector
-  capabilities) are plain data checks next to the domain.
+  cross the edge (Discord command admin/ban gating) are plain data checks next
+  to the domain.
 - **External edges always verify** (this is the real authentication and must
-  never be dropped): Discord Ed25519 (`apps/webhooks`), provider HMAC
-  and provider webhook HMAC (auth worker, secret never leaves it), CF Access + Better Auth
-  (`apps/auth`).
+  never be dropped): Discord Ed25519 (`apps/webhooks`), provider webhook HMAC
+  (the auth worker, secret never leaves it), CF Access + Better Auth (`apps/auth`).
 - **Outbound HTTP is in-process.** The RPC method that needs it builds a boundary
   client (`createEgressClient` from `@rag/outbound`; profiles in
   `packages/outbound/profiles.ts`) and fetches directly — host allowlist +
