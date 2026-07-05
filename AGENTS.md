@@ -74,7 +74,7 @@ never import apps; an app never imports another app; the graph stays acyclic.
   envelopes, no identity tokens, no Cedar. Trust is structural: only a worker
   whose wrangler declares a binding (or is a queue producer/consumer) can make
   the call, so the binding graph authenticates the caller. Callers that need a
-  principal pass it as a plain argument (e.g. the broker's `caller` string).
+  principal pass it as a plain argument.
 - **The auth worker is the single API Gateway for public ingress.** Every public
   app's middleware calls `AUTH.authenticateClient → verify → authorize` before a
   handler runs; backends trust the verdict and never re-check it (API-Gateway
@@ -89,14 +89,14 @@ never import apps; an app never imports another app; the graph stays acyclic.
   capabilities) are plain data checks next to the domain.
 - **External edges always verify** (this is the real authentication and must
   never be dropped): Discord Ed25519 (`apps/webhooks`), provider HMAC
-  (broker-side, secret never leaves the broker), CF Access + Better Auth
+  and provider webhook HMAC (auth worker, secret never leaves it), CF Access + Better Auth
   (`apps/auth`).
 - **Outbound HTTP is in-process.** The RPC method that needs it builds a boundary
   client (`createEgressClient` from `@rag/outbound`; profiles in
   `packages/outbound/profiles.ts`) and fetches directly — host allowlist +
   credential injection are enforced by the boundary client, and the credential is
-  the calling worker's own secret. Provider secrets live only in the broker
-  (phantom-token: callers get opaque handles, `authorizedFetch` runs broker-side).
+  the calling worker's own secret. Webhook signing secrets live only on the auth
+  worker (verifyWebhook resolves them per provider).
 - **Fail closed, disclose nothing**: denials return a bare status; the reason is
   logged, never echoed. Never log request bodies, headers, tokens, or secrets.
 - **Wire hygiene**: queue sends use `contentType: "bytes"` (JSON mangles

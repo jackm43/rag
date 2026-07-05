@@ -22,8 +22,9 @@ External edges are verified (Discord Ed25519, Cloudflare Access, provider
 webhook HMAC); public requests are authenticated and authorized by the auth
 worker, which backends trust and don't re-check. Worker-to-worker calls are
 plain, capability-gated Cloudflare service-binding RPC — no signing, no Cedar
-(only a worker whose wrangler declares a binding can make the call). Credentials
-live only at the broker. Architecture, conventions, and how
+(only a worker whose wrangler declares a binding can make the call). Outbound
+credentials live on the workers that make the calls; webhook secrets on the auth
+worker. Architecture, conventions, and how
 to build things live in [AGENTS.md](AGENTS.md).
 
 ## Repository layout
@@ -113,11 +114,12 @@ Secrets go on the worker that needs them:
    (`wrangler d1 migrations apply ragbot-auth -c apps/auth/wrangler.jsonc
    --remote`). `GATEWAY_CONTROL_TOKEN` (operator bearer token) and
    `RAG_ADMIN_USER_IDS` also live here.
-6. Webhooks: deploy the broker first with `GITHUB_WEBHOOK_SECRET`, then
+6. Webhooks: put each provider's webhook secret on the auth worker
+   (`wrangler secret put GITHUB_WEBHOOK_SECRET -c apps/auth/wrangler.jsonc`), then
    `pnpm run deploy:webhooks`. This shared ingress carries two concerns, both
    keyed by the caller's client/connector id:
    - Provider webhooks — `https://webhooks.jsmunro.me/{provider}/{connectorId}`
-     (e.g. `/github/github-app`); the provider HMAC (verified in the broker) is
+     (e.g. `/github/github-app`); the provider HMAC (verified by the auth worker) is
      the authentication.
    - Discord interaction callbacks —
      `https://webhooks.jsmunro.me/{clientId}/interactions`; the Ed25519
