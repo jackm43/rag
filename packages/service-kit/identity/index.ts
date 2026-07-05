@@ -36,3 +36,18 @@ export {
   PUBLIC_KEYRING,
   type ApplicationAuthorityEnv,
 } from "./keyring";
+export {
+  jwkThumbprint,
+  signRequest,
+  verifyRequest,
+  webBotAuthDirectory,
+  WEB_BOT_AUTH_DEFAULT_TTL_SECONDS,
+  WEB_BOT_AUTH_DIRECTORY_CONTENT_TYPE,
+  WEB_BOT_AUTH_DIRECTORY_PATH,
+  WEB_BOT_AUTH_TAG,
+  type WebBotAuthKeyResolver,
+  type WebBotAuthSignParams,
+  type WebBotAuthVerifyFailureReason,
+  type WebBotAuthVerifyOptions,
+  type WebBotAuthVerifyResult,
+} from "./web-bot-auth";

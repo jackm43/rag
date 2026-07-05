@@ -35,6 +35,15 @@ export type BoundaryPolicy = {
   // credentials (Discord webhook paths carry the interaction token) or reach
   // arbitrary hosts (media); their logs stay host-only.
   logPath?: boolean;
+  // Optional RFC 9421 "Web Bot Auth" request signer. When set, the headers it
+  // returns (Signature / Signature-Input / Signature-Agent) are merged onto each
+  // outbound request so Cloudflare-fronted origins can verify this caller as a
+  // registered signature agent instead of challenging it. Off by default; the
+  // signer owns key custody (e.g. an ApplicationAuthority DO RPC), so private
+  // keys never reach the boundary client. Fails CLOSED: if the signer throws we
+  // do not fall back to sending the request unsigned. See
+  // packages/service-kit/identity/web-bot-auth.ts (signRequest).
+  signer?: (request: { method: string; url: URL }) => Promise<Record<string, string>>;
 };
 
 type RequestOutcome = "ok" | "denied" | "http_error" | "timeout" | "network_error";
@@ -167,6 +176,12 @@ export const createBoundaryClient = (policy: BoundaryPolicy): BoundaryFetch => {
     const headers = headerRecord(init.headers);
     if (policy.credential) {
       headers[policy.credential.header] = policy.credential.value;
+    }
+    if (policy.signer) {
+      // Sign after credential injection so the signature covers the request as
+      // it will leave the boundary. A signer failure is fatal (fail closed) — an
+      // identity that opted into signing must not silently egress unsigned.
+      Object.assign(headers, await policy.signer({ method, url }));
     }
 
     let response: Response;

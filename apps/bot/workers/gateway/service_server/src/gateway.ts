@@ -30,7 +30,11 @@ export type DiscordGatewayHealth = {
   resumable: boolean;
 };
 
-const DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
+// Discord requires resumes to reconnect with the same version + encoding query
+// params as the initial connect. resume_gateway_url arrives without them, so we
+// keep the suffix separate and append it to whichever host we dial.
+const GATEWAY_QUERY = "/?v=10&encoding=json";
+const DISCORD_GATEWAY_URL = `wss://gateway.discord.gg${GATEWAY_QUERY}`;
 const GUILD_MESSAGES_INTENT = 1 << 9;
 const DIRECT_MESSAGES_INTENT = 1 << 12;
 const MESSAGE_CONTENT_INTENT = 1 << 15;
@@ -114,8 +118,12 @@ export class DiscordGateway extends DurableObject<Env> {
 
   async start() {
     // A manual start clears any operator stop so automatic wake-ups resume.
-    await this.ctx.storage.delete(GATEWAY_STOPPED_KEY);
-    await this.enableGateway();
+    // Independent keys, so initiate together and let the output gate coalesce
+    // the writes; connectGateway() is synchronous and needs no persisted state.
+    await Promise.all([
+      this.ctx.storage.delete(GATEWAY_STOPPED_KEY),
+      this.enableGateway(),
+    ]);
     this.connectGateway();
     return { ok: true };
   }
@@ -137,11 +145,16 @@ export class DiscordGateway extends DurableObject<Env> {
   // with a fresh IDENTIFY. The alarm handler also checks isGatewayEnabled,
   // so even a racing alarm cannot resurrect a stopped gateway.
   async stop() {
-    await this.ctx.storage.delete(GATEWAY_ENABLED_KEY);
-    // Mark an explicit operator stop so the cron/interaction ensureConnected()
-    // cannot bring it back up until a manual start().
-    await this.ctx.storage.put(GATEWAY_STOPPED_KEY, true);
-    await this.ctx.storage.deleteAlarm();
+    // These three writes hit distinct keys/alarm, so initiate them together and
+    // let the output gate coalesce them into one durable batch — the operator
+    // stop flag marks that ensureConnected() must not bring it back up until a
+    // manual start(). Overlaps the (synchronous) socket teardown below; awaited
+    // before return so the RPC still confirms durability.
+    const persisted = Promise.all([
+      this.ctx.storage.delete(GATEWAY_ENABLED_KEY),
+      this.ctx.storage.put(GATEWAY_STOPPED_KEY, true),
+      this.ctx.storage.deleteAlarm(),
+    ]);
 
     if (this.reconnectTimer !== undefined) {
       clearTimeout(this.reconnectTimer);
@@ -158,6 +171,7 @@ export class DiscordGateway extends DurableObject<Env> {
     this.sessionId = null;
     this.resumeGatewayUrl = null;
     this.lastSequence = null;
+    await persisted;
     return { ok: true };
   }
 
@@ -171,8 +185,11 @@ export class DiscordGateway extends DurableObject<Env> {
   }
 
   private async enableGateway() {
-    await this.ctx.storage.put(GATEWAY_ENABLED_KEY, true);
-    await this.scheduleWatchdog();
+    // Independent write + alarm: coalesce under the output gate.
+    await Promise.all([
+      this.ctx.storage.put(GATEWAY_ENABLED_KEY, true),
+      this.scheduleWatchdog(),
+    ]);
   }
 
   private async isGatewayEnabled() {
@@ -193,7 +210,9 @@ export class DiscordGateway extends DurableObject<Env> {
       this.reconnectTimer = undefined;
     }
 
-    const webSocket = new WebSocket(this.resumeGatewayUrl ?? DISCORD_GATEWAY_URL);
+    const webSocket = new WebSocket(
+      this.resumeGatewayUrl ? `${this.resumeGatewayUrl}${GATEWAY_QUERY}` : DISCORD_GATEWAY_URL,
+    );
     this.webSocket = webSocket;
     webSocket.addEventListener("message", (event) => {
       // Only the current socket handles events. A socket this object has already

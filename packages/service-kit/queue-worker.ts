@@ -1,7 +1,7 @@
 import type { ServiceManifest } from "./manifest";
 import { ensureRegistered } from "./registry";
 import type { ServiceKitEnv as Env } from "./env";
-import { logger } from "@rag/logger";
+import { errorMessage, logger } from "@rag/logger";
 
 export type QueueMessageHandler<TEnv extends Env = Env> = (
   message: Message<unknown>,
@@ -36,8 +36,24 @@ export const createQueueWorker = <TEnv extends Env>(
       return;
     }
 
+    // Handlers own per-message ack/retry on their own paths. This catch is only
+    // a contract backstop: a handler that *throws* is a bug, and letting it
+    // propagate would fail every sibling message in the batch and reprocess the
+    // whole batch on retry. Isolate the fault to its own message instead —
+    // retry() so it is redelivered (and eventually dead-lettered), never
+    // silently dropped. A throw after the handler already ack'd/retried is a
+    // no-op here, since the first disposition wins.
     for (const message of batch.messages) {
-      await handler(message, env);
+      try {
+        await handler(message, env);
+      } catch (error) {
+        logger.error("queue_handler_threw", {
+          service: manifest.service,
+          queue: batch.queue,
+          error: errorMessage(error),
+        });
+        message.retry();
+      }
     }
   },
 });
