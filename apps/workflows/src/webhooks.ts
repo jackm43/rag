@@ -1,30 +1,19 @@
-import { createServiceServer } from "@rag/service-kit";
 import { decodeWebhookEventEnvelope } from "@rag/connectors-core/contracts";
 import type { Env } from "@rag/discord/contracts";
 import { logger } from "@rag/logger";
 
-// Consumer for the webhook-jobs queue: verified third-party webhook events
-// enqueued by the webhooks edge worker. The receive pipeline is IDENTICAL to
-// ai-jobs (apps/bot/lib/domain/consumer.ts): createServiceServer verifies the
-// identity token (iss = webhooks, aud = workflows, envelope-hash binding), the
-// registration gate checks webhook.event against the workflows worker's registered
-// operations, Cedar authorizes the delivery, and only then is the envelope
-// decoded and value-validated. Anything that fails is logged as a denial and
-// acked so the queue never wedges on a hostile message.
+// Consumer for the webhook-jobs queue: third-party webhook events enqueued by the
+// webhooks edge worker (which verified the provider signature broker-side before
+// enqueueing). The event crosses the trusted webhooks -> workflows queue as a
+// plain capnp envelope — no token to verify. The envelope is decoded and
+// value-validated; anything that fails is acked so the queue never wedges.
 export const processWebhookQueueMessage = async (message: Message<unknown>, env: Env) => {
-  const server = createServiceServer({
-    self: "workflows",
-    expectedIssuers: ["webhooks"],
-    env,
-    transportTrust: { queue: "trusted" },
-  });
-  const received = await server.receive(message.body, decodeWebhookEventEnvelope);
-  if (!received) {
+  const job = decodeWebhookEventEnvelope(message.body);
+  if (!job) {
     message.ack();
     return;
   }
 
-  const job = received.payload;
   // The structured receipt record: identifiers only — NEVER the body (it may
   // carry third-party payload data that has no business in logs).
   logger.info("webhook_event_received", {
@@ -32,7 +21,6 @@ export const processWebhookQueueMessage = async (message: Message<unknown>, env:
     provider: job.provider,
     eventId: job.eventId,
     eventType: job.eventType,
-    subject: received.context.subject,
   });
 
   // SEAM: real webhook processing lands here (dispatch on connectorId/

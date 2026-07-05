@@ -66,10 +66,7 @@ test("spend worker aggregates pending spend events", async () => {
 
     await processSpendQueueMessage(
       {
-        body: await signedServiceMessage(
-          encodeAiSpendJobEnvelope({ spendEventId: "event-1" }, { source: "worker" }),
-          { iss: "workflows", aud: "spend", env },
-        ),
+        body: await (encodeAiSpendJobEnvelope({ spendEventId: "event-1" }, { source: "worker" })),
         attempts: 1,
         ack: () => {
           acked = true;

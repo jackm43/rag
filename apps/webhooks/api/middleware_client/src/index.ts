@@ -152,14 +152,8 @@ const handleWebhook = async (
   // token bound to the envelope bytes). Enqueue failures are 500 so the
   // provider retries the delivery.
   try {
-    await createClient({
-      env,
-      self: "webhooks",
-      context: { subject: subject.sub },
-    }).to("workflows", { transportTrust: "trusted" }).call({
-      transport: "queue",
-      queue: env.WEBHOOK_JOBS,
-      envelope: encodeWebhookEventEnvelope(
+    await env.WEBHOOK_JOBS.send(
+      encodeWebhookEventEnvelope(
         {
           kind: "webhook.event",
           connectorId,
@@ -171,13 +165,8 @@ const handleWebhook = async (
         },
         { source: "worker" },
       ),
-      intent: createHopIntent({
-        action: "webhook.event",
-        resourceType: "Connector",
-        resourceId: connectorId,
-        method: provider,
-      }),
-    });
+      { contentType: "bytes" },
+    );
   } catch (error) {
     logger.error("webhook_enqueue_failed", { connectorId, provider, error: errorMessage(error) });
     return new Response("Internal error", { status: 500 });

@@ -1,11 +1,12 @@
 import { sanitizeAiText } from "../ai/ai";
-import { createServiceServer } from "@rag/service-kit";
 import { decodeReplyJobEnvelope } from "../../contracts";
 import { editOriginalInteractionResponse, postChannelMessageForSubject } from "../discord";
 import { errorMessage, logger } from "@rag/logger";
-import type { RequestContext } from "@rag/service-kit/context";
 import { MAX_DISCORD_MESSAGE_LENGTH, type Env, type InteractionEditReplyJob, type ResponderAttachment } from "../../contracts";
-import { type ServiceMessageBytes } from "@rag/contracts-core";
+
+// The requester subject used to ride a signed token; egress no longer signs a
+// subject, so the responder applies replies under a fixed system identity.
+const SYSTEM_ACTOR = { sub: "system" };
 
 const DISCORD_MESSAGE_HARD_LIMIT = 2000;
 const EMPTY_REPLY_FALLBACK = "I could not generate a response.";
@@ -56,7 +57,6 @@ const applyInteractionEdit = async (
   env: Env,
   job: InteractionEditReplyJob,
   attachment: ResponderAttachment | null,
-  context: RequestContext,
 ) => {
   await editOriginalInteractionResponse(
     env,
@@ -69,54 +69,40 @@ const applyInteractionEdit = async (
       ...(attachment ? { attachments: [{ id: "0", filename: attachment.name }] } : {}),
     },
     attachment ? [attachment] : [],
-    { sub: context.subject, delegates: context.delegates },
+    SYSTEM_ACTOR,
   );
 };
 
-const responderServer = (env: Env) =>
-  createServiceServer({
-    self: "responder",
-    expectedIssuers: ["workflows"],
-    env,
-    transportTrust: { queue: "trusted", binding: "trusted" },
-  });
-
-// Only interaction edits may arrive over the binding transport; a verified
-// envelope of any other kind is the wrong operation for this entrypoint.
-const decodeInteractionEdit = (bytes: Uint8Array): InteractionEditReplyJob | null => {
+// Only interaction edits may arrive over the binding transport.
+const decodeInteractionEdit = (bytes: unknown): InteractionEditReplyJob | null => {
   const job = decodeReplyJobEnvelope(bytes);
   return job?.kind === "reply.interaction_edit" ? job : null;
 };
 
-// Binding RPC entrypoint: verify the identity-context token that rode as a
-// sibling RPC argument (aud must be the responder, envelope hash must match),
-// run Cedar, then apply the media edit.
+// Binding RPC entrypoint (media edits): reached only over the trusted RESPONDER
+// binding, so it takes the plain capnp ReplyJob envelope — no token to verify.
 export const deliverInteractionEdit = async (
   env: Env,
-  message: ServiceMessageBytes,
+  message: unknown,
   attachment: ResponderAttachment | null = null,
 ) => {
-  const received = await responderServer(env).receive(
-    message,
-    decodeInteractionEdit,
-    "binding",
-  );
-  if (!received) {
+  const job = decodeInteractionEdit(message);
+  if (!job) {
     throw new Error("Invalid interaction edit envelope");
   }
-
-  await applyInteractionEdit(env, received.payload, attachment, received.context);
+  await applyInteractionEdit(env, job, attachment);
 };
 
 const isRetryableDiscordStatus = (status: number) => status === 429 || status >= 500;
 
+// discord-outbox queue consumer. Messages are plain capnp ReplyJob bytes crossing
+// the trusted workflows -> responder producer/consumer binding.
 export const processOutboxMessage = async (message: Message<unknown>, env: Env) => {
-  const received = await responderServer(env).receive(message.body, decodeReplyJobEnvelope);
-  if (!received) {
+  const job = decodeReplyJobEnvelope(message.body);
+  if (!job) {
     message.ack();
     return;
   }
-  const job = received.payload;
 
   try {
     if (job.kind === "reply.channel_message") {
@@ -125,7 +111,7 @@ export const processOutboxMessage = async (message: Message<unknown>, env: Env) 
         "responder",
         job.channelId,
         finalizeAiReplyText(job.content),
-        { sub: received.context.subject, delegates: received.context.delegates },
+        SYSTEM_ACTOR,
       );
       if (!response.ok) {
         logger.warn("reply_delivery_rejected", { kind: job.kind, status: response.status });
@@ -135,8 +121,7 @@ export const processOutboxMessage = async (message: Message<unknown>, env: Env) 
         }
       }
     } else {
-      // Already verified + decoded above; apply directly rather than re-verifying.
-      await applyInteractionEdit(env, job, null, received.context);
+      await applyInteractionEdit(env, job, null);
     }
     message.ack();
   } catch (error) {

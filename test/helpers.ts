@@ -170,23 +170,12 @@ const subjectOf = (job: AiJob): string => {
 // SERVICE_REGISTRY control-plane binding, so the minted token carries a real
 // placement instead of being denied by the receiving server's placement
 // enforcement.
-export const gatewayAiJob = (job: AiJob, options: EnvelopeOptions, env?: Env): Promise<ServiceMessageBytes> =>
-  signedServiceMessage(encodeAiJobEnvelope(job, options), {
-    iss: "gateway",
-    aud: "workflows",
-    sub: subjectOf(job),
-    env,
-  });
+export const gatewayAiJob = async (job: AiJob, options: EnvelopeOptions, _env?: Env): Promise<Uint8Array> =>
+  encodeAiJobEnvelope(job, options);
 
-// Extract the envelope bytes from a captured service message (what a producer
-// handed the queue), for decoding in assertions.
-export const sentEnvelope = (sent: unknown): Uint8Array => {
-  const envelope = serviceEnvelopeBytes(sent);
-  if (!envelope) {
-    throw new Error("Captured queue body does not contain envelope bytes");
-  }
-  return envelope;
-};
+// A producer now hands the queue the raw capnp envelope bytes directly (no
+// signed ServiceMessage wrapper), so the captured body IS the envelope.
+export const sentEnvelope = (sent: unknown): Uint8Array => sent as Uint8Array;
 
 export const serviceRegistrySnapshot = () =>
   encodeManifestSnapshot([

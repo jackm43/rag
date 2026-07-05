@@ -82,19 +82,12 @@ export const recordAiSpendEvent = async (env: Env, input: SpendEventInput) => {
       .run();
 
     if (env.SPEND_JOBS) {
-      // Spend reconciliation is a workflows-originated flow: it re-mints an
-      // on-behalf-of token for the original requester when known, else the
-      // user-less "system" subject.
-      await createClient({
-        env,
-        self: "workflows",
-        context: clientContextOf(input.subject, input.requesterUserId),
-      }).to("spend", { transportTrust: "trusted" }).call({
-        transport: "queue",
-        queue: env.SPEND_JOBS,
-        envelope: encodeAiSpendJobEnvelope({ spendEventId: sourceId }, { source: "worker" }),
-        delaySeconds: 120,
-      });
+      // Spend reconciliation crosses the trusted workflows -> spend queue as a
+      // plain capnp envelope (the producer capability authenticates it).
+      await env.SPEND_JOBS.send(
+        encodeAiSpendJobEnvelope({ spendEventId: sourceId }, { source: "worker" }),
+        { contentType: "bytes", delaySeconds: 120 },
+      );
     }
   } catch (error) {
     logger.warn("ai_spend_event_record_failed", { error: errorMessage(error), kind: input.kind, model: input.model });
@@ -168,18 +161,12 @@ const findGatewayLogCostMicros = async (env: Env, sourceId: string) => {
 };
 
 export const processSpendQueueMessage = async (message: Message<unknown>, env: Env) => {
-  const server = createServiceServer({
-    self: "spend",
-    expectedIssuers: ["workflows"],
-    env,
-    transportTrust: { queue: "trusted" },
-  });
-  const received = await server.receive(message.body, decodeAiSpendJobEnvelope);
-  if (!received) {
+  // Plain capnp envelope over the trusted spend-jobs queue — no token to verify.
+  const job = decodeAiSpendJobEnvelope(message.body);
+  if (!job) {
     message.ack();
     return;
   }
-  const job = received.payload;
 
   const event = await env.DB.prepare(
     "SELECT source_id, kind, requester_user_id, requester_username, model, prompt_tokens, completion_tokens, total_tokens, unit_count, estimated_cost_micros, status FROM rag_ai_spend_events WHERE source_id = ?",

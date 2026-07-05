@@ -168,24 +168,11 @@ export const executeCommand = async (
   }
 
   if (spec.kind === "enqueue") {
-    await createClient({
-      env,
-      self: "gateway",
-      context: { subject: ctx.invoker?.id ?? SYSTEM_SUBJECT },
-    }).to("workflows", { transportTrust: "trusted" }).call({
-      transport: "queue",
-      queue: env.AI_JOBS,
-      envelope: encodeAiJobEnvelope(spec.buildJob(ctx), {
-        source: "interactions",
-        guildId: ctx.guildId,
-      }),
-      intent: createHopIntent({
-        action: `command.${spec.name}`,
-        resourceType: "Guild",
-        resourceId: ctx.guildId ?? "unknown",
-        method: spec.name,
-      }),
-    });
+    // Plain capnp envelope over the trusted gateway -> workflows ai-jobs queue.
+    await env.AI_JOBS.send(
+      encodeAiJobEnvelope(spec.buildJob(ctx), { source: "interactions", guildId: ctx.guildId }),
+      { contentType: "bytes" },
+    );
     return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
   }
 

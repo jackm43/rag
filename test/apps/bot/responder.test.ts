@@ -147,17 +147,14 @@ test("responder posts sanitized channel messages with allowed_mentions locked do
       queue: "discord-outbox",
       messages: [
         {
-          body: await signedServiceMessage(
-            encodeReplyJobEnvelope(
+          body: await (encodeReplyJobEnvelope(
               {
                 kind: "reply.channel_message",
                 channelId: CHANNEL_ID,
                 content: "Ping <@123456789012345678> and @everyone",
               },
               { source: "worker" },
-            ),
-            { iss: "workflows", aud: "responder", env },
-          ),
+            )),
           ack: () => {
             acked = true;
           },
@@ -204,8 +201,7 @@ test("responder edits interactions with text-only content through the outbox", a
       queue: "discord-outbox",
       messages: [
         {
-          body: await signedServiceMessage(
-            encodeReplyJobEnvelope(
+          body: await (encodeReplyJobEnvelope(
               {
                 kind: "reply.interaction_edit",
                 applicationId: APPLICATION_ID,
@@ -213,9 +209,7 @@ test("responder edits interactions with text-only content through the outbox", a
                 content: `Generated song: https://example.com/song.mp3\nPrompt: ${"a".repeat(2100)}`,
               },
               { source: "worker" },
-            ),
-            { iss: "workflows", aud: "responder", env },
-          ),
+            )),
           ack: () => {
             acked = true;
           },
@@ -265,18 +259,11 @@ test("responder delivers media interaction edits over the RPC path", async () =>
       },
       { source: "worker" },
     );
-    await deliverInteractionEdit(
-      env,
-      encodeServiceMessage(
-        mediaEnvelope,
-        await mintServiceToken(mediaEnvelope, { iss: "workflows", aud: "responder", env }),
-      ),
-      {
-        name: "bicture.png",
-        contentType: "image/png",
-        data: imageBytes.slice().buffer,
-      },
-    );
+    await deliverInteractionEdit(env, mediaEnvelope, {
+      name: "bicture.png",
+      contentType: "image/png",
+      data: imageBytes.slice().buffer,
+    });
 
     const editCall = fetchCalls.find(
       (call) => call.url === `https://discord.com/api/v10/webhooks/${APPLICATION_ID}/interaction-token/messages/@original`,
@@ -388,7 +375,7 @@ test("responder retries channel posts on retryable Discord errors and acks termi
       queue: "discord-outbox",
       messages: [
         {
-          body: await signedServiceMessage(replyEnvelope(), { iss: "workflows", aud: "responder", env }),
+          body: await (replyEnvelope()),
           ack: () => {
             throw new Error("message should not be acked");
           },
@@ -411,7 +398,7 @@ test("responder retries channel posts on retryable Discord errors and acks termi
       queue: "discord-outbox",
       messages: [
         {
-          body: await signedServiceMessage(replyEnvelope(), { iss: "workflows", aud: "responder", env }),
+          body: await (replyEnvelope()),
           ack: () => {
             acked = true;
           },

@@ -51,14 +51,9 @@ export const runAskCommand = async (ctx: CommandContext, env: Env) => {
     title,
   });
 
-  await createClient({
-    env,
-    self: "gateway",
-    context: { subject: requester?.id ?? SYSTEM_SUBJECT },
-  }).to("workflows", { transportTrust: "trusted" }).call({
-    transport: "queue",
-    queue: env.AI_JOBS,
-    envelope: encodeAiJobEnvelope(
+  // Plain capnp envelope over the trusted gateway -> workflows ai-jobs queue.
+  await env.AI_JOBS.send(
+    encodeAiJobEnvelope(
       {
         kind: "ask",
         channelId: thread.id,
@@ -68,13 +63,8 @@ export const runAskCommand = async (ctx: CommandContext, env: Env) => {
       },
       { source: "interactions", guildId: ctx.guildId },
     ),
-    intent: createHopIntent({
-      action: "command.ask",
-      resourceType: "Guild",
-      resourceId: ctx.guildId ?? "unknown",
-      method: "ask",
-    }),
-  });
+    { contentType: "bytes" },
+  );
 
   return {
     content: `Started <#${thread.id}>`,

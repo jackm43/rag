@@ -249,26 +249,25 @@ const jobProcessors: AiJobProcessors = {
   channel_reply: processChatJob,
 };
 
+// The acting-subject context used to ride a signed token; egress no longer signs
+// a subject, so jobs process under a fixed system context.
+const SYSTEM_CONTEXT = { subject: "system", delegates: [] } as unknown as RequestContext;
+
 export const processAiQueueMessage = async (message: Message<unknown>, env: Env) => {
   const startedAt = Date.now();
-  const server = createServiceServer({
-    self: "workflows",
-    expectedIssuers: ["gateway"],
-    env,
-    transportTrust: { queue: "trusted" },
-  });
-  const received = await server.receive(message.body, decodeAiJobEnvelope);
-  if (!received) {
+  // Plain capnp envelope over the trusted gateway -> workflows ai-jobs queue.
+  const job = decodeAiJobEnvelope(message.body);
+  if (!job) {
     message.ack();
     return;
   }
 
-  const process = jobProcessors[received.payload.kind] as (
+  const process = jobProcessors[job.kind] as (
     job: AiJob,
     env: Env,
     startedAt: number,
     context: RequestContext,
   ) => Promise<void>;
-  await process(received.payload, env, startedAt, received.context);
+  await process(job, env, startedAt, SYSTEM_CONTEXT);
   message.ack();
 };
