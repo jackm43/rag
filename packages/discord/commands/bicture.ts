@@ -1,14 +1,12 @@
 import bictureImageConfig from "../ai/ai-config/bicture-image.json";
 import { buildAiGatewayMetadata } from "../ai/ai-metadata";
 import { errorDetails, errorMessage, logger } from "@rag/logger";
-import { boundaryClients } from "@rag/outbound/clients";
+import { fetchMedia } from "../api/http";
 import { inferenceClient } from "../ai/inference";
 import { sendInteractionEdit, sendInteractionMediaEdit } from "../domain/outbox";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../ai/spend";
 import { type BictureJob, type Env } from "../contracts";
 import { isRecord } from "@rag/contracts-core";
-import type { RequestContext } from "@rag/service-kit/context";
-import type { Subject } from "@rag/service-kit";
 
 const BICTURE_FILENAME_PREFIX = "bicture";
 const DEFAULT_IMAGE_CONTENT_TYPE = "image/jpeg";
@@ -63,9 +61,9 @@ const extensionForContentType = (contentType: string) => {
 const filenameForContentType = (contentType: string) =>
   `${BICTURE_FILENAME_PREFIX}.${extensionForContentType(contentType)}`;
 
-const imageFileFromString = async (env: Env, value: string) => {
+const imageFileFromString = async (value: string) => {
   if (/^https:\/\//i.test(value)) {
-    const response = await boundaryClients(env, "workflows").mediaDownload(value);
+    const response = await fetchMedia(value);
     if (!response.ok) {
       throw new Error(`Generated image download failed (${response.status}): ${response.statusText}`);
     }
@@ -114,7 +112,7 @@ const extractImageString = (result: unknown) => {
   return null;
 };
 
-const imageFileFrom = async (env: Env, result: unknown) => {
+const imageFileFrom = async (result: unknown) => {
   if (result instanceof Uint8Array) {
     return { data: bytesToArrayBuffer(result), contentType: DEFAULT_IMAGE_CONTENT_TYPE };
   }
@@ -130,7 +128,7 @@ const imageFileFrom = async (env: Env, result: unknown) => {
 
   const imageString = extractImageString(result);
   if (imageString) {
-    return imageFileFromString(env, imageString);
+    return imageFileFromString(imageString);
   }
 
   throw new Error("missing_bicture_image");
@@ -159,7 +157,7 @@ const runBictureImageGeneration = async (
   );
 };
 
-const buildBictureResponse = async (job: BictureJob & { subject?: Subject }, env: Env) => {
+const buildBictureResponse = async (job: BictureJob, env: Env) => {
   const spendSourceId = createAiSpendSourceId();
   const result = await runBictureImageGeneration(
     env,
@@ -178,9 +176,8 @@ const buildBictureResponse = async (job: BictureJob & { subject?: Subject }, env
     model: activeBictureProfile.model,
     unitCount: 1,
     sourceId: spendSourceId,
-    subject: job.subject,
   });
-  const imageFile = await imageFileFrom(env, result);
+  const imageFile = await imageFileFrom(result);
   const filename = filenameForContentType(imageFile.contentType);
 
   return {
@@ -193,18 +190,10 @@ const buildBictureResponse = async (job: BictureJob & { subject?: Subject }, env
   };
 };
 
-const subjectFromContext = (context: RequestContext | undefined, fallback?: string) => context
-  ? { sub: context.subject, delegates: context.delegates, requestId: context.requestId, correlationId: context.correlationId }
-  : fallback;
-
-export const processBictureJob = async (job: BictureJob, env: Env, context?: RequestContext) => {
-  const subject = subjectFromContext(context, job.requesterUserId);
+export const processBictureJob = async (job: BictureJob, env: Env) => {
   try {
-    const response = await buildBictureResponse(
-      { ...job, ...(typeof subject === "object" ? { subject } : {}) },
-      env,
-    );
-    await sendInteractionMediaEdit(env, job.applicationId, job.interactionToken, response.content, response.file, subject);
+    const response = await buildBictureResponse(job, env);
+    await sendInteractionMediaEdit(env, job.applicationId, job.interactionToken, response.content, response.file);
   } catch (error) {
     logger.error("bicture_command_failed", {
       error: errorMessage(error),
@@ -218,7 +207,6 @@ export const processBictureJob = async (job: BictureJob, env: Env, context?: Req
       job.applicationId,
       job.interactionToken,
       "Could not generate that image. Try a different prompt.",
-      subject,
     ).catch(() => undefined);
   }
 };

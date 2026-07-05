@@ -11,7 +11,6 @@
   },
   "dependencies": {
     "@rag/discord": "workspace:*",
-    "@rag/queue-kit": "workspace:*",
-    "@rag/service-kit": "workspace:*"
+    "@rag/queue-kit": "workspace:*"
   }
 }

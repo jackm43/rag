@@ -11,7 +11,6 @@
   },
   "dependencies": {
     "@rag/contracts-core": "workspace:*",
-    "@rag/discord": "workspace:*",
-    "@rag/service-kit": "workspace:*"
+    "@rag/discord": "workspace:*"
   }
 }

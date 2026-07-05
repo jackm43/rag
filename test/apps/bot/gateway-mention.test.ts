@@ -473,7 +473,7 @@ test("fetchChannelMessages drops malformed Discord messages", async () => {
 
   try {
     const env = createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" });
-    const messages = await fetchChannelMessages(env, "workflows", "channel-id");
+    const messages = await fetchChannelMessages(env, "channel-id");
 
     assert.equal(messages.length, 1);
     assert.equal(messages[0].id, "message-id");

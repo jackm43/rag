@@ -18,13 +18,11 @@ type DeferredReplyOptions = {
 };
 
 // Runs a deferred command to completion and edits the original interaction
-// response as the `workflows` principal. This runs inside the
-// InteractionSession Durable Object (hosted by the workflows worker) — the only
-// bot component that holds both the EGRESS binding and WORKFLOWS_SIGNING_KEY,
-// which the outbound edit requires. The gateway ingress holds neither, so the
-// reply cannot be sent from there. It awaits to completion (the DO owns the
-// lifetime, not a fire-and-forget waitUntil); on failure it best-effort posts
-// the failure message so the interaction never hangs on "thinking…".
+// response. This runs inside the InteractionSession Durable Object (hosted by
+// the workflows worker), which holds the bot token needed for the outbound
+// edit. It awaits to completion (the DO owns the lifetime, not a
+// fire-and-forget waitUntil); on failure it best-effort posts the failure
+// message so the interaction never hangs on "thinking…".
 export const runDeferredReply = async (
   interaction: DiscordInteraction,
   env: Env,
@@ -42,13 +40,13 @@ export const runDeferredReply = async (
     const { data, files } = "data" in result
       ? result
       : { data: result, files: [] as InteractionResponseFile[] };
-    await editOriginalInteractionResponse(env, "workflows", applicationId, interactionToken, data, files);
+    await editOriginalInteractionResponse(env, applicationId, interactionToken, data, files);
   } catch (error) {
     logger.error(options.logEvent, {
       error: errorMessage(error),
       ...options.logContext?.(error),
     });
-    await editOriginalInteractionResponse(env, "workflows", applicationId, interactionToken, {
+    await editOriginalInteractionResponse(env, applicationId, interactionToken, {
       content: options.failureMessage,
       allowed_mentions: { parse: [] },
     }).catch(() => undefined);

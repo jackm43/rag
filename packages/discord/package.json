@@ -15,9 +15,7 @@
     "@rag/auth-kit": "workspace:*",
     "@rag/contracts-core": "workspace:*",
     "@rag/logger": "workspace:*",
-    "@rag/outbound": "workspace:*",
     "@rag/secrets": "workspace:*",
-    "@rag/service-kit": "workspace:*",
     "capnp-es": "^0.0.14",
     "tweetnacl": "^1.0.3"
   }

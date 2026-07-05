@@ -1,15 +1,12 @@
 import ragjamMusicConfig from "../ai/ai-config/ragjam-music.json";
 import { buildAiGatewayMetadata } from "../ai/ai-metadata";
 import { errorDetails, errorMessage, logger } from "@rag/logger";
-import { PolicyViolationError } from "@rag/outbound/boundary-client";
-import { boundaryClients } from "@rag/outbound/clients";
+import { fetchMedia, MediaTooLargeError } from "../api/http";
 import { inferenceClient } from "../ai/inference";
 import { sendInteractionEdit, sendInteractionMediaEdit } from "../domain/outbox";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../ai/spend";
 import { type Env, type RagjamJob, type ResponderAttachment } from "../contracts";
 import { isRecord } from "@rag/contracts-core";
-import type { RequestContext } from "@rag/service-kit/context";
-import type { Subject } from "@rag/service-kit";
 
 const DISCORD_MESSAGE_HARD_LIMIT = 2000;
 const RAGJAM_FILENAME_PREFIX = "ragjam";
@@ -61,9 +58,9 @@ const extensionForAudio = (contentType: string, url: string) => {
 const filenameForAudio = (contentType: string, url: string) =>
   `${RAGJAM_FILENAME_PREFIX}.${extensionForAudio(contentType, url)}`;
 
-const audioFileFromUrl = async (env: Env, url: string): Promise<ResponderAttachment | null> => {
+const audioFileFromUrl = async (url: string): Promise<ResponderAttachment | null> => {
   try {
-    const response = await boundaryClients(env, "workflows").mediaDownload(url);
+    const response = await fetchMedia(url);
     if (!response.ok) {
       throw new Error(`Generated audio download failed (${response.status}): ${response.statusText}`);
     }
@@ -75,7 +72,7 @@ const audioFileFromUrl = async (env: Env, url: string): Promise<ResponderAttachm
       data: await response.arrayBuffer(),
     };
   } catch (error) {
-    if (error instanceof PolicyViolationError && error.reason === "response_too_large") {
+    if (error instanceof MediaTooLargeError) {
       return null;
     }
     throw error;
@@ -100,7 +97,7 @@ const runRagjamMusicGeneration = async (
   );
 };
 
-const buildRagjamResponse = async (job: RagjamJob & { subject?: Subject }, env: Env) => {
+const buildRagjamResponse = async (job: RagjamJob, env: Env) => {
   const { prompt } = job;
   const lyrics = job.lyrics?.trim() || "";
   if (!prompt) {
@@ -126,7 +123,6 @@ const buildRagjamResponse = async (job: RagjamJob & { subject?: Subject }, env: 
     model: activeRagjamConfig.model,
     unitCount: 1,
     sourceId: spendSourceId,
-    subject: job.subject,
   });
 
   const audioUrl = extractAudioUrl(result);
@@ -136,7 +132,7 @@ const buildRagjamResponse = async (job: RagjamJob & { subject?: Subject }, env: 
 
   let audioFile: ResponderAttachment | null = null;
   try {
-    audioFile = await audioFileFromUrl(env, audioUrl);
+    audioFile = await audioFileFromUrl(audioUrl);
   } catch (error) {
     logger.warn("ragjam_audio_download_failed", {
       error: errorMessage(error),
@@ -151,21 +147,13 @@ const buildRagjamResponse = async (job: RagjamJob & { subject?: Subject }, env: 
   return { content: promptContent(prompt, `Generated song: ${audioUrl}\nPrompt: `), file: null };
 };
 
-const subjectFromContext = (context: RequestContext | undefined, fallback?: string) => context
-  ? { sub: context.subject, delegates: context.delegates, requestId: context.requestId, correlationId: context.correlationId }
-  : fallback;
-
-export const processRagjamJob = async (job: RagjamJob, env: Env, context?: RequestContext) => {
-  const subject = subjectFromContext(context, job.requesterUserId);
+export const processRagjamJob = async (job: RagjamJob, env: Env) => {
   try {
-    const response = await buildRagjamResponse(
-      { ...job, ...(typeof subject === "object" ? { subject } : {}) },
-      env,
-    );
+    const response = await buildRagjamResponse(job, env);
     if (response.file) {
-      await sendInteractionMediaEdit(env, job.applicationId, job.interactionToken, response.content, response.file, subject);
+      await sendInteractionMediaEdit(env, job.applicationId, job.interactionToken, response.content, response.file);
     } else {
-      await sendInteractionEdit(env, job.applicationId, job.interactionToken, response.content, subject);
+      await sendInteractionEdit(env, job.applicationId, job.interactionToken, response.content);
     }
   } catch (error) {
     logger.error("ragjam_command_failed", {
@@ -180,7 +168,6 @@ export const processRagjamJob = async (job: RagjamJob, env: Env, context?: Reque
       job.applicationId,
       job.interactionToken,
       "Could not generate that song. Try a different prompt or lyrics.",
-      subject,
     ).catch(() => undefined);
   }
 };

@@ -1,6 +1,6 @@
 // Wire-validation kernel: the character classes, caps, and tiny predicates
 // every app's message validators are built from. App-specific job validators
-// live with their app's contracts (apps/*/contracts, @rag/outbound/contracts).
+// live with their app's contracts (apps/*/contracts, @rag/discord/contracts).
 // Value constraints the Cap'n Proto schema cannot express. Applied at encode
 // (producer) and decode (consumer) time so neither side trusts the other hop.
 export const SNOWFLAKE_PATTERN = /^\d{17,20}$/;

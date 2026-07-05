@@ -1,12 +1,11 @@
 import { decodeAiSpendJobEnvelope, encodeAiSpendJobEnvelope } from "../contracts";
 import { errorMessage, logger } from "@rag/logger";
-import { boundaryClients } from "@rag/outbound/clients";
-import { SYSTEM_SUBJECT, type Subject, type VerifiedRequestContext } from "@rag/service-kit";
 import type { Env } from "../contracts";
 import { isRecord } from "@rag/contracts-core";
 
 const USD_MICROS = 1_000_000;
 const DEFAULT_AIG_GATEWAY_ID = "platy";
+const CLOUDFLARE_API_TIMEOUT_MS = 30_000;
 
 type SpendEventInput = {
   kind: string;
@@ -18,7 +17,6 @@ type SpendEventInput = {
   totalTokens?: number | null;
   unitCount?: number;
   sourceId?: string;
-  subject?: Subject;
 };
 
 type SpendEventRow = {
@@ -34,16 +32,6 @@ type SpendEventRow = {
   estimated_cost_micros: number | null;
   status: string;
 };
-
-const clientContextOf = (subject: Subject | undefined, fallback: string | undefined): VerifiedRequestContext =>
-  subject
-    ? {
-        subject: subject.sub,
-        delegates: subject.delegates,
-        requestId: subject.requestId,
-        correlationId: subject.correlationId,
-      }
-    : { subject: fallback ?? SYSTEM_SUBJECT };
 
 const optionalUsage = (value: number | null | undefined) =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
@@ -138,7 +126,11 @@ const findGatewayLogCostMicros = async (env: Env, sourceId: string) => {
     const url = new URL(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/ai-gateway/gateways/${gatewayId}/logs`);
     url.searchParams.set("page", String(page));
     url.searchParams.set("per_page", "50");
-    const response = await boundaryClients(env, "spend").cloudflareApi(url);
+    // In-process outbound to the Cloudflare API: inject the token + a timeout.
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
+      signal: AbortSignal.timeout(CLOUDFLARE_API_TIMEOUT_MS),
+    });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(`AI Gateway logs request failed (${response.status}): ${JSON.stringify(payload)}`);

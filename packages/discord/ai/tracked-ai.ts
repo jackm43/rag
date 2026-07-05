@@ -11,7 +11,6 @@ import { buildAiGatewayMetadata } from "./ai-metadata";
 import type { BotConfig } from "./config";
 import { createAiSpendSourceId, recordAiSpendEvent } from "./spend";
 import type { Env } from "../contracts";
-import type { Subject } from "@rag/service-kit";
 
 export type SpendAttribution = {
   kind: string;
@@ -19,7 +18,6 @@ export type SpendAttribution = {
   requesterUsername?: string | null;
   channelId?: string | null;
   messageId?: string | null;
-  subject?: Subject;
 };
 
 const recordCompletionSpend = async (
@@ -37,7 +35,6 @@ const recordCompletionSpend = async (
     completionTokens: result.usage?.completionTokens ?? null,
     totalTokens: result.usage?.totalTokens ?? null,
     sourceId,
-    subject: attribution.subject,
   });
 };
 
@@ -47,7 +44,7 @@ export const runTrackedChatCompletion = async (
   messages: ChatMessage[],
   options: SpendAttribution & Omit<ChatOptions, "metadata">,
 ): Promise<ChatModelResult> => {
-  const { kind, requesterUserId, requesterUsername, channelId, messageId, subject, ...chatOptions } = options;
+  const { kind, requesterUserId, requesterUsername, channelId, messageId, ...chatOptions } = options;
   const spendSourceId = createAiSpendSourceId();
   const result = await runChatCompletion(env, config, messages, {
     ...chatOptions,
@@ -59,7 +56,7 @@ export const runTrackedChatCompletion = async (
       messageId,
     }),
   });
-  await recordCompletionSpend(env, { kind, requesterUserId, requesterUsername, subject }, result, spendSourceId);
+  await recordCompletionSpend(env, { kind, requesterUserId, requesterUsername }, result, spendSourceId);
   return result;
 };
 
@@ -68,7 +65,7 @@ export const runTrackedWebSearchCompletion = async (
   input: string,
   options: SpendAttribution & Omit<WebSearchChatOptions, "metadata">,
 ): Promise<WebSearchModelResult> => {
-  const { kind, requesterUserId, requesterUsername, channelId, messageId, subject, ...searchOptions } = options;
+  const { kind, requesterUserId, requesterUsername, channelId, messageId, ...searchOptions } = options;
   const spendSourceId = createAiSpendSourceId();
   const result = await runWebSearchCompletion(env, input, {
     ...searchOptions,
@@ -80,6 +77,6 @@ export const runTrackedWebSearchCompletion = async (
       messageId,
     }),
   });
-  await recordCompletionSpend(env, { kind, requesterUserId, requesterUsername, subject }, result, spendSourceId);
+  await recordCompletionSpend(env, { kind, requesterUserId, requesterUsername }, result, spendSourceId);
   return result;
 };

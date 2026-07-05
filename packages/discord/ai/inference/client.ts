@@ -5,14 +5,13 @@
 // ask and how to interpret the raw response payloads — nothing outside this
 // package touches gateway.ai.cloudflare.com or env.AI directly.
 //
-// The AI Gateway credential (CF_AIG_TOKEN) is NOT held here: the gateway-HTTP
-// path routes through the "ai-gateway" egress profile, so the token lives on
-// the egress worker and is injected there. env.AI (the Workers AI binding)
-// path is unaffected and still runs in-process.
-import type { BoundaryFetch } from "@rag/outbound/boundary-client";
-import { createEgressClient } from "@rag/outbound/client";
+// The AI Gateway credential (CF_AIG_TOKEN) is injected on the outbound request
+// here (gateway-HTTP path). env.AI (the Workers AI binding) path is unaffected
+// and still runs in-process.
 import type { Env } from "../../contracts";
 import { isRecord } from "@rag/contracts-core";
+
+const AI_GATEWAY_TIMEOUT_MS = 120_000;
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -106,19 +105,7 @@ const errorDetailFrom = (payload: unknown, fallback: string) => {
   return fallback;
 };
 
-const lazy = <T>(create: () => T) => {
-  let value: T | undefined;
-  return () => (value ??= create());
-};
-
 const buildClient = (env: Env): InferenceClient => {
-  // The gateway-HTTP path routes through the "ai-gateway" egress profile
-  // (workflows caller): host allowlist, timeout and the CF_AIG_TOKEN
-  // credential all live on the egress worker's profile, injected there.
-  const gatewayFetch: () => BoundaryFetch = lazy(() =>
-    createEgressClient(env, "ai-gateway", "workflows"),
-  );
-
   const gatewayChatCompletions = async (
     gatewayId: string,
     body: Record<string, unknown>,
@@ -130,15 +117,19 @@ const buildClient = (env: Env): InferenceClient => {
       throw new Error(`CF_ACCOUNT_ID is required for ${requiredDetail}`);
     }
 
-    const response = await gatewayFetch()(
+    // In-process outbound to the AI Gateway: inject the CF_AIG_TOKEN and a
+    // timeout. The host is fixed.
+    const response = await fetch(
       `https://gateway.ai.cloudflare.com/v1/${env.CF_ACCOUNT_ID}/${gatewayId}/compat/chat/completions`,
       {
         method: "POST",
         headers: {
           "content-type": "application/json",
+          "cf-aig-authorization": `Bearer ${env.CF_AIG_TOKEN}`,
           ...(metadata ? { "cf-aig-metadata": JSON.stringify(metadata) } : {}),
         },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(AI_GATEWAY_TIMEOUT_MS),
       },
     );
 

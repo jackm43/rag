@@ -9,7 +9,7 @@ import { stringOption, type CommandContext } from "./context";
 export { shouldUseAskWebSearch } from "../ai/ask-mode";
 
 const resolveThreadParentChannelId = async (env: Env, channelId: string) => {
-  const channel = await fetchChannel(env, "workflows", channelId);
+  const channel = await fetchChannel(env, channelId);
   if (channel && isThreadChannel(channel) && channel.parent_id) {
     return channel.parent_id;
   }
@@ -30,7 +30,7 @@ export const runAskCommand = async (ctx: CommandContext, env: Env) => {
   const requesterUsername = ctx.displayName;
   const title = fallbackThreadTitle(prompt);
   const targetChannelId = await resolveThreadParentChannelId(env, parentChannelId);
-  const thread = await createThreadWithoutMessage(env, "workflows", targetChannelId, title).catch((error) => {
+  const thread = await createThreadWithoutMessage(env, targetChannelId, title).catch((error) => {
     logger.warn("ask_thread_create_failed", {
       error: errorMessage(error),
       channelId: targetChannelId,

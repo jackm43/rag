@@ -16,7 +16,8 @@ top-level `apps/<worker>` application** and all shared code lives in
 - **The edge** — `apps/auth` is the **API Gateway**: every public app binds it as
   `AUTH` and it owns all public authentication (Cloudflare Access, Better Auth
   Discord sessions, operator token) and the authorization policy table. Outbound
-  HTTP is in-process (`@rag/outbound`) in the RPC method that needs it.
+  HTTP is a plain in-process fetch (credential + timeout injected) in the method
+  that needs it.
 
 External edges are verified (Discord Ed25519, Cloudflare Access, provider
 webhook HMAC); public requests are authenticated and authorized by the auth
@@ -34,8 +35,7 @@ apps/           one top-level dir per deployed worker:
                 auth, gateway, workflows, responder, spend, webhooks
 packages/       shared (may never import apps):
                 edge-kit (the middleware), auth-kit (auth library),
-                discord, contracts-core, outbound,
-                rpc, queue-kit, secrets, service-kit (types only), logger
+                discord, contracts-core, queue-kit, secrets, logger
 scripts/        deploy, codegen, scaffold, dependency-direction check
 migrations/     D1 schema (schema.sql is a read-only mirror)
 test/           vitest (@cloudflare/vitest-pool-workers)

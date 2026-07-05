@@ -1,6 +1,6 @@
 // The envelope kernel: framed capnp EventEnvelope plumbing and the validation
 // primitives. App message types and their encoders/decoders live with the
-// owning app (apps/*/contracts) or package (@rag/outbound/contracts) — this
+// owning app (apps/*/contracts) or package (e.g. @rag/discord/contracts) — this
 // package must stay a leaf. Queue payloads are plain EventEnvelope bytes.
 import * as capnp from "capnp-es";
 import { EventEnvelope } from "./envelope";

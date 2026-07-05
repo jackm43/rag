@@ -1,4 +1,3 @@
-import { SYSTEM_SUBJECT } from "@rag/service-kit";
 import { MAX_MENTION_IDS } from "../contracts";
 import { isSnowflake, MAX_FREE_TEXT_LENGTH } from "@rag/contracts-core";
 import { fetchBotRoleIds } from "../api";
@@ -164,7 +163,7 @@ export const resolveGatewayMessage = async (
 
   let botRoleIds: string[] = [];
   if (job.mentionRoleIds.length > 0 && job.guildId) {
-    botRoleIds = await fetchBotRoleIds(env, "workflows", job.guildId, job.botUserId);
+    botRoleIds = await fetchBotRoleIds(env, job.guildId, job.botUserId);
   }
 
   const prompt = resolveChannelPrompt(
@@ -210,7 +209,7 @@ const gatewayUsageAllowed = async (job: MessageReceivedJob, env: Env, kind: stri
     return true;
   }
 
-  await sendChannelReply(env, job.channelId, usage.message, job.authorId ?? SYSTEM_SUBJECT).catch((error) => {
+  await sendChannelReply(env, job.channelId, usage.message).catch((error) => {
     logger.warn("ai_usage_denial_notice_failed", { error: errorMessage(error) });
   });
   return false;

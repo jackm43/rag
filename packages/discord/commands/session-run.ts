@@ -18,8 +18,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 // whose workflows consumer edits the deferred reply. The processor DO already
 // runs inside the workflows worker but has no producer binding to that queue,
 // so it invokes the SAME job processor in-process — the processor edits the
-// deferred response itself, attributed to the requester when no request context
-// is threaded.
+// deferred response itself.
 const runEnqueueJob = async (job: AiJob, env: Env): Promise<void> => {
   switch (job.kind) {
     case "bicture":
@@ -35,8 +34,7 @@ const runEnqueueJob = async (job: AiJob, env: Env): Promise<void> => {
 
 // The all-deferred processor dispatch: runs the FULL command pre-flight and
 // handler for a verified Discord interaction, turning every outcome into an
-// edit of the already-acked deferred response, sent as the `workflows`
-// principal (the only bot component holding EGRESS + WORKFLOWS_SIGNING_KEY).
+// edit of the already-acked deferred response.
 // The neutral webhook ingress verifies the Discord signature, returns the
 // type-5 ack, and kicks the InteractionSession DO, which calls this. Because
 // the ack is already public, a rejection (guild gate, authz, limits, missing
@@ -59,7 +57,7 @@ export const runInteractionSession = async (
   // edit is logged, never thrown, so the DO alarm can still reclaim storage.
   const edit = async (data: InteractionMessageData): Promise<void> => {
     try {
-      await editOriginalInteractionResponse(env, "workflows", applicationId, interactionToken, data);
+      await editOriginalInteractionResponse(env, applicationId, interactionToken, data);
     } catch (error) {
       logger.error("session_interaction_edit_failed", { error: errorMessage(error) });
     }

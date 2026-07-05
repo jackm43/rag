@@ -35,9 +35,6 @@ importers:
       '@rag/logger':
         specifier: workspace:*
         version: link:packages/logger
-      '@rag/outbound':
-        specifier: workspace:*
-        version: link:packages/outbound
       '@rag/queue-kit':
         specifier: workspace:*
         version: link:packages/queue-kit
@@ -47,9 +44,6 @@ importers:
       '@rag/secrets':
         specifier: workspace:*
         version: link:packages/secrets
-      '@rag/service-kit':
-        specifier: workspace:*
-        version: link:packages/service-kit
       '@rag/spend':
         specifier: workspace:*
         version: link:apps/spend
@@ -147,12 +141,6 @@ importers:
       '@rag/logger':
         specifier: workspace:*
         version: link:../../packages/logger
-      '@rag/outbound':
-        specifier: workspace:*
-        version: link:../../packages/outbound
-      '@rag/service-kit':
-        specifier: workspace:*
-        version: link:../../packages/service-kit
 
   apps/responder:
     dependencies:
@@ -162,9 +150,6 @@ importers:
       '@rag/discord':
         specifier: workspace:*
         version: link:../../packages/discord
-      '@rag/service-kit':
-        specifier: workspace:*
-        version: link:../../packages/service-kit
 
   apps/spend:
     dependencies:
@@ -174,9 +159,6 @@ importers:
       '@rag/queue-kit':
         specifier: workspace:*
         version: link:../../packages/queue-kit
-      '@rag/service-kit':
-        specifier: workspace:*
-        version: link:../../packages/service-kit
 
   apps/webhooks:
     dependencies:
@@ -204,9 +186,6 @@ importers:
       '@rag/queue-kit':
         specifier: workspace:*
         version: link:../../packages/queue-kit
-      '@rag/service-kit':
-        specifier: workspace:*
-        version: link:../../packages/service-kit
 
   packages/auth-kit:
     dependencies:
@@ -240,15 +219,9 @@ importers:
       '@rag/logger':
         specifier: workspace:*
         version: link:../logger
-      '@rag/outbound':
-        specifier: workspace:*
-        version: link:../outbound
       '@rag/secrets':
         specifier: workspace:*
         version: link:../secrets
-      '@rag/service-kit':
-        specifier: workspace:*
-        version: link:../service-kit
       capnp-es:
         specifier: ^0.0.14
         version: 0.0.14(typescript@5.9.3)
@@ -264,18 +237,6 @@ importers:
 
   packages/logger: {}
 
-  packages/outbound:
-    dependencies:
-      '@rag/contracts-core':
-        specifier: workspace:*
-        version: link:../contracts-core
-      '@rag/logger':
-        specifier: workspace:*
-        version: link:../logger
-      '@rag/service-kit':
-        specifier: workspace:*
-        version: link:../service-kit
-
   packages/queue-kit:
     dependencies:
       '@rag/logger':
@@ -287,18 +248,6 @@ importers:
       '@1password/sdk':
         specifier: ^0.4.0
         version: 0.4.0
-      '@rag/logger':
-        specifier: workspace:*
-        version: link:../logger
-      '@rag/outbound':
-        specifier: workspace:*
-        version: link:../outbound
-
-  packages/service-kit:
-    dependencies:
-      '@rag/contracts-core':
-        specifier: workspace:*
-        version: link:../contracts-core
       '@rag/logger':
         specifier: workspace:*
         version: link:../logger

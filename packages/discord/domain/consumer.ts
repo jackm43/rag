@@ -16,7 +16,6 @@ import { sendChannelReply } from "./outbox";
 import { finalizeAiReplyText } from "./responder";
 import { recordAiThread } from "./threads";
 import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "../ai/tracked-ai";
-import type { RequestContext } from "@rag/service-kit/context";
 import { decodeAiJobEnvelope } from "../contracts";
 import { type AiAskJob, type AiChatJob, type AiJob, type Env, type MessageReceivedJob } from "../contracts";
 
@@ -70,7 +69,6 @@ export const processMessageReceivedJob = async (
   decoded: MessageReceivedJob,
   env: Env,
   startedAt: number,
-  context?: RequestContext,
 ) => {
   let resolved: AiChatJob | null = null;
   try {
@@ -81,21 +79,13 @@ export const processMessageReceivedJob = async (
   if (!resolved) {
     return;
   }
-  await processChatJob(resolved, env, startedAt, context);
+  await processChatJob(resolved, env, startedAt);
 };
-
-const contextSubject = (context: RequestContext | undefined, fallback?: string) => context
-  ? { sub: context.subject, delegates: context.delegates, requestId: context.requestId, correlationId: context.correlationId }
-  : fallback;
-const requestSubject = (context: RequestContext | undefined) => context
-  ? { sub: context.subject, delegates: context.delegates, requestId: context.requestId, correlationId: context.correlationId }
-  : undefined;
 
 const processChatJob = async (
   job: AiChatJob | AiAskJob,
   env: Env,
   startedAt: number,
-  context?: RequestContext,
 ) => {
   let model = "unknown";
   let aiDurationMs: number | null = null;
@@ -127,7 +117,6 @@ const processChatJob = async (
       requesterUsername: job.requesterUsername,
       channelId: job.channelId,
       messageId: job.messageId,
-      subject: requestSubject(context),
     };
 
     let messages: ChatMessage[];
@@ -193,7 +182,7 @@ const processChatJob = async (
     let responseChannelId = job.channelId;
     if (job.kind === "thread_start") {
       const title = fallbackThreadTitle(job.prompt);
-      const thread = await createThreadFromMessage(env, "workflows", job.channelId, job.messageId, title);
+      const thread = await createThreadFromMessage(env, job.channelId, job.messageId, title);
       if (!thread) {
         await record("discord_thread_create_invalid", null);
         return;
@@ -211,7 +200,7 @@ const processChatJob = async (
       });
     }
 
-    await sendChannelReply(env, responseChannelId, responseText, contextSubject(context, job.requesterUserId));
+    await sendChannelReply(env, responseChannelId, responseText);
     await record("ok", null);
   } catch (error) {
     logger.error("ai_job_failed", { error: errorMessage(error) });
@@ -221,7 +210,6 @@ const processChatJob = async (
         env,
         job.channelId,
         "I started this thread, but the AI response failed. Try again in a moment.",
-        contextSubject(context, job.requesterUserId),
       ).catch(() => undefined);
     }
   }
@@ -234,23 +222,18 @@ type AiJobProcessors = {
     job: Extract<AiJob, { kind: K }>,
     env: Env,
     startedAt: number,
-    context: RequestContext,
   ) => Promise<void>;
 };
 
 const jobProcessors: AiJobProcessors = {
-  ragjam: (job, env, _startedAt, context) => processRagjamJob(job, env, context),
-  bicture: (job, env, _startedAt, context) => processBictureJob(job, env, context),
+  ragjam: (job, env) => processRagjamJob(job, env),
+  bicture: (job, env) => processBictureJob(job, env),
   "message.received": processMessageReceivedJob,
   ask: processChatJob,
   thread_start: processChatJob,
   thread_reply: processChatJob,
   channel_reply: processChatJob,
 };
-
-// The acting-subject context used to ride a signed token; egress no longer signs
-// a subject, so jobs process under a fixed system context.
-const SYSTEM_CONTEXT = { subject: "system", delegates: [] } as unknown as RequestContext;
 
 export const processAiQueueMessage = async (message: Message<unknown>, env: Env) => {
   const startedAt = Date.now();
@@ -265,8 +248,7 @@ export const processAiQueueMessage = async (message: Message<unknown>, env: Env)
     job: AiJob,
     env: Env,
     startedAt: number,
-    context: RequestContext,
   ) => Promise<void>;
-  await process(job, env, startedAt, SYSTEM_CONTEXT);
+  await process(job, env, startedAt);
   message.ack();
 };

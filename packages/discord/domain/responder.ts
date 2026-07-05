@@ -1,12 +1,8 @@
 import { sanitizeAiText } from "../ai/ai";
 import { decodeReplyJobEnvelope } from "../contracts";
-import { editOriginalInteractionResponse, postChannelMessageForSubject } from "../api";
+import { editOriginalInteractionResponse, postChannelMessage } from "../api";
 import { errorMessage, logger } from "@rag/logger";
 import { MAX_DISCORD_MESSAGE_LENGTH, type Env, type InteractionEditReplyJob, type ResponderAttachment } from "../contracts";
-
-// The requester subject used to ride a signed token; egress no longer signs a
-// subject, so the responder applies replies under a fixed system identity.
-const SYSTEM_ACTOR = { sub: "system" };
 
 const DISCORD_MESSAGE_HARD_LIMIT = 2000;
 const EMPTY_REPLY_FALLBACK = "I could not generate a response.";
@@ -60,7 +56,6 @@ const applyInteractionEdit = async (
 ) => {
   await editOriginalInteractionResponse(
     env,
-    "responder",
     job.applicationId,
     job.interactionToken,
     {
@@ -69,7 +64,6 @@ const applyInteractionEdit = async (
       ...(attachment ? { attachments: [{ id: "0", filename: attachment.name }] } : {}),
     },
     attachment ? [attachment] : [],
-    SYSTEM_ACTOR,
   );
 };
 
@@ -106,12 +100,10 @@ export const processOutboxMessage = async (message: Message<unknown>, env: Env) 
 
   try {
     if (job.kind === "reply.channel_message") {
-      const response = await postChannelMessageForSubject(
+      const response = await postChannelMessage(
         env,
-        "responder",
         job.channelId,
         finalizeAiReplyText(job.content),
-        SYSTEM_ACTOR,
       );
       if (!response.ok) {
         logger.warn("reply_delivery_rejected", { kind: job.kind, status: response.status });

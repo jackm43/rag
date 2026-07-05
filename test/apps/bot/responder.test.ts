@@ -105,7 +105,7 @@ test("editOriginalInteractionResponse logs rejected edits without the token and 
   try {
     const env = createEnv("unused", { DISCORD_BOT_TOKEN: "bot-token" });
 
-    const rejectedOk = await editOriginalInteractionResponse(env, "responder", APPLICATION_ID, "interaction-token", {
+    const rejectedOk = await editOriginalInteractionResponse(env, APPLICATION_ID, "interaction-token", {
       content: "hello",
     });
     assert.isFalse(rejectedOk);
@@ -119,7 +119,7 @@ test("editOriginalInteractionResponse logs rejected edits without the token and 
 
     warnLines.length = 0;
     globalThis.fetch = async () => new Response("{}", { status: 200 });
-    const acceptedOk = await editOriginalInteractionResponse(env, "responder", APPLICATION_ID, "interaction-token", {
+    const acceptedOk = await editOriginalInteractionResponse(env, APPLICATION_ID, "interaction-token", {
       content: "hello",
     });
     assert.isTrue(acceptedOk);
@@ -169,7 +169,7 @@ test("responder posts sanitized channel messages with allowed_mentions locked do
     );
     assert.ok(postCall);
     assert.equal(
-      (postCall.init?.headers as Record<string, string>).authorization,
+      new Headers(postCall.init?.headers).get("authorization"),
       "Bot bot-token",
     );
     assert.deepEqual(JSON.parse(bodyText(postCall.init)), {

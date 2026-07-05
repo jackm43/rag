@@ -1,13 +1,23 @@
-import { createBoundaryClient, type BoundaryFetch } from "@rag/outbound/boundary-client";
 import type { SecretsEnv as Env } from "../env";
 import { errorMessage, logger } from "@rag/logger";
 import type { SecretsProvider } from "../types";
 
 // hashicorp-vault: reads (and, for the future UI, writes) a secret via Vault's
-// KV v2 HTTP API through a boundary client host-allowlisted to VAULT_ADDR's
-// host, authenticating with VAULT_TOKEN. Everything fails closed: an
-// unconfigured backend, a malformed reference, an insecure/unreachable address,
-// a non-2xx, or a missing field all resolve to null.
+// KV v2 HTTP API with an in-process fetch to VAULT_ADDR (https-only + a
+// timeout), authenticating with VAULT_TOKEN. The target URL is always built from
+// VAULT_ADDR + the parsed path, so the ref never controls the host. Everything
+// fails closed: an unconfigured backend, a malformed reference, an
+// insecure/unreachable address, a non-2xx, or a missing field all resolve to null.
+
+type VaultFetch = (url: string, init?: RequestInit) => Promise<Response>;
+
+// https-only fetch with a timeout. VAULT_ADDR is the only host reached.
+const vaultFetch: VaultFetch = (url, init) => {
+  if (new URL(url).protocol !== "https:") {
+    throw new Error("VAULT_ADDR must be https");
+  }
+  return fetch(url, { ...init, signal: AbortSignal.timeout(VAULT_TIMEOUT_MS) });
+};
 //
 // KV v2 reference shape: "<mount>/<path>#<field>". KV v2 inserts a "data"
 // segment on the wire — GET /v1/<mount>/data/<path> — and the value lives at
@@ -35,37 +45,18 @@ export const hashicorpVaultProvider = (env: Env): SecretsProvider => {
   const address = env.VAULT_ADDR;
   const token = env.VAULT_TOKEN;
 
-  // Build the host-allowlisted boundary client for VAULT_ADDR's host, or null
-  // when the backend is not configured / the address is unparseable.
-  //
-  // Deliberate remaining exception to the egress migration: Vault stays on a
-  // direct boundary client. VAULT_ADDR is per-deployment and dynamic — not a
-  // fixed host known at profile-authoring time — and this is a CREDENTIALED
-  // call (VAULT_TOKEN). A static egress profile would need either a wildcard
-  // host (a security regression for a credentialed egress, unlike
-  // media-download's uncredentialed wildcard) or a dynamic-per-deployment
-  // profile (out of scope). So there is no Vault egress profile.
-  const boundary = (): { fetch: BoundaryFetch; base: string } | null => {
+  // Resolve the Vault base URL, or null when the backend is not configured / the
+  // address is unparseable.
+  const boundary = (): { fetch: VaultFetch; base: string } | null => {
     if (!address || !token) {
       return null;
     }
-    let host: string;
     try {
-      host = new URL(address).hostname;
+      new URL(address);
     } catch {
       return null;
     }
-    return {
-      fetch: createBoundaryClient({
-        identity: "secrets-vault",
-        trustZone: "egress-vault",
-        allowedHosts: [host],
-        defaultTimeoutMs: VAULT_TIMEOUT_MS,
-        // KV paths are secret locators — keep failure logs host-only.
-        logPath: false,
-      }),
-      base: address.replace(/\/$/, ""),
-    };
+    return { fetch: vaultFetch, base: address.replace(/\/$/, "") };
   };
 
   const headers = (): Record<string, string> => ({

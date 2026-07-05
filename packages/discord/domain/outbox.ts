@@ -5,19 +5,14 @@ import type { Env, ResponderAttachment } from "../contracts";
 // the durable discord-outbox queue; media-bearing interaction edits go over the
 // responder service binding because queue messages cap out at 128 KiB. Both hops
 // are trusted by capability (only workflows declares the queue producer and the
-// RESPONDER binding), so they carry the plain capnp ReplyJob envelope — no signed
-// ServiceMessage. The requester id is accepted for call-site compatibility but is
-// no longer threaded into a token (egress no longer signs a subject).
+// RESPONDER binding), so they carry the plain capnp ReplyJob envelope.
 
 const transportCap = (content: string) => content.slice(0, MAX_REPLY_CONTENT_LENGTH);
-
-export type ReplySubject = string | { sub: string } | undefined;
 
 export const sendChannelReply = async (
   env: Env,
   channelId: string,
   content: string,
-  _requesterUserId?: ReplySubject,
 ) => {
   if (!env.DISCORD_OUTBOX) {
     throw new Error("DISCORD_OUTBOX binding is required to send channel replies");
@@ -34,7 +29,6 @@ export const sendInteractionEdit = async (
   applicationId: string,
   interactionToken: string,
   content: string,
-  _requesterUserId?: ReplySubject,
 ) => {
   if (!env.DISCORD_OUTBOX) {
     throw new Error("DISCORD_OUTBOX binding is required to send interaction edits");
@@ -52,7 +46,6 @@ export const sendInteractionMediaEdit = async (
   interactionToken: string,
   content: string,
   attachment: ResponderAttachment,
-  _requesterUserId?: ReplySubject,
 ) => {
   if (!env.RESPONDER) {
     throw new Error("RESPONDER binding is required to send media interaction edits");
