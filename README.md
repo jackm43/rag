@@ -10,10 +10,9 @@ top-level `apps/<worker>` application** and all shared code lives in
   (Discord write policy), `apps/spend` (AI cost accounting). Domain code in
   `packages/discord`. Commands: `/rag`, `/ragboard`, `/raghammer`, `/ask`,
   `/bicture`, `/ragjam`, `/ragspend`, …
-- **The connectors** — `apps/broker` (holds every third-party secret; callers
-  get opaque handles), `apps/webhooks` (provider webhooks + Discord interaction
-  callbacks at `webhooks.jsmunro.me`), `apps/connectors-api`
-  (`connectors.jsmunro.me`). Broker internals in `packages/connectors-core`.
+- **The webhooks** — `apps/webhooks` (provider webhooks + Discord interaction
+  callbacks at `webhooks.jsmunro.me`); signatures are verified by the auth service
+  (`AUTH.verifyWebhook`) / inline Ed25519.
 - **The edge** — `apps/auth` is the **API Gateway**: every public app binds it as
   `AUTH` and it owns all public authentication (Cloudflare Access, Better Auth
   Discord sessions, operator token) and the authorization policy table. Outbound
@@ -35,7 +34,7 @@ apps/           one top-level dir per deployed worker:
                 broker, connectors-api, webhooks
 packages/       shared (may never import apps):
                 edge-kit (the middleware), auth-kit (auth library),
-                discord, connectors-core, contracts-core, outbound,
+                discord, contracts-core, outbound,
                 rpc, queue-kit, secrets, service-kit (types only), logger
 scripts/        deploy, codegen, scaffold, dependency-direction check
 migrations/     D1 schema (schema.sql is a read-only mirror)
@@ -74,7 +73,7 @@ pnpm scaffold <name>      # generate a complete new top-level application
 
 `pnpm run deploy` (what deploy.sh calls) discovers every `wrangler.jsonc`
 under `apps/` and deploys in binding-safe order: **auth first** (every public
-app binds it) → broker → connectors-api → responder → **workflows →
+app binds it) → responder → **workflows →
 gateway** (the gateway binds workflows' `InteractionSession` processor DO
 cross-script) → spend. A discovered worker missing from `DEPLOY_ORDER` in
 [scripts/deploy.ts](scripts/deploy.ts) fails the deploy loudly. The webhooks
@@ -132,9 +131,10 @@ Secrets go on the worker that needs them:
    Access policy so providers and Discord can POST — the signature at the edge
    is the authentication there. All other paths require the `ragbot-webhooks`
    service token.
-7. GitHub App connector: create the App, `GITHUB_APP_ID` var +
-   `GITHUB_APP_PRIVATE_KEY` secret on the broker
-   (`apps/broker`).
+7. Webhook secrets: the auth worker verifies provider webhook signatures, so put
+   each provider's secret on it — e.g.
+   `wrangler secret put GITHUB_WEBHOOK_SECRET -c apps/auth/wrangler.jsonc`.
+   Verification fails closed until the secret is set.
 
 ## Configuration
 

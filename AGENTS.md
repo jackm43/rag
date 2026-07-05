@@ -29,12 +29,10 @@ never import other apps. There is no product grouping and no per-worker
 - `apps/responder` — Discord write policy: the `discord-outbox` queue consumer +
   the `Responder` media-edit RPC entrypoint.
 - `apps/spend` — AI Gateway cost reconciliation (`ai-spend-jobs` consumer).
-- `apps/broker` — the credential broker (`Connectors` RPC + `ConnectorStore` DO);
-  binding-only, the only owner of provider credentials (phantom-token model).
-- `apps/connectors-api` — the machine-facing connectors HTTP surface
-  (`connectors.jsmunro.me`).
 - `apps/webhooks` — provider-webhook + Discord-interaction ingress
-  (`webhooks.jsmunro.me`); the `WebhookDedupe` DO.
+  (`webhooks.jsmunro.me`); the `WebhookDedupe` DO. Provider webhooks are verified
+  by the auth service (`AUTH.verifyWebhook`); Discord interactions are verified
+  inline (Ed25519).
 
 There is no egress worker: outbound HTTP happens **in-process** in the RPC method
 that needs it (see `@rag/outbound`).
@@ -48,15 +46,13 @@ that needs it (see `@rag/outbound`).
   generic `createEdgeWorker` harness for inline-signature workers (webhooks).
 - `auth-kit` — the auth library: verification primitives (CF Access JWT, Better
   Auth Discord session, native/operator token, oauth2 client-credentials, Discord
-  Ed25519) + per-client-kind strategies (`authenticateWeb`/`authenticateNative`).
-  Used by the auth worker and the webhooks worker (Discord verify).
+  Ed25519, provider webhook HMAC) + per-client-kind strategies
+  (`authenticateWeb`/`authenticateNative`) and `verifyWebhook`. Used by the auth
+  worker and the webhooks worker.
 - `discord` — the bot domain, laid out by concern: `api` (Discord REST client),
   `ai` (inference/config/spend), `commands` (specs + dispatch), `domain` (bans,
   limits, mention, outbox, responder policy, consumer, dlq, …), `ingress`,
   `contracts`. Shared by gateway/workflows/responder/spend.
-- `connectors-core` — the broker internals (providers, handler, webhook signature
-  schemes, connector registry) + connector contracts. Shared by
-  broker/connectors-api/webhooks (and `discord` for the webhook.event contract).
 - `outbound` — in-process outbound HTTP: the boundary client (host allowlist,
   credential injection, caps) + profiles. `createEgressClient(env, profile,
   caller)` returns a boundary `fetch`; the credential is resolved from the calling
@@ -121,23 +117,16 @@ authenticated route + RPC handler, `src/openapi.ts`, a registration in
 `routes` entry to its wrangler; implement your route handler (it receives the
 authenticated `principal`) and use `@rag/outbound` for any outbound HTTP.
 
-**A new webhook provider:** add its HMAC scheme + `WebhookEventProvider` union
-entry in `packages/connectors-core/lib/webhooks.ts`, a webhook config on the
-connector's registry entry (secret ref + enabled), and the caller in that
-connector's `capabilities.webhookVerify`. The webhooks worker verifies via the
-broker (never sees the secret), dedupes, and enqueues a `webhook.event` to
-workflows.
+**A new webhook provider:** add its HMAC scheme to `packages/auth-kit/webhook.ts`
+(+ the `WebhookEventProvider` union in `packages/discord/contracts`) and its
+secret env var to the auth worker's `WEBHOOK_SECRET_ENV` map. The webhooks worker
+calls `AUTH.verifyWebhook` (never sees the secret), dedupes, and enqueues a
+`webhook.event` to workflows.
 
 **A new internal service worker (no route):** scaffold or hand-write a worker
 whose `src/index.ts` exports a `WorkerEntrypoint` (RPC) and/or a
 `createQueueWorker(service, handlers)` default. Callers bind it and call its
 methods directly.
-
-**A new connector (third-party credential):** config, not code, if the auth
-shape exists — add a registry entry in `packages/connectors-core/lib/registry.ts`
-(id, kind, single `host`, `capabilities` caller lists, `{provider, ref}` secret),
-and the secret on the broker. A genuinely new auth shape adds a
-`lib/providers/<name>.ts` strategy.
 
 ## Key flows (mental model)
 
