@@ -3,7 +3,7 @@ import { assert, test } from "vitest";
 import {
   STRIPE_TIMESTAMP_TOLERANCE_SECONDS,
   verifyWebhookSignature,
-} from "@rag/connectors/lib/webhooks";
+} from "@rag/connectors-core/lib/webhooks";
 
 // Security-critical crypto: webhook signature verification is the ONLY gate
 // between an arbitrary internet POST and a message the system treats as a

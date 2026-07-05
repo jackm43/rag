@@ -5,10 +5,10 @@ import {
   deliverInteractionEdit,
   finalizeAiReplyText,
   suppressUrlEmbeds,
-} from "@rag/bot/lib/domain/responder";
-import { appendSourceFallback } from "@rag/bot/lib/ai/ask-mode";
-import { editOriginalInteractionResponse } from "@rag/bot/lib/discord";
-import { encodeReplyJobEnvelope } from "@rag/bot/contracts";
+} from "@rag/discord/lib/domain/responder";
+import { appendSourceFallback } from "@rag/discord/lib/ai/ask-mode";
+import { editOriginalInteractionResponse } from "@rag/discord/lib/discord";
+import { encodeReplyJobEnvelope } from "@rag/discord/contracts";
 import { encodeServiceMessage } from "@rag/contracts-core";
 import { createEnv, mintServiceToken, signedServiceMessage } from "../../helpers";
 

@@ -1,7 +1,7 @@
 import { assert, test } from "vitest";
 
 import { decodeManifestSnapshot, decodeServiceMessage, encodeManifestSnapshot, encodeServiceManifest, decodeServiceManifest, encodeServiceMessage } from "@rag/contracts-core";
-import { encodeReplyJobEnvelope } from "@rag/bot/contracts";
+import { encodeReplyJobEnvelope } from "@rag/discord/contracts";
 
 const envelope = () =>
   encodeReplyJobEnvelope(

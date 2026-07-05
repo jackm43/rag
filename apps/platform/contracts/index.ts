@@ -19,7 +19,7 @@ import {
   type RegistryInvokePayload,
 } from "@rag/contracts-core/envelope";
 import { APPLICATION_ID_PATTERN, type EgressEnv } from "@rag/egress/contracts";
-import { MAX_WEBHOOK_BODY_BASE64_LENGTH, type ConnectorsEnv } from "@rag/connectors/contracts";
+import { MAX_WEBHOOK_BODY_BASE64_LENGTH, type ConnectorsEnv } from "@rag/connectors-core/contracts";
 import type { IngressEnv } from "@rag/ingress/env";
 import type { SecretsEnv } from "@rag/secrets/env";
 import type { ServiceKitEnv } from "@rag/service-kit/env";

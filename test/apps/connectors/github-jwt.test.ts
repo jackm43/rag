@@ -4,7 +4,7 @@ import {
   APP_JWT_TTL_SECONDS,
   importAppPrivateKey,
   mintAppJwt,
-} from "@rag/connectors/lib/providers/github";
+} from "@rag/connectors-core/lib/providers/github";
 
 // Security-critical crypto: the GitHub App JWT is what proves the broker holds
 // the App private key. These tests prove the RS256 signature is real (verifiable

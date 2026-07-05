@@ -1,6 +1,6 @@
 import { createServiceServer } from "@rag/service-kit";
-import { decodeWebhookEventEnvelope } from "@rag/connectors/contracts";
-import type { Env } from "../../../contracts";
+import { decodeWebhookEventEnvelope } from "@rag/connectors-core/contracts";
+import type { Env } from "@rag/discord/contracts";
 import { logger } from "@rag/logger";
 
 // Consumer for the webhook-jobs queue: verified third-party webhook events

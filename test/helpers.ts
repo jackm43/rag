@@ -1,9 +1,9 @@
 import nacl from "tweetnacl";
 
-import { encodeAiJobEnvelope } from "@rag/bot/contracts";
+import { encodeAiJobEnvelope } from "@rag/discord/contracts";
 import { encodeManifestSnapshot, encodeServiceMessage, type EnvelopeOptions } from "@rag/contracts-core";
-import type { AiJob } from "@rag/bot/contracts";
-import type { Env } from "@rag/bot/contracts";
+import type { AiJob } from "@rag/discord/contracts";
+import type { Env } from "@rag/discord/contracts";
 import type { ServiceMessageBytes } from "@rag/contracts-core";
 import {
   SERVICE_ZONE,
@@ -18,9 +18,9 @@ import {
   mint,
 } from "@rag/service-kit/identity";
 import { handleEgressRequest } from "@rag/egress/server";
-import { runDeferredCommandByName, runInteractionSession } from "@rag/bot/lib/domain/commands/session-run";
-import { processMessageReceivedJob } from "@rag/bot/lib/domain/consumer";
-import type { DiscordInteraction, MessageReceivedJob } from "@rag/bot/contracts";
+import { runDeferredCommandByName, runInteractionSession } from "@rag/discord/lib/domain/commands/session-run";
+import { processMessageReceivedJob } from "@rag/discord/lib/domain/consumer";
+import type { DiscordInteraction, MessageReceivedJob } from "@rag/discord/contracts";
 
 const encoder = new TextEncoder();
 

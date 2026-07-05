@@ -1,6 +1,6 @@
 import { createQueueWorker } from "@rag/service-kit";
-import { processAiQueueMessage } from "../../../lib/domain/consumer";
-import { processAiJobsDlqMessage, processWebhookJobsDlqMessage } from "../../../lib/domain/dlq";
+import { processAiQueueMessage } from "@rag/discord/lib/domain/consumer";
+import { processAiJobsDlqMessage, processWebhookJobsDlqMessage } from "@rag/discord/lib/domain/dlq";
 import { WORKFLOWS_MANIFEST } from "./manifest";
 import { processWebhookQueueMessage } from "./webhooks";
 

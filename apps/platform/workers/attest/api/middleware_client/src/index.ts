@@ -1,6 +1,6 @@
 import { base64Of, createEdgeWorker, jsonResponse, prepareApplicationHop, readCappedBody } from "@rag/service-kit/edge";
 import { ATTEST_WEBHOOK_SIGNATURE_HEADERS, encodeAttestInvokeEnvelope } from "../../../../../contracts";
-import { MAX_WEBHOOK_BODY_BYTES } from "@rag/connectors/contracts";
+import { MAX_WEBHOOK_BODY_BYTES } from "@rag/connectors-core/contracts";
 import type { AttestInvokeResult, Env } from "../../../../../contracts";
 import { ATTEST_MANIFEST, AttestationStore, AttestService } from "../../../service_server/src";
 import { OPENAPI } from "./openapi";

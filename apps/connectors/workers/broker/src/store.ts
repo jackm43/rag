@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 
-import type { Env } from "../../../contracts";
+import type { Env } from "@rag/connectors-core/contracts";
 
 // The broker's grant/token store as a Durable Object: strongly consistent and
 // persistent across isolates, so a handle minted in one isolate resolves in

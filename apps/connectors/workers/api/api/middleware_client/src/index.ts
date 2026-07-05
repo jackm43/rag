@@ -1,7 +1,7 @@
 import { createAppWorker, jsonResponse, type AuthGatewayBinding } from "@rag/edge-kit";
 import { createClient } from "@rag/service-kit";
-import { connectorsClient } from "../../../../../lib";
-import type { ConnectorResult, Env as ConnectorsEnv } from "../../../../../contracts";
+import { connectorsClient } from "@rag/connectors-core/lib";
+import type { ConnectorResult, Env as ConnectorsEnv } from "@rag/connectors-core/contracts";
 import { errorMessage, logger } from "@rag/logger";
 import { OPENAPI } from "./openapi";
 

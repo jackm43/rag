@@ -1,0 +1,24 @@
+{
+  "name": "@rag/connectors-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./contracts": "./contracts/index.ts",
+    "./lib": "./lib/index.ts",
+    "./*": "./*.ts",
+    "./*.json": "./*.json",
+    "./*.md": "./*.md"
+  },
+  "dependencies": {
+    "@rag/authz": "workspace:*",
+    "@rag/contracts-core": "workspace:*",
+    "@rag/egress": "workspace:*",
+    "@rag/ingress": "workspace:*",
+    "@rag/logger": "workspace:*",
+    "@rag/secrets": "workspace:*",
+    "@rag/service-kit": "workspace:*",
+    "capnp-es": "^0.0.14",
+    "zod": "^3.25.76"
+  }
+}

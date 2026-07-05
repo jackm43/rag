@@ -1,8 +1,8 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 
 import { ensureRegistered } from "@rag/service-kit";
-import { handleConnectorInvoke } from "../../../lib";
-import type { ConnectorResult, Env } from "../../../contracts";
+import { handleConnectorInvoke } from "@rag/connectors-core/lib";
+import type { ConnectorResult, Env } from "@rag/connectors-core/contracts";
 import type { ServiceMessageBytes } from "@rag/contracts-core";
 import { ConnectorStore } from "./store";
 import { CONNECTORS_MANIFEST } from "./manifest";

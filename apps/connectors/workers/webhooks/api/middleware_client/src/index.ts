@@ -6,9 +6,9 @@ import {
   DISCORD_INTERACTION_PONG,
   verifyDiscordSignature,
 } from "@rag/ingress/discord";
-import { connectorsClient } from "../../../../../lib";
-import { CONNECTOR_ID_PATTERN, encodeWebhookEventEnvelope, MAX_WEBHOOK_BODY_BYTES, MAX_WEBHOOK_EVENT_TYPE_LENGTH } from "../../../../../contracts";
-import type { Env, WebhookEventProvider } from "../../../../../contracts";
+import { connectorsClient } from "@rag/connectors-core/lib";
+import { CONNECTOR_ID_PATTERN, encodeWebhookEventEnvelope, MAX_WEBHOOK_BODY_BYTES, MAX_WEBHOOK_EVENT_TYPE_LENGTH } from "@rag/connectors-core/contracts";
+import type { Env, WebhookEventProvider } from "@rag/connectors-core/contracts";
 import { errorMessage, logger } from "@rag/logger";
 import { WEBHOOKS_MANIFEST, WebhookDedupe } from "../../../service_server/src";
 import { OPENAPI } from "./openapi";

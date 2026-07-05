@@ -1,7 +1,7 @@
 import { assert, test } from "vitest";
 
-import { isGuildAllowed } from "@rag/bot/lib/domain/guilds";
-import { handleGatewayMessageCreate, resolveGatewayMessage } from "@rag/bot/lib/domain/mention";
+import { isGuildAllowed } from "@rag/discord/lib/domain/guilds";
+import { handleGatewayMessageCreate, resolveGatewayMessage } from "@rag/discord/lib/domain/mention";
 import { createEnv } from "../../../helpers";
 
 const BOT_USER_ID = "100000000000000001";

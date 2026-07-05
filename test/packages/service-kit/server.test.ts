@@ -3,9 +3,9 @@ import { assert, test } from "vitest";
 import type { EntityJson } from "@cedar-policy/cedar-wasm/web";
 import { createServiceServer } from "@rag/service-kit/server";
 import { createServiceClientFromEnv } from "@rag/service-kit/client";
-import { decodeAiSpendJobEnvelope, decodeReplyJobEnvelope, encodeAiSpendJobEnvelope, encodeReplyJobEnvelope } from "@rag/bot/contracts";
+import { decodeAiSpendJobEnvelope, decodeReplyJobEnvelope, encodeAiSpendJobEnvelope, encodeReplyJobEnvelope } from "@rag/discord/contracts";
 import { encodeManifestSnapshot, encodeServiceMessage } from "@rag/contracts-core";
-import type { InteractionEditReplyJob } from "@rag/bot/contracts";
+import type { InteractionEditReplyJob } from "@rag/discord/contracts";
 import type { ServiceMessageBytes } from "@rag/contracts-core";
 import { mintServiceToken, signedServiceMessage, SIGNING_KEY_JWKS } from "../../helpers";
 

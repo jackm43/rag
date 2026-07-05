@@ -4,9 +4,9 @@ import { createQueueWorker, ensureRegistered } from "@rag/service-kit";
 import {
   deliverInteractionEdit,
   processOutboxMessage,
-} from "../../../lib/domain/responder";
-import { processOutboxDlqMessage } from "../../../lib/domain/dlq";
-import type { Env, ResponderAttachment } from "../../../contracts";
+} from "@rag/discord/lib/domain/responder";
+import { processOutboxDlqMessage } from "@rag/discord/lib/domain/dlq";
+import type { Env, ResponderAttachment } from "@rag/discord/contracts";
 import type { ServiceMessageBytes } from "@rag/contracts-core";
 import { RESPONDER_MANIFEST } from "./manifest";
 

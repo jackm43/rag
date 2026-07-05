@@ -1,8 +1,8 @@
 import { assert, test } from "vitest";
 
 import workflowsWorker from "@rag/bot/workers/workflows/src";
-import { shouldUseAskWebSearch } from "@rag/bot/lib/domain/commands/ask";
-import { decodeReplyJobEnvelope } from "@rag/bot/contracts";
+import { shouldUseAskWebSearch } from "@rag/discord/lib/domain/commands/ask";
+import { decodeReplyJobEnvelope } from "@rag/discord/contracts";
 import { createDbMock, createEnv, gatewayAiJob, sentEnvelope } from "../../helpers";
 
 // Outbound HTTP bodies now travel through the egress hop as raw bytes, so a

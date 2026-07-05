@@ -29,9 +29,15 @@ importers:
       '@rag/connectors':
         specifier: workspace:*
         version: link:apps/connectors
+      '@rag/connectors-core':
+        specifier: workspace:*
+        version: link:packages/connectors-core
       '@rag/contracts-core':
         specifier: workspace:*
         version: link:packages/contracts-core
+      '@rag/discord':
+        specifier: workspace:*
+        version: link:packages/discord
       '@rag/edge-kit':
         specifier: workspace:*
         version: link:packages/edge-kit
@@ -138,12 +144,12 @@ importers:
       '@rag/authz':
         specifier: workspace:*
         version: link:../../packages/authz
-      '@rag/connectors':
-        specifier: workspace:*
-        version: link:../connectors
       '@rag/contracts-core':
         specifier: workspace:*
         version: link:../../packages/contracts-core
+      '@rag/discord':
+        specifier: workspace:*
+        version: link:../../packages/discord
       '@rag/egress':
         specifier: workspace:*
         version: link:../../packages/egress
@@ -174,6 +180,9 @@ importers:
       '@rag/authz':
         specifier: workspace:*
         version: link:../../packages/authz
+      '@rag/connectors-core':
+        specifier: workspace:*
+        version: link:../../packages/connectors-core
       '@rag/contracts-core':
         specifier: workspace:*
         version: link:../../packages/contracts-core
@@ -253,11 +262,74 @@ importers:
         specifier: ^4.11.2
         version: 4.11.2
 
+  packages/connectors-core:
+    dependencies:
+      '@rag/authz':
+        specifier: workspace:*
+        version: link:../authz
+      '@rag/contracts-core':
+        specifier: workspace:*
+        version: link:../contracts-core
+      '@rag/egress':
+        specifier: workspace:*
+        version: link:../egress
+      '@rag/ingress':
+        specifier: workspace:*
+        version: link:../ingress
+      '@rag/logger':
+        specifier: workspace:*
+        version: link:../logger
+      '@rag/secrets':
+        specifier: workspace:*
+        version: link:../secrets
+      '@rag/service-kit':
+        specifier: workspace:*
+        version: link:../service-kit
+      capnp-es:
+        specifier: ^0.0.14
+        version: 0.0.14(typescript@5.9.3)
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
   packages/contracts-core:
     dependencies:
       capnp-es:
         specifier: ^0.0.14
         version: 0.0.14(typescript@5.9.3)
+
+  packages/discord:
+    dependencies:
+      '@rag/authz':
+        specifier: workspace:*
+        version: link:../authz
+      '@rag/connectors-core':
+        specifier: workspace:*
+        version: link:../connectors-core
+      '@rag/contracts-core':
+        specifier: workspace:*
+        version: link:../contracts-core
+      '@rag/egress':
+        specifier: workspace:*
+        version: link:../egress
+      '@rag/ingress':
+        specifier: workspace:*
+        version: link:../ingress
+      '@rag/logger':
+        specifier: workspace:*
+        version: link:../logger
+      '@rag/secrets':
+        specifier: workspace:*
+        version: link:../secrets
+      '@rag/service-kit':
+        specifier: workspace:*
+        version: link:../service-kit
+      capnp-es:
+        specifier: ^0.0.14
+        version: 0.0.14(typescript@5.9.3)
+      tweetnacl:
+        specifier: ^1.0.3
+        version: 1.0.3
 
   packages/edge-kit:
     dependencies:

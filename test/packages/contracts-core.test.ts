@@ -1,7 +1,7 @@
 import { assert, test } from "vitest";
 import * as capnp from "capnp-es";
 
-import { decodeAiJobEnvelope, decodeAiSpendJobEnvelope, decodeReplyJobEnvelope, encodeAiJobEnvelope, encodeAiSpendJobEnvelope, encodeReplyJobEnvelope, MAX_REPLY_CONTENT_LENGTH } from "@rag/bot/contracts";
+import { decodeAiJobEnvelope, decodeAiSpendJobEnvelope, decodeReplyJobEnvelope, encodeAiJobEnvelope, encodeAiSpendJobEnvelope, encodeReplyJobEnvelope, MAX_REPLY_CONTENT_LENGTH } from "@rag/discord/contracts";
 import { decodeMetadataQueryEnvelope, decodeRegistryInvokeEnvelope, encodeMetadataQueryEnvelope, encodeRegistryInvokeEnvelope } from "@rag/platform/contracts";
 import { MAX_FREE_TEXT_LENGTH, MAX_USERNAME_LENGTH } from "@rag/contracts-core";
 import { EventEnvelope } from "@rag/contracts-core/envelope";

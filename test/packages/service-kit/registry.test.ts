@@ -2,7 +2,7 @@ import { assert, test } from "vitest";
 
 import { manifestsToEntities, serviceResourceId, type ServiceManifest } from "@rag/service-kit/manifest";
 import { authorize } from "@rag/authz/authorize";
-import { connectorsToEntities } from "@rag/connectors/lib/registry";
+import { connectorsToEntities } from "@rag/connectors-core/lib/registry";
 
 const MANIFESTS: ServiceManifest[] = [
   {

@@ -1,6 +1,6 @@
 import { assert, test } from "vitest";
 
-import { runInteractionSession } from "@rag/bot/lib/domain/commands/session-run";
+import { runInteractionSession } from "@rag/discord/lib/domain/commands/session-run";
 import { RAG_ADMIN_USER_IDS } from "@rag/authz/entities";
 import { createDbMock, createEnv } from "../../../helpers";
 

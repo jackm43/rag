@@ -1,9 +1,9 @@
 import { assert, test } from "vitest";
 
 import { RAG_ADMIN_USER_IDS } from "@rag/authz/entities";
-import { routeInteraction } from "@rag/bot/lib/domain/commands/router";
-import { executeCommand, type CommandSpec } from "@rag/bot/lib/domain/commands/registry";
-import { APPLICATION_COMMAND, type Env } from "@rag/bot/contracts";
+import { routeInteraction } from "@rag/discord/lib/domain/commands/router";
+import { executeCommand, type CommandSpec } from "@rag/discord/lib/domain/commands/registry";
+import { APPLICATION_COMMAND, type Env } from "@rag/discord/contracts";
 
 const executionCtx = {} as ExecutionContext;
 

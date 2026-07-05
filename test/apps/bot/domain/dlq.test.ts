@@ -4,8 +4,8 @@ import {
   processAiJobsDlqMessage,
   processOutboxDlqMessage,
   processSpendJobsDlqMessage,
-} from "@rag/bot/lib/domain/dlq";
-import { encodeAiJobEnvelope, encodeAiSpendJobEnvelope, encodeReplyJobEnvelope } from "@rag/bot/contracts";
+} from "@rag/discord/lib/domain/dlq";
+import { encodeAiJobEnvelope, encodeAiSpendJobEnvelope, encodeReplyJobEnvelope } from "@rag/discord/contracts";
 import { signedServiceMessage } from "../../../helpers";
 
 const CHANNEL_ID = "200000000000000001";

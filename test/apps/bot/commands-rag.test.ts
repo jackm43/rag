@@ -1,7 +1,7 @@
 import { assert, test } from "vitest";
 
-import { encodeAiSpendJobEnvelope } from "@rag/bot/contracts";
-import { processSpendQueueMessage } from "@rag/bot/lib/ai/spend";
+import { encodeAiSpendJobEnvelope } from "@rag/discord/contracts";
+import { processSpendQueueMessage } from "@rag/discord/lib/ai/spend";
 import { createEnv, signedServiceMessage } from "../../helpers";
 
 // Command dispatch (rag/raghammer/ragunban/undorag/ragspend) is exercised on the

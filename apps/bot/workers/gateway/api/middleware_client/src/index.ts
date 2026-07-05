@@ -3,8 +3,8 @@ import { authorize } from "@rag/authz/authorize";
 import {
   extractBotMentionPrompt,
   handleGatewayMessageCreate,
-} from "../../../../../lib/domain/mention";
-import type { Env } from "../../../../../contracts";
+} from "@rag/discord/lib/domain/mention";
+import type { Env } from "@rag/discord/contracts";
 import {
   ApplicationMiddleware,
   DiscordGateway,

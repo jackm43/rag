@@ -1,5 +1,5 @@
 import { createClient } from "@rag/service-kit";
-import { connectorsClient } from "@rag/connectors/lib";
+import { connectorsClient } from "@rag/connectors-core/lib";
 import type { Env } from "../../../../contracts";
 import type {
   AttestedArtifact,

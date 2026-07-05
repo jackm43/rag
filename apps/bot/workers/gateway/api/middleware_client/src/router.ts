@@ -1,6 +1,6 @@
 import { operatorControlGuard } from "@rag/ingress/operator-control";
 import type { InboundGuard } from "@rag/ingress/guard";
-import type { Env } from "../../../../../contracts";
+import type { Env } from "@rag/discord/contracts";
 import { GATEWAY_ROUTES, type GatewaySecurityScheme } from "./routes";
 
 // The gateway's HTTP surface is constructed from generated route bindings:

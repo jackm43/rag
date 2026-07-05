@@ -1,9 +1,9 @@
 import { assert, test } from "vitest";
 
-import { checkAiUsageAllowed } from "@rag/bot/lib/domain/limits";
-import { runInteractionSession } from "@rag/bot/lib/domain/commands/session-run";
-import { resolveGatewayMessage } from "@rag/bot/lib/domain/mention";
-import { decodeReplyJobEnvelope } from "@rag/bot/contracts";
+import { checkAiUsageAllowed } from "@rag/discord/lib/domain/limits";
+import { runInteractionSession } from "@rag/discord/lib/domain/commands/session-run";
+import { resolveGatewayMessage } from "@rag/discord/lib/domain/mention";
+import { decodeReplyJobEnvelope } from "@rag/discord/contracts";
 import { createEnv, sentEnvelope } from "../../../helpers";
 
 const EDIT_URL =

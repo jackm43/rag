@@ -7,10 +7,10 @@ import {
   handleGatewayMessageCreate,
 } from "@rag/bot/workers/gateway/api/middleware_client/src";
 import workflowsWorker from "@rag/bot/workers/workflows/src";
-import { resolveGatewayMessage } from "@rag/bot/lib/domain/mention";
+import { resolveGatewayMessage } from "@rag/discord/lib/domain/mention";
 import responderWorker from "@rag/bot/workers/responder/src";
-import { decodeReplyJobEnvelope } from "@rag/bot/contracts";
-import { fetchChannelMessages } from "@rag/bot/lib/discord";
+import { decodeReplyJobEnvelope } from "@rag/discord/contracts";
+import { fetchChannelMessages } from "@rag/discord/lib/discord";
 import { createDbMock, createEnv, gatewayAiJob, sentEnvelope } from "../../helpers";
 
 const BOT_USER_ID = "100000000000000001";

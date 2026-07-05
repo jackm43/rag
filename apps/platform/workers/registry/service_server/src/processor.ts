@@ -1,6 +1,6 @@
 import { createClient } from "@rag/service-kit";
-import { connectorsClient } from "@rag/connectors/lib";
-import type { ConnectorResult } from "@rag/connectors/contracts";
+import { connectorsClient } from "@rag/connectors-core/lib";
+import type { ConnectorResult } from "@rag/connectors-core/contracts";
 import type { Env } from "../../../../contracts";
 import { buildApplicationScaffold } from "../../../../lib/registry-kit/scaffold";
 import type { RegistryEvent, RegistryScaffold } from "../../../../lib/registry-kit/types";

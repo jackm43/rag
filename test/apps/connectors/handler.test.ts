@@ -1,11 +1,11 @@
 import { assert, test } from "vitest";
 
-import { handleConnectorInvoke } from "@rag/connectors/lib/handler";
-import { createInMemoryKeyValueStore, generateHandle } from "@rag/connectors/lib/store";
-import type { GrantEntry } from "@rag/connectors/lib/types";
-import { encodeConnectorInvokeEnvelope } from "@rag/connectors/contracts";
+import { handleConnectorInvoke } from "@rag/connectors-core/lib/handler";
+import { createInMemoryKeyValueStore, generateHandle } from "@rag/connectors-core/lib/store";
+import type { GrantEntry } from "@rag/connectors-core/lib/types";
+import { encodeConnectorInvokeEnvelope } from "@rag/connectors-core/contracts";
 import { encodeServiceMessage } from "@rag/contracts-core";
-import type { ConnectorInvokeJob } from "@rag/connectors/contracts";
+import type { ConnectorInvokeJob } from "@rag/connectors-core/contracts";
 import { createServiceRegistryMock, mintServiceToken, signedServiceMessage } from "../../helpers";
 
 // The security invariant: EVERY operation is authenticated (identity-context

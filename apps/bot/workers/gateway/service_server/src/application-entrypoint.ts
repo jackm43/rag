@@ -2,7 +2,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 
 import { createClient, createHopIntent, ensureRegistered, SYSTEM_SUBJECT } from "@rag/service-kit";
 import { encodeApplicationRequestEnvelope, MAX_APPLICATION_BODY_BYTES, type PreparedApplicationRequest } from "@rag/egress/contracts";
-import type { Env } from "../../../../contracts";
+import type { Env } from "@rag/discord/contracts";
 import { envelopeSha256 } from "@rag/service-kit/identity";
 import { errorMessage, logger } from "@rag/logger";
 import { GATEWAY_MANIFEST } from "./manifest";

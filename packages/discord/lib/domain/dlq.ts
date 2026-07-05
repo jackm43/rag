@@ -1,5 +1,5 @@
 import { decodeAiJobEnvelope, decodeAiSpendJobEnvelope, decodeReplyJobEnvelope } from "../../contracts";
-import { decodeWebhookEventEnvelope } from "@rag/connectors/contracts";
+import { decodeWebhookEventEnvelope } from "@rag/connectors-core/contracts";
 import { serviceEnvelopeBytes } from "@rag/service-kit";
 import { logger } from "@rag/logger";
 

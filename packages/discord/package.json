@@ -1,21 +1,19 @@
 {
-  "name": "@rag/bot",
+  "name": "@rag/discord",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": {
-    "./workers/gateway/api/middleware_client/src": "./workers/gateway/api/middleware_client/src/index.ts",
-    "./workers/gateway/service_server/src": "./workers/gateway/service_server/src/index.ts",
-    "./workers/responder/src": "./workers/responder/src/index.ts",
-    "./workers/spend/src": "./workers/spend/src/index.ts",
-    "./workers/workflows/src": "./workers/workflows/src/index.ts",
+    "./contracts": "./contracts/index.ts",
+    "./lib/ai/inference": "./lib/ai/inference/index.ts",
+    "./lib/discord": "./lib/discord/index.ts",
     "./*": "./*.ts",
     "./*.json": "./*.json",
     "./*.md": "./*.md"
   },
   "dependencies": {
     "@rag/authz": "workspace:*",
-    "@rag/discord": "workspace:*",
+    "@rag/connectors-core": "workspace:*",
     "@rag/contracts-core": "workspace:*",
     "@rag/egress": "workspace:*",
     "@rag/ingress": "workspace:*",

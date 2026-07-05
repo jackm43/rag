@@ -4,7 +4,7 @@ import type { EntityJson } from "@cedar-policy/cedar-wasm/web";
 import { createServiceClient, createServiceClientFromEnv } from "@rag/service-kit/client";
 import { bumpRequestIntentVersion, revokeRequestIntent } from "@rag/service-kit/control-plane";
 import { createServiceServer } from "@rag/service-kit/server";
-import { decodeReplyJobEnvelope, encodeReplyJobEnvelope } from "@rag/bot/contracts";
+import { decodeReplyJobEnvelope, encodeReplyJobEnvelope } from "@rag/discord/contracts";
 import { decodeServiceMessage, encodeManifestSnapshot, encodeServiceMessage } from "@rag/contracts-core";
 import type { ServiceMessageBytes } from "@rag/contracts-core";
 import { buildIdentityContext, mint } from "@rag/service-kit/identity";
