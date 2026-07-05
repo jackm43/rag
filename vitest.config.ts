@@ -15,22 +15,7 @@ export default defineConfig({
       // same behaviour tests already rely on (no test pre-registers a manifest).
       miniflare: {
         workers: [
-          {
-            name: "ragbot-registry-worker",
-            modules: true,
-            compatibilityDate: "2026-04-23",
-            compatibilityFlags: ["nodejs_compat"],
-            script: [
-              'import { DurableObject } from "cloudflare:workers";',
-              "export class ServiceRegistry extends DurableObject {",
-              "  async register() {}",
-              "  async snapshot() { return new Uint8Array(); }",
-              "}",
-              'export default { fetch() { return new Response("Not found", { status: 404 }); } };',
-            ].join("\n"),
-            durableObjects: { SERVICE_REGISTRY: "ServiceRegistry" },
-          },
-          // The gateway also binds InteractionSession as an EXTERNAL Durable
+          // The gateway binds InteractionSession as an EXTERNAL Durable
           // Object (script_name: ragbot-workflows-worker) to run deferred
           // commands. Stub it so miniflare can resolve the binding; the real DO
           // runs in the workflows worker. runDeferredCommand is a no-op here, so
