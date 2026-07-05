@@ -1,47 +1,19 @@
 import { afterEach, assert, test, vi } from "vitest";
 
 import { handleEgressRequest } from "@rag/egress/server";
-import { encodeEgressRequestEnvelope } from "@rag/egress/contracts";
-import { encodeManifestSnapshot } from "@rag/contracts-core";
-import type { EgressEnv as Env } from "@rag/egress/contracts";
-import type { EgressProfileConfig } from "@rag/egress/contracts";
-import type { ServiceMessageBytes } from "@rag/contracts-core";
-import { createServiceRegistryMock, signedServiceMessage } from "../../helpers";
+import type { EgressEnv as Env, EgressFetchInput, EgressProfileConfig } from "@rag/egress/contracts";
 
-const egressEnvelope = () =>
-  encodeEgressRequestEnvelope(
-    {
-      kind: "egress.request",
-      profile: "discord-rest",
-      method: "POST",
-      url: "https://discord.com/api/v10/channels/200000000000000001/messages",
-      headersJson: JSON.stringify({ "content-type": "application/json" }),
-    },
-    { source: "worker" },
-  );
+// The egress boundary is now a plain RPC: a caller reachable over the trusted
+// EGRESS binding passes an EgressFetchInput. No signing, no envelope, no
+// registry — authorization is the profile's allowedCallers list.
 
-const serviceRegistry = () => ({
-  idFromName: (name: string) => name,
-  get: () => ({
-    register: async () => undefined,
-    snapshot: async () =>
-      encodeManifestSnapshot([
-        {
-          service: "responder",
-          zone: "application",
-          targets: [],
-          operations: [],
-          scopes: [],
-        },
-        {
-          service: "egress",
-          zone: "platform",
-          targets: [],
-          operations: ["egress.request"],
-          scopes: [],
-        },
-      ]),
-  }),
+const input = (overrides: Partial<EgressFetchInput> = {}): EgressFetchInput => ({
+  caller: "responder",
+  profile: "discord-rest",
+  method: "POST",
+  url: "https://discord.com/api/v10/channels/200000000000000001/messages",
+  headers: { "content-type": "application/json" },
+  ...overrides,
 });
 
 const profile = (allowedCallers: string[] = ["responder"]): EgressProfileConfig => ({
@@ -63,17 +35,7 @@ const egressControl = (profiles: Record<string, EgressProfileConfig>) => ({
 });
 
 const env = (overrides: Partial<Env> = {}): Env =>
-  ({
-    DISCORD_BOT_TOKEN: "bot-token",
-    SERVICE_REGISTRY: serviceRegistry(),
-    ...overrides,
-  }) as Env;
-
-const message = (
-  envelope: Uint8Array = egressEnvelope(),
-  hopEnv?: Env,
-): Promise<ServiceMessageBytes> =>
-  signedServiceMessage(envelope, { iss: "responder", aud: "egress", sub: "user-1", env: hopEnv });
+  ({ DISCORD_BOT_TOKEN: "bot-token", ...overrides }) as Env;
 
 const expectReject = async (run: () => Promise<unknown>) => {
   let rejected = false;
@@ -87,20 +49,20 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("egress fails closed when the control-plane binding is absent", async () => {
+test("egress falls back to bundled defaults when no control-plane profile exists", async () => {
+  // With no EGRESS_CONTROL binding the bundled DEFAULT_EGRESS_PROFILES are used;
+  // an unknown (caller, profile) still fails closed.
   const fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
-
-  await expectReject(async () => handleEgressRequest(env(), await message()));
+  await expectReject(async () => handleEgressRequest(env(), input({ profile: "does-not-exist" })));
   assert.equal(fetchMock.mock.calls.length, 0);
 });
 
-test("egress fails closed when the requested profile is absent", async () => {
+test("egress fails closed when the requested profile is absent from the control plane", async () => {
   const fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
-
   await expectReject(() =>
-    message().then((body) => handleEgressRequest(env({ EGRESS_CONTROL: egressControl({}) as never }), body)),
+    handleEgressRequest(env({ EGRESS_CONTROL: egressControl({}) as never }), input({ profile: "custom-x" })),
   );
   assert.equal(fetchMock.mock.calls.length, 0);
 });
@@ -108,33 +70,25 @@ test("egress fails closed when the requested profile is absent", async () => {
 test("egress denies callers absent from the profile caller list", async () => {
   const fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
-
   await expectReject(() =>
-    message().then((body) =>
-      handleEgressRequest(
-        env({ EGRESS_CONTROL: egressControl({ "discord-rest": profile(["connectors"]) }) as never }),
-        body,
-      ),
+    handleEgressRequest(
+      env({ EGRESS_CONTROL: egressControl({ "discord-rest": profile(["connectors"]) }) as never }),
+      input({ caller: "responder" }),
     ),
   );
   assert.equal(fetchMock.mock.calls.length, 0);
 });
 
 test("egress authorizes a configured profile and injects the profile credential", async () => {
-  const fetchMock = vi.fn(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } }));
+  const fetchMock = vi.fn(
+    async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+  );
   vi.stubGlobal("fetch", fetchMock);
 
-  // Unlike the fail-closed tests above (which use the register+snapshot-only
-  // registry double), this test exercises a real accept path end to end, so
-  // it needs a SERVICE_REGISTRY stub that actually implements the placement
-  // RPCs — otherwise the request is (correctly, per the fail-closed
-  // doctrine) denied before it ever reaches the profile/credential logic.
-  const workingEnv = env({
-    SERVICE_REGISTRY: createServiceRegistryMock(),
-    EGRESS_CONTROL: egressControl({ "discord-rest": profile() }) as never,
-  });
-
-  const result = await handleEgressRequest(workingEnv, await message(undefined, workingEnv));
+  const result = await handleEgressRequest(
+    env({ EGRESS_CONTROL: egressControl({ "discord-rest": profile() }) as never }),
+    input(),
+  );
 
   assert.equal(result.status, 200);
   assert.equal(fetchMock.mock.calls.length, 1);

@@ -36,6 +36,19 @@ export type EgressResult = {
   body: ArrayBuffer;
 };
 
+// The plain RPC input the egress sidecar receives over its capability-gated
+// service binding. No capnp envelope, no signed identity token: only a worker
+// whose wrangler declares the EGRESS binding can call, so the binding graph
+// authenticates the caller. `caller` selects the (caller, profile) config and
+// its credential; the profile's allowedCallers gates it.
+export type EgressFetchInput = {
+  caller: string;
+  profile: string;
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+};
+
 export type EgressCredentialRef = {
   header: string;
   env: string;
@@ -73,11 +86,12 @@ export type PreparedApplicationRequest =
 export type EgressEnv = {
   LINKED_APP_TOKEN?: string;
   LINKED_APP_TOKEN_SHA256?: string;
-  // Generic bound egress proxy. Application workers call this with a signed
-  // egress.request ServiceMessage plus optional raw body bytes. The egress
-  // worker owns host allowlists and credential injection for the named profile.
+  // Generic bound egress proxy. Application workers call this over the EGRESS
+  // service binding with a plain EgressFetchInput plus optional raw body bytes.
+  // The egress worker owns host allowlists and credential injection for the
+  // named profile.
   EGRESS?: {
-    fetchProfile: (message: ServiceMessageBytes, body?: ArrayBuffer) => Promise<EgressResult>;
+    fetchProfile: (input: EgressFetchInput, body?: ArrayBuffer) => Promise<EgressResult>;
   };
   // Per-application egress profile authority. The egress worker selects an
   // object by verified caller/application, then resolves the requested profile.

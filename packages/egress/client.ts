@@ -1,45 +1,18 @@
-import { createClient, createHopIntent, SYSTEM_SUBJECT, type Subject, type VerifiedRequestContext } from "@rag/service-kit";
-import { encodeEgressRequestEnvelope } from "@rag/egress/contracts";
-import type { EgressEnv } from "./contracts";
-import type { ServiceKitEnv } from "@rag/service-kit/env";
-
-type Env = EgressEnv & ServiceKitEnv;
-import type { ServiceMessageBytes } from "@rag/contracts-core";
-import { envelopeSha256 } from "@rag/service-kit/identity";
+import type { EgressEnv, EgressFetchInput } from "./contracts";
 import type { BoundaryFetch } from "./outbound/boundary-client";
+
+type Env = EgressEnv;
 
 const STRIPPED_HEADERS = new Set(["authorization", "cookie", "proxy-authorization"]);
 
 export type EgressCaller = "responder" | "connectors" | "workflows" | "spend";
 
+// Retained for call-site compatibility; the subject is no longer signed into a
+// token (egress is reached over a trusted, capability-gated binding), so it is
+// currently unused. Kept so callers can pass it without churn.
 export type EgressFetchOptions = {
-  subject?: Subject;
+  subject?: { sub: string };
 };
-
-const prepareEgressMessage = (
-  env: Env,
-  caller: EgressCaller,
-  context: VerifiedRequestContext,
-  envelope: Uint8Array,
-  intent: ReturnType<typeof createHopIntent>,
-): Promise<ServiceMessageBytes> =>
-  createClient({ env, self: caller, context })
-    // Egress is reachable only over its capability-gated service binding, so the
-    // caller is authenticated by the binding graph; send a claims-only token and
-    // let the egress server read it without verifying a signature (no signing
-    // key required on any caller).
-    .to("egress", { transportTrust: "trusted", authorizeExchange: false })
-    .prepare(envelope, { intent });
-
-const clientContextOf = (subject: Subject | undefined): VerifiedRequestContext =>
-  subject
-    ? {
-        subject: subject.sub,
-        delegates: subject.delegates,
-        requestId: subject.requestId,
-        correlationId: subject.correlationId,
-      }
-    : { subject: SYSTEM_SUBJECT };
 
 const bodyAllowed = (method: string) => method !== "GET" && method !== "HEAD";
 
@@ -56,44 +29,28 @@ const materializeRequest = async (input: string | URL, init: RequestInit = {}) =
   return { method, url: request.url, headers, body };
 };
 
+// A `fetch`-shaped function that routes an outbound request through the egress
+// sidecar over its service binding. Trust is structural: only a worker whose
+// wrangler declares EGRESS can call, so the request is a plain object — no
+// envelope, no identity token.
 export const createEgressClient = (
   env: Env,
   profile: string,
   caller: EgressCaller,
 ): BoundaryFetch => {
-  return async (input, init = {}, options?: EgressFetchOptions) => {
+  return async (input, init = {}, _options?: EgressFetchOptions) => {
     if (!env.EGRESS) {
       throw new Error("EGRESS service binding is required for bound egress");
     }
-
     const request = await materializeRequest(input, init);
-    const bodySha256 = request.body && request.body.byteLength > 0
-      ? await envelopeSha256(new Uint8Array(request.body))
-      : undefined;
-    const envelope = encodeEgressRequestEnvelope(
-      {
-        kind: "egress.request",
-        profile,
-        method: request.method,
-        url: request.url,
-        headersJson: JSON.stringify(request.headers),
-        ...(bodySha256 === undefined ? {} : { bodySha256 }),
-      },
-      { source: "worker" },
-    );
-    const message = await prepareEgressMessage(
-      env,
+    const fetchInput: EgressFetchInput = {
       caller,
-      clientContextOf(options?.subject),
-      envelope,
-      createHopIntent({
-        action: "egress.request",
-        resourceType: "EgressSidecar",
-        resourceId: profile,
-        method: request.method,
-      }),
-    );
-    const result = await env.EGRESS.fetchProfile(message, request.body);
+      profile,
+      method: request.method,
+      url: request.url,
+      headers: request.headers,
+    };
+    const result = await env.EGRESS.fetchProfile(fetchInput, request.body);
     return new Response(result.body, {
       status: result.status,
       statusText: result.statusText,
