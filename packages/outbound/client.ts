@@ -4,7 +4,7 @@ import {
   type BoundaryFetch,
   type BoundaryPolicy,
   type EgressIdentityZone,
-} from "./outbound/boundary-client";
+} from "./boundary-client";
 import { isEgressProfileConfig, type EgressProfileConfig } from "./config";
 import { DEFAULT_EGRESS_PROFILES } from "./profiles";
 

@@ -1,4 +1,4 @@
-import { createBoundaryClient, type BoundaryFetch } from "@rag/egress/outbound/boundary-client";
+import { createBoundaryClient, type BoundaryFetch } from "@rag/outbound/boundary-client";
 import type { ConnectorDetail, ConnectorInvokeJob, ConnectorOperation, ConnectorResult, ConnectorSummary, ConnectorWebhookVerification, Env, SetConnectorSecretResult } from "../contracts";
 import { errorMessage, logger } from "@rag/logger";
 import {

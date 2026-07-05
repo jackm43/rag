@@ -1,8 +1,8 @@
 import ragjamMusicConfig from "../../ai/ai-config/ragjam-music.json";
 import { buildAiGatewayMetadata } from "../../ai/ai-metadata";
 import { errorDetails, errorMessage, logger } from "@rag/logger";
-import { PolicyViolationError } from "@rag/egress/outbound/boundary-client";
-import { boundaryClients } from "@rag/egress/outbound/clients";
+import { PolicyViolationError } from "@rag/outbound/boundary-client";
+import { boundaryClients } from "@rag/outbound/clients";
 import { inferenceClient } from "../../ai/inference";
 import { sendInteractionEdit, sendInteractionMediaEdit } from "../outbox";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../../ai/spend";

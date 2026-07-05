@@ -1,5 +1,5 @@
 {
-  "name": "@rag/egress",
+  "name": "@rag/outbound",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,11 +9,8 @@
     "./*.md": "./*.md"
   },
   "dependencies": {
-    "@rag/authz": "workspace:*",
     "@rag/contracts-core": "workspace:*",
     "@rag/logger": "workspace:*",
-    "@rag/service-kit": "workspace:*",
-    "@cedar-policy/cedar-wasm": "^4.11.2",
-    "capnp-es": "^0.0.14"
+    "@rag/service-kit": "workspace:*"
   }
 }

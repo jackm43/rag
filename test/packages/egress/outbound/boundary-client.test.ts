@@ -4,8 +4,8 @@ import {
   createBoundaryClient,
   PolicyViolationError,
   type BoundaryPolicy,
-} from "@rag/egress/outbound/boundary-client";
-import { boundaryClients } from "@rag/egress/outbound/clients";
+} from "@rag/outbound/boundary-client";
+import { boundaryClients } from "@rag/outbound/clients";
 import { createEnv } from "../../../helpers";
 
 const discordPolicy: BoundaryPolicy = {

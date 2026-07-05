@@ -1,4 +1,4 @@
-import { boundaryClients, type EgressCaller } from "@rag/egress/outbound/clients";
+import { boundaryClients, type EgressCaller } from "@rag/outbound/clients";
 import { logger } from "@rag/logger";
 import { DISCORD_API_BASE_URL, type DiscordChannel, type DiscordMessage, type Env } from "../../contracts";
 import { isDiscordMessage } from "../../contracts";

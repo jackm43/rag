@@ -1,4 +1,3 @@
-import type { CedarValueJson, EntityJson } from "@cedar-policy/cedar-wasm/web";
 import type { MachinePrincipal } from "@rag/service-kit/principal";
 import type { ConnectorCapability, ConnectorConfig } from "./types";
 
@@ -102,66 +101,3 @@ const BY_ID = new Map(CONNECTOR_REGISTRY.map((connector) => [connector.id, conne
 
 export const lookupConnector = (id: string | undefined): ConnectorConfig | null =>
   id ? BY_ID.get(id) ?? null : null;
-
-const capabilityAttr: Record<ConnectorCapability, string> = {
-  grant: "grant",
-  fetch: "fetch",
-  token: "token",
-  authorize: "authorize",
-  webhookVerify: "webhookVerify",
-  adminRead: "adminRead",
-  adminWrite: "adminWrite",
-};
-
-const appRefs = (apps: MachinePrincipal[] | undefined) =>
-  (apps ?? []).map((app) => ({ __entity: { type: "Application", id: app } }));
-
-const hasManagementCapability = (capabilities: Partial<Record<ConnectorCapability, Set<MachinePrincipal>>>) =>
-  (capabilities.adminRead?.size ?? 0) > 0 || (capabilities.adminWrite?.size ?? 0) > 0;
-
-export const connectorsToEntities = (connectors: ConnectorConfig[] = CONNECTOR_REGISTRY): EntityJson[] => {
-  const byResource = new Map<string, ConnectorConfig[]>();
-  for (const connector of connectors) {
-    const existing = byResource.get(connector.cedarResource) ?? [];
-    existing.push(connector);
-    byResource.set(connector.cedarResource, existing);
-  }
-
-  const entities: EntityJson[] = [
-    {
-      uid: { type: "Connector", id: "*" },
-      attrs: {
-        plane: "management",
-        adminList: appRefs(["dev-proxy"]),
-      },
-      parents: [],
-    },
-  ];
-
-  for (const [resource, grouped] of byResource) {
-    const merged: Partial<Record<ConnectorCapability, Set<MachinePrincipal>>> = {};
-    for (const connector of grouped) {
-      for (const [capability, callers] of Object.entries(connector.capabilities ?? {}) as Array<[
-        ConnectorCapability,
-        MachinePrincipal[],
-      ]>) {
-        const set = merged[capability] ?? new Set<MachinePrincipal>();
-        callers.forEach((caller) => set.add(caller));
-        merged[capability] = set;
-      }
-    }
-    const attrs: Record<string, CedarValueJson> = { plane: "data" };
-    if (hasManagementCapability(merged)) {
-      attrs.planes = ["data", "management"];
-    }
-    for (const [capability, callers] of Object.entries(merged) as Array<[
-      ConnectorCapability,
-      Set<MachinePrincipal>,
-    ]>) {
-      attrs[capabilityAttr[capability]] = appRefs([...callers]);
-    }
-    entities.push({ uid: { type: "Connector", id: resource }, attrs, parents: [] });
-  }
-
-  return entities;
-};

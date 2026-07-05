@@ -1,5 +1,5 @@
 import type { BoundaryFetch } from "./boundary-client";
-import { createEgressClient, type EgressCaller, type EgressFetchOptions } from "../client";
+import { createEgressClient, type EgressCaller, type EgressFetchOptions } from "./client";
 
 // Every application outbound HTTP client now routes through the generic egress
 // sidecar worker: the credential, host allowlist, timeout and size caps live

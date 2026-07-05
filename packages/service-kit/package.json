@@ -11,9 +11,7 @@
     "./*.md": "./*.md"
   },
   "dependencies": {
-    "@rag/authz": "workspace:*",
     "@rag/contracts-core": "workspace:*",
-    "@rag/logger": "workspace:*",
-    "@cedar-policy/cedar-wasm": "^4.11.2"
+    "@rag/logger": "workspace:*"
   }
 }

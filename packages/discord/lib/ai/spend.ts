@@ -1,6 +1,6 @@
 import { decodeAiSpendJobEnvelope, encodeAiSpendJobEnvelope } from "../../contracts";
 import { errorMessage, logger } from "@rag/logger";
-import { boundaryClients } from "@rag/egress/outbound/clients";
+import { boundaryClients } from "@rag/outbound/clients";
 import { SYSTEM_SUBJECT, type Subject, type VerifiedRequestContext } from "@rag/service-kit";
 import type { Env } from "../../contracts";
 import { isRecord } from "@rag/contracts-core";

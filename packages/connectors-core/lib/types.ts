@@ -1,6 +1,6 @@
 import type { Env } from "../contracts";
 import type { MachinePrincipal } from "@rag/service-kit/principal";
-import type { BoundaryFetch } from "@rag/egress/outbound/boundary-client";
+import type { BoundaryFetch } from "@rag/outbound/boundary-client";
 import type { SecretRef } from "@rag/secrets";
 import type { AccessTokenCache } from "./cache";
 import type { GrantStore, OAuthStateStore, OAuthTokenStore } from "./store";

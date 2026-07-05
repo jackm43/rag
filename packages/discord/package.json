@@ -12,12 +12,11 @@
     "./*.md": "./*.md"
   },
   "dependencies": {
-    "@rag/authz": "workspace:*",
     "@rag/connectors-core": "workspace:*",
     "@rag/contracts-core": "workspace:*",
-    "@rag/egress": "workspace:*",
     "@rag/ingress": "workspace:*",
     "@rag/logger": "workspace:*",
+    "@rag/outbound": "workspace:*",
     "@rag/secrets": "workspace:*",
     "@rag/service-kit": "workspace:*",
     "capnp-es": "^0.0.14",

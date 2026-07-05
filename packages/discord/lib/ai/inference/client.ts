@@ -9,8 +9,8 @@
 // path routes through the "ai-gateway" egress profile, so the token lives on
 // the egress worker and is injected there. env.AI (the Workers AI binding)
 // path is unaffected and still runs in-process.
-import type { BoundaryFetch } from "@rag/egress/outbound/boundary-client";
-import { createEgressClient } from "@rag/egress/client";
+import type { BoundaryFetch } from "@rag/outbound/boundary-client";
+import { createEgressClient } from "@rag/outbound/client";
 import type { Env } from "../../../contracts";
 import { isRecord } from "@rag/contracts-core";
 

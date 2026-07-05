@@ -1,4 +1,4 @@
-import { createBoundaryClient, type BoundaryFetch } from "@rag/egress/outbound/boundary-client";
+import { createBoundaryClient, type BoundaryFetch } from "@rag/outbound/boundary-client";
 import type { SecretsEnv as Env } from "../env";
 import { errorMessage, logger } from "@rag/logger";
 import type { SecretsProvider } from "../types";
