@@ -20,12 +20,6 @@ importers:
       '@rag/auth-kit':
         specifier: workspace:*
         version: link:packages/auth-kit
-      '@rag/broker':
-        specifier: workspace:*
-        version: link:apps/broker
-      '@rag/connectors-core':
-        specifier: workspace:*
-        version: link:packages/connectors-core
       '@rag/contracts-core':
         specifier: workspace:*
         version: link:packages/contracts-core
@@ -50,9 +44,6 @@ importers:
       '@rag/responder':
         specifier: workspace:*
         version: link:apps/responder
-      '@rag/rpc':
-        specifier: workspace:*
-        version: link:packages/rpc
       '@rag/secrets':
         specifier: workspace:*
         version: link:packages/secrets
@@ -142,18 +133,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/logger
 
-  apps/broker:
-    dependencies:
-      '@rag/connectors-core':
-        specifier: workspace:*
-        version: link:../../packages/connectors-core
-      '@rag/contracts-core':
-        specifier: workspace:*
-        version: link:../../packages/contracts-core
-      '@rag/service-kit':
-        specifier: workspace:*
-        version: link:../../packages/service-kit
-
   apps/gateway:
     dependencies:
       '@rag/auth-kit':
@@ -204,24 +183,18 @@ importers:
       '@rag/auth-kit':
         specifier: workspace:*
         version: link:../../packages/auth-kit
-      '@rag/connectors-core':
+      '@rag/discord':
         specifier: workspace:*
-        version: link:../../packages/connectors-core
+        version: link:../../packages/discord
       '@rag/edge-kit':
         specifier: workspace:*
         version: link:../../packages/edge-kit
       '@rag/logger':
         specifier: workspace:*
         version: link:../../packages/logger
-      '@rag/service-kit':
-        specifier: workspace:*
-        version: link:../../packages/service-kit
 
   apps/workflows:
     dependencies:
-      '@rag/connectors-core':
-        specifier: workspace:*
-        version: link:../../packages/connectors-core
       '@rag/discord':
         specifier: workspace:*
         version: link:../../packages/discord
@@ -250,33 +223,6 @@ importers:
         specifier: ^1.0.3
         version: 1.0.3
 
-  packages/connectors-core:
-    dependencies:
-      '@rag/auth-kit':
-        specifier: workspace:*
-        version: link:../auth-kit
-      '@rag/contracts-core':
-        specifier: workspace:*
-        version: link:../contracts-core
-      '@rag/logger':
-        specifier: workspace:*
-        version: link:../logger
-      '@rag/outbound':
-        specifier: workspace:*
-        version: link:../outbound
-      '@rag/secrets':
-        specifier: workspace:*
-        version: link:../secrets
-      '@rag/service-kit':
-        specifier: workspace:*
-        version: link:../service-kit
-      capnp-es:
-        specifier: ^0.0.14
-        version: 0.0.14(typescript@5.9.3)
-      zod:
-        specifier: ^3.25.76
-        version: 3.25.76
-
   packages/contracts-core:
     dependencies:
       capnp-es:
@@ -288,9 +234,6 @@ importers:
       '@rag/auth-kit':
         specifier: workspace:*
         version: link:../auth-kit
-      '@rag/connectors-core':
-        specifier: workspace:*
-        version: link:../connectors-core
       '@rag/contracts-core':
         specifier: workspace:*
         version: link:../contracts-core
@@ -334,12 +277,6 @@ importers:
         version: link:../service-kit
 
   packages/queue-kit:
-    dependencies:
-      '@rag/logger':
-        specifier: workspace:*
-        version: link:../logger
-
-  packages/rpc:
     dependencies:
       '@rag/logger':
         specifier: workspace:*
