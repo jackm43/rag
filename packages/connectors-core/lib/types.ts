@@ -164,9 +164,9 @@ export type ConnectorProvider = {
 export type GrantEntry = {
   handle: string;
   connectorId: string;
-  // The verified machine principal the handle was issued to. A handle presented
-  // by any other caller is rejected — this is the phantom-token binding.
-  callerPrincipal: MachinePrincipal;
+  // The calling worker the handle was issued to. A handle presented by any other
+  // caller is rejected — this is the phantom-token binding.
+  callerPrincipal: string;
   subject: string;
   scopes: string[];
   params: Record<string, unknown>;

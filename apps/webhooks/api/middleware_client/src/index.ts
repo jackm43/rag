@@ -100,14 +100,7 @@ const handleWebhook = async (
   // or a failed hop (e.g. missing signing material) — exits 401, fail closed.
   let verification: { valid: boolean; eventId?: string } | undefined;
   try {
-    const result = await connectorsClient(
-      env,
-      createClient({
-        env,
-        self: "webhooks",
-        context: { subject: subject.sub },
-      }).to("connectors", { transportTrust: "trusted" }),
-    ).verifyWebhook(connectorId, {
+    const result = await connectorsClient(env, "webhooks").verifyWebhook(connectorId, {
       provider,
       signatureHeaders: collectSignatureHeaders(request, provider),
       bodyBase64,

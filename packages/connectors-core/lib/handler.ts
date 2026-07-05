@@ -1,9 +1,4 @@
-import { createServiceServer, registryEntities } from "@rag/service-kit";
-import { SYSTEM_SUBJECT, type MachinePrincipal } from "@rag/service-kit/principal";
-import type { RequestContext } from "@rag/service-kit/context";
-import { authorize } from "@rag/authz/authorize";
 import { createBoundaryClient, type BoundaryFetch } from "@rag/egress/outbound/boundary-client";
-import { decodeConnectorInvokeEnvelope } from "../contracts";
 import type { ConnectorDetail, ConnectorInvokeJob, ConnectorOperation, ConnectorResult, ConnectorSummary, ConnectorWebhookVerification, Env, SetConnectorSecretResult } from "../contracts";
 import { errorMessage, logger } from "@rag/logger";
 import {
@@ -15,7 +10,7 @@ import {
 } from "@rag/secrets";
 import { sharedAccessTokenCache } from "./cache";
 import { listAppInstallations } from "./providers/github";
-import { CONNECTOR_REGISTRY, connectorsToEntities, lookupConnector } from "./registry";
+import { CONNECTOR_REGISTRY, lookupConnector } from "./registry";
 import {
   createConnectorConfigStore,
   createGrantStore,
@@ -31,7 +26,18 @@ import {
 } from "./store";
 import { strategyFor } from "./strategy";
 import { verifyWebhookSignature } from "./webhooks";
-import { ConnectorError, type ConnectorConfig, type GrantEntry, type StrategyContext } from "./types";
+import { ConnectorError, type ConnectorCapability, type ConnectorConfig, type GrantEntry, type StrategyContext } from "./types";
+
+// The broker is reached only over the trusted CONNECTORS binding, so the caller
+// is a plain string it declares; there is no signed token. Authorization is a
+// data lookup against each connector's `capabilities` (registry.ts) — the same
+// caller lists Cedar used to compile, now checked directly.
+const SYSTEM_SUBJECT = "system";
+
+// The audit context carried through a broker call: the acting subject and the
+// (now single-element) delegation chain. Built from the plain RPC args, not a
+// verified token.
+type AuditContext = { subject: string; delegates?: readonly string[] };
 
 // The credential broker's ingress. Every operation runs the SAME fail-closed
 // order, reusing the shared machinery rather than reinventing it:
@@ -67,7 +73,9 @@ import { ConnectorError, type ConnectorConfig, type GrantEntry, type StrategyCon
 // it cannot use a credential. `webhooks` is the webhook-ingress edge worker: it
 // reaches ONLY `connector.webhook.verify` (a boolean out, never a secret), so a
 // compromised receiver can verify signatures but never touch a credential.
-const CONNECTOR_CALLERS: readonly MachinePrincipal[] = ["workflows", "dev-proxy", "registry", "attest", "webhooks"];
+// Broker-wide admin ops that name no single connector (list connectors, list
+// secrets backends) — permitted to the management caller only.
+const BROKER_ADMIN_CALLERS: readonly string[] = ["dev-proxy"];
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 
@@ -98,14 +106,17 @@ type CredentialOperation = Exclude<
   "admin_list" | "admin_describe" | "admin_set_secret" | "admin_providers" | "admin_installations"
   | "admin_set_capabilities"
 >;
-const CEDAR_ACTION: Record<CredentialOperation, string> = {
-  grant: "connector.grant",
-  fetch: "connector.fetch",
-  token: "connector.token",
-  introspect: "connector.fetch",
-  begin_authorization: "connector.authorize",
-  complete_authorization: "connector.authorize",
-  webhook_verify: "connector.webhook.verify",
+// The connector capability each credential-facing operation requires (checked
+// against connector.capabilities). introspect reuses `fetch` (a read on the
+// caller's own grant); begin/complete map to `authorize`.
+const CAPABILITY_FOR: Record<CredentialOperation, ConnectorCapability> = {
+  grant: "grant",
+  fetch: "fetch",
+  token: "token",
+  introspect: "fetch",
+  begin_authorization: "authorize",
+  complete_authorization: "authorize",
+  webhook_verify: "webhookVerify",
 };
 
 const parseParams = (json: string): Record<string, unknown> => {
@@ -228,9 +239,6 @@ const effectiveConnector = async (connector: ConnectorConfig, env: Env): Promise
   };
 };
 
-const connectorEntities = async (env: Env) =>
-  connectorsToEntities(await Promise.all(CONNECTOR_REGISTRY.map((connector) => effectiveConnector(connector, env))));
-
 // The flows a connector's kind supports, for the admin surface (informational —
 // the per-op capability is still Cedar-gated). Derived from the strategy so the
 // UI need not know kinds: every kind grants + fetches; api_key has no mintable
@@ -267,23 +275,21 @@ const strategyContext = (
   params,
 });
 
+// A caller is authorized for a connector capability iff it appears in that
+// connector's capabilities list for the capability (registry.ts) — a plain data
+// check, no Cedar.
+const hasCapability = (connector: ConnectorConfig, capability: ConnectorCapability, caller: string): boolean =>
+  ((connector.capabilities?.[capability] ?? []) as readonly string[]).includes(caller);
+
+// Authorize against the EFFECTIVE connector so an admin_set_capabilities override
+// (persisted in the config store) takes effect on the authorization decision, not
+// just on credential resolution.
 const authorizeConnector = async (
-  caller: MachinePrincipal,
+  caller: string,
   operation: CredentialOperation,
   connector: ConnectorConfig,
   env: Env,
-): Promise<boolean> => {
-  const entities = [...(await registryEntities(env)), ...(await connectorEntities(env))];
-  const decision = authorize(
-    {
-      principal: { type: "Application", id: caller },
-      action: CEDAR_ACTION[operation],
-      resource: { type: "Connector", id: connector.cedarResource },
-    },
-    entities,
-  );
-  return decision.allowed;
-};
+): Promise<boolean> => hasCapability(await effectiveConnector(connector, env), CAPABILITY_FOR[operation], caller);
 
 const logDenied = (reason: string, fields: Record<string, unknown>) =>
   logger.warn("connector_denied", { outcome: "denied", reason, ...fields });
@@ -294,7 +300,7 @@ const logDenied = (reason: string, fields: Record<string, unknown>) =>
 const auditUse = (
   operation: ConnectorOperation,
   entry: GrantEntry,
-  context: RequestContext,
+  context: AuditContext,
   extra: Record<string, unknown>,
 ) =>
   logger.info("connector_use", {
@@ -307,40 +313,22 @@ const auditUse = (
     ...extra,
   });
 
-// The broker-wide admin resource for ops that name no single connector (list
-// connectors, list secrets backends). CONNECTOR_ID_PATTERN forbids "*", so this
-// sentinel can never collide with a real connector's Cedar resource.
-const BROKER_ADMIN_RESOURCE = "*";
-
-// The per-op admin Cedar gate: authorize the verified caller for a
-// `connector.admin.*` action against a Connector resource (a real connector's
-// cedarResource for describe/set-secret, the broker-wide sentinel for list/
-// providers). Fail closed exactly like authorizeConnector.
-const authorizeAdmin = async (
-  caller: MachinePrincipal,
-  action: string,
-  resourceId: string,
+// Per-connector admin authorization: the caller must hold the adminRead or
+// adminWrite capability on that connector (registry.ts).
+const authorizeConnectorAdmin = async (
+  caller: string,
+  capability: "adminRead" | "adminWrite",
+  connector: ConnectorConfig,
   env: Env,
-): Promise<boolean> => {
-  const entities = [...(await registryEntities(env)), ...(await connectorEntities(env))];
-  const decision = authorize(
-    {
-      principal: { type: "Application", id: caller },
-      action,
-      resource: { type: "Connector", id: resourceId },
-    },
-    entities,
-  );
-  return decision.allowed;
-};
+): Promise<boolean> => hasCapability(await effectiveConnector(connector, env), capability, caller);
 
 // The audit record for a management operation. Carries the full actor chain and
 // the operation's target, and NEVER a secret value (set-secret logs only the
 // {provider, ref} locator and the coarse outcome).
 const auditAdmin = (
   operation: ConnectorOperation,
-  caller: MachinePrincipal,
-  context: RequestContext,
+  caller: string,
+  context: AuditContext,
   extra: Record<string, unknown>,
 ) =>
   logger.info("connector_admin", {
@@ -355,7 +343,7 @@ const auditAdmin = (
 // must exist, be unexpired, and have been issued to this verified caller.
 const resolveGrant = async (
   handle: string,
-  caller: MachinePrincipal,
+  caller: string,
   env: Env,
 ): Promise<GrantEntry | null> => {
   const entry = await grantStore(env).get(handle);
@@ -373,7 +361,7 @@ const resolveGrant = async (
 
 const handleGrant = async (
   job: ConnectorInvokeJob,
-  caller: MachinePrincipal,
+  caller: string,
   env: Env,
 ): Promise<ConnectorResult> => {
   const connector = lookupConnector(job.connectorId);
@@ -417,8 +405,8 @@ const handleGrant = async (
 
 const handleFetch = async (
   job: ConnectorInvokeJob,
-  caller: MachinePrincipal,
-  context: RequestContext,
+  caller: string,
+  context: AuditContext,
   env: Env,
 ): Promise<ConnectorResult> => {
   const entry = await resolveGrant(job.handle as string, caller, env);
@@ -471,8 +459,8 @@ const handleFetch = async (
 
 const handleToken = async (
   job: ConnectorInvokeJob,
-  caller: MachinePrincipal,
-  context: RequestContext,
+  caller: string,
+  context: AuditContext,
   env: Env,
 ): Promise<ConnectorResult> => {
   const entry = await resolveGrant(job.handle as string, caller, env);
@@ -510,8 +498,8 @@ const handleToken = async (
 
 const handleIntrospect = async (
   job: ConnectorInvokeJob,
-  caller: MachinePrincipal,
-  context: RequestContext,
+  caller: string,
+  context: AuditContext,
   env: Env,
 ): Promise<ConnectorResult> => {
   const entry = await resolveGrant(job.handle as string, caller, env);
@@ -543,7 +531,7 @@ const handleIntrospect = async (
 
 const handleAuthorization = async (
   job: ConnectorInvokeJob,
-  caller: MachinePrincipal,
+  caller: string,
   env: Env,
 ): Promise<ConnectorResult> => {
   const connector = lookupConnector(job.connectorId);
@@ -633,8 +621,8 @@ const parseWebhookVerify = (params: Record<string, unknown>): WebhookVerifyInput
 // digest, and the body never leave the broker, and none of them is logged.
 const handleWebhookVerify = async (
   job: ConnectorInvokeJob,
-  caller: MachinePrincipal,
-  context: RequestContext,
+  caller: string,
+  context: AuditContext,
   env: Env,
 ): Promise<ConnectorResult> => {
   const connector = lookupConnector(job.connectorId);
@@ -710,11 +698,11 @@ const buildSummary = async (
 };
 
 const handleAdminList = async (
-  caller: MachinePrincipal,
-  context: RequestContext,
+  caller: string,
+  context: AuditContext,
   env: Env,
 ): Promise<ConnectorResult> => {
-  if (!(await authorizeAdmin(caller, "connector.admin.list", BROKER_ADMIN_RESOURCE, env))) {
+  if (!(BROKER_ADMIN_CALLERS.includes(caller))) {
     logDenied("not_authorized", { caller, action: "connector.admin.list" });
     return denied(403);
   }
@@ -730,8 +718,8 @@ const handleAdminList = async (
 
 const handleAdminDescribe = async (
   job: ConnectorInvokeJob,
-  caller: MachinePrincipal,
-  context: RequestContext,
+  caller: string,
+  context: AuditContext,
   env: Env,
 ): Promise<ConnectorResult> => {
   const connector = lookupConnector(job.connectorId);
@@ -739,7 +727,7 @@ const handleAdminDescribe = async (
     logDenied("unknown_connector", { caller, connectorId: job.connectorId });
     return denied(404);
   }
-  if (!(await authorizeAdmin(caller, "connector.admin.read", connector.cedarResource, env))) {
+  if (!(authorizeConnectorAdmin(caller, "adminRead", connector, env))) {
     logDenied("not_authorized", { caller, connectorId: connector.id, action: "connector.admin.read" });
     return denied(403);
   }
@@ -756,11 +744,11 @@ const handleAdminDescribe = async (
 };
 
 const handleAdminProviders = async (
-  caller: MachinePrincipal,
-  context: RequestContext,
+  caller: string,
+  context: AuditContext,
   env: Env,
 ): Promise<ConnectorResult> => {
-  if (!(await authorizeAdmin(caller, "connector.admin.list", BROKER_ADMIN_RESOURCE, env))) {
+  if (!(BROKER_ADMIN_CALLERS.includes(caller))) {
     logDenied("not_authorized", { caller, action: "connector.admin.list" });
     return denied(403);
   }
@@ -810,8 +798,8 @@ const parseSetSecret = (params: Record<string, unknown>): SetSecretInput => {
 // The secret value is NEVER echoed back or logged.
 const handleAdminSetSecret = async (
   job: ConnectorInvokeJob,
-  caller: MachinePrincipal,
-  context: RequestContext,
+  caller: string,
+  context: AuditContext,
   env: Env,
 ): Promise<ConnectorResult> => {
   const connector = lookupConnector(job.connectorId);
@@ -819,7 +807,7 @@ const handleAdminSetSecret = async (
     logDenied("unknown_connector", { caller, connectorId: job.connectorId });
     return denied(404);
   }
-  if (!(await authorizeAdmin(caller, "connector.admin.write", connector.cedarResource, env))) {
+  if (!(authorizeConnectorAdmin(caller, "adminWrite", connector, env))) {
     logDenied("not_authorized", { caller, connectorId: connector.id, action: "connector.admin.write" });
     return denied(403);
   }
@@ -900,8 +888,8 @@ const handleAdminSetSecret = async (
 
 const handleAdminSetCapabilities = async (
   job: ConnectorInvokeJob,
-  caller: MachinePrincipal,
-  context: RequestContext,
+  caller: string,
+  context: AuditContext,
   env: Env,
 ): Promise<ConnectorResult> => {
   const connector = lookupConnector(job.connectorId);
@@ -909,7 +897,7 @@ const handleAdminSetCapabilities = async (
     logDenied("unknown_connector", { caller, connectorId: job.connectorId });
     return denied(404);
   }
-  if (!(await authorizeAdmin(caller, "connector.admin.write", connector.cedarResource, env))) {
+  if (!(authorizeConnectorAdmin(caller, "adminWrite", connector, env))) {
     logDenied("not_authorized", { caller, connectorId: connector.id, action: "connector.admin.write" });
     return denied(403);
   }
@@ -934,8 +922,8 @@ const handleAdminSetCapabilities = async (
 // caller receives only the trimmed {id, accountLogin, repositorySelection} list.
 const handleAdminInstallations = async (
   job: ConnectorInvokeJob,
-  caller: MachinePrincipal,
-  context: RequestContext,
+  caller: string,
+  context: AuditContext,
   env: Env,
 ): Promise<ConnectorResult> => {
   const connector = lookupConnector(job.connectorId);
@@ -943,7 +931,7 @@ const handleAdminInstallations = async (
     logDenied("unknown_connector", { caller, connectorId: job.connectorId });
     return denied(404);
   }
-  if (!(await authorizeAdmin(caller, "connector.admin.read", connector.cedarResource, env))) {
+  if (!(authorizeConnectorAdmin(caller, "adminRead", connector, env))) {
     logDenied("not_authorized", { caller, connectorId: connector.id, action: "connector.admin.read" });
     return denied(403);
   }
@@ -960,45 +948,44 @@ const handleAdminInstallations = async (
   return { status: 200, installations };
 };
 
+// The broker's ingress. The caller is trusted by the CONNECTORS binding
+// capability (only a worker that declares the binding can call), so it arrives
+// as a plain string alongside the job — no signature to verify. Per-connector
+// authorization is a capabilities lookup (registry.ts). Handle operations still
+// re-check that the grant was issued to THIS caller.
 export const handleConnectorInvoke = async (
-  message: unknown,
+  job: ConnectorInvokeJob,
+  caller: string,
   env: Env,
 ): Promise<ConnectorResult> => {
-  // Step 1: verify + registration gate + Cedar service.invoke, over the binding.
-  const server = createServiceServer({ self: "connectors", expectedIssuers: CONNECTOR_CALLERS, env });
-  const received = await server.receive(message, decodeConnectorInvokeEnvelope, "binding");
-  if (!received) {
-    return denied(401);
-  }
-  const job = received.payload;
-  const caller = received.context.source;
+  const context: AuditContext = { subject: job.subject ?? SYSTEM_SUBJECT, delegates: [caller] };
   try {
     switch (job.operation) {
       case "grant":
         return await handleGrant(job, caller, env);
       case "fetch":
-        return await handleFetch(job, caller, received.context, env);
+        return await handleFetch(job, caller, context, env);
       case "token":
-        return await handleToken(job, caller, received.context, env);
+        return await handleToken(job, caller, context, env);
       case "introspect":
-        return await handleIntrospect(job, caller, received.context, env);
+        return await handleIntrospect(job, caller, context, env);
       case "begin_authorization":
       case "complete_authorization":
         return await handleAuthorization(job, caller, env);
       case "webhook_verify":
-        return await handleWebhookVerify(job, caller, received.context, env);
+        return await handleWebhookVerify(job, caller, context, env);
       case "admin_list":
-        return await handleAdminList(caller, received.context, env);
+        return await handleAdminList(caller, context, env);
       case "admin_describe":
-        return await handleAdminDescribe(job, caller, received.context, env);
+        return await handleAdminDescribe(job, caller, context, env);
       case "admin_set_secret":
-        return await handleAdminSetSecret(job, caller, received.context, env);
+        return await handleAdminSetSecret(job, caller, context, env);
       case "admin_set_capabilities":
-        return await handleAdminSetCapabilities(job, caller, received.context, env);
+        return await handleAdminSetCapabilities(job, caller, context, env);
       case "admin_providers":
-        return await handleAdminProviders(caller, received.context, env);
+        return await handleAdminProviders(caller, context, env);
       case "admin_installations":
-        return await handleAdminInstallations(job, caller, received.context, env);
+        return await handleAdminInstallations(job, caller, context, env);
       default:
         return denied(400);
     }

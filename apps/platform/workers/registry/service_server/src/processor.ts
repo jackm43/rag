@@ -68,11 +68,7 @@ const submitGithubPr = async (
     return null;
   }
 
-  const client = connectorsClient(env, createClient({
-    env,
-    self: "registry",
-    context: { subject: event.actorDiscordId },
-  }).to("connectors", { transportTrust: "trusted" }));
+  const client = connectorsClient(env, "registry");
   const grant = await client.grant("github-app", { params: { installationId } });
   if (grant.status !== 200 || !grant.grant) {
     logger.warn("registry_github_grant_failed", { applicationId: event.applicationId, status: grant.status });

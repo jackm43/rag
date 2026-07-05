@@ -1,5 +1,4 @@
 import { createAppWorker, jsonResponse, type AuthGatewayBinding } from "@rag/edge-kit";
-import { createClient } from "@rag/service-kit";
 import { connectorsClient } from "@rag/connectors-core/lib";
 import type { ConnectorResult, Env as ConnectorsEnv } from "@rag/connectors-core/contracts";
 import { errorMessage, logger } from "@rag/logger";
@@ -32,16 +31,15 @@ const relay = (result: ConnectorResult, pick: (result: ConnectorResult) => unkno
 // GET /api/connectors: the read-only management listing. The auth worker has
 // already authenticated + authorized the caller; `subject` is the acting Access
 // identity, used as the broker-hop subject.
-const listConnectors = async (subject: string, env: Env): Promise<Response> => {
+const listConnectors = async (_subject: string, env: Env): Promise<Response> => {
   if (!env.CONNECTORS) {
     logger.error("connectors_binding_missing", {});
     return jsonResponse(500, { error: "misconfigured" });
   }
   try {
-    const client = connectorsClient(
-      env,
-      createClient({ env, self: "dev-proxy", context: { subject } }).to("connectors", { transportTrust: "trusted" }),
-    );
+    // The broker's admin caller is the "dev-proxy" management principal (the
+    // registry capabilities list). Reached over the trusted CONNECTORS binding.
+    const client = connectorsClient(env, "dev-proxy");
     return relay(await client.listConnectors(), (result) => ({ connectors: result.connectors ?? [] }));
   } catch (error) {
     logger.error("connectors_list_failed", { error: errorMessage(error) });

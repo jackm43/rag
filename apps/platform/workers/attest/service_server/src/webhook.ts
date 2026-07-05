@@ -188,14 +188,7 @@ const verifyWebhook = async (
   headers: Record<string, string>,
   bodyBase64: string,
 ): Promise<{ valid: boolean; eventId?: string }> => {
-  const result = await connectorsClient(
-    env,
-    createClient({
-      env,
-      self: "attest",
-      context: { subject: "github:webhook" },
-    }).to("connectors", { transportTrust: "trusted" }),
-  ).verifyWebhook(GITHUB_CONNECTOR_ID, {
+  const result = await connectorsClient(env, "attest").verifyWebhook(GITHUB_CONNECTOR_ID, {
     provider: "github",
     signatureHeaders: headers,
     bodyBase64,
@@ -263,14 +256,7 @@ export const handleGitHubWebhookEvent = async (
     return { status: 202, body: "Ignored" };
   }
 
-  const client = connectorsClient(
-    env,
-    createClient({
-      env,
-      self: "attest",
-      context: { subject: `github:${repo.fullName}` },
-    }).to("connectors", { transportTrust: "trusted" }),
-  );
+  const client = connectorsClient(env, "attest");
   const grant = await client.grant(GITHUB_CONNECTOR_ID, { params: { installationId } });
   if (grant.status !== 200 || !grant.grant) {
     logger.warn("attest_github_grant_failed", { repository: repo.fullName, status: grant.status });

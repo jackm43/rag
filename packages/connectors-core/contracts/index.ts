@@ -327,7 +327,7 @@ export type ConnectorsEnv = {
   // RPC surface is reachable only from such a caller. Typed structurally so
   // contracts does not import worker code (mirrors RESPONDER / GATEWAY_DEVPROXY).
   CONNECTORS?: {
-    invoke: (message: ServiceMessageBytes) => Promise<ConnectorResult>;
+    invoke: (job: ConnectorInvokeJob, caller: string) => Promise<ConnectorResult>;
   };
   // The broker's own grant/token store, a Durable Object it defines and binds
   // (apps/connectors/workers/broker). Strongly consistent and persistent across

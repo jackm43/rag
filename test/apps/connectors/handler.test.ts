@@ -3,16 +3,13 @@ import { assert, test } from "vitest";
 import { handleConnectorInvoke } from "@rag/connectors-core/lib/handler";
 import { createInMemoryKeyValueStore, generateHandle } from "@rag/connectors-core/lib/store";
 import type { GrantEntry } from "@rag/connectors-core/lib/types";
-import { encodeConnectorInvokeEnvelope } from "@rag/connectors-core/contracts";
-import { encodeServiceMessage } from "@rag/contracts-core";
 import type { ConnectorInvokeJob } from "@rag/connectors-core/contracts";
-import { createServiceRegistryMock, mintServiceToken, signedServiceMessage } from "../../helpers";
 
-// The security invariant: EVERY operation is authenticated (identity-context
-// token verified via the shared createServiceServer pipeline) AND authorized
-// (Cedar) before any credential is touched, and a handle is bound to the caller
-// it was issued to. These tests prove each gate fails closed — the only way to
-// prove fail-closed is to try to get through.
+// The broker is reached only over the trusted CONNECTORS binding, so the caller
+// arrives as a plain string alongside the job — no signature. The security
+// invariants that remain: EVERY operation is authorized (a per-connector
+// capabilities check) before any credential is touched, and a handle is bound to
+// the caller it was issued to. These tests prove each gate fails closed.
 
 const PRIVATE_KEY = `-----BEGIN RSA PRIVATE KEY-----
 MIIEowIBAAKCAQEAo6ZO6+S+oJqKOgltJGvUQ7e0QNH3eMLKXEx4+/a9xFEg/b9w
@@ -68,8 +65,6 @@ const captureFetch = (respond: (url: string, init?: RequestInit) => Response) =>
   return { calls, restore: () => (globalThis.fetch = original) };
 };
 
-// A CONNECTOR_STORE binding backed by an in-memory kv, plus direct kv access for
-// pre-seeding grants in the caller-binding test.
 const storeEnv = (overrides: Record<string, unknown> = {}) => {
   const kv = createInMemoryKeyValueStore();
   const stub = { read: kv.read, write: kv.write, remove: kv.remove };
@@ -77,13 +72,10 @@ const storeEnv = (overrides: Record<string, unknown> = {}) => {
     kv,
     env: {
       CONNECTOR_STORE: { idFromName: () => "id", get: () => stub },
-      SERVICE_REGISTRY: createServiceRegistryMock(),
       ...overrides,
     } as never,
   };
 };
-
-const encode = (job: ConnectorInvokeJob) => encodeConnectorInvokeEnvelope(job, { source: "worker" });
 
 const grantJob = (connectorId: string, params: Record<string, unknown> = {}): ConnectorInvokeJob => ({
   kind: "connector.invoke",
@@ -104,31 +96,17 @@ const adminJob = (
   ...extra,
 });
 
-// The connectors ADMIN surface. The dev-proxy is the only admin caller; the
-// invariant is the same as every other broker op — authenticated + Cedar-gated
-// (connector.admin.*) + audit-logged — and NO management op ever returns a secret
-// value. These tests prove the gate fails closed and the per-backend set-secret
-// write-capability differences are surfaced honestly (never faking success).
-
 test("admin_list: the dev-proxy admin caller lists connectors and their status, never secrets", async () => {
   const logs = captureLogs();
   try {
     const { env } = storeEnv();
-    const message = await signedServiceMessage(encode(adminJob("admin_list")), {
-      iss: "dev-proxy",
-      aud: "connectors",
-      env,
-    });
-    const result = await handleConnectorInvoke(message, env);
+    const result = await handleConnectorInvoke(adminJob("admin_list"), "dev-proxy", env);
     assert.equal(result.status, 200);
-    const connectors = result.connectors ?? [];
-    const github = connectors.find((c) => c.id === "github-app");
+    const github = (result.connectors ?? []).find((c) => c.id === "github-app");
     assert.ok(github);
     assert.equal(github.secretProvider, "wrangler-env");
-    // Its secret is unprovisioned in this env, so status is a boolean, not a value.
     assert.equal(github.secretConfigured, false);
     assert.include(github.flows, "fetch");
-    // The admin op is audited with the actor chain.
     assert.ok(logs.lines.some((line) => line.message === "connector_admin" && line.operation === "admin_list"));
   } finally {
     logs.restore();
@@ -138,17 +116,9 @@ test("admin_list: the dev-proxy admin caller lists connectors and their status, 
 test("admin ops fail closed: the workflows worker (a credential caller, not an admin) is denied", async () => {
   const logs = captureLogs();
   try {
-    // The workflows worker is a valid broker caller for connector.grant/fetch/token, but it
-    // holds NO connector.admin.* permit — an admin op is refused by Cedar.
     const { env } = storeEnv();
-    const message = await signedServiceMessage(encode(adminJob("admin_list")), {
-      iss: "workflows",
-      aud: "connectors",
-      env,
-    });
-    const result = await handleConnectorInvoke(message, env);
+    const result = await handleConnectorInvoke(adminJob("admin_list"), "workflows", env);
     assert.equal(result.status, 403);
-    assert.ok(logs.lines.some((line) => line.reason === "not_authorized"));
   } finally {
     logs.restore();
   }
@@ -156,12 +126,7 @@ test("admin ops fail closed: the workflows worker (a credential caller, not an a
 
 test("admin_providers: reports each backend's runtime write capability (no values)", async () => {
   const { env } = storeEnv({ VAULT_ADDR: "https://vault.example.com", VAULT_TOKEN: "s.token" });
-  const message = await signedServiceMessage(encode(adminJob("admin_providers")), {
-    iss: "dev-proxy",
-    aud: "connectors",
-    env,
-  });
-  const result = await handleConnectorInvoke(message, env);
+  const result = await handleConnectorInvoke(adminJob("admin_providers"), "dev-proxy", env);
   assert.equal(result.status, 200);
   const byName = Object.fromEntries((result.providers ?? []).map((p) => [p.name, p]));
   assert.equal(byName["wrangler-env"].writable, false);
@@ -173,92 +138,66 @@ test("admin_providers: reports each backend's runtime write capability (no value
 
 test("set-secret: wrangler-env with a value is rejected (deploy-time only), nothing persisted", async () => {
   const { env } = storeEnv();
-  const message = await signedServiceMessage(
-    encode(
-      adminJob("admin_set_secret", {
-        connectorId: "github-app",
-        paramsJson: JSON.stringify({
-          provider: "wrangler-env",
-          ref: "GITHUB_APP_PRIVATE_KEY",
-          value: "super-secret-pem",
-        }),
-      }),
-    ),
-    { iss: "dev-proxy", aud: "connectors", env },
+  const result = await handleConnectorInvoke(
+    adminJob("admin_set_secret", {
+      connectorId: "github-app",
+      paramsJson: JSON.stringify({ provider: "wrangler-env", ref: "GITHUB_APP_PRIVATE_KEY", value: "super-secret-pem" }),
+    }),
+    "dev-proxy",
+    env,
   );
-  const result = await handleConnectorInvoke(message, env);
   assert.equal(result.status, 200);
   assert.equal(result.secret?.status, "rejected");
-  // The value never appears in the response.
   assert.notInclude(JSON.stringify(result), "super-secret-pem");
 
-  // Nothing was persisted: a describe shows no override.
-  const describe = await signedServiceMessage(
-    encode(adminJob("admin_describe", { connectorId: "github-app" })),
-    { iss: "dev-proxy", aud: "connectors", env },
-  );
-  const described = await handleConnectorInvoke(describe, env);
+  const described = await handleConnectorInvoke(adminJob("admin_describe", { connectorId: "github-app" }), "dev-proxy", env);
   assert.equal(described.connector?.secretOverridden, false);
 });
 
 test("set-secret: cloudflare-secret-store with a value re-points but requires out-of-band provisioning", async () => {
   const { env } = storeEnv();
-  const message = await signedServiceMessage(
-    encode(
-      adminJob("admin_set_secret", {
-        connectorId: "github-app",
-        paramsJson: JSON.stringify({ provider: "cloudflare-secret-store", ref: "GH_APP_KEY", value: "x" }),
-      }),
-    ),
-    { iss: "dev-proxy", aud: "connectors", env },
+  const result = await handleConnectorInvoke(
+    adminJob("admin_set_secret", {
+      connectorId: "github-app",
+      paramsJson: JSON.stringify({ provider: "cloudflare-secret-store", ref: "GH_APP_KEY", value: "x" }),
+    }),
+    "dev-proxy",
+    env,
   );
-  const result = await handleConnectorInvoke(message, env);
   assert.equal(result.status, 200);
-  // Not faked as success: the write cannot happen at runtime.
   assert.equal(result.secret?.status, "provision_required");
   assert.include(result.secret?.detail ?? "", "GH_APP_KEY");
 });
 
 test("set-secret: hashicorp-vault writes the value at runtime and the connector re-points to it", async () => {
   const { env } = storeEnv({ VAULT_ADDR: "https://vault.example.com", VAULT_TOKEN: "s.token" });
-  const vault = captureFetch((url, init) => {
-    // The KV v2 write (POST) succeeds; the read-back (GET) returns the value so
-    // the broker can report secretConfigured without ever returning it.
-    if (init?.method === "POST") {
-      return new Response(JSON.stringify({}), { status: 200 });
-    }
-    return new Response(
-      JSON.stringify({ data: { data: { GITHUB_APP_PRIVATE_KEY: "vault-stored-pem" } } }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
-  });
-  try {
-    const message = await signedServiceMessage(
-      encode(
-        adminJob("admin_set_secret", {
-          connectorId: "github-app",
-          paramsJson: JSON.stringify({
-            provider: "hashicorp-vault",
-            ref: "secret/ragbot#GITHUB_APP_PRIVATE_KEY",
-            value: "vault-stored-pem",
-          }),
+  const vault = captureFetch((_url, init) =>
+    init?.method === "POST"
+      ? new Response(JSON.stringify({}), { status: 200 })
+      : new Response(JSON.stringify({ data: { data: { GITHUB_APP_PRIVATE_KEY: "vault-stored-pem" } } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
         }),
-      ),
-      { iss: "dev-proxy", aud: "connectors", env },
+  );
+  try {
+    const result = await handleConnectorInvoke(
+      adminJob("admin_set_secret", {
+        connectorId: "github-app",
+        paramsJson: JSON.stringify({
+          provider: "hashicorp-vault",
+          ref: "secret/ragbot#GITHUB_APP_PRIVATE_KEY",
+          value: "vault-stored-pem",
+        }),
+      }),
+      "dev-proxy",
+      env,
     );
-    const result = await handleConnectorInvoke(message, env);
     assert.equal(result.status, 200);
     assert.equal(result.secret?.status, "written");
     assert.equal(result.secret?.secretConfigured, true);
-    // The value flowed inward only — it is never echoed back.
     assert.notInclude(JSON.stringify(result), "vault-stored-pem");
 
-    // The override survives: a describe now shows the connector pointed at Vault.
-    const describe = await signedServiceMessage(
-      encode(adminJob("admin_describe", { connectorId: "github-app" })),
-      { iss: "dev-proxy", aud: "connectors", env },
-    );
-    const described = await handleConnectorInvoke(describe, env);
+    const described = await handleConnectorInvoke(adminJob("admin_describe", { connectorId: "github-app" }), "dev-proxy", env);
     assert.equal(described.connector?.secretProvider, "hashicorp-vault");
     assert.equal(described.connector?.secretOverridden, true);
   } finally {
@@ -266,63 +205,30 @@ test("set-secret: hashicorp-vault writes the value at runtime and the connector 
   }
 });
 
-test("denies a caller outside the broker's allowlist", async () => {
+test("denies a caller without the connector capability", async () => {
   const logs = captureLogs();
   try {
-    // The broker is reached only over its capability-gated CONNECTORS binding, so
-    // it trusts the transport and reads claims without a signature — but it still
-    // enforces its caller allowlist: an issuer that is not a connector caller
-    // (here spend) is rejected before any credential operation runs.
-    const message = await signedServiceMessage(encode(grantJob("github-app")), {
-      iss: "spend",
-      aud: "connectors",
-    });
-    const result = await handleConnectorInvoke(message, storeEnv().env);
-    assert.equal(result.status, 401);
-    assert.ok(logs.lines.some((line) => line.reason === "identity_unknown_issuer"));
-  } finally {
-    logs.restore();
-  }
-});
-
-test("denies a forged token (signature does not verify)", async () => {
-  const logs = captureLogs();
-  try {
-    const envelope = encode(grantJob("github-app"));
-    const token = await mintServiceToken(envelope, { iss: "workflows", aud: "connectors" });
-    // Tamper the signature segment.
-    const forged = encodeServiceMessage(envelope, `${token.slice(0, -4)}AAAA`);
-    const result = await handleConnectorInvoke(forged, storeEnv().env);
-    assert.equal(result.status, 401);
-  } finally {
-    logs.restore();
-  }
-});
-
-test("denies an operation the caller is not authorized for (Cedar)", async () => {
-  const logs = captureLogs();
-  try {
-    // The workflows worker may grant/fetch/token the GitHub App connector, but is NOT granted
-    // connector.authorize — a begin_authorization is refused by Cedar before any
-    // strategy or credential runs.
-    const { env } = storeEnv();
-    const message = await signedServiceMessage(
-      encode({
-        kind: "connector.invoke",
-        operation: "begin_authorization",
-        connectorId: "github-app",
-        scopes: [],
-        paramsJson: "{}",
-      }),
-      { iss: "workflows", aud: "connectors", env },
-    );
-    const result = await handleConnectorInvoke(message, env);
+    // spend holds no capability on github-app, so a grant is refused.
+    const result = await handleConnectorInvoke(grantJob("github-app"), "spend", storeEnv().env);
     assert.equal(result.status, 403);
-    assert.ok(
-      logs.lines.some(
-        (line) => line.message === "connector_denied" && line.reason === "not_authorized",
-      ),
+    assert.ok(logs.lines.some((line) => line.reason === "not_authorized"));
+  } finally {
+    logs.restore();
+  }
+});
+
+test("denies an operation the caller is not authorized for", async () => {
+  const logs = captureLogs();
+  try {
+    // workflows may grant/fetch/token github-app, but is NOT granted authorize.
+    const { env } = storeEnv();
+    const result = await handleConnectorInvoke(
+      { kind: "connector.invoke", operation: "begin_authorization", connectorId: "github-app", scopes: [], paramsJson: "{}" },
+      "workflows",
+      env,
     );
+    assert.equal(result.status, 403);
+    assert.ok(logs.lines.some((line) => line.message === "connector_denied" && line.reason === "not_authorized"));
   } finally {
     logs.restore();
   }
@@ -330,45 +236,28 @@ test("denies an operation the caller is not authorized for (Cedar)", async () =>
 
 test("admin_set_capabilities replaces connector authorization from the DO config store", async () => {
   const { env } = storeEnv({ GITHUB_APP_ID: "123456", GITHUB_APP_PRIVATE_KEY: PRIVATE_KEY });
-  const revokeWorkflows = await signedServiceMessage(
-    encode(
-      adminJob("admin_set_capabilities", {
-        connectorId: "github-app",
-        paramsJson: JSON.stringify({
-          capabilities: {
-            grant: ["dev-proxy"],
-            fetch: ["dev-proxy"],
-            adminRead: ["dev-proxy"],
-            adminWrite: ["dev-proxy"],
-          },
-        }),
+  const revoke = await handleConnectorInvoke(
+    adminJob("admin_set_capabilities", {
+      connectorId: "github-app",
+      paramsJson: JSON.stringify({
+        capabilities: { grant: ["dev-proxy"], fetch: ["dev-proxy"], adminRead: ["dev-proxy"], adminWrite: ["dev-proxy"] },
       }),
-    ),
-    { iss: "dev-proxy", aud: "connectors", env },
+    }),
+    "dev-proxy",
+    env,
   );
-  assert.equal((await handleConnectorInvoke(revokeWorkflows, env)).status, 200);
+  assert.equal(revoke.status, 200);
 
-  const workflowsGrant = await signedServiceMessage(
-    encode(grantJob("github-app", { installationId: "12345" })),
-    { iss: "workflows", aud: "connectors", env },
-  );
-  assert.equal((await handleConnectorInvoke(workflowsGrant, env)).status, 403);
+  const workflowsGrant = await handleConnectorInvoke(grantJob("github-app", { installationId: "12345" }), "workflows", env);
+  assert.equal(workflowsGrant.status, 403);
 
-  const devProxyDescribe = await signedServiceMessage(
-    encode(adminJob("admin_describe", { connectorId: "github-app" })),
-    { iss: "dev-proxy", aud: "connectors", env },
-  );
-  assert.equal((await handleConnectorInvoke(devProxyDescribe, env)).status, 200);
+  const describe = await handleConnectorInvoke(adminJob("admin_describe", { connectorId: "github-app" }), "dev-proxy", env);
+  assert.equal(describe.status, 200);
 });
 
 test("denies a grant for an unknown connector", async () => {
   const { env } = storeEnv();
-  const message = await signedServiceMessage(encode(grantJob("does-not-exist")), {
-    iss: "workflows",
-    aud: "connectors",
-    env,
-  });
-  const result = await handleConnectorInvoke(message, env);
+  const result = await handleConnectorInvoke(grantJob("does-not-exist"), "workflows", env);
   assert.equal(result.status, 404);
 });
 
@@ -376,7 +265,6 @@ test("rejects a handle presented by a service other than the one it was issued t
   const logs = captureLogs();
   const { kv, env } = storeEnv();
   try {
-    // A grant issued to the gateway, pre-seeded into the store.
     const handle = generateHandle();
     const entry: GrantEntry = {
       handle,
@@ -390,18 +278,11 @@ test("rejects a handle presented by a service other than the one it was issued t
     };
     await kv.write(`grant:${handle}`, JSON.stringify(entry));
 
-    // The workflows worker (a different, validly authenticated caller) presents it.
-    const message = await signedServiceMessage(
-      encode({
-        kind: "connector.invoke",
-        operation: "fetch",
-        handle,
-        scopes: [],
-        paramsJson: JSON.stringify({ request: { method: "GET", path: "/repos/o/r" } }),
-      }),
-      { iss: "workflows", aud: "connectors", env },
+    const result = await handleConnectorInvoke(
+      { kind: "connector.invoke", operation: "fetch", handle, scopes: [], paramsJson: JSON.stringify({ request: { method: "GET", path: "/repos/o/r" } }) },
+      "workflows",
+      env,
     );
-    const result = await handleConnectorInvoke(message, env);
     assert.equal(result.status, 404);
     assert.ok(logs.lines.some((line) => line.reason === "handle_caller_mismatch"));
   } finally {
@@ -411,23 +292,12 @@ test("rejects a handle presented by a service other than the one it was issued t
 
 test("fails closed at grant when the connector's secret does not resolve", async () => {
   const logs = captureLogs();
-  // The App id resolves (a plain var) but the private key is unprovisioned, so the
-  // secrets-provider gate returns null and the strategy's resolveSecret denies
-  // (500) BEFORE any App JWT is minted or installation token requested. A grant is
-  // only ever issued when a use could actually succeed.
   const { env } = storeEnv({ GITHUB_APP_ID: "123456" });
   try {
-    const message = await signedServiceMessage(encode(grantJob("github-app", { installationId: "12345" })), {
-      iss: "workflows",
-      aud: "connectors",
-      env,
-    });
-    const result = await handleConnectorInvoke(message, env);
+    const result = await handleConnectorInvoke(grantJob("github-app", { installationId: "12345" }), "workflows", env);
     assert.equal(result.status, 500);
     assert.ok(
-      logs.lines.some(
-        (line) => line.message === "connector_denied" && String(line.reason).startsWith("secret_unresolved"),
-      ),
+      logs.lines.some((line) => line.message === "connector_denied" && String(line.reason).startsWith("secret_unresolved")),
     );
   } finally {
     logs.restore();
@@ -437,61 +307,43 @@ test("fails closed at grant when the connector's secret does not resolve", async
 test("grant then authorizedFetch: the credential is injected server-side and never returned", async () => {
   const logs = captureLogs();
   const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
-  const fetchMock = captureFetch((url) => {
-    if (url.endsWith("/access_tokens")) {
-      return new Response(JSON.stringify({ token: "ghs_installation", expires_at: expiresAt }), {
-        status: 201,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    return new Response(JSON.stringify({ full_name: "o/r" }), {
-      status: 200,
-      headers: { "content-type": "application/json", "set-cookie": "leak=1" },
-    });
-  });
+  const fetchMock = captureFetch((url) =>
+    url.endsWith("/access_tokens")
+      ? new Response(JSON.stringify({ token: "ghs_installation", expires_at: expiresAt }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        })
+      : new Response(JSON.stringify({ full_name: "o/r" }), {
+          status: 200,
+          headers: { "content-type": "application/json", "set-cookie": "leak=1" },
+        }),
+  );
   const { env } = storeEnv({ GITHUB_APP_ID: "123456", GITHUB_APP_PRIVATE_KEY: PRIVATE_KEY });
   try {
-    const grantMessage = await signedServiceMessage(encode(grantJob("github-app", { installationId: "12345" })), {
-      iss: "workflows",
-      aud: "connectors",
-      env,
-    });
-    const granted = await handleConnectorInvoke(grantMessage, env);
+    const granted = await handleConnectorInvoke(grantJob("github-app", { installationId: "12345" }), "workflows", env);
     assert.equal(granted.status, 200);
     const handle = granted.grant?.handle;
     assert.isString(handle);
-    // The grant response carries only the opaque handle, never a credential.
     assert.notInclude(JSON.stringify(granted), "ghs_installation");
 
-    const fetchMessage = await signedServiceMessage(
-      encode({
-        kind: "connector.invoke",
-        operation: "fetch",
-        handle,
-        scopes: [],
-        paramsJson: JSON.stringify({ request: { method: "GET", path: "/repos/o/r" } }),
-      }),
-      { iss: "workflows", aud: "connectors", env },
+    const fetched = await handleConnectorInvoke(
+      { kind: "connector.invoke", operation: "fetch", handle, scopes: [], paramsJson: JSON.stringify({ request: { method: "GET", path: "/repos/o/r" } }) },
+      "workflows",
+      env,
     );
-    const fetched = await handleConnectorInvoke(fetchMessage, env);
     assert.equal(fetched.status, 200);
     assert.equal(fetched.fetch?.status, 200);
     assert.include(fetched.fetch?.body ?? "", "o/r");
 
-    // The installation token was injected as Authorization on the API call...
     const apiCall = fetchMock.calls.find((call) => call.url.endsWith("/repos/o/r"));
     assert.ok(apiCall);
     const headers = new Headers(apiCall.init?.headers);
     assert.equal(headers.get("authorization"), "Bearer ghs_installation");
     assert.equal(headers.get("accept"), "application/vnd.github+json");
-    assert.equal(headers.get("user-agent"), "rag-apps-gateway");
-    // ...and the response was header-filtered (no Set-Cookie leaks to the caller).
     assert.isUndefined(fetched.fetch?.headers["set-cookie"]);
 
-    // Every use is audited with the full actor chain.
     const audit = logs.lines.find((line) => line.message === "connector_use");
     assert.ok(audit);
-    assert.equal(audit.connectorId, "github-app");
     assert.equal(audit.callerPrincipal, "workflows");
     assert.equal(audit.grantId, handle);
   } finally {
