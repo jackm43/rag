@@ -39,7 +39,6 @@ paths:
             type: string
             enum:
               - github
-              - stripe
         - name: id
           in: path
           required: true

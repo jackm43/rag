@@ -1,59 +1,26 @@
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import YAML from "yaml";
 
 import {
-  GATEWAY_APPLICATION,
   GATEWAY_ROUTE_BINDINGS,
-  GATEWAY_SCHEMAS,
   GATEWAY_SECURITY_SCHEMES,
   type GatewayRouteBinding,
 } from "@rag/gateway/src/application-bindings";
 
-// Generates the gateway OpenAPI document and route table from application
-// bindings. This keeps the gateway aligned with generated application
-// middleware clients: bindings are the source of truth; OpenAPI and router data
-// are build artifacts (`pnpm run routes:build` after editing bindings).
+// Generates the gateway's router table from application bindings. The gateway is
+// operator-only (bearer-token control routes) with no public discovery surface,
+// so there is no OpenAPI document — bindings are the source of truth and
+// routes.ts is the sole build artifact (`pnpm run routes:build` after editing
+// bindings).
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const specPath = join(root, "apps/gateway/openapi.yaml");
-const openApiModulePath = join(root, "apps/gateway/src/openapi.ts");
 const routesPath = join(root, "apps/gateway/src/routes.ts");
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"] as const;
-type HttpMethod = typeof HTTP_METHODS[number];
 
-type OpenApiOperation = {
-  operationId: string;
-  summary: string;
-  description?: string;
-  security?: Array<Record<string, unknown[]>>;
-  requestBody?: unknown;
-  responses: Record<string, unknown>;
-};
-
-type OpenApi = {
-  openapi: "3.1.0";
-  info: {
-    title: string;
-    description: string;
-    version: string;
-  };
-  servers: Array<{ url: string }>;
-  paths: Record<string, Partial<Record<Lowercase<HttpMethod>, OpenApiOperation>>>;
-  components: {
-    securitySchemes: typeof GATEWAY_SECURITY_SCHEMES;
-    schemas: typeof GATEWAY_SCHEMAS;
-  };
-};
-
-const methodKey = (method: HttpMethod): Lowercase<HttpMethod> =>
-  method.toLowerCase() as Lowercase<HttpMethod>;
-
-const securitySchemeNames = Object.keys(GATEWAY_SECURITY_SCHEMES).sort();
+const securitySchemeNames: readonly string[] = GATEWAY_SECURITY_SCHEMES;
 const operationIds = new Set<string>();
-const paths: OpenApi["paths"] = {};
 const routeBindings: readonly GatewayRouteBinding[] = GATEWAY_ROUTE_BINDINGS;
 
 for (const binding of routeBindings) {
@@ -67,36 +34,11 @@ for (const binding of routeBindings) {
   if (binding.security && !securitySchemeNames.includes(binding.security)) {
     throw new Error(`Unknown gateway security scheme ${binding.security} on ${binding.path}`);
   }
-
-  const operation: OpenApiOperation = {
-    operationId: binding.operationId,
-    summary: binding.summary,
-    ...(binding.description ? { description: binding.description } : {}),
-    ...(binding.security ? { security: [{ [binding.security]: [] }] } : {}),
-    ...(binding.requestBody === undefined ? {} : { requestBody: binding.requestBody }),
-    responses: binding.responses,
-  };
-  (paths[binding.path] ??= {})[methodKey(binding.method)] = operation;
 }
 
-if (Object.keys(paths).length === 0) {
+if (routeBindings.length === 0) {
   throw new Error("Gateway application bindings declare no routes");
 }
-
-const openapi: OpenApi = {
-  openapi: "3.1.0",
-  info: {
-    title: GATEWAY_APPLICATION.title,
-    description: GATEWAY_APPLICATION.description,
-    version: GATEWAY_APPLICATION.version,
-  },
-  servers: [{ url: GATEWAY_APPLICATION.serverUrl }],
-  paths,
-  components: {
-    securitySchemes: GATEWAY_SECURITY_SCHEMES,
-    schemas: GATEWAY_SCHEMAS,
-  },
-};
 
 const sortedRouteBindings = [...routeBindings].sort((left, right) =>
   left.path === right.path
@@ -139,13 +81,5 @@ ${routeEntries}
 };
 `;
 
-const openApiOutput = `// AUTO-GENERATED from gateway application bindings by
-// scripts/generate-gateway-routes.ts (\`pnpm run routes:build\`). Do not edit.
-
-export const OPENAPI = ${JSON.stringify(openapi, null, 2)} as const;
-`;
-
-writeFileSync(specPath, YAML.stringify(openapi, { lineWidth: 100 }));
-writeFileSync(openApiModulePath, openApiOutput);
 writeFileSync(routesPath, routesOutput);
-process.stdout.write(`${specPath}\n${openApiModulePath}\n${routesPath}\n`);
+process.stdout.write(`${routesPath}\n`);

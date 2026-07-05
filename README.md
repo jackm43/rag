@@ -151,11 +151,13 @@ Secrets go on the worker that needs them:
 
 ## Operating it
 
-- Health: every public application worker serves `GET /health` and
-  `GET /openapi.json` (unauthenticated discovery) via the shared middleware.
+- Health: `createAppWorker` public workers serve `GET /health` and
+  `GET /openapi.json` (unauthenticated discovery) via the shared middleware. The
+  gateway is the exception — it exposes only the operator control routes below.
 - Gateway websocket control: `POST /gateway/start`, `POST /gateway/stop`
   (kill switch — stays down until the next start), `GET /gateway/health`;
-  all require `Authorization: Bearer $GATEWAY_CONTROL_TOKEN`.
+  all require `Authorization: Bearer $GATEWAY_CONTROL_TOKEN`. No public
+  discovery surface (no `/openapi.json`, no `/.well-known/*`).
 - Every DLQ has a consumer that logs `dead_letter_message` (ids and envelope
   kinds only, never content) and acks, so dead letters surface in logs
   instead of accumulating.

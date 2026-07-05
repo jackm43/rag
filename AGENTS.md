@@ -22,7 +22,7 @@ never import other apps. There is no product grouping and no per-worker
   authorization policy table. Every public app binds it as `AUTH`.
 - `apps/gateway` — the Discord bot edge (`ragbot.jsmunro.me`): the
   `DiscordGateway` websocket Durable Object + cron, and the operator control
-  routes (start/stop/health) + key-discovery docs.
+  routes (start/stop/health). Control-only — no public discovery surface.
 - `apps/workflows` — the AI job consumer + the `InteractionSession` processor DO
   (deferred commands / mentions run to completion here). Consumes `ai-jobs` and
   `webhook-jobs`.

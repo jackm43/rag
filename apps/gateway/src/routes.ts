@@ -10,15 +10,6 @@ export type GatewayRoute = {
 };
 
 export const GATEWAY_ROUTES: Record<string, readonly GatewayRoute[]> = {
-  "/.well-known/jwks.json": [
-    { method: "GET", operationId: "jwks", security: null },
-  ],
-  "/.well-known/oauth-authorization-server": [
-    { method: "GET", operationId: "oauthAuthorizationServerMetadata", security: null },
-  ],
-  "/.well-known/openid-configuration": [
-    { method: "GET", operationId: "openidConfiguration", security: null },
-  ],
   "/gateway/health": [
     { method: "GET", operationId: "gatewayHealth", security: "controlToken" },
   ],
@@ -27,8 +18,5 @@ export const GATEWAY_ROUTES: Record<string, readonly GatewayRoute[]> = {
   ],
   "/gateway/stop": [
     { method: "POST", operationId: "stopGateway", security: "controlToken" },
-  ],
-  "/openapi.json": [
-    { method: "GET", operationId: "openApiJson", security: null },
   ],
 };

@@ -10,33 +10,16 @@ import {
   startGateway,
   stopGateway,
 } from "./gateway";
-import { OPENAPI } from "./openapi";
 import { createGatewayRouter } from "./router";
 
 export { DiscordGateway, extractBotMentionPrompt, handleGatewayMessageCreate };
 
-// Control routes (start/stop/health) are authenticated by the operator bearer
-// token the router wires from the spec's security scheme; holding that token IS
-// the authorization, so there is no second (Cedar) gate. Handlers are keyed by
-// generated OpenAPI operationId.
+// The gateway's only HTTP surface is the operator control routes
+// (start/stop/health), authenticated by the GATEWAY_CONTROL_TOKEN bearer the
+// router wires from the route's security scheme; holding that token IS the
+// authorization. There is no public discovery surface. Handlers are keyed by
+// operationId.
 const router = createGatewayRouter({
-  openApiJson: () => Response.json(OPENAPI),
-  // Key-discovery documents kept for relying-party compatibility. Per-worker
-  // signing keys have been removed, so the key set is now empty.
-  oauthAuthorizationServerMetadata: (request) => {
-    const origin = new URL(request.url).origin;
-    return Response.json({ issuer: origin, jwks_uri: `${origin}/.well-known/jwks.json` });
-  },
-  openidConfiguration: (request) => {
-    const origin = new URL(request.url).origin;
-    return Response.json({
-      issuer: origin,
-      jwks_uri: `${origin}/.well-known/jwks.json`,
-      subject_types_supported: ["public"],
-      id_token_signing_alg_values_supported: ["EdDSA"],
-    });
-  },
-  jwks: () => Response.json({ keys: [] }, { headers: { "Cache-Control": "public, max-age=3600" } }),
   startGateway: async (_request, env) => Response.json(await startGateway(env)),
   stopGateway: async (_request, env) => Response.json(await stopGateway(env)),
   gatewayHealth: async (_request, env) => Response.json(await getGatewayHealth(env)),
