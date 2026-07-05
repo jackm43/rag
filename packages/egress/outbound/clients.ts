@@ -1,4 +1,3 @@
-import type { EgressEnv as Env } from "../contracts";
 import type { BoundaryFetch } from "./boundary-client";
 import { createEgressClient, type EgressCaller, type EgressFetchOptions } from "../client";
 
@@ -24,7 +23,7 @@ const lazy = <T>(create: () => T) => {
   return () => (value ??= create());
 };
 
-const buildClients = (env: Env, caller: EgressCaller): BoundaryClients => {
+const buildClients = (env: unknown, caller: EgressCaller): BoundaryClients => {
   const discordRest = lazy(() => createEgressClient(env, "discord-rest", caller));
   const discordWebhook = lazy(() => createEgressClient(env, "discord-webhook", caller));
   const cloudflareApi = lazy(() => createEgressClient(env, "cloudflare-api", caller));
@@ -49,13 +48,13 @@ const buildClients = (env: Env, caller: EgressCaller): BoundaryClients => {
 // Cache per env AND per caller: two workers can share an Env-shaped object in
 // tests, and a client built for one caller must never be returned to another
 // (the egress hop is signed with the caller's identity).
-const clientsByEnv = new WeakMap<Env, Map<EgressCaller, BoundaryClients>>();
+const clientsByEnv = new WeakMap<object, Map<EgressCaller, BoundaryClients>>();
 
-export const boundaryClients = (env: Env, caller: EgressCaller): BoundaryClients => {
-  let byCaller = clientsByEnv.get(env);
+export const boundaryClients = (env: unknown, caller: EgressCaller): BoundaryClients => {
+  let byCaller = clientsByEnv.get(env as object);
   if (!byCaller) {
     byCaller = new Map();
-    clientsByEnv.set(env, byCaller);
+    clientsByEnv.set(env as object, byCaller);
   }
   const cached = byCaller.get(caller);
   if (cached) {

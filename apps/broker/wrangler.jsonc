@@ -42,11 +42,6 @@
     ]
   },
   "services": [
-    {
-      "binding": "EGRESS",
-      "service": "ragbot-egress-worker",
-      "entrypoint": "Egress"
-    }
   ],
   "migrations": [
     {

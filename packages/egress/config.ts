@@ -1,9 +1,20 @@
 import { isRecord } from "@rag/contracts-core";
 import { isMachinePrincipal, type MachinePrincipal } from "@rag/service-kit";
-import type { EgressProfileConfig as WireEgressProfileConfig } from "@rag/egress/contracts";
 
-export type EgressProfileConfig = WireEgressProfileConfig & {
+export type EgressCredentialRef = { header: string; env: string; prefix?: string };
+
+// An outbound profile: host allowlist + timeout/size caps + optional credential
+// injection, resolved from the calling worker's env. `allowedCallers` gates
+// which workers may build it. The canonical definition (contracts moved here
+// when the egress sidecar worker was removed and outbound went in-process).
+export type EgressProfileConfig = {
+  identity?: string;
   allowedCallers: MachinePrincipal[];
+  allowedHosts: string[];
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+  logPath?: boolean;
+  credential?: EgressCredentialRef;
 };
 
 export type EgressConfig = {

@@ -26,7 +26,6 @@ import {
   type EventEnvelope,
 } from "@rag/contracts-core/envelope";
 import type { IngressEnv } from "@rag/ingress/env";
-import type { EgressEnv } from "@rag/egress/contracts";
 import type { SecretsEnv } from "@rag/secrets/env";
 import type { ServiceKitEnv } from "@rag/service-kit/env";
 
@@ -268,7 +267,7 @@ export type BotEnv = {
   AI_CONFIG?: KVNamespace;
 };
 
-export type Env = Cloudflare.Env & ServiceKitEnv & IngressEnv & EgressEnv & SecretsEnv & BotEnv;
+export type Env = Cloudflare.Env & ServiceKitEnv & IngressEnv & SecretsEnv & BotEnv;
 
 export const MAX_SPEND_EVENT_ID_LENGTH = 128;
 // Raw model text crossing the outbox before the responder applies the final

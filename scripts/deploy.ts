@@ -17,7 +17,6 @@ import { join } from "node:path";
 const DEPLOY_ORDER = [
   // The auth worker (API Gateway) first: every public app binds it as AUTH.
   "ragbot-auth-worker",
-  "ragbot-egress-worker",
   "ragbot-connectors-worker",
   // connectors-api after the broker: it is the broker's HTTP face and binds the
   // CONNECTORS entrypoint, so the defining worker must exist first.

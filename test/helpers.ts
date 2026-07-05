@@ -9,7 +9,6 @@ import {
   SYSTEM_SUBJECT,
   type MachinePrincipal,
 } from "@rag/service-kit/principal";
-import { handleEgressRequest } from "@rag/egress/server";
 import { runDeferredCommandByName, runInteractionSession } from "@rag/discord/lib/domain/commands/session-run";
 import { processMessageReceivedJob } from "@rag/discord/lib/domain/consumer";
 import type { DiscordInteraction, MessageReceivedJob } from "@rag/discord/contracts";
@@ -257,19 +256,10 @@ export const createEnv = (publicKeyHex: string, overrides: Record<string, unknow
     },
     ...overrides,
   };
-  // Realistic in-process EGRESS binding: fetchProfile runs the REAL egress
-  // server (packages/egress/server.ts) against this SAME env object. There is
-  // no EGRESS_CONTROL binding, so the server falls back to the bundled default
-  // profiles (packages/egress/profiles.ts); credentials come from this env's
-  // own vars (DISCORD_BOT_TOKEN, CF_AIG_TOKEN, CLOUDFLARE_API_TOKEN). This
-  // makes every application outbound HTTP path run the true egress hop under
-  // the suite's global-fetch mocks. Overridable via `overrides.EGRESS`.
-  if (env.EGRESS === undefined) {
-    env.EGRESS = {
-      fetchProfile: (message: unknown, body?: ArrayBuffer) =>
-        handleEgressRequest(env as never, message, body),
-    };
-  }
+  // Outbound HTTP is in-process now (createEgressClient builds a boundary client
+  // that fetches directly), so there is no EGRESS binding to stub — the boundary
+  // client injects credentials from this env's own vars (DISCORD_BOT_TOKEN,
+  // CF_AIG_TOKEN, CLOUDFLARE_API_TOKEN) and hits the suite's global-fetch mocks.
   // In-process INTERACTION_SESSION stub: production kicks the workflows worker's
   // Durable Object (idFromName(interactionToken)) to run a deferred command and
   // edit the response as `workflows`. Here we run the SAME dispatch synchronously

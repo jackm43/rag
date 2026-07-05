@@ -23,7 +23,6 @@ import {
   type WebhookEventPayload,
 } from "@rag/contracts-core/envelope";
 import type { IngressEnv } from "@rag/ingress/env";
-import type { EgressEnv } from "@rag/egress/contracts";
 import type { SecretsEnv } from "@rag/secrets/env";
 import type { ServiceKitEnv } from "@rag/service-kit/env";
 
@@ -326,7 +325,7 @@ export type ConnectorsEnv = {
   CONNECTORS_TOKEN_ENC_KEY?: string;
 };
 
-export type Env = Cloudflare.Env & ServiceKitEnv & IngressEnv & EgressEnv & SecretsEnv & ConnectorsEnv;
+export type Env = Cloudflare.Env & ServiceKitEnv & IngressEnv & SecretsEnv & ConnectorsEnv;
 
 // Credential-broker envelope constraints. A connector id is a short lowercase
 // slug; an opaque handle is a high-entropy url-safe string; params is a JSON
