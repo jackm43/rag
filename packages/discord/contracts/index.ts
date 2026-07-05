@@ -244,16 +244,14 @@ export type BotEnv = {
     ) => Promise<void>;
   };
   // InteractionSession Durable Object (defined in the workflows worker). Typed
-  // structurally like SERVICE_REGISTRY so contracts stays leaf. Both ingresses
-  // bind it cross-script and kick it: the webhooks ingress via run() (full
-  // deferred dispatch), the gateway via runDeferredCommand() (legacy path). It
-  // edits the response as `workflows`; the workflows worker hosts it locally.
+  // structurally so contracts stays leaf. The webhooks ingress binds it
+  // cross-script and kicks it via run() (full deferred dispatch) or runMention().
+  // It edits the response as `workflows`; the workflows worker hosts it locally.
   INTERACTION_SESSION: {
     idFromName: (name: string) => DurableObjectId;
     get: (id: DurableObjectId) => {
       run: (interaction: DiscordInteraction) => Promise<void>;
       runMention: (job: MessageReceivedJob) => Promise<void>;
-      runDeferredCommand: (interaction: DiscordInteraction, commandName: string) => Promise<void>;
     };
   };
   CLOUDFLARE_API_TOKEN?: string;

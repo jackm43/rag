@@ -1,6 +1,6 @@
 import { runAskCommand } from "./ask";
 import { stringOption } from "./context";
-import { runRagCommand, runRagCommandInline } from "./rag";
+import { runRagCommand } from "./rag";
 import { runRagboardCommand } from "./ragboard";
 import { runRaghammerCommand, TIMEFRAME_FORMAT_MESSAGE } from "./raghammer";
 import { runRagspendCommand, runRagspendboardCommand } from "./ragspend";
@@ -22,7 +22,6 @@ export const commandSpecs: CommandSpec[] = [
     run: runRagCommand,
     failureMessage: "Command failed. Try again.",
     logEvent: "rag_command_failed",
-    onMissingCredentials: runRagCommandInline,
   },
   {
     name: "ragboard",

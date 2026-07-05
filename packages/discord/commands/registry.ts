@@ -1,10 +1,8 @@
 import type { InteractionMessageData, InteractionResponseFile } from "../api";
-import { encodeAiJobEnvelope } from "../contracts";
-import { CHANNEL_MESSAGE_WITH_SOURCE, DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, type AiJob, type DiscordInteraction, type Env } from "../contracts";
+import { type AiJob, type Env } from "../contracts";
 import { activeAiBanForUser, aiBanMessage } from "../domain/bans";
-import { jsonResponse } from "../domain/http";
 import { checkAiUsageAllowed } from "../domain/limits";
-import { buildCommandContext, hasOption, type CommandContext } from "./context";
+import { type CommandContext } from "./context";
 
 // A context whose interaction credentials have been verified by the shared
 // pre-flight chain, so enqueue/deferred specs can rely on them.
@@ -47,24 +45,14 @@ export type CommandSpec = CommandSpecBase &
         run: (ctx: CredentialedCommandContext, env: Env) => Promise<DeferredRunResult>;
         failureMessage: string;
         logEvent: string;
-        onMissingCredentials?: (ctx: CommandContext, env: Env) => Response | Promise<Response>;
       }
   );
-
-const inlineMessage = (content: string) =>
-  jsonResponse({
-    type: CHANNEL_MESSAGE_WITH_SOURCE,
-    data: { content, allowed_mentions: { parse: [] } },
-  });
-
-const hasCredentials = (ctx: CommandContext): ctx is CredentialedCommandContext =>
-  Boolean(ctx.applicationId && ctx.interactionToken);
 
 // The command authorization gate, now plain data (Cedar removed). It mirrors the
 // former policy exactly: admin commands need admin membership; a raghammer AI ban
 // forbids the AI commands; AI-limited commands then pay the usage lookup. Public
-// commands are open. Shared by the synchronous gateway path (executeCommand) and
-// the all-deferred processor path so there is a single authorization authority.
+// commands are open. Used by the all-deferred processor path (runInteractionSession)
+// as the single authorization authority.
 const ADMIN_COMMANDS = new Set(["raghammer", "ragunban", "undorag"]);
 // Admin membership is data, not code — the rag-admins list. This file (not a
 // policy engine) is what changes when an admin is added or removed.
@@ -100,92 +88,4 @@ export const authorizeAndLimit = async (
   }
 
   return { allowed: true };
-};
-
-// Shared pre-flight chain: option validation -> interaction credentials ->
-// Cedar authorization (admin gate + raghammer ban) -> usage limits ->
-// dispatch (enqueue+defer, inline, or defer+run). Every command goes through
-// the same guards in the same order.
-// How the command was invoked. "discord" is the normal path (defer + edit the
-// interaction). "synchronous" is the dev-proxy path: there is no Discord
-// interaction to defer against, so deferred-inline commands run to completion
-// and their real result is returned in the response. Commands that can only
-// deliver asynchronously (enqueue) are not available synchronously — the
-// dev-proxy capability policy (devproxy.cedar) also withholds them, so this is
-// a defensive fallback, never the primary gate.
-export type CommandExecution = { synchronous?: boolean };
-
-export const executeCommand = async (
-  spec: CommandSpec,
-  interaction: DiscordInteraction,
-  env: Env,
-  executionCtx: ExecutionContext,
-  execution: CommandExecution = {},
-): Promise<Response> => {
-  const ctx = buildCommandContext(interaction);
-
-  for (const option of spec.requiredOptions ?? []) {
-    if (!hasOption(ctx, option.name)) {
-      return inlineMessage(option.message);
-    }
-  }
-
-  // A synchronous invocation never defers, so it needs no interaction
-  // credentials; only the Discord path requires them to edit the response.
-  if (!execution.synchronous && spec.kind !== "inline" && !hasCredentials(ctx)) {
-    if (spec.kind === "deferred-inline" && spec.onMissingCredentials) {
-      return spec.onMissingCredentials(ctx, env);
-    }
-    return inlineMessage(`Could not defer /${spec.name} without interaction credentials.`);
-  }
-
-  const gate = await authorizeAndLimit(spec, ctx, env);
-  if (!gate.allowed) {
-    return inlineMessage(gate.message);
-  }
-
-  if (spec.kind === "inline") {
-    return spec.run(ctx, env);
-  }
-
-  // Synchronous (dev-proxy) dispatch: run to completion and return the real
-  // result instead of deferring. deferred-inline runs need no credentials (see
-  // above); enqueue commands deliver asynchronously to Discord and cannot round
-  // trip here, so they are refused rather than silently enqueued and lost.
-  if (execution.synchronous) {
-    if (spec.kind === "deferred-inline") {
-      const result = await spec.run(ctx as CredentialedCommandContext, env);
-      const data = "data" in result ? result.data : result;
-      return jsonResponse({ type: CHANNEL_MESSAGE_WITH_SOURCE, data });
-    }
-    return inlineMessage(
-      `/${spec.name} delivers its result asynchronously to Discord and is not available over the dev proxy.`,
-    );
-  }
-
-  if (!hasCredentials(ctx)) {
-    // Unreachable: guarded above. Narrows the type for the calls below.
-    return inlineMessage(`Could not defer /${spec.name} without interaction credentials.`);
-  }
-
-  if (spec.kind === "enqueue") {
-    // Plain capnp envelope over the trusted gateway -> workflows ai-jobs queue.
-    await env.AI_JOBS.send(
-      encodeAiJobEnvelope(spec.buildJob(ctx), { source: "interactions", guildId: ctx.guildId }),
-      { contentType: "bytes" },
-    );
-    return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
-  }
-
-  // deferred-inline: return the type-5 ack now; the InteractionSession DO in the
-  // workflows worker runs the handler and edits the response as `workflows`. The
-  // gateway ingress holds neither the EGRESS binding nor WORKFLOWS_SIGNING_KEY,
-  // so the outbound edit cannot be sent from here. The kick rides waitUntil so
-  // the 3-second ack is never delayed by the DO round-trip.
-  executionCtx.waitUntil(
-    env.INTERACTION_SESSION
-      .get(env.INTERACTION_SESSION.idFromName(ctx.interactionToken))
-      .runDeferredCommand(interaction, spec.name),
-  );
-  return jsonResponse({ type: DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
 };

@@ -1,7 +1,6 @@
 import type { InteractionMessageData } from "../api";
 import { activeRagBanForUser, formatBanExpiry } from "../domain/bans";
-import { jsonResponse } from "../domain/http";
-import { CHANNEL_MESSAGE_WITH_SOURCE, type Env } from "../contracts";
+import { type Env } from "../contracts";
 import { idOption, requireInvoker, type CommandContext } from "./context";
 import { getTargetUsername } from "./rag-utils";
 
@@ -48,11 +47,3 @@ export const runRagCommand = async (
     },
   };
 };
-
-// Fallback when the interaction carries no application_id/token to defer
-// against: answer synchronously instead.
-export const runRagCommandInline = async (ctx: CommandContext, env: Env) =>
-  jsonResponse({
-    type: CHANNEL_MESSAGE_WITH_SOURCE,
-    data: await runRagCommand(ctx, env),
-  });

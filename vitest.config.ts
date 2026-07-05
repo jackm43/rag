@@ -16,11 +16,11 @@ export default defineConfig({
       miniflare: {
         workers: [
           // The gateway binds InteractionSession as an EXTERNAL Durable
-          // Object (script_name: ragbot-workflows-worker) to run deferred
-          // commands. Stub it so miniflare can resolve the binding; the real DO
-          // runs in the workflows worker. runDeferredCommand is a no-op here, so
-          // tests assert the KICK (deferred type-5 ack) at the gateway boundary
-          // and exercise the handler logic directly where needed.
+          // Object (script_name: ragbot-workflows-worker) to kick mention
+          // processing. Stub it so miniflare can resolve the binding; the real DO
+          // runs in the workflows worker. runMention is a no-op here, so tests
+          // assert the KICK at the gateway boundary and exercise the handler
+          // logic directly where needed.
           {
             name: "ragbot-workflows-worker",
             modules: true,
@@ -29,7 +29,7 @@ export default defineConfig({
             script: [
               'import { DurableObject } from "cloudflare:workers";',
               "export class InteractionSession extends DurableObject {",
-              "  async runDeferredCommand() {}",
+              "  async runMention() {}",
               "}",
               'export default { fetch() { return new Response("Not found", { status: 404 }); } };',
             ].join("\n"),

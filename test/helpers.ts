@@ -9,7 +9,7 @@ import {
   SYSTEM_SUBJECT,
   type MachinePrincipal,
 } from "@rag/service-kit/principal";
-import { runDeferredCommandByName, runInteractionSession } from "@rag/discord/commands/session-run";
+import { runInteractionSession } from "@rag/discord/commands/session-run";
 import { processMessageReceivedJob } from "@rag/discord/domain/consumer";
 import type { DiscordInteraction, MessageReceivedJob } from "@rag/discord/contracts";
 
@@ -273,8 +273,6 @@ export const createEnv = (publicKeyHex: string, overrides: Record<string, unknow
           runInteractionSession(interaction, env as never),
         runMention: (job: MessageReceivedJob) =>
           processMessageReceivedJob(job, env as never, Date.now()),
-        runDeferredCommand: (interaction: DiscordInteraction, commandName: string) =>
-          runDeferredCommandByName(interaction, commandName, env as never),
       }),
     };
   }
