@@ -77,7 +77,7 @@ importers:
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: ^0.16.18
-        version: 0.16.20(@vitest/runner@4.1.9)(@vitest/snapshot@4.1.9)(vitest@4.1.9)
+        version: 0.16.20(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.9)
       '@types/node':
         specifier: ^25.6.0
         version: 25.9.4
@@ -91,8 +91,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(vite@8.1.3)
       discord.js:
-        specifier: ^14.26.4
-        version: 14.26.4
+        specifier: ^14.26.5
+        version: 14.26.5
       openapi-typescript:
         specifier: ^7.13.0
         version: 7.13.0(typescript@5.9.3)
@@ -429,15 +429,15 @@ packages:
       workerd: 1.20260701.1
     dev: true
 
-  /@cloudflare/vitest-pool-workers@0.16.20(@vitest/runner@4.1.9)(@vitest/snapshot@4.1.9)(vitest@4.1.9):
+  /@cloudflare/vitest-pool-workers@0.16.20(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.9):
     resolution: {integrity: sha512-buw0YgsAMT7s60wcmyxbtciEJjMJzKcWzayDMPhWaqMqfQzW+0WPLV67Lobn4C80nkNQhYocEJPnrEhLWnOf+A==}
     peerDependencies:
       '@vitest/runner': ^4.1.0
       '@vitest/snapshot': ^4.1.0
       vitest: ^4.1.0
     dependencies:
-      '@vitest/runner': 4.1.9
-      '@vitest/snapshot': 4.1.9
+      '@vitest/runner': 4.1.10
+      '@vitest/snapshot': 4.1.10
       cjs-module-lexer: 1.2.3
       esbuild: 0.28.1
       miniflare: 4.20260625.0
@@ -1428,16 +1428,38 @@ packages:
       magic-string: 0.30.21
       vite: 8.1.3(@types/node@25.9.4)(tsx@4.23.0)(yaml@2.9.0)
 
+  /@vitest/pretty-format@4.1.10:
+    resolution: {integrity: sha512-W1HsjSH4MXQ9YfmmhLAoIYf1HRfekQCGngeIgcei6MP5QQGWUe0gkopdZQaVCFO+JDJMrAJGwa5pRpNpvy4P8Q==}
+    dependencies:
+      tinyrainbow: 3.1.0
+    dev: true
+
   /@vitest/pretty-format@4.1.9:
     resolution: {integrity: sha512-s0iufns3iIFitdgm+YR7g1whCAaGtXz459VS9/PqyKDEEFgYIhsHOQmXgIgDuYCt7DeQmiZT0Qe2OA2p4ZPu5A==}
     dependencies:
       tinyrainbow: 3.1.0
+
+  /@vitest/runner@4.1.10:
+    resolution: {integrity: sha512-IKI6kpIH+LmpROplyLwBBaCfMgOZOMsygVa6BARD6ahA04VRuJSa6OaVG7kRvSEMD870Vd91rSSw0eegtWyLGg==}
+    dependencies:
+      '@vitest/utils': 4.1.10
+      pathe: 2.0.3
+    dev: true
 
   /@vitest/runner@4.1.9:
     resolution: {integrity: sha512-KXLMDtc7oe70+3mJfGrPUWPesswH+3sTxAMAMl8DG7I8IUQT4XW718dY5ID3vPUcmlu27CcKfY4P3h3I29SLJg==}
     dependencies:
       '@vitest/utils': 4.1.9
       pathe: 2.0.3
+
+  /@vitest/snapshot@4.1.10:
+    resolution: {integrity: sha512-xRkfOT1qpTAi/Ti4Y1LtfRc3kEuqxGw59eN2jN9pRWMtS/XDevekhcFSqvQqjUNGksfjMJu3Y+oJ+4Ypn2OaJw==}
+    dependencies:
+      '@vitest/pretty-format': 4.1.10
+      '@vitest/utils': 4.1.10
+      magic-string: 0.30.21
+      pathe: 2.0.3
+    dev: true
 
   /@vitest/snapshot@4.1.9:
     resolution: {integrity: sha512-Jc7RKGNBo8Z28WYIm0Niej4xdSPByRf6mU58VpHQkd6Zh05rlnA+twjbK5HyeIGHxrzsc3mJgS43uM0CZKzaIA==}
@@ -1449,6 +1471,14 @@ packages:
 
   /@vitest/spy@4.1.9:
     resolution: {integrity: sha512-fHpsS6mIi+PiEW+vcRVOMkX1oSaPKne3VOclSFICPcGOmfKgXPU5iAah+wcNcj2xPrCCmfq99IDGf+EojhhvhA==}
+
+  /@vitest/utils@4.1.10:
+    resolution: {integrity: sha512-fy9am/HWxbaGt/Sawrp90vt6Y6jQwf1RX77cz3uwoJwJVMli/e1IEwRPnMNJ7vKfPTwo0diXifkpPvwH9v7nGA==}
+    dependencies:
+      '@vitest/pretty-format': 4.1.10
+      convert-source-map: 2.0.0
+      tinyrainbow: 3.1.0
+    dev: true
 
   /@vitest/utils@4.1.9:
     resolution: {integrity: sha512-A51o8ymO5PpqlWNnBP9ZHPXDIpuMtTLlGSjN7la4US+LJzoUMyhwjA5QXlm39JexgwHKW4Xjs8Z2d3dLCXOeuA==}
@@ -1661,8 +1691,8 @@ packages:
     resolution: {integrity: sha512-XnqcWmnFZFAE8ZM8SHAw9DIV8D3Or00rMQ8iQLotrEA2PmXhl+ykaf6L6q4l474hrSUH1JaYcv+iOMRWp2p6Tg==}
     dev: true
 
-  /discord.js@14.26.4:
-    resolution: {integrity: sha512-4oBp8tc6Kf8IDBwAHhbsMaAqx1b5fob9SNasZT7V6yyyUydoO5i5fGuX7TmvRtR+q/WgKRnRViRoAWnG7fNyvA==}
+  /discord.js@14.26.5:
+    resolution: {integrity: sha512-SGYgjiAs0o8ZzMC97XmFXKONyairJ9YzVda+LvoSKs9YYh2gPtQhY+liaV6H/w72jxYbu9ggiSqAXoF3FLOH4A==}
     engines: {node: '>=18'}
     dependencies:
       '@discordjs/builders': 1.14.1
