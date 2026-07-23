@@ -10,6 +10,9 @@ export interface Env {
   ALLOWED_GUILD_IDS: string;
   CF_ACCOUNT_ID: string;
   CF_AIG_GATEWAY_ID: string;
+  // Optional AI usage-guard tuning vars (fall back to code defaults when unset).
+  AI_BURST_LIMIT_PER_MINUTE?: string;
+  AI_GLOBAL_DAILY_BUDGET_USD?: string;
 
   // Secrets
   DISCORD_BOT_TOKEN: string;
