@@ -67,8 +67,15 @@ const isGatewayReady = (value: unknown): value is DiscordGatewayReady =>
   (value.user === undefined ||
     (isRecord(value.user) && typeof value.user.id === "string"));
 
+// The one true singleton name. Historical deployments used older names (the
+// "-v2" suffix exists for a reason); any object addressed by another name is a
+// zombie whose persisted enabled-flag + alarm chain would maintain a SECOND
+// Discord session and double-process every mention. Non-canonical instances
+// self-decommission (see isCanonicalInstance / decommission).
+const GATEWAY_DO_NAME = "discord-gateway-v2";
+
 const gatewayStub = (env: Env) => {
-  const id = env.DISCORD_GATEWAY.idFromName("discord-gateway-v2");
+  const id = env.DISCORD_GATEWAY.idFromName(GATEWAY_DO_NAME);
   return env.DISCORD_GATEWAY.get(id) as unknown as DiscordGatewayStub;
 };
 
@@ -114,11 +121,34 @@ export class DiscordGateway extends DurableObject<Env> {
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
     this.ctx.blockConcurrencyWhile?.(async () => {
+      if (!this.isCanonicalInstance()) {
+        await this.decommission();
+        return;
+      }
       if (await this.isGatewayEnabled()) {
         await this.scheduleWatchdog();
         this.connectGateway();
       }
     });
+  }
+
+  // True only for the object addressed by idFromName(GATEWAY_DO_NAME). Stale
+  // objects under older names must never hold a gateway session.
+  private isCanonicalInstance() {
+    // Unit tests construct the DO with a mock env without the binding; treat
+    // that as canonical so the mock's behavior is unchanged.
+    if (!this.env.DISCORD_GATEWAY?.idFromName) {
+      return true;
+    }
+    return this.ctx.id.equals(this.env.DISCORD_GATEWAY.idFromName(GATEWAY_DO_NAME));
+  }
+
+  // Permanently retire a non-canonical instance: wipe the persisted flags and
+  // dedupe markers and cancel the alarm chain, so nothing ever wakes it again.
+  private async decommission() {
+    logger.warn("gateway_stale_instance_decommissioned", { id: this.ctx.id.toString() });
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
   }
 
   async health(): Promise<DiscordGatewayHealth> {
@@ -188,6 +218,10 @@ export class DiscordGateway extends DurableObject<Env> {
   }
 
   async alarm() {
+    if (!this.isCanonicalInstance()) {
+      await this.decommission();
+      return;
+    }
     await this.pruneProcessedMarkers();
     if (!(await this.isGatewayEnabled())) {
       return;

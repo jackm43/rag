@@ -168,9 +168,35 @@ describe("DiscordGateway durable object", () => {
     });
   });
 
+  test("a stale non-canonical instance self-decommissions instead of reconnecting", async () => {
+    await withFakeWebSocket(async () => {
+      // Regression: a leftover object from an older singleton name (e.g. the
+      // pre-"-v2" era) kept gatewayEnabled=true in its own storage and its
+      // watchdog alarm resurrected a second Discord session forever — every
+      // mention got two replies. Any instance whose id is not
+      // idFromName("discord-gateway-v2") must wipe itself on alarm, not connect.
+      const id = testEnv.DISCORD_GATEWAY.idFromName("discord-gateway");
+      const gateway = testEnv.DISCORD_GATEWAY.get(id);
+
+      await runInDurableObject(gateway, async (instance, state) => {
+        await state.storage.put("gatewayEnabled", true);
+        await state.storage.put("processed:zombie-message", Date.now());
+        await state.storage.setAlarm(Date.now() + 60_000);
+
+        await (instance as { alarm: () => Promise<void> }).alarm();
+
+        assert.equal(await state.storage.get("gatewayEnabled"), undefined, "stale flag wiped");
+        assert.equal(await state.storage.get("processed:zombie-message"), undefined, "stale markers wiped");
+        assert.isNull(await state.storage.getAlarm(), "no alarm rescheduled — the zombie stays dead");
+      });
+
+      assert.equal(FakeWebSocket.instances.length, 0, "a non-canonical instance must never connect");
+    });
+  });
+
   test("the watchdog alarm prunes processed-message markers older than 24h", async () => {
     await withFakeWebSocket(async () => {
-      const id = testEnv.DISCORD_GATEWAY.idFromName(`prune-${crypto.randomUUID()}`);
+      const id = testEnv.DISCORD_GATEWAY.idFromName("discord-gateway-v2");
       const gateway = testEnv.DISCORD_GATEWAY.get(id);
 
       await runInDurableObject(gateway, async (instance, state) => {
