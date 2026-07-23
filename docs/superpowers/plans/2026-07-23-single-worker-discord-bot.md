@@ -129,7 +129,7 @@
 
 - [ ] **Step 1:** `op run --env-file=.env -- pnpm wrangler deploy` (replaces old gateway worker in place). Verify `GET https://ragbot.jsmunro.me/gateway/health` with control token.
 - [ ] **Step 2:** `op run --env-file=.env -- pnpm run register:commands`.
-- [ ] **Step 3:** Ensure secrets exist on the worker (`wrangler secret list`; put any missing: `DISCORD_PUBLIC_KEY`, `CF_AIG_TOKEN`).
+- [ ] **Step 3:** Ensure ALL secrets exist on the worker (`wrangler secret list`; put any missing): `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`, `GATEWAY_CONTROL_TOKEN`, `CF_AIG_TOKEN`, `CLOUDFLARE_API_TOKEN` (new to this worker — reconciliation silently stalls without it).
 - [ ] **Step 4:** PATCH Discord `https://discord.com/api/v10/applications/@me` with `{"interactions_endpoint_url":"https://ragbot.jsmunro.me/interactions"}` (Discord sends a PING; endpoint must 200-PONG). 
 - [ ] **Step 5:** `POST /gateway/start`; verify websocket connects (health shows connected). Smoke-test `/ragboard` and an @-mention in the guild if possible; otherwise verify via worker logs (`wrangler tail`).
 - [ ] **Step 6:** Do NOT delete old workers, queues, D1, or KV. Commit any final tweaks; report cutover state.
