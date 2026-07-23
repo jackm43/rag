@@ -14,7 +14,7 @@
     "d1:migrate:remote": "wrangler d1 migrations apply ragbot --remote"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.16.18",
+    "@cloudflare/vitest-pool-workers": "^0.18.7",
     "@types/node": "^25.6.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
