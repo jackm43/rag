@@ -25,6 +25,7 @@
     "test/db.test.ts",
     "test/ai-config.test.ts",
     "test/commands.test.ts",
+    "test/register-payload.test.ts",
     "test/apply-migrations.ts",
     "scripts/register-commands.ts",
     "vitest.config.ts"
