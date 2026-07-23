@@ -19,4 +19,7 @@ export interface Env {
   DISCORD_PUBLIC_KEY: string;
   GATEWAY_CONTROL_TOKEN: string;
   CF_AIG_TOKEN: string;
+  // Cloudflare account API token used by the spend reconciliation sweep to read
+  // AI Gateway logs (distinct from CF_AIG_TOKEN, which authenticates model calls).
+  CLOUDFLARE_API_TOKEN: string;
 }
