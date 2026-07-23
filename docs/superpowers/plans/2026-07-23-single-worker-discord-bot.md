@@ -18,6 +18,7 @@
 - External edge always verified: Ed25519 (`timestamp + rawBody`, 5-min skew) on `/interactions`; `GATEWAY_CONTROL_TOKEN` on operator routes. No other ingress.
 - Vars carried over: `DISCORD_APPLICATION_ID=1496842508251172895`, `ALLOWED_GUILD_IDS=457689460096630794`, `CF_ACCOUNT_ID`, `CF_AIG_GATEWAY_ID=platy`, admin ids from `packages/discord/commands/registry.ts` (`RAG_ADMIN_USER_IDS`). Secrets: `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`, `GATEWAY_CONTROL_TOKEN`, `CF_AIG_TOKEN`.
 - Green gates: `pnpm run check` (tsc) and `pnpm test` after every task. Commit after every task.
+- Follow evobot's discord.js idioms: each command module exports `data: new SlashCommandBuilder()…` and `execute()`; the registry holds them in a `Collection` (or Map) keyed by name like evobot's `bot.commands`; replies use `EmbedBuilder` where the old code built raw embed objects. Because the full discord.js `Client` cannot run on Workers, runtime imports come from `@discordjs/builders` and `discord-api-types/v10` (the exact classes discord.js re-exports); the gateway stays our DO.
 - Port logic verbatim where possible — this is a re-homing, not a rewrite. Preserve behavior: ban checks, guild allow-list, thread conversation flow, spend-estimate writes.
 - Old `apps/*` and `packages/*` stay in the tree until Task 8 removes them; new code must not import from them (copy, don't import).
 
@@ -76,7 +77,7 @@
 
 **Interfaces:**
 - Consumes: Task 3 libs.
-- Produces: `interface Command { data: RESTPostAPIApplicationCommandsJSONBody; adminOnly?: boolean; aiLimited?: boolean; execute(ctx: CommandContext): Promise<void> }` where `CommandContext = { interaction, env, followUp(msg), editReply(msg) }`. `src/commands/index.ts` exports `commands: Map<string, Command>`. `registry.ts` exports `dispatch(interaction, env, ctx)` — resolves command, runs ban/admin/guild checks (port from `packages/discord/commands/registry.ts` + `session-run.ts`), calls `execute`, edits deferred reply on error. Task 2's stub is replaced by this `dispatch`.
+- Produces: `interface Command { data: SlashCommandBuilder | SlashCommandOptionsOnlyBuilder; adminOnly?: boolean; aiLimited?: boolean; execute(ctx: CommandContext): Promise<void> }` (`SlashCommandBuilder` from `@discordjs/builders`), where `CommandContext = { interaction: APIChatInputApplicationCommandInteraction, env, ctx, editReply(msg), followUp(msg) }` (interaction types from `discord-api-types/v10`). `src/commands/index.ts` exports `commands: Map<string, Command>` keyed by `data.name`, evobot-style. `registry.ts` exports `dispatch(interaction, env, ctx)` — resolves command, runs ban/admin/guild checks (port from `packages/discord/commands/registry.ts` + `session-run.ts`), calls `execute`, edits deferred reply on error. Task 2's stub is replaced by this `dispatch`.
 
 - [ ] **Step 1:** Build `command.ts` + `registry.ts`. Each command's `data` comes from the spec in `packages/discord/commands/specs.ts` merged with the builder definitions in `scripts/register-commands.ts` (they were duplicated; commands become the single source of truth).
 - [ ] **Step 2:** Port each handler from `packages/discord/commands/<name>.ts`. Formerly-enqueued kinds (`ask`, `bicture`, `ragjam`) now run their job in-process inside `execute` (the code that lived in the workflows consumer, `packages/discord/domain/consumer.ts` / `session.ts` `run()`), still behind the type-5 deferred ack.
@@ -109,7 +110,7 @@
 ### Task 7: Command registration script from registry
 
 **Files:**
-- Modify: `scripts/register-commands.ts` — delete the duplicated builder list; import `commands` from `src/commands/index.ts` and PUT `[...commands.values()].map(c => c.data)` as guild commands for `457689460096630794`, empty global set, unchanged REST v10 calls.
+- Modify: `scripts/register-commands.ts` — delete the duplicated builder list; import `commands` from `src/commands/index.ts` and PUT `[...commands.values()].map(c => c.data.toJSON())` as guild commands for `457689460096630794`, empty global set, unchanged REST v10 calls.
 - Test: `test/register-payload.test.ts` — payload contains exactly the 10 names.
 
 - [ ] **Step 1:** Implement, test PASS, commit `feat: derive command registration from command modules`.
