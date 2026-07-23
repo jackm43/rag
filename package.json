@@ -23,8 +23,7 @@
   },
   "dependencies": {
     "discord-api-types": "^0.38.49",
-    "tweetnacl": "^1.0.3",
-    "zod": "^3.25.76"
+    "tweetnacl": "^1.0.3"
   },
   "pnpm": {
     "overrides": {
