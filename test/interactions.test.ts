@@ -1,3 +1,4 @@
+import { env as workerEnv } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import nacl from "tweetnacl";
 
@@ -10,6 +11,17 @@ const minimalEnv = (publicKeyHex: string): Env =>
   ({
     DISCORD_PUBLIC_KEY: publicKeyHex,
   }) as Env;
+
+// Adds the real D1 binding (migrated per-file by test/apply-migrations.ts) plus
+// the credentials dispatch needs to reach a command and edit the deferred
+// reply: DISCORD_BOT_TOKEN for the bot-authenticated egress helper, and no
+// ALLOWED_GUILD_IDS so every guild passes the allowlist gate.
+const dispatchEnv = (publicKeyHex: string): Env =>
+  ({
+    DISCORD_PUBLIC_KEY: publicKeyHex,
+    DISCORD_BOT_TOKEN: "bot-token",
+    DB: workerEnv.DB,
+  }) as unknown as Env;
 
 const waitUntilCtx = () => {
   const tasks: Array<Promise<unknown>> = [];
@@ -114,6 +126,59 @@ describe("POST /interactions", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ type: 5 });
     await settle();
+  });
+
+  it("dispatches a signed /ragboard command end-to-end: 200 type 5, then the deferred reply is edited over REST", async () => {
+    const applicationId = "app-id-e2e";
+    const invokerId = "500000000000000001";
+    const raggedId = "500000000000000002";
+    await workerEnv.DB.prepare(
+      "INSERT INTO rag_totals (ragged_user_id, ragged_username, rag_count) VALUES (?, ?, ?)",
+    )
+      .bind(raggedId, "target", 3)
+      .run();
+
+    const keyPair = nacl.sign.keyPair();
+    const env = dispatchEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+    const payload = {
+      type: 2,
+      id: "interaction-id-e2e",
+      application_id: applicationId,
+      token: "interaction-token-e2e",
+      data: { name: "ragboard" },
+      member: { user: { id: invokerId, username: "eve" } },
+    };
+    const request = signedRequest(payload, keyPair.secretKey);
+    const { ctx, settle } = waitUntilCtx();
+
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const response = await worker.fetch(request, env, ctx);
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ type: 5 });
+
+      // The command runs inside ctx.waitUntil(dispatch(...)); await it before
+      // asserting on the fetch mock, or the PATCH may not have fired yet.
+      await settle();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const editCall = calls.find((call) =>
+      call.url === `https://discord.com/api/v10/webhooks/${applicationId}/interaction-token-e2e/messages/@original`,
+    );
+    expect(editCall, "the deferred reply is PATCHed over REST").toBeDefined();
+    expect(editCall?.init?.method).toBe("PATCH");
+    const body = JSON.parse(String(editCall?.init?.body));
+    expect(body.content).toContain("Ragboard");
+    expect(body.content).toContain(`<@${raggedId}>`);
   });
 
   it("returns 404 for unrelated routes", async () => {
