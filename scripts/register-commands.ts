@@ -1,117 +1,34 @@
-import { Routes, SlashCommandBuilder } from "discord.js";
+import { commands } from "../src/commands/index";
+import type { SlashCommandJSON } from "../src/structs/slash-command-builder";
+
+// Inlined from discord-api-types' Routes.applicationCommands /
+// Routes.applicationGuildCommands (rest/v10). Importing discord.js here (for
+// just those two route-string helpers) pulls in discord-api-types' runtime
+// enums, which crash under the workerd-backed vitest pool this suite runs
+// under — see src/structs/slash-command-builder.ts for the same issue. The
+// routes below are plain, stable string templates, confirmed against
+// discord-api-types@0.38.49's rest/v10/index.js.
+const applicationCommandsRoute = (applicationId: string) => `/applications/${applicationId}/commands`;
+const applicationGuildCommandsRoute = (applicationId: string, guildId: string) =>
+  `/applications/${applicationId}/guilds/${guildId}/commands`;
 
 export { };
 
 declare const process: {
   env: Record<string, string | undefined>;
+  argv: string[];
 };
 
-const applicationId = process.env.DISCORD_APPLICATION_ID;
-const botToken = process.env.DISCORD_BOT_TOKEN;
 const targetGuildId = "457689460096630794";
 
-if (!applicationId || !botToken) {
-  throw new Error("DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN are required");
-}
+// The single source of truth for the registration payload: each command's
+// `data` builder (src/structs/slash-command-builder.ts) is already the source
+// of truth for the name the registry keys commands by. Exported so the test
+// suite can exercise payload building under Node without touching Discord.
+export const buildCommandPayload = (): SlashCommandJSON[] =>
+  [...commands.values()].map((command) => command.data.toJSON());
 
-const commands = [
-  new SlashCommandBuilder()
-    .setName("rag")
-    .setDescription("Record a rag against a user")
-    .addUserOption((option) =>
-      option
-        .setName("user")
-        .setDescription("User to mark as ragging")
-        .setRequired(true),
-    ),
-  new SlashCommandBuilder()
-    .setName("ragboard")
-    .setDescription("Show the rag leaderboard"),
-  new SlashCommandBuilder()
-    .setName("ragspend")
-    .setDescription("Show your AI ragbot spend"),
-  new SlashCommandBuilder()
-    .setName("ragspendboard")
-    .setDescription("Show the AI ragbot spend leaderboard"),
-  new SlashCommandBuilder()
-    .setName("raghammer")
-    .setDescription("Temporarily block a user from using /rag")
-    .addUserOption((option) =>
-      option
-        .setName("user")
-        .setDescription("User to block from /rag")
-        .setRequired(true),
-    )
-    .addStringOption((option) =>
-      option
-        .setName("timeframe")
-        .setDescription("Examples: 5m, 1h, 1d. Use only m, h, or d.")
-        .setRequired(true)
-        .setMinLength(2)
-        .setMaxLength(12),
-    ),
-  new SlashCommandBuilder()
-    .setName("ragunban")
-    .setDescription("Remove a user's current /rag ban")
-    .addUserOption((option) =>
-      option
-        .setName("user")
-        .setDescription("User to allow back onto /rag")
-        .setRequired(true),
-    ),
-  new SlashCommandBuilder()
-    .setName("undorag")
-    .setDescription("Undo the last rag recorded against a user")
-    .addUserOption((option) =>
-      option
-        .setName("user")
-        .setDescription("User whose last rag should be undone")
-        .setRequired(true),
-    ),
-  new SlashCommandBuilder()
-    .setName("ask")
-    .setDescription("Start an AI conversation in a new thread")
-    .addStringOption((option) =>
-      option
-        .setName("prompt")
-        .setDescription("Question or topic for the new thread")
-        .setRequired(true)
-        .setMinLength(1)
-        .setMaxLength(6000),
-    ),
-  new SlashCommandBuilder()
-    .setName("bicture")
-    .setDescription("Generate an image with Cloudflare AI")
-    .addStringOption((option) =>
-      option
-        .setName("prompt")
-        .setDescription("Image prompt")
-        .setRequired(true)
-        .setMinLength(1)
-        .setMaxLength(2000),
-    ),
-  new SlashCommandBuilder()
-    .setName("ragjam")
-    .setDescription("Generate a song with Cloudflare AI")
-    .addStringOption((option) =>
-      option
-        .setName("prompt")
-        .setDescription("Music style, mood, and scenario")
-        .setRequired(true)
-        .setMinLength(1)
-        .setMaxLength(2000),
-    )
-    .addStringOption((option) =>
-      option
-        .setName("lyrics")
-        .setDescription("Song lyrics; omit to auto-generate lyrics")
-        .setRequired(false)
-        .setMinLength(1)
-        .setMaxLength(3500),
-    ),
-].map((command) => command.toJSON());
-
-const discordApiRequest = async (path: string, init: RequestInit = {}) => {
+const discordApiRequest = async (botToken: string, path: string, init: RequestInit = {}) => {
   const response = await fetch(`https://discord.com/api/v10${path}`, {
     ...init,
     headers: {
@@ -128,14 +45,31 @@ const discordApiRequest = async (path: string, init: RequestInit = {}) => {
   return response.json().catch(() => null);
 };
 
-// Keep commands guild-scoped. This bot is only intended for the target guild,
-// and global commands can appear as duplicates beside guild commands.
-await discordApiRequest(Routes.applicationCommands(applicationId), {
-  method: "PUT",
-  body: JSON.stringify([]),
-});
+const main = async () => {
+  const applicationId = process.env.DISCORD_APPLICATION_ID;
+  const botToken = process.env.DISCORD_BOT_TOKEN;
 
-await discordApiRequest(Routes.applicationGuildCommands(applicationId, targetGuildId), {
-  method: "PUT",
-  body: JSON.stringify(commands),
-});
+  if (!applicationId || !botToken) {
+    throw new Error("DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN are required");
+  }
+
+  const payload = buildCommandPayload();
+
+  // Keep commands guild-scoped. This bot is only intended for the target guild,
+  // and global commands can appear as duplicates beside guild commands.
+  await discordApiRequest(botToken, applicationCommandsRoute(applicationId), {
+    method: "PUT",
+    body: JSON.stringify([]),
+  });
+
+  await discordApiRequest(botToken, applicationGuildCommandsRoute(applicationId, targetGuildId), {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+};
+
+// Only run against Discord when this file is executed directly (`pnpm run
+// register:commands`), not when imported (e.g. by test/register-payload.test.ts).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  await main();
+}

@@ -1,0 +1,79 @@
+{
+  "name": "ragbot-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-23",
+  "rules": [
+    {
+      "type": "Text",
+      "globs": [
+        "**/*.md"
+      ],
+      "fallthrough": true
+    }
+  ],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "ragbot.jsmunro.me",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "DISCORD_APPLICATION_ID": "1496842508251172895",
+    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
+    "ALLOWED_GUILD_IDS": "457689460096630794",
+    "CF_AIG_GATEWAY_ID": "platy"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ragbot",
+      "database_id": "5833b0bb-7806-483e-9015-32e209ce2fb0",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // AI prompt/config store. loadConfig reads keys (file basenames) with a
+  // bundled fallback, so a fresh or empty namespace still works.
+  "kv_namespaces": [
+    {
+      "binding": "AI_CONFIG",
+      "id": "2a6dbd4428b64d6982bfe628445c163a"
+    }
+  ],
+  "ai": {
+    "binding": "AI"
+  },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true
+    }
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DISCORD_GATEWAY",
+        "class_name": "DiscordGateway"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": [
+        "DiscordGateway"
+      ]
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "*/15 * * * *"
+    ]
+  }
+}

@@ -10,17 +10,17 @@
     "resolveJsonModule": true,
     "strict": true,
     "types": [
-      "node"
+      "node",
+      "@cloudflare/vitest-pool-workers/types"
     ],
     "noEmit": true,
     "skipLibCheck": true
   },
   "include": [
     "worker-configuration.d.ts",
-    "apps/**/*.ts",
-    "packages/**/*.ts",
+    "src/**/*.ts",
+    "test/**/*.ts",
     "scripts/**/*.ts",
-    "cli/**/*.ts",
     "vitest.config.ts"
   ]
 }
