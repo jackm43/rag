@@ -130,8 +130,8 @@ describe("DiscordGateway durable object", () => {
       const id = testEnv.DISCORD_GATEWAY.idFromName(`rpc-start-${crypto.randomUUID()}`);
       const gateway = testEnv.DISCORD_GATEWAY.get(id);
 
-      assert.deepEqual(await gateway.health(), { connected: false, resumable: false });
-      assert.deepEqual(await gateway.start(), { ok: true });
+      assert.deepEqual({ ...(await gateway.health()) }, { connected: false, resumable: false });
+      assert.deepEqual({ ...(await gateway.start()) }, { ok: true });
 
       await runInDurableObject(gateway, async (_instance, state) => {
         assert.equal(await state.storage.get("gatewayEnabled"), true);
@@ -150,7 +150,7 @@ describe("DiscordGateway durable object", () => {
       await gateway.start();
       assert.equal(FakeWebSocket.instances.length, 1);
 
-      assert.deepEqual(await gateway.stop(), { ok: true });
+      assert.deepEqual({ ...(await gateway.stop()) }, { ok: true });
 
       await runInDurableObject(gateway, async (instance, state) => {
         assert.equal(await state.storage.get("gatewayEnabled"), undefined);
@@ -161,9 +161,9 @@ describe("DiscordGateway durable object", () => {
       });
 
       assert.equal(FakeWebSocket.instances.length, 1, "a stopped gateway must not reconnect");
-      assert.deepEqual(await gateway.health(), { connected: false, resumable: false });
+      assert.deepEqual({ ...(await gateway.health()) }, { connected: false, resumable: false });
 
-      assert.deepEqual(await gateway.start(), { ok: true });
+      assert.deepEqual({ ...(await gateway.start()) }, { ok: true });
       assert.equal(FakeWebSocket.instances.length, 2, "start works again after a stop");
     });
   });

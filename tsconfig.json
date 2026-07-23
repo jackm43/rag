@@ -19,15 +19,8 @@
   "include": [
     "worker-configuration.d.ts",
     "src/**/*.ts",
-    "test/index.test.ts",
-    "test/verify.test.ts",
-    "test/interactions.test.ts",
-    "test/db.test.ts",
-    "test/ai-config.test.ts",
-    "test/commands.test.ts",
-    "test/register-payload.test.ts",
-    "test/apply-migrations.ts",
-    "scripts/register-commands.ts",
+    "test/**/*.ts",
+    "scripts/**/*.ts",
     "vitest.config.ts"
   ]
 }
