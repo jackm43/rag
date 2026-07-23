@@ -1,7 +1,5 @@
 import responseConfig from "./ai-config/discord-response.json";
 import askWebSearchConfig from "./ai-config/ask-web-search.json";
-import responseSystemPromptText from "./ai-config/discord-response-system-prompt.md";
-import askWebSearchSystemPromptText from "./ai-config/ask-web-search-system-prompt.md";
 import { errorMessage, logger } from "../logger";
 
 // The worker binds a Workers KV namespace (AI_CONFIG) holding the same files
@@ -79,18 +77,32 @@ const loadJsonConfig = async <T>(
   }
 };
 
+// The bundled fallback text lives in ./prompts, which statically imports the
+// `.md` files. Loading it via dynamic import() keeps that import out of this
+// module's static graph, so Node (scripts/register-commands.ts, via tsx) can
+// import config.ts's callers without ever needing a `.md` loader — the
+// dynamic import only actually runs on a KV miss/outage, which happens in the
+// Workers runtime.
 const loadPrompt = async (
   env: ConfigEnv | undefined,
   key: string,
-  fallback: string,
-): Promise<string> => (await readKvText(env, key)) ?? fallback;
+  loadFallback: () => Promise<string>,
+): Promise<string> => (await readKvText(env, key)) ?? (await loadFallback());
 
 const resolveConfig = async (env?: ConfigEnv): Promise<BotConfig> => {
   const [responseCfg, askCfg, systemPrompt, askWebSearchSystemPrompt] = await Promise.all([
     loadJsonConfig(env, KV_KEYS.responseConfig, responseConfig),
     loadJsonConfig(env, KV_KEYS.askWebSearchConfig, askWebSearchConfig),
-    loadPrompt(env, KV_KEYS.responseSystemPrompt, responseSystemPromptText),
-    loadPrompt(env, KV_KEYS.askWebSearchSystemPrompt, askWebSearchSystemPromptText),
+    loadPrompt(
+      env,
+      KV_KEYS.responseSystemPrompt,
+      async () => (await import("./prompts")).discordResponseSystemPrompt,
+    ),
+    loadPrompt(
+      env,
+      KV_KEYS.askWebSearchSystemPrompt,
+      async () => (await import("./prompts")).askWebSearchSystemPrompt,
+    ),
   ]);
 
   return {
