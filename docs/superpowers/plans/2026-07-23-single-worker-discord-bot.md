@@ -96,7 +96,8 @@
 
 **Files:**
 - Create: `src/structs/gateway.ts` (port `apps/gateway/src/gateway.ts` verbatim: identify/resume, heartbeat, op 7/9, watchdog alarm, start/stop flags), `src/events/messageCreate.ts` (port `packages/discord/domain/mention.ts`: `handleGatewayMessageCreate` + `resolveGatewayMessage`)
-- Modify: `src/index.ts` (scheduled → `ensureGatewayConnected`; operator routes `POST /gateway/start|stop`, `GET /gateway/health` gated by `GATEWAY_CONTROL_TOKEN`, port from `apps/gateway/src/router.ts`)
+- Create: `src/lib/ai/reconcile.ts` — port the AI-Gateway cost reconciliation from `packages/discord/ai/spend.ts` (`processSpendQueueMessage` + `findGatewayLogCostMicros`) as a batch sweep: select pending `rag_ai_spend_events` rows, look up real cost in AI Gateway logs (CF API, `CF_AIG_TOKEN`/`CLOUDFLARE_API_TOKEN` secret, gateway `platy`), `UPDATE estimated_cost_micros` + upsert `rag_ai_spend_totals` exactly as the old consumer did; leave still-missing logs pending for the next sweep. Called from `scheduled()` each cron tick. This keeps `/ragspend*` and the budget guard alive without queues (resolves the Task 3 ⚠️).
+- Modify: `src/index.ts` (scheduled → `ensureGatewayConnected` + spend reconciliation sweep; operator routes `POST /gateway/start|stop`, `GET /gateway/health` gated by `GATEWAY_CONTROL_TOKEN`, port from `apps/gateway/src/router.ts`)
 - Test: `test/mention.test.ts` (port existing mention tests), `test/gateway-routes.test.ts`
 
 **Interfaces:**
