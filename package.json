@@ -23,6 +23,7 @@
     "wrangler": "^4.13.2"
   },
   "dependencies": {
+    "discord-api-types": "^0.38.49",
     "tweetnacl": "^1.0.3",
     "zod": "^3.25.76"
   },

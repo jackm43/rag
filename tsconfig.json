@@ -20,6 +20,8 @@
     "worker-configuration.d.ts",
     "src/**/*.ts",
     "test/index.test.ts",
+    "test/verify.test.ts",
+    "test/interactions.test.ts",
     "scripts/register-commands.ts",
     "vitest.config.ts"
   ]
