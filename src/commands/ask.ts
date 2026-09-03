@@ -1,21 +1,16 @@
 import { SlashCommandBuilder } from "../structs/slash-command-builder";
 
-import type { ChatModelResult } from "../lib/ai/ai";
-import {
-  appendSourceFallback,
-  buildAskConversation,
-  buildAskWebSearchInput,
-  shouldUseAskWebSearch,
-} from "../lib/ai/ask-mode";
+import { runAskModeCompletion } from "../lib/ai/ask-mode";
 import { loadConfig } from "../lib/ai/config";
-import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "../lib/ai/tracked-ai";
 import { fallbackThreadTitle } from "../lib/db/conversation";
+import { recordAiInteraction } from "../lib/db/interactions";
 import { recordAiThread } from "../lib/db/threads";
 import {
   createThreadWithoutMessage,
   fetchChannel,
   finalizeAiReplyText,
   isThreadChannel,
+  postChannelMessage,
   sendChannelReply,
 } from "../lib/discord";
 import { errorMessage, logger } from "../lib/logger";
@@ -29,53 +24,6 @@ const resolveThreadParentChannelId = async (env: Env, channelId: string) => {
     return channel.parent_id;
   }
   return channelId;
-};
-
-// Records the AI interaction for analytics. Best-effort; a failed write is
-// logged and never bubbles. Ported from the workflows consumer.
-const recordAiInteraction = async (
-  env: Env,
-  fields: {
-    channelId: string;
-    requesterUserId?: string;
-    requesterUsername?: string;
-    prompt: string;
-  },
-  model: string,
-  totalDurationMs: number,
-  status: string,
-  responseText: string | null,
-  aiDurationMs: number | null,
-  errorText: string | null,
-  promptTokens: number | null = null,
-  completionTokens: number | null = null,
-  totalTokens: number | null = null,
-) => {
-  try {
-    await env.DB.prepare(
-      "INSERT INTO rag_ai_interactions (kind, channel_id, message_id, requester_user_id, requester_username, prompt, response_text, model, ai_duration_ms, total_duration_ms, status, error_message, prompt_tokens, completion_tokens, total_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-      .bind(
-        "ask",
-        fields.channelId,
-        null,
-        fields.requesterUserId ?? null,
-        fields.requesterUsername ?? null,
-        fields.prompt,
-        responseText,
-        model,
-        aiDurationMs,
-        totalDurationMs,
-        status,
-        errorText,
-        promptTokens,
-        completionTokens,
-        totalTokens,
-      )
-      .run();
-  } catch (error) {
-    logger.warn("interaction_record_failed", { error: errorMessage(error) });
-  }
 };
 
 // The /ask AI reply, run in-process behind the deferred ack (formerly the
@@ -92,64 +40,54 @@ const generateAskReply = async (
   let model = "unknown";
   let aiDurationMs: number | null = null;
   let content: string | null = null;
-  const fields = { channelId: threadId, requesterUserId, requesterUsername, prompt };
+  let usage: { promptTokens: number; completionTokens: number; totalTokens: number } | null = null;
+  const record = (status: "ok" | "error", errorText: string | null) =>
+    recordAiInteraction(env, {
+      kind: "ask",
+      channelId: threadId,
+      requesterUserId,
+      requesterUsername,
+      prompt,
+      model,
+      status,
+      responseText: content,
+      errorMessage: errorText,
+      aiDurationMs,
+      totalDurationMs: Date.now() - startedAt,
+      usage,
+    });
 
   try {
     const config = await loadConfig(env);
     model = config.responseModel;
-    const attribution = {
-      kind: "ask",
-      requesterUserId,
-      requesterUsername,
-      channelId: threadId,
-    };
-    const messages = [{ role: "user" as const, content: `${requesterUsername}: ${prompt}` }];
+    const attribution = { kind: "ask", requesterUserId, requesterUsername, channelId: threadId };
 
-    let responseText: string;
-    let result: ChatModelResult;
     const aiStartedAt = Date.now();
-    if (shouldUseAskWebSearch(prompt)) {
-      const webSearchResult = await runTrackedWebSearchCompletion(
-        env,
-        buildAskWebSearchInput(prompt, requesterUsername, []),
-        {
-          model: config.askWebSearchModel,
-          instructions: config.askWebSearchSystemPrompt,
-          maxOutputTokens: config.askWebSearchMaxOutputTokens,
-          maxTurns: config.askWebSearchMaxTurns,
-          searchContextSize: config.askWebSearchContextSize,
-          temperature: config.askWebSearchTemperature,
-          gatewayId: config.askWebSearchGatewayId,
-          ...attribution,
-        },
-      );
-      responseText = appendSourceFallback(webSearchResult.content, webSearchResult.sources);
-      result = webSearchResult;
-    } else {
-      result = await runTrackedChatCompletion(env, config, buildAskConversation(config, messages), attribution);
-      responseText = result.content;
-    }
+    const { result, responseText } = await runAskModeCompletion(
+      env,
+      config,
+      {
+        prompt,
+        requesterUsername,
+        conversation: [{ role: "user", content: `${requesterUsername}: ${prompt}` }],
+        // A fresh thread has no prior turns to feed the web-search prompt.
+        webSearchContext: [],
+      },
+      attribution,
+    );
     model = result.model;
+    usage = result.usage ?? null;
     aiDurationMs = Date.now() - aiStartedAt;
     content = finalizeAiReplyText(responseText);
 
-    await sendChannelReply(env, threadId, responseText);
-    await recordAiInteraction(
-      env,
-      fields,
-      model,
-      Date.now() - startedAt,
-      "ok",
-      content,
-      aiDurationMs,
-      null,
-      result.usage?.promptTokens ?? null,
-      result.usage?.completionTokens ?? null,
-      result.usage?.totalTokens ?? null,
-    );
+    const posted = await postChannelMessage(env, threadId, content);
+    if (!posted.ok) {
+      throw new Error(`discord_channel_post_failed_${posted.status}`);
+    }
+    await record("ok", null);
   } catch (error) {
     logger.error("ai_job_failed", { error: errorMessage(error) });
-    await recordAiInteraction(env, fields, model, Date.now() - startedAt, "error", content, aiDurationMs, errorMessage(error));
+    await record("error", errorMessage(error));
     await sendChannelReply(
       env,
       threadId,
@@ -195,6 +133,8 @@ export const ask: Command = {
       return;
     }
 
+    // The thread already exists on Discord; a failed D1 write only means later
+    // replies in it will not be tracked, so still deliver the first answer.
     await recordAiThread(env, {
       threadId: thread.id,
       parentChannelId: targetChannelId,
@@ -202,6 +142,8 @@ export const ask: Command = {
       requesterUsername,
       initialPrompt: prompt,
       title,
+    }).catch((error) => {
+      logger.warn("ask_thread_record_failed", { error: errorMessage(error), threadId: thread.id });
     });
 
     await editReply(`Started <#${thread.id}>`);

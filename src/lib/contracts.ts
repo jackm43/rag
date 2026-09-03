@@ -89,6 +89,9 @@ export type AiThreadStartJob = {
 export type AiThreadReplyJob = {
   kind: "thread_reply";
   channelId: string;
+  // The tracked thread the resolver already looked up, so the conversation
+  // builder does not repeat the D1 read.
+  thread?: AiThread;
   messageId?: string;
   botUserId?: string;
   requesterUserId?: string;

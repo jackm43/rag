@@ -51,11 +51,16 @@ export const checkAiUsageAllowed = async (
   );
 
   try {
-    const requestRow = await env.DB.prepare(
-      "SELECT COUNT(*) AS request_count FROM rag_ai_requests WHERE requester_user_id = ? AND created_at >= datetime('now', '-1 minute')",
-    )
-      .bind(userId)
-      .first<{ request_count: number }>();
+    // Both reads in one D1 round trip; the request is logged only if allowed.
+    const [requestResult, spendResult] = await env.DB.batch<{ request_count?: number; spend_micros?: number }>([
+      env.DB.prepare(
+        "SELECT COUNT(*) AS request_count FROM rag_ai_requests WHERE requester_user_id = ? AND created_at >= datetime('now', '-1 minute')",
+      ).bind(userId),
+      env.DB.prepare(
+        "SELECT COALESCE(SUM(estimated_cost_micros), 0) AS spend_micros FROM rag_ai_spend_events WHERE created_at >= datetime('now', '-24 hours')",
+      ),
+    ]);
+    const requestRow = requestResult.results?.[0];
     const requestCount = typeof requestRow?.request_count === "number" ? requestRow.request_count : 0;
     if (requestCount >= burstLimitPerMinute) {
       return {
@@ -65,9 +70,7 @@ export const checkAiUsageAllowed = async (
       };
     }
 
-    const spendRow = await env.DB.prepare(
-      "SELECT COALESCE(SUM(estimated_cost_micros), 0) AS spend_micros FROM rag_ai_spend_events WHERE created_at >= datetime('now', '-24 hours')",
-    ).first<{ spend_micros: number }>();
+    const spendRow = spendResult.results?.[0];
     const spendMicros = typeof spendRow?.spend_micros === "number" ? spendRow.spend_micros : 0;
     if (spendMicros >= globalDailyBudgetMicros) {
       return {
@@ -85,4 +88,14 @@ export const checkAiUsageAllowed = async (
   }
 
   return { allowed: true };
+};
+
+// The burst guard only ever looks one minute back, so the request log is
+// garbage after that. Run from the cron trigger; best-effort.
+export const pruneAiRequestLog = async (env: Env) => {
+  try {
+    await env.DB.prepare("DELETE FROM rag_ai_requests WHERE created_at < datetime('now', '-1 day')").run();
+  } catch (error) {
+    logger.warn("ai_request_log_prune_failed", { error: errorMessage(error) });
+  }
 };

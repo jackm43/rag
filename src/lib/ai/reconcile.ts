@@ -14,8 +14,10 @@ const USD_MICROS = 1_000_000;
 const DEFAULT_AIG_GATEWAY_ID = "platy";
 const CLOUDFLARE_API_TIMEOUT_MS = 30_000;
 // Bounds the per-tick work: at most this many pending events are reconciled each
-// cron run (each requires up to 3 paginated log requests).
+// cron run, matched against one fetch of the most recent log pages.
 const RECONCILE_BATCH_SIZE = 25;
+const LOG_PAGE_SIZE = 50;
+const LOG_MAX_PAGES = 3;
 
 type PendingSpendEventRow = {
   source_id: string;
@@ -57,18 +59,22 @@ const costMicrosFrom = (log: unknown) => {
   return cost === null ? null : Math.round(cost * USD_MICROS);
 };
 
-const findGatewayLogCostMicros = async (env: Env, sourceId: string) => {
+// One pass over the most recent AI Gateway log pages, indexed by our request id
+// (the ragbot_request_id metadata every tracked call sends). Fetched once per
+// sweep and shared by every pending event, instead of re-paging per event.
+const fetchGatewayLogCosts = async (env: Env): Promise<Map<string, number | null>> => {
   if (!env.CF_ACCOUNT_ID) {
     throw new Error("CF_ACCOUNT_ID is required to reconcile AI Gateway spend");
   }
 
   const gatewayId = env.CF_AIG_GATEWAY_ID || DEFAULT_AIG_GATEWAY_ID;
-  for (let page = 1; page <= 3; page += 1) {
+  const costs = new Map<string, number | null>();
+  for (let page = 1; page <= LOG_MAX_PAGES; page += 1) {
     const url = new URL(
       `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/ai-gateway/gateways/${gatewayId}/logs`,
     );
     url.searchParams.set("page", String(page));
-    url.searchParams.set("per_page", "50");
+    url.searchParams.set("per_page", String(LOG_PAGE_SIZE));
     const response = await fetch(url, {
       headers: { authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
       signal: AbortSignal.timeout(CLOUDFLARE_API_TIMEOUT_MS),
@@ -82,16 +88,17 @@ const findGatewayLogCostMicros = async (env: Env, sourceId: string) => {
       if (!isRecord(log)) {
         continue;
       }
-      const metadata = parseMetadata(log.metadata);
-      if (metadata.ragbot_request_id === sourceId) {
-        return costMicrosFrom(log);
+      const requestId = parseMetadata(log.metadata).ragbot_request_id;
+      // Newest first: the first log seen for a request id wins.
+      if (typeof requestId === "string" && !costs.has(requestId)) {
+        costs.set(requestId, costMicrosFrom(log));
       }
     }
-    if (logs.length < 50) {
+    if (logs.length < LOG_PAGE_SIZE) {
       break;
     }
   }
-  return null;
+  return costs;
 };
 
 // Write the reconciled cost and re-derive the user's spend total. Identical SQL
@@ -108,8 +115,8 @@ const applyReconciledCost = async (env: Env, event: PendingSpendEventRow, costMi
   ]);
 };
 
-// One reconciliation sweep. Best-effort: a per-event lookup failure is logged and
-// leaves that row pending for the next tick; it never aborts the sweep.
+// One reconciliation sweep. Best-effort: a log fetch failure leaves every row
+// pending for the next tick, and a per-event write failure never aborts the sweep.
 export const reconcileAiSpend = async (env: Env): Promise<{ reconciled: number; scanned: number }> => {
   const pending = await env.DB.prepare(
     "SELECT source_id, requester_user_id, requester_username FROM rag_ai_spend_events WHERE status = 'pending' ORDER BY id ASC LIMIT ?",
@@ -118,19 +125,24 @@ export const reconcileAiSpend = async (env: Env): Promise<{ reconciled: number; 
     .all<PendingSpendEventRow>();
 
   const rows = pending.results ?? [];
+  if (rows.length === 0) {
+    return { reconciled: 0, scanned: 0 };
+  }
+
+  let costs: Map<string, number | null>;
+  try {
+    costs = await fetchGatewayLogCosts(env);
+  } catch (error) {
+    logger.warn("ai_spend_gateway_log_lookup_failed", { error: errorMessage(error) });
+    return { reconciled: 0, scanned: rows.length };
+  }
+
   let reconciled = 0;
   for (const event of rows) {
-    let costMicros: number | null = null;
-    try {
-      costMicros = await findGatewayLogCostMicros(env, event.source_id);
-    } catch (error) {
-      logger.warn("ai_spend_gateway_log_lookup_failed", { error: errorMessage(error), sourceId: event.source_id });
-      continue;
-    }
-
-    // No matching log yet — the AI Gateway is eventually consistent, so leave the
-    // row pending for a later sweep rather than forcing a zero cost.
-    if (costMicros === null) {
+    // No matching log (or no cost on it) yet — the AI Gateway is eventually
+    // consistent, so leave the row pending rather than forcing a zero cost.
+    const costMicros = costs.get(event.source_id);
+    if (costMicros === undefined || costMicros === null) {
       continue;
     }
 

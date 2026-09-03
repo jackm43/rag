@@ -18,12 +18,7 @@ type SpendEventInput = {
 const optionalUsage = (value: number | null | undefined) =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
 
-const randomEventId = () =>
-  typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-export const createAiSpendSourceId = () => `aigreq:${randomEventId()}`;
+export const createAiSpendSourceId = () => `aigreq:${crypto.randomUUID()}`;
 
 export const formatUsdMicros = (micros: number) =>
   `$${(Math.max(0, micros) / USD_MICROS).toFixed(2)}`;

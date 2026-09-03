@@ -1,6 +1,6 @@
 import { SlashCommandBuilder } from "../structs/slash-command-builder";
 
-import { idOption, requireInvoker, getTargetUsername } from "../lib/interaction";
+import { idOption, requireInvoker, getTargetUsername, stringOption } from "../lib/interaction";
 import type { Command } from "../structs/command";
 
 const TIMEFRAME_PATTERN = /^([1-9]\d*)([mhd])$/;
@@ -10,8 +10,13 @@ const UNIT_MS: Record<string, number> = {
   d: 24 * 60 * 60 * 1000,
 };
 
+// Longest ban a single /raghammer may issue. Also keeps the expiry inside the
+// range Date can represent (an unbounded amount overflowed toISOString()).
+const MAX_BAN_DURATION_MS = 365 * UNIT_MS.d;
+
 export const TIMEFRAME_FORMAT_MESSAGE =
   "Timeframe must use minutes, hours, or days, like 5m, 1h, or 1d.";
+export const TIMEFRAME_TOO_LONG_MESSAGE = "Timeframe must be 365d or less.";
 
 const parseTimeframe = (timeframe: string) => {
   const match = TIMEFRAME_PATTERN.exec(timeframe.trim().toLowerCase());
@@ -50,9 +55,13 @@ export const raghammer: Command = {
   async execute({ interaction, env, editReply }) {
     const invoker = requireInvoker(interaction);
     const targetId = idOption(interaction, "user");
-    const parsedTimeframe = parseTimeframe(idOption(interaction, "timeframe"));
+    const parsedTimeframe = parseTimeframe(stringOption(interaction, "timeframe"));
     if (!parsedTimeframe) {
       await editReply(TIMEFRAME_FORMAT_MESSAGE);
+      return;
+    }
+    if (parsedTimeframe.durationMs > MAX_BAN_DURATION_MS) {
+      await editReply(TIMEFRAME_TOO_LONG_MESSAGE);
       return;
     }
 

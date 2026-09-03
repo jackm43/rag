@@ -19,7 +19,7 @@ export const ragunban: Command = {
     const result = (await env.DB.prepare(
       "DELETE FROM rag_command_bans WHERE banned_user_id = ? AND expires_at > ?",
     )
-      .bind(targetId, new Date(Date.now()).toISOString())
+      .bind(targetId, new Date().toISOString())
       .run()) as DeleteResult;
     const removedCount = result.meta?.changes ?? 0;
 

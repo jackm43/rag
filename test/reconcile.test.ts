@@ -115,6 +115,35 @@ test("leaves events without a matching log pending for a later sweep", async () 
   assert.equal(total, null);
 });
 
+test("fetches the AI Gateway log window once per sweep, not once per pending event", async () => {
+  await insertPending("aigreq:a", ALICE_ID, "alice");
+  await insertPending("aigreq:b", BOB_ID, "bob");
+  await insertPending("aigreq:c", ALICE_ID, "alice");
+
+  await withFetch(
+    (call) =>
+      call.url.includes("/ai-gateway/gateways/platy/logs")
+        ? Response.json({
+            result: [
+              { metadata: { ragbot_request_id: "aigreq:a" }, cost: 0.001 },
+              { metadata: JSON.stringify({ ragbot_request_id: "aigreq:c" }), cost: "0.003" },
+            ],
+          })
+        : undefined,
+    async (calls) => {
+      const summary = await reconcileAiSpend(baseEnv());
+      assert.deepEqual(summary, { reconciled: 2, scanned: 3 });
+      assert.equal(calls.filter((call) => call.url.includes("/logs")).length, 1, "one log fetch for the sweep");
+    },
+  );
+
+  const c = await env.DB.prepare("SELECT status, estimated_cost_micros FROM rag_ai_spend_events WHERE source_id = ?")
+    .bind("aigreq:c")
+    .first<{ status: string; estimated_cost_micros: number }>();
+  assert.equal(c?.status, "aggregated");
+  assert.equal(c?.estimated_cost_micros, 3000);
+});
+
 test("continues the sweep past an unmatched event and reconciles later rows", async () => {
   await insertPending("aigreq:err-1", ALICE_ID, "alice");
   await insertPending("aigreq:ok-2", BOB_ID, "bob");

@@ -50,6 +50,18 @@ const GATEWAY_WATCHDOG_INTERVAL_MS = 5 * 60_000;
 // InteractionSession.claim()).
 const PROCESSED_KEY_PREFIX = "processed:";
 const PROCESSED_TTL_MS = 24 * 60 * 60_000;
+// The synchronous dedupe Set is only a same-tick race guard; storage is the
+// durable record, so it can be bounded (oldest-first eviction).
+const PROCESSED_SET_MAX = 2000;
+// Close codes Discord documents as "do not reconnect": authentication failed,
+// invalid shard, sharding required, invalid API version, invalid/disallowed
+// intents. Retrying every 5s would only hammer the gateway with the same
+// rejected IDENTIFY, so the gateway is disabled instead; the next cron tick's
+// ensureConnected() (or an operator start) retries at that cadence.
+const FATAL_CLOSE_CODES = new Set([4004, 4010, 4011, 4012, 4013, 4014]);
+// Invalid seq / session timed out: the session is gone, so resume state must be
+// dropped and the reconnect must send a fresh IDENTIFY.
+const NON_RESUMABLE_CLOSE_CODES = new Set([4007, 4009]);
 
 const isGatewayPayload = (value: unknown): value is DiscordGatewayPayload =>
   isRecord(value) &&
@@ -210,11 +222,15 @@ export class DiscordGateway extends DurableObject<Env> {
       webSocket.close(1000, "stop");
     }
 
+    this.resetSession();
+    await persisted;
+    return { ok: true as const };
+  }
+
+  private resetSession() {
     this.sessionId = null;
     this.resumeGatewayUrl = null;
     this.lastSequence = null;
-    await persisted;
-    return { ok: true as const };
   }
 
   async alarm() {
@@ -283,11 +299,27 @@ export class DiscordGateway extends DurableObject<Env> {
     // Ignore events from sockets this object has already let go of (stop() and
     // reconnect() null out this.webSocket first), so a deliberate close does not
     // schedule a reconnect.
-    webSocket.addEventListener("close", () => {
+    webSocket.addEventListener("close", (event) => {
       if (this.webSocket !== webSocket) {
         return;
       }
       this.clearHeartbeat();
+      const code = (event as Partial<CloseEvent>).code;
+      if (code !== undefined && FATAL_CLOSE_CODES.has(code)) {
+        logger.error("gateway_fatal_close", { code });
+        this.webSocket = null;
+        this.resetSession();
+        void Promise.all([
+          this.ctx.storage.delete(GATEWAY_ENABLED_KEY),
+          this.ctx.storage.deleteAlarm(),
+        ]).catch((error) => {
+          logger.error("gateway_fatal_close_disable_failed", { error: errorMessage(error) });
+        });
+        return;
+      }
+      if (code !== undefined && NON_RESUMABLE_CLOSE_CODES.has(code)) {
+        this.resetSession();
+      }
       this.scheduleReconnect();
     });
     webSocket.addEventListener("error", () => {
@@ -339,9 +371,7 @@ export class DiscordGateway extends DurableObject<Env> {
 
     if (payload.op === 9) {
       if (payload.d !== true) {
-        this.sessionId = null;
-        this.resumeGatewayUrl = null;
-        this.lastSequence = null;
+        this.resetSession();
       }
       this.reconnect();
       return;
@@ -379,6 +409,12 @@ export class DiscordGateway extends DurableObject<Env> {
       return;
     }
     this.processedMessageIds.add(messageId);
+    if (this.processedMessageIds.size > PROCESSED_SET_MAX) {
+      const oldest = this.processedMessageIds.values().next().value;
+      if (oldest !== undefined) {
+        this.processedMessageIds.delete(oldest);
+      }
+    }
 
     const key = `${PROCESSED_KEY_PREFIX}${messageId}`;
     try {

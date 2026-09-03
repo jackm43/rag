@@ -4,7 +4,7 @@ import ragjamMusicConfig from "../lib/ai/ai-config/ragjam-music.json";
 import { buildAiGatewayMetadata } from "../lib/ai/ai-metadata";
 import { inferenceClient } from "../lib/ai/inference";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../lib/ai/spend";
-import { fetchMedia, MediaTooLargeError } from "../lib/discord";
+import { downloadMedia, MediaTooLargeError } from "../lib/discord";
 import type { ResponderAttachment } from "../lib/contracts";
 import { isRecord } from "../lib/contracts";
 import { errorDetails, errorMessage, logger } from "../lib/logger";
@@ -64,17 +64,9 @@ const filenameForAudio = (contentType: string, url: string) =>
 
 const audioFileFromUrl = async (url: string): Promise<ResponderAttachment | null> => {
   try {
-    const response = await fetchMedia(url);
-    if (!response.ok) {
-      throw new Error(`Generated audio download failed (${response.status}): ${response.statusText}`);
-    }
-
-    const contentType = response.headers.get("content-type") ?? DEFAULT_AUDIO_CONTENT_TYPE;
-    return {
-      name: filenameForAudio(contentType, url),
-      contentType,
-      data: await response.arrayBuffer(),
-    };
+    const media = await downloadMedia(url);
+    const contentType = media.contentType ?? DEFAULT_AUDIO_CONTENT_TYPE;
+    return { name: filenameForAudio(contentType, url), contentType, data: media.data };
   } catch (error) {
     if (error instanceof MediaTooLargeError) {
       return null;

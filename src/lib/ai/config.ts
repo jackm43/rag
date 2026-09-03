@@ -60,7 +60,10 @@ const readKvText = async (env: ConfigEnv | undefined, key: string): Promise<stri
   }
 };
 
-const loadJsonConfig = async <T>(
+// A KV override is merged over the bundled file field by field, so a partial
+// or oddly-shaped document can only override what it actually provides —
+// a missing `gatewayId` or a non-string `model` can never brick the bot.
+const loadJsonConfig = async <T extends Record<string, unknown>>(
   env: ConfigEnv | undefined,
   key: string,
   fallback: T,
@@ -70,12 +73,22 @@ const loadJsonConfig = async <T>(
     return fallback;
   }
   try {
-    return JSON.parse(raw) as T;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      logger.warn("ai_config_kv_shape_invalid", { key });
+      return fallback;
+    }
+    return { ...fallback, ...(parsed as Partial<T>) };
   } catch (error) {
     logger.warn("ai_config_kv_parse_failed", { key, error: errorMessage(error) });
     return fallback;
   }
 };
+
+const stringField = (value: unknown, fallback: string) =>
+  typeof value === "string" && value.trim().length > 0 ? value : fallback;
+
+const gatewayIdField = (value: unknown) => (typeof value === "string" && value.trim()) || null;
 
 // The bundled fallback text lives in ./prompts, which statically imports the
 // `.md` files. Loading it via dynamic import() keeps that import out of this
@@ -106,19 +119,19 @@ const resolveConfig = async (env?: ConfigEnv): Promise<BotConfig> => {
   ]);
 
   return {
-    responseModel: responseCfg.model,
+    responseModel: stringField(responseCfg.model, responseConfig.model),
     systemPrompt: systemPrompt.trim(),
     maxTokens: parsePositiveInt(String(responseCfg.maxTokens), 256),
     temperature: parseTemperature(String(responseCfg.temperature), 0.7),
     historyLimit: parsePositiveInt(String(responseCfg.historyLimit), 12),
-    gatewayId: responseCfg.gatewayId.trim() || null,
-    askWebSearchModel: askCfg.model,
+    gatewayId: gatewayIdField(responseCfg.gatewayId),
+    askWebSearchModel: stringField(askCfg.model, askWebSearchConfig.model),
     askWebSearchSystemPrompt: askWebSearchSystemPrompt.trim(),
     askWebSearchMaxOutputTokens: parsePositiveInt(String(askCfg.maxOutputTokens), 1200),
     askWebSearchTemperature: parseTemperature(String(askCfg.temperature), 0.3),
     askWebSearchMaxTurns: parsePositiveInt(String(askCfg.maxTurns), 4),
-    askWebSearchContextSize: parseSearchContextSize(askCfg.searchContextSize),
-    askWebSearchGatewayId: askCfg.gatewayId.trim() || null,
+    askWebSearchContextSize: parseSearchContextSize(String(askCfg.searchContextSize)),
+    askWebSearchGatewayId: gatewayIdField(askCfg.gatewayId),
   };
 };
 
@@ -128,8 +141,17 @@ const resolveConfig = async (env?: ConfigEnv): Promise<BotConfig> => {
 // object for an isolate's lifetime).
 let cachedConfig: Promise<BotConfig> | null = null;
 
-export const loadConfig = (env?: ConfigEnv): Promise<BotConfig> =>
-  (cachedConfig ??= resolveConfig(env));
+export const loadConfig = (env?: ConfigEnv): Promise<BotConfig> => {
+  if (cachedConfig === null) {
+    // A failed resolve must not be memoized, or one transient error would
+    // pin every later call in the isolate to the same rejection.
+    cachedConfig = resolveConfig(env).catch((error: unknown) => {
+      cachedConfig = null;
+      throw error;
+    });
+  }
+  return cachedConfig;
+};
 
 // Test-only: production never clears the cache (see above). Tests reset it to
 // exercise different KV states within a single isolate.
