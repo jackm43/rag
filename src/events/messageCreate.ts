@@ -1,21 +1,20 @@
-import type { ChatMessage, ChatModelResult } from "../lib/ai/ai";
-import {
-  appendSourceFallback,
-  buildAskConversation,
-  buildAskWebSearchInput,
-  shouldUseAskWebSearch,
-} from "../lib/ai/ask-mode";
+import type { ChatModelResult } from "../lib/ai/ai";
+import { runAskModeCompletion } from "../lib/ai/ask-mode";
 import { loadConfig } from "../lib/ai/config";
-import { runTrackedChatCompletion, runTrackedWebSearchCompletion } from "../lib/ai/tracked-ai";
+import { runTrackedChatCompletion } from "../lib/ai/tracked-ai";
 import { activeAiBanForUser } from "../lib/db/bans";
 import { buildNormalThreadConversation, isAskThread } from "../lib/db/conversation";
 import { isGuildAllowed } from "../lib/db/guilds";
+import { recordAiInteraction } from "../lib/db/interactions";
 import { checkAiUsageAllowed } from "../lib/db/limits";
+import { getMessageAuthorDisplayName, stripMentionTokens } from "../lib/db/mention";
 import { findAiThread } from "../lib/db/threads";
-import { fetchBotRoleIds, finalizeAiReplyText, sendChannelReply } from "../lib/discord";
+import { fetchBotRoleIds, finalizeAiReplyText, postChannelMessage, sendChannelReply } from "../lib/discord";
 import { isSnowflake, type AiChatJob, type DiscordMessage } from "../lib/contracts";
 import { errorMessage, logger } from "../lib/logger";
 import type { Env } from "../env";
+
+export { stripMentionTokens } from "../lib/db/mention";
 
 // Ported from packages/discord/domain/mention.ts + the channel_reply/thread_reply
 // branches of packages/discord/domain/consumer.ts. In the collapsed worker the
@@ -47,12 +46,6 @@ export type GatewayMessageJob = {
 type ChannelPromptMessage = Pick<DiscordMessage, "content" | "mentions" | "mention_roles">;
 
 const mentionTokens = (content: string) => [...content.matchAll(/<@([!&]?)([^>\s]+)>/g)];
-
-export const stripMentionTokens = (content: string) =>
-  content
-    .replace(/<@[!&]?[^>\s]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
 
 const messageMentionsBot = (
   message: ChannelPromptMessage,
@@ -96,12 +89,6 @@ const resolveChannelPrompt = (
   const prompt = stripMentionTokens(message.content ?? "");
   return prompt.length > 0 ? prompt : null;
 };
-
-const getMessageAuthorDisplayName = (message: DiscordMessage) =>
-  message.member?.nick?.trim() ||
-  message.author?.global_name?.trim() ||
-  message.author?.username?.trim() ||
-  "user";
 
 const snowflakesOnly = (ids: Iterable<string>) =>
   [...new Set(ids)].filter((id) => isSnowflake(id)).slice(0, MAX_MENTION_IDS);
@@ -172,6 +159,7 @@ export const resolveGatewayMessage = async (
     return {
       kind: "thread_reply",
       channelId: job.channelId,
+      thread: existingThread,
       messageId: job.messageId,
       botUserId: job.botUserId,
       requesterUserId: job.authorId,
@@ -218,47 +206,6 @@ export const resolveGatewayMessage = async (
   };
 };
 
-// Best-effort analytics write. A failed insert is logged and never bubbles.
-const recordAiInteraction = async (
-  env: Env,
-  job: AiChatJob,
-  model: string,
-  totalDurationMs: number,
-  status: string,
-  responseText: string | null,
-  aiDurationMs: number | null,
-  errorText: string | null,
-  promptTokens: number | null = null,
-  completionTokens: number | null = null,
-  totalTokens: number | null = null,
-) => {
-  try {
-    await env.DB.prepare(
-      "INSERT INTO rag_ai_interactions (kind, channel_id, message_id, requester_user_id, requester_username, prompt, response_text, model, ai_duration_ms, total_duration_ms, status, error_message, prompt_tokens, completion_tokens, total_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-      .bind(
-        job.kind,
-        job.channelId,
-        job.messageId ?? null,
-        job.requesterUserId ?? null,
-        job.requesterUsername ?? null,
-        job.prompt,
-        responseText,
-        model,
-        aiDurationMs,
-        totalDurationMs,
-        status,
-        errorText,
-        promptTokens,
-        completionTokens,
-        totalTokens,
-      )
-      .run();
-  } catch (error) {
-    logger.warn("interaction_record_failed", { error: errorMessage(error) });
-  }
-};
-
 // The gateway mention reply, run in-process (formerly the workflows consumer's
 // channel_reply/thread_reply branches). Builds the thread conversation, calls the
 // model, and posts the reply into the channel.
@@ -266,23 +213,23 @@ const processChatJob = async (job: AiChatJob, env: Env, startedAt: number) => {
   let model = "unknown";
   let aiDurationMs: number | null = null;
   let content: string | null = null;
-  let promptTokens: number | null = null;
-  let completionTokens: number | null = null;
-  let totalTokens: number | null = null;
-  const record = (status: string, errorText: string | null) =>
-    recordAiInteraction(
-      env,
-      job,
+  let usage: ChatModelResult["usage"] | null = null;
+  const record = (status: "ok" | "error", errorText: string | null) =>
+    recordAiInteraction(env, {
+      kind: job.kind,
+      channelId: job.channelId,
+      messageId: job.messageId,
+      requesterUserId: job.requesterUserId,
+      requesterUsername: job.requesterUsername,
+      prompt: job.prompt,
       model,
-      Date.now() - startedAt,
       status,
-      content,
+      responseText: content,
+      errorMessage: errorText,
       aiDurationMs,
-      errorText,
-      promptTokens,
-      completionTokens,
-      totalTokens,
-    );
+      totalDurationMs: Date.now() - startedAt,
+      usage,
+    });
 
   try {
     const config = await loadConfig(env);
@@ -295,59 +242,37 @@ const processChatJob = async (job: AiChatJob, env: Env, startedAt: number) => {
       messageId: job.messageId,
     };
 
-    const builtConversation = await buildNormalThreadConversation(env, config, job);
-    const messages: ChatMessage[] = builtConversation.messages;
-    const askMode = job.kind === "thread_reply" && isAskThread(builtConversation.thread);
-
-    let responseText: string;
-    let result: ChatModelResult;
+    const { messages, thread } = await buildNormalThreadConversation(env, config, job);
+    const askMode = job.kind === "thread_reply" && isAskThread(thread);
 
     const aiStartedAt = Date.now();
+    let result: ChatModelResult;
+    let responseText: string;
     if (askMode) {
-      if (shouldUseAskWebSearch(job.prompt)) {
-        const webSearchResult = await runTrackedWebSearchCompletion(
-          env,
-          buildAskWebSearchInput(
-            job.prompt,
-            job.requesterUsername ?? "user",
-            messages.filter((message) => message.role !== "system"),
-          ),
-          {
-            model: config.askWebSearchModel,
-            instructions: config.askWebSearchSystemPrompt,
-            maxOutputTokens: config.askWebSearchMaxOutputTokens,
-            maxTurns: config.askWebSearchMaxTurns,
-            searchContextSize: config.askWebSearchContextSize,
-            temperature: config.askWebSearchTemperature,
-            gatewayId: config.askWebSearchGatewayId,
-            ...attribution,
-          },
-        );
-        responseText = appendSourceFallback(webSearchResult.content, webSearchResult.sources);
-        result = webSearchResult;
-      } else {
-        result = await runTrackedChatCompletion(
-          env,
-          config,
-          buildAskConversation(config, messages.filter((message) => message.role !== "system")),
-          attribution,
-        );
-        responseText = result.content;
-      }
+      ({ result, responseText } = await runAskModeCompletion(
+        env,
+        config,
+        {
+          prompt: job.prompt,
+          requesterUsername: job.requesterUsername ?? "user",
+          conversation: messages.filter((message) => message.role !== "system"),
+        },
+        attribution,
+      ));
     } else {
       result = await runTrackedChatCompletion(env, config, messages, attribution);
       responseText = result.content;
     }
     model = result.model;
-    promptTokens = result.usage?.promptTokens ?? null;
-    completionTokens = result.usage?.completionTokens ?? null;
-    totalTokens = result.usage?.totalTokens ?? null;
+    usage = result.usage ?? null;
     aiDurationMs = Date.now() - aiStartedAt;
 
-    // Record the exact text the egress policy will deliver.
+    // Finalise once; record exactly what is delivered.
     content = finalizeAiReplyText(responseText);
-
-    await sendChannelReply(env, job.channelId, responseText);
+    const posted = await postChannelMessage(env, job.channelId, content);
+    if (!posted.ok) {
+      throw new Error(`discord_channel_post_failed_${posted.status}`);
+    }
     await record("ok", null);
   } catch (error) {
     logger.error("ai_job_failed", { error: errorMessage(error) });

@@ -295,6 +295,19 @@ describe("rag family (real D1)", () => {
     assert.match((editBody as { content: string }).content, /Timeframe must use minutes/);
   });
 
+  test("/raghammer rejects a timeframe past the cap instead of overflowing the expiry", async () => {
+    const { editBody } = await runDispatch(
+      baseEnv(),
+      command(
+        { name: "raghammer", options: [userOption(TARGET_ID), { name: "timeframe", type: 3, value: "99999999999d" }], resolved: resolvedUser(TARGET_ID, "target") },
+        { user: { id: ADMIN_ID, username: "admin" } },
+      ),
+    );
+    assert.deepEqual(editBody, { content: "Timeframe must be 365d or less.", allowed_mentions: { parse: [] } });
+    const bans = await env.DB.prepare("SELECT COUNT(*) AS c FROM rag_command_bans").first<{ c: number }>();
+    assert.equal(bans?.c, 0);
+  });
+
   test("/ragunban (admin) removes an active ban", async () => {
     await insertBan(TARGET_ID, "2999-01-01T00:00:00.000Z");
     const { editBody } = await runDispatch(

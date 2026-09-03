@@ -2,6 +2,7 @@ import type { APIInteraction } from "discord-api-types/v10";
 
 import type { Env } from "./env";
 import { reconcileAiSpend } from "./lib/ai/reconcile";
+import { pruneAiRequestLog } from "./lib/db/limits";
 import { jsonResponse } from "./lib/http";
 import { errorMessage, logger } from "./lib/logger";
 import { verifyDiscordSignature } from "./lib/verify";
@@ -24,6 +25,7 @@ export { DiscordGateway } from "./structs/gateway";
 // using it for typing and hardcode the two protocol-stable numeric values
 // this endpoint needs.
 const INTERACTION_TYPE_PING = 1;
+const INTERACTION_TYPE_APPLICATION_COMMAND = 2;
 const INTERACTION_RESPONSE_TYPE_PONG = 1;
 const INTERACTION_RESPONSE_TYPE_DEFERRED_CHANNEL_MESSAGE = 5;
 
@@ -44,6 +46,13 @@ const handleInteraction = async (request: Request, env: Env, ctx: ExecutionConte
 
   if (interaction.type === INTERACTION_TYPE_PING) {
     return jsonResponse({ type: INTERACTION_RESPONSE_TYPE_PONG });
+  }
+
+  // Only slash commands are registered. A deferred-message ack is not a valid
+  // response to autocomplete/component/modal interactions, so reject those
+  // outright instead of acking publicly and then editing in an error.
+  if (interaction.type !== INTERACTION_TYPE_APPLICATION_COMMAND) {
+    return new Response("Unsupported interaction type", { status: 400 });
   }
 
   ctx.waitUntil(dispatch(interaction, env, ctx));
@@ -141,5 +150,6 @@ export default {
         logger.error("ai_spend_reconcile_failed", { error: errorMessage(error) });
       }),
     );
+    ctx.waitUntil(pruneAiRequestLog(env));
   },
 } satisfies ExportedHandler<Env>;

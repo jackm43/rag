@@ -18,7 +18,7 @@ export const undorag: Command = {
     const targetId = idOption(interaction, "user");
 
     const latestEvent = await env.DB.prepare(
-      "SELECT id FROM rag_events WHERE ragged_user_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+      "SELECT id FROM rag_events WHERE ragged_user_id = ? ORDER BY id DESC LIMIT 1",
     )
       .bind(targetId)
       .first<RagEventRow>();

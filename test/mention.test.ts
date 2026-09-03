@@ -202,6 +202,17 @@ describe("resolveGatewayMessage", () => {
     assert.deepEqual(resolved, {
       kind: "thread_reply",
       channelId: THREAD_ID,
+      // The resolver's lookup rides along so the conversation builder does not
+      // repeat the D1 read.
+      thread: {
+        threadId: THREAD_ID,
+        parentChannelId: CHANNEL_ID,
+        sourceMessageId: "300000000000000004",
+        requesterUserId: ALICE_ID,
+        requesterUsername: "alice",
+        initialPrompt: "Explain queues",
+        title: "Queue chat",
+      },
       messageId: MESSAGE_ID,
       botUserId: BOT_USER_ID,
       requesterUserId: BOB_ID,

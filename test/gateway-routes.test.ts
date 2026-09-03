@@ -168,6 +168,30 @@ describe("DiscordGateway durable object", () => {
     });
   });
 
+  test("a fatal close code disables the gateway instead of reconnecting every 5s", async () => {
+    await withFakeWebSocket(async () => {
+      const id = testEnv.DISCORD_GATEWAY.idFromName(`rpc-fatal-${crypto.randomUUID()}`);
+      const gateway = testEnv.DISCORD_GATEWAY.get(id);
+
+      await gateway.start();
+      assert.equal(FakeWebSocket.instances.length, 1);
+
+      await runInDurableObject(gateway, async (_instance, state) => {
+        // 4014 = disallowed intents: Discord documents it as "do not reconnect".
+        FakeWebSocket.instances[0].dispatchEvent(new CloseEvent("close", { code: 4014 }));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.equal(await state.storage.get("gatewayEnabled"), undefined, "enabled flag cleared");
+        assert.isNull(await state.storage.getAlarm(), "watchdog cancelled");
+      });
+
+      // Nothing is scheduled to reconnect; only a cron ensureConnected/start may.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(FakeWebSocket.instances.length, 1, "no reconnect after a fatal close");
+      assert.isTrue((await gateway.ensureConnected()).ok);
+      assert.equal(FakeWebSocket.instances.length, 2, "the cron path can bring it back");
+    });
+  });
+
   test("a stale non-canonical instance self-decommissions instead of reconnecting", async () => {
     await withFakeWebSocket(async () => {
       // Regression: a leftover object from an older singleton name (e.g. the

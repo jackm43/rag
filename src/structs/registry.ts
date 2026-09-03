@@ -9,11 +9,8 @@ import { aiBanMessage, activeAiBanForUser } from "../lib/db/bans";
 import { GUILD_NOT_ALLOWED_MESSAGE, isGuildAllowed } from "../lib/db/guilds";
 import { checkAiUsageAllowed } from "../lib/db/limits";
 import {
-  DISCORD_API_BASE_URL,
-} from "../lib/contracts";
-import {
-  discordWebhookFetch,
   editOriginalInteractionResponse,
+  postInteractionFollowUp,
   type InteractionMessageData,
   type InteractionResponseFile,
 } from "../lib/discord";
@@ -62,30 +59,10 @@ const buildEditReply =
   };
 
 const buildFollowUp =
-  (env: Env, applicationId: string, interactionToken: string) =>
+  (applicationId: string, interactionToken: string) =>
   async (message: CommandReply): Promise<void> => {
     const { data, files } = toMessageData(message);
-    const url = `${DISCORD_API_BASE_URL}/webhooks/${applicationId}/${interactionToken}`;
-    const body =
-      files.length > 0
-        ? (() => {
-            const form = new FormData();
-            form.append("payload_json", JSON.stringify(data));
-            files.forEach((file, index) => {
-              form.append(
-                `files[${index}]`,
-                new Blob([file.data], { type: file.contentType }),
-                file.name,
-              );
-            });
-            return form;
-          })()
-        : JSON.stringify(data);
-    await discordWebhookFetch(url, {
-      method: "POST",
-      headers: files.length > 0 ? undefined : { "content-type": "application/json" },
-      body,
-    });
+    await postInteractionFollowUp(applicationId, interactionToken, data, files);
   };
 
 // Resolves a verified interaction to a command and runs it behind the already
@@ -106,12 +83,14 @@ export async function dispatch(
   }
 
   const editReply = buildEditReply(env, applicationId, interactionToken);
-  const followUp = buildFollowUp(env, applicationId, interactionToken);
+  const followUp = buildFollowUp(applicationId, interactionToken);
   let commandName = "unknown";
 
   try {
+    // The fetch handler only defers (and dispatches) application commands, so
+    // there is no deferred reply to edit for anything else.
     if (interaction.type !== INTERACTION_TYPE_APPLICATION_COMMAND) {
-      await editReply("Unsupported interaction.");
+      logger.warn("dispatch_unsupported_interaction_type", { type: interaction.type });
       return;
     }
 

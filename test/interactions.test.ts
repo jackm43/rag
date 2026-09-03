@@ -181,6 +181,19 @@ describe("POST /interactions", () => {
     expect(body.content).toContain(`<@${raggedId}>`);
   });
 
+  it("rejects a non-command interaction (autocomplete) with 400 instead of a deferred ack", async () => {
+    const keyPair = nacl.sign.keyPair();
+    const env = minimalEnv(Buffer.from(keyPair.publicKey).toString("hex"));
+    const payload = { type: 4, id: "interaction-id", token: "interaction-token", data: { name: "ask" } };
+    const request = signedRequest(payload, keyPair.secretKey);
+    const { ctx, settle } = waitUntilCtx();
+
+    const response = await worker.fetch(request, env, ctx);
+
+    expect(response.status).toBe(400);
+    expect((await settle()).length, "nothing is dispatched").toBe(0);
+  });
+
   it("returns 404 for unrelated routes", async () => {
     const request = new Request("https://example.com/unknown-route");
     const { ctx } = waitUntilCtx();

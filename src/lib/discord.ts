@@ -54,20 +54,51 @@ export const discordApiFetch = (env: Env, path: string, init: RequestInit = {}):
 export const discordWebhookFetch = (url: string, init: RequestInit = {}): Promise<Response> =>
   fetch(url, withTimeout(init, DISCORD_TIMEOUT_MS));
 
-// Thrown when a media response's declared size exceeds the cap. Callers may
-// treat it as a soft failure (skip the attachment) rather than a hard error.
+// Thrown when generated media exceeds the size cap. Callers may treat it as a
+// soft failure (skip the attachment) rather than a hard error.
 export class MediaTooLargeError extends Error {}
 
+export type DownloadedMedia = { data: ArrayBuffer; contentType: string | null };
+
 // Download generated media from an arbitrary provider host. No credential; a
-// timeout plus a content-length cap bound it (the one call that faces
-// non-fixed hosts).
-export const fetchMedia = async (url: string): Promise<Response> => {
+// timeout plus a byte cap bound it (the one call that faces non-fixed hosts).
+// The cap is enforced while streaming the body, not just on content-length: a
+// chunked or mis-declared response can never buffer more than MEDIA_MAX_BYTES.
+export const downloadMedia = async (url: string): Promise<DownloadedMedia> => {
   const response = await fetch(url, { signal: AbortSignal.timeout(MEDIA_TIMEOUT_MS) });
+  if (!response.ok) {
+    throw new Error(`media download failed (${response.status}): ${response.statusText}`);
+  }
   const contentLength = Number(response.headers.get("content-length") ?? Number.NaN);
   if (Number.isFinite(contentLength) && contentLength > MEDIA_MAX_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
     throw new MediaTooLargeError(`media response exceeds ${MEDIA_MAX_BYTES} bytes`);
   }
-  return response;
+
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  if (response.body) {
+    const reader = response.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      received += value.byteLength;
+      if (received > MEDIA_MAX_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new MediaTooLargeError(`media response exceeds ${MEDIA_MAX_BYTES} bytes`);
+      }
+      chunks.push(value);
+    }
+  }
+  const data = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    data.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { data: data.buffer, contentType: response.headers.get("content-type") };
 };
 
 // --- REST client ---
@@ -267,6 +298,24 @@ export const fetchBotRoleIds = async (
   return roleIds;
 };
 
+// A webhook message body: JSON when text-only, multipart (payload_json + files[n])
+// when attachments ride along. Shared by the @original edit and follow-ups.
+const interactionRequestInit = (
+  method: string,
+  data: InteractionMessageData,
+  files: InteractionResponseFile[],
+): RequestInit => {
+  if (files.length === 0) {
+    return { method, headers: { "content-type": "application/json" }, body: JSON.stringify(data) };
+  }
+  const form = new FormData();
+  form.append("payload_json", JSON.stringify(data));
+  files.forEach((file, index) => {
+    form.append(`files[${index}]`, new Blob([file.data], { type: file.contentType }), file.name);
+  });
+  return { method, body: form };
+};
+
 export const editOriginalInteractionResponse = async (
   env: Env,
   applicationId: string,
@@ -274,32 +323,29 @@ export const editOriginalInteractionResponse = async (
   data: InteractionMessageData,
   files: InteractionResponseFile[] = [],
 ): Promise<boolean> => {
-  const body = files.length > 0
-    ? (() => {
-      const form = new FormData();
-      form.append("payload_json", JSON.stringify(data));
-      files.forEach((file, index) => {
-        form.append(
-          `files[${index}]`,
-          new Blob([file.data], { type: file.contentType }),
-          file.name,
-        );
-      });
-      return form;
-    })()
-    : JSON.stringify(data);
-
   const response = await discordWebhookFetch(
     `${DISCORD_API_BASE_URL}/webhooks/${applicationId}/${interactionToken}/messages/@original`,
-    {
-      method: "PATCH",
-      headers: files.length > 0 ? undefined : { "content-type": "application/json" },
-      body,
-    },
+    interactionRequestInit("PATCH", data, files),
   );
   if (!response.ok) {
     // Never log the interaction token: it authenticates webhook edits.
     logger.warn("interaction_edit_rejected", { status: response.status, applicationId });
+  }
+  return response.ok;
+};
+
+export const postInteractionFollowUp = async (
+  applicationId: string,
+  interactionToken: string,
+  data: InteractionMessageData,
+  files: InteractionResponseFile[] = [],
+): Promise<boolean> => {
+  const response = await discordWebhookFetch(
+    `${DISCORD_API_BASE_URL}/webhooks/${applicationId}/${interactionToken}`,
+    interactionRequestInit("POST", data, files),
+  );
+  if (!response.ok) {
+    logger.warn("interaction_followup_rejected", { status: response.status, applicationId });
   }
   return response.ok;
 };
@@ -315,14 +361,23 @@ const CODE_SEGMENT_PATTERN = /(```[\s\S]*?```|`[^`\n]*`)/g;
 const URL_PATTERN = /<?https?:\/\/[^\s<>]+>?/g;
 const TRAILING_PUNCTUATION_PATTERN = /[.,!?;:]+$/;
 
+const count = (value: string, char: string) => value.split(char).length - 1;
+
 const wrapBareUrls = (segment: string) =>
   segment.replace(URL_PATTERN, (match) => {
     if (match.startsWith("<")) {
       return match;
     }
-    const trailingPunctuation = TRAILING_PUNCTUATION_PATTERN.exec(match)?.[0] ?? "";
-    const url = trailingPunctuation ? match.slice(0, -trailingPunctuation.length) : match;
-    return `<${url}>${trailingPunctuation}`;
+    let url = match;
+    let suffix = TRAILING_PUNCTUATION_PATTERN.exec(url)?.[0] ?? "";
+    url = url.slice(0, url.length - suffix.length);
+    // A closing paren with no opener inside the URL belongs to the surrounding
+    // text (markdown `[label](https://...)`, a parenthetical), not the link.
+    while (url.endsWith(")") && count(url, ")") > count(url, "(")) {
+      url = url.slice(0, -1);
+      suffix = `)${suffix}`;
+    }
+    return `<${url}>${suffix}`;
   });
 
 export const suppressUrlEmbeds = (text: string) =>

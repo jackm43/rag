@@ -4,7 +4,7 @@ import bictureImageConfig from "../lib/ai/ai-config/bicture-image.json";
 import { buildAiGatewayMetadata } from "../lib/ai/ai-metadata";
 import { inferenceClient } from "../lib/ai/inference";
 import { createAiSpendSourceId, recordAiSpendEvent } from "../lib/ai/spend";
-import { fetchMedia } from "../lib/discord";
+import { downloadMedia } from "../lib/discord";
 import { isRecord } from "../lib/contracts";
 import { errorDetails, errorMessage, logger } from "../lib/logger";
 import { getInvoker, getInvokerDisplayName, stringOption } from "../lib/interaction";
@@ -42,12 +42,6 @@ const base64ToBytes = (value: string) => {
   return bytes;
 };
 
-const bytesToArrayBuffer = (bytes: Uint8Array) => {
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  return copy.buffer;
-};
-
 const isReadableStream = (value: unknown): value is ReadableStream<Uint8Array> =>
   typeof ReadableStream !== "undefined" && value instanceof ReadableStream;
 
@@ -66,20 +60,13 @@ const filenameForContentType = (contentType: string) =>
 
 const imageFileFromString = async (value: string) => {
   if (/^https:\/\//i.test(value)) {
-    const response = await fetchMedia(value);
-    if (!response.ok) {
-      throw new Error(`Generated image download failed (${response.status}): ${response.statusText}`);
-    }
-
-    return {
-      data: await response.arrayBuffer(),
-      contentType: response.headers.get("content-type") ?? DEFAULT_IMAGE_CONTENT_TYPE,
-    };
+    const media = await downloadMedia(value);
+    return { data: media.data, contentType: media.contentType ?? DEFAULT_IMAGE_CONTENT_TYPE };
   }
 
   const dataUriMatch = /^data:([^;]+);base64,(.+)$/i.exec(value);
   return {
-    data: bytesToArrayBuffer(base64ToBytes(dataUriMatch ? dataUriMatch[2] : value)),
+    data: base64ToBytes(dataUriMatch ? dataUriMatch[2] : value),
     contentType: dataUriMatch ? dataUriMatch[1] : DEFAULT_IMAGE_CONTENT_TYPE,
   };
 };
@@ -115,12 +102,13 @@ const extractImageString = (result: unknown) => {
   return null;
 };
 
-const imageFileFrom = async (result: unknown) => {
-  if (result instanceof Uint8Array) {
-    return { data: bytesToArrayBuffer(result), contentType: DEFAULT_IMAGE_CONTENT_TYPE };
-  }
+const imageFileFrom = async (result: unknown): Promise<{ data: BlobPart; contentType: string }> => {
   if (result instanceof ArrayBuffer) {
     return { data: result, contentType: DEFAULT_IMAGE_CONTENT_TYPE };
+  }
+  if (result instanceof Uint8Array) {
+    // Re-wrap so the view is guaranteed to sit on a plain ArrayBuffer.
+    return { data: new Uint8Array(result), contentType: DEFAULT_IMAGE_CONTENT_TYPE };
   }
   if (isReadableStream(result)) {
     return {

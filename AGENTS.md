@@ -34,8 +34,11 @@ operator routes; interaction handling for slash commands goes through
 - `src/lib/` — everything else: Discord REST client (`discord.ts`), Ed25519
   request verification (`verify.ts`), AI (`ai/`: inference client, per-feature
   config loaded from `ai/ai-config` with a KV override, spend tracking,
-  reconciliation), D1 access (`db/`: bans, limits, threads, guilds, mention
-  state), wire types/validators (`contracts.ts`), logging (`logger.ts`).
+  reconciliation, and `ask-mode.ts`'s `runAskModeCompletion` — the one
+  web-search-vs-chat router shared by `/ask` and tracked-thread replies), D1
+  access (`db/`: bans, limits, threads, guilds, mention state, and
+  `interactions.ts` for the shared `rag_ai_interactions` analytics row), wire
+  types/validators (`contracts.ts`), logging (`logger.ts`).
 
 - `dev/` — the local-only debugging UI (`pnpm run dev:ui`, config
   `wrangler.dev.jsonc`, launcher `scripts/dev-ui.ts`). `dev/harness.ts` drives
@@ -103,7 +106,14 @@ of internal RPC, since there isn't any.
 - Node 22+ for wrangler; `pnpm install`.
 - D1: change schema via `migrations/` only. The AI usage guard fails open on
   D1 errors (deliberate); the Discord signature check and gateway control
-  token fail closed.
+  token fail closed. The cron also prunes `rag_ai_requests` (the burst-guard
+  log) after a day, so that table never grows unbounded.
+- Generated media (`/bicture`, `/ragjam`) is downloaded through
+  `downloadMedia` in `src/lib/discord.ts`, which enforces the 25 MiB cap while
+  streaming — do not replace it with a bare `fetch(...).arrayBuffer()`.
+- The gateway DO treats Discord close codes 4004/4010–4014 as fatal: it
+  disables itself instead of reconnecting every 5 s, and the next cron
+  `ensureConnected()` (or an operator `/gateway/start`) is what retries.
 - `worker-configuration.d.ts` is generated (`wrangler types`) — regenerate it
   after changing `wrangler.jsonc` bindings/vars, don't hand-edit it.
 - The former multi-worker platform (a separate auth/API-Gateway worker, plus

@@ -83,7 +83,7 @@ const buildThreadConversationMessages = async (
   let history: DiscordMessage[] = [];
 
   if (job.kind === "thread_reply") {
-    thread = await findAiThread(env, job.channelId);
+    thread = job.thread ?? (await findAiThread(env, job.channelId));
     if (thread?.initialPrompt) {
       const username = thread.requesterUsername ?? "user";
       messages.push({ role: "user", content: `${username}: ${thread.initialPrompt}` });

@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { assert, beforeEach, describe, test } from "vitest";
 
 import { activeAiBanForUser, activeRagBanForUser, aiBanMessage } from "../src/lib/db/bans";
-import { checkAiUsageAllowed } from "../src/lib/db/limits";
+import { checkAiUsageAllowed, pruneAiRequestLog } from "../src/lib/db/limits";
 import { findAiThread, recordAiThread } from "../src/lib/db/threads";
 import { GUILD_NOT_ALLOWED_MESSAGE, isGuildAllowed } from "../src/lib/db/guilds";
 import {
@@ -142,6 +142,22 @@ describe("limits", () => {
       "ask",
     );
     assert.equal(overBudget.allowed, false);
+  });
+
+  test("pruneAiRequestLog drops request rows older than a day and keeps fresh ones", async () => {
+    await DB.batch([
+      DB.prepare("INSERT INTO rag_ai_requests (requester_user_id, kind, created_at) VALUES (?, 'ask', datetime('now', '-2 days'))").bind(ALICE_ID),
+      DB.prepare("INSERT INTO rag_ai_requests (requester_user_id, kind) VALUES (?, 'ask')").bind(ALICE_ID),
+    ]);
+
+    await pruneAiRequestLog(dbEnv);
+
+    const row = await DB.prepare("SELECT COUNT(*) AS c FROM rag_ai_requests WHERE requester_user_id = ?")
+      .bind(ALICE_ID)
+      .first<{ c: number }>();
+    assert.equal(row?.c, 1);
+    // Best-effort: a D1 failure is swallowed.
+    await pruneAiRequestLog(throwingDbEnv);
   });
 
   test("checkAiUsageAllowed fails open when D1 errors", async () => {

@@ -104,6 +104,23 @@ test("loadConfig ignores malformed JSON in KV and falls back", async () => {
   assert.equal(config.responseModel, responseConfig.model);
 });
 
+test("loadConfig falls back field by field when a KV document is mis-shaped", async () => {
+  resetConfigCache();
+  // No gatewayId at all (previously a TypeError that pinned the isolate to a
+  // rejected config), a non-string model, and a bogus context size.
+  const kv = kvMock({
+    "discord-response.json": JSON.stringify({ maxTokens: 12, model: 42 }),
+    "ask-web-search.json": JSON.stringify({ searchContextSize: "huge", gatewayId: "" }),
+  });
+  const config = await loadConfig({ AI_CONFIG: kv.binding });
+
+  assert.equal(config.maxTokens, 12, "provided field is honoured");
+  assert.equal(config.responseModel, responseConfig.model, "bad model falls back");
+  assert.equal(config.gatewayId, responseConfig.gatewayId, "missing gatewayId falls back");
+  assert.equal(config.askWebSearchContextSize, "medium");
+  assert.isNull(config.askWebSearchGatewayId, "blank gatewayId means no gateway");
+});
+
 test("loadConfig memoizes per isolate until the cache is reset", async () => {
   resetConfigCache();
   const kv = kvMock(KV_VALUES);

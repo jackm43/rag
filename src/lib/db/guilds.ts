@@ -25,9 +25,18 @@ const parseAllowedGuildIds = (value: string | undefined): Set<string> | null => 
 };
 
 let warnedAllowlistUnset = false;
+// The var is fixed for an isolate's lifetime; parse it once per distinct value
+// instead of on every interaction and gateway message.
+const UNPARSED = Symbol("unparsed");
+let parsedFor: string | undefined | typeof UNPARSED = UNPARSED;
+let parsedAllowlist: Set<string> | null = null;
 
 export const isGuildAllowed = (env: Env, guildId: string | undefined): boolean => {
-  const allowedGuildIds = parseAllowedGuildIds(env.ALLOWED_GUILD_IDS);
+  if (parsedFor !== env.ALLOWED_GUILD_IDS) {
+    parsedFor = env.ALLOWED_GUILD_IDS;
+    parsedAllowlist = parseAllowedGuildIds(env.ALLOWED_GUILD_IDS);
+  }
+  const allowedGuildIds = parsedAllowlist;
   if (allowedGuildIds === null) {
     if (!warnedAllowlistUnset) {
       warnedAllowlistUnset = true;
