@@ -11,9 +11,11 @@
     "test": "vitest run",
     "register:commands": "tsx scripts/register-commands.ts",
     "d1:migrate:local": "wrangler d1 migrations apply ragbot --local",
-    "d1:migrate:remote": "wrangler d1 migrations apply ragbot --remote"
+    "d1:migrate:remote": "wrangler d1 migrations apply ragbot --remote",
+    "dev:ui": "tsx scripts/dev-ui.ts"
   },
   "devDependencies": {
+    "@1password/sdk": "^0.5.0",
     "@cloudflare/vitest-pool-workers": "^0.16.18",
     "@types/node": "^25.6.0",
     "tsx": "^4.20.6",

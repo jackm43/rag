@@ -1,0 +1,64 @@
+// The local debugging UI (dev/). Run with `pnpm run dev:ui` — never deploy.
+//
+// Same D1/KV/AI bindings as the bot (wrangler.jsonc) so the real command and
+// mention code runs against local D1/KV and the real AI Gateway, plus the dev
+// worker's own vars. No Durable Object: the dev worker never opens a Discord
+// websocket, it feeds synthetic events straight into the handlers.
+{
+  "name": "ragbot-dev-ui",
+  "main": "dev/index.ts",
+  "compatibility_date": "2026-04-23",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "rules": [
+    {
+      "type": "Text",
+      "globs": [
+        "**/*.md",
+        "**/*.html",
+        "**/*.css",
+        "**/*.client.js"
+      ],
+      "fallthrough": true
+    }
+  ],
+  "dev": {
+    "ip": "localhost",
+    "port": 8788
+  },
+  "vars": {
+    "DEV_UI": "1",
+    "DISCORD_APPLICATION_ID": "1496842508251172895",
+    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
+    "ALLOWED_GUILD_IDS": "457689460096630794",
+    "CF_AIG_GATEWAY_ID": "platy",
+    // Production resources read (never written) by the "load from production"
+    // panels, over the REST API with CLOUDFLARE_API_TOKEN.
+    "PROD_D1_DATABASE_ID": "5833b0bb-7806-483e-9015-32e209ce2fb0",
+    "PROD_KV_NAMESPACE_ID": "2a6dbd4428b64d6982bfe628445c163a",
+    // Unused by the simulated flows (Discord REST is stubbed) but required by
+    // the Env shape.
+    "DISCORD_BOT_TOKEN": "dev-unused",
+    "DISCORD_PUBLIC_KEY": "dev-unused",
+    "GATEWAY_CONTROL_TOKEN": "dev-unused"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ragbot",
+      "database_id": "5833b0bb-7806-483e-9015-32e209ce2fb0",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "AI_CONFIG",
+      "id": "2a6dbd4428b64d6982bfe628445c163a"
+    }
+  ],
+  "ai": {
+    "binding": "AI"
+  }
+}
