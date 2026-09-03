@@ -37,6 +37,14 @@ operator routes; interaction handling for slash commands goes through
   reconciliation), D1 access (`db/`: bans, limits, threads, guilds, mention
   state), wire types/validators (`contracts.ts`), logging (`logger.ts`).
 
+- `dev/` — the local-only debugging UI (`pnpm run dev:ui`, config
+  `wrangler.dev.jsonc`, launcher `scripts/dev-ui.ts`). `dev/harness.ts` drives
+  `handleMessageCreate` / `dispatch` with synthetic Discord events under an
+  AsyncLocalStorage fetch tap (`dev/fetch-tap.ts`) that stubs discord.com and
+  records the AI Gateway exchange; `dev/ui/` is the static page. It imports from
+  `src/` but nothing in `src/` may import from `dev/`, and it must never be
+  deployed (no routes, `workers_dev: false`, `DEV_UI` guard).
+
 ## Trust model (do not regress)
 
 - **External edges always verify.** This is the only authentication boundary

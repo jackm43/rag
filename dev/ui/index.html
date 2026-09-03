@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ragbot dev console</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">ragbot <span>dev console</span></div>
+    <nav class="tabs">
+      <button class="tab active" data-page="mention">@ Mention chat</button>
+      <button class="tab" data-page="slash">/ Slash commands</button>
+    </nav>
+    <div class="pills" id="status-pills"></div>
+  </header>
+
+  <div class="toolbar" id="toolbar">
+    <label>Model
+      <span class="row">
+        <input id="model" list="model-list" placeholder="provider/model" autocomplete="off" spellcheck="false">
+        <button class="ghost small" id="probe-model" title="Send a one-token request through the bot's inference client to check this model id works">test</button>
+      </span>
+      <datalist id="model-list"></datalist>
+    </label>
+    <label>Provider
+      <select id="provider-filter"><option value="">all</option></select>
+    </label>
+    <label class="check"><input type="checkbox" id="chat-only" checked> chat only</label>
+    <label class="check" title="Also list models that need a provider key you have not stored on the gateway, and models the gateway has rejected in this browser (retired ids, unsupported request shape, no credentials)"><input type="checkbox" id="show-key-required"> show unavailable</label>
+    <span class="cost" id="model-cost" title="AI Gateway catalog price per 1M tokens (in / out)"></span>
+    <label>Temp <input id="temperature" type="number" step="0.1" min="0" max="2"></label>
+    <label>Max tokens <input id="max-tokens" type="number" min="1" step="1"></label>
+    <label>History <input id="history-limit" type="number" min="1" step="1" title="thread history messages fetched (historyLimit)"></label>
+    <label id="web-search-wrap" class="hidden">Web-search model
+      <input id="web-search-model" list="model-list" placeholder="openai/gpt-4o-search-preview" autocomplete="off" spellcheck="false">
+    </label>
+    <label>Config
+      <select id="config-source">
+        <option value="bundled">bundled (repo)</option>
+        <option value="production">production (KV)</option>
+      </select>
+    </label>
+    <button class="ghost" id="refresh-models" title="Refresh the AI Gateway model catalog">↻ models</button>
+    <button class="ghost" id="reset-overrides" title="Clear the overrides and use the config values">reset</button>
+    <button class="ghost" id="show-config">resolved config</button>
+    <button class="ghost" id="reset-layout" title="Reset tile sizes">⊞ layout</button>
+    <button class="ghost" id="toggle-drawer">⟲ replay</button>
+  </div>
+
+  <main class="layout" id="layout">
+    <aside class="col" data-col="left">
+      <section class="card identity" id="identity-card">
+        <div class="card-head">
+          <h3>Identity</h3>
+          <div class="row">
+            <select id="profile-select" title="Saved profiles"></select>
+            <button class="ghost small" id="profile-save">save</button>
+            <button class="ghost small danger" id="profile-delete">✕</button>
+          </div>
+        </div>
+        <div class="fields">
+          <label>Profile name <input id="profile-name" placeholder="me"></label>
+          <label>User ID <input id="user-id" placeholder="Discord user snowflake" spellcheck="false"></label>
+          <label>Username <input id="username" placeholder="account name" spellcheck="false"></label>
+          <label>Display name <input id="global-name" placeholder="global display name"></label>
+          <label>Guild nick <input id="nick" placeholder="server nickname (preferred by the bot)"></label>
+        </div>
+        <div class="fields two">
+          <label>Bot user ID <input id="bot-user-id" spellcheck="false"></label>
+          <label>Guild ID <input id="guild-id" spellcheck="false"></label>
+          <label>Channel / thread ID
+            <span class="row"><input id="channel-id" spellcheck="false"><button class="ghost small" id="new-channel" title="Start a fresh channel (new id, empty transcript)">new</button></span>
+          </label>
+          <label>Mode
+            <select id="mode">
+              <option value="channel">channel @mention</option>
+              <option value="thread">thread reply (normal)</option>
+              <option value="ask_thread">thread reply (/ask)</option>
+            </select>
+          </label>
+        </div>
+        <div class="row wrap checks">
+          <label class="check"><input type="checkbox" id="mention-bot" checked> prefix &lt;@bot&gt;</label>
+          <label class="check"><input type="checkbox" id="reply-last"> reply to last bot message</label>
+        </div>
+      </section>
+
+      <section class="card chat page-mention" id="chat-card">
+        <div class="card-head">
+          <h3>Chat</h3>
+          <div class="row">
+            <button class="ghost small" id="reset-limits" title="Delete local rag_ai_requests rows (per-user burst limit)">reset rate limit</button>
+            <button class="ghost small danger" id="clear-transcript">clear</button>
+          </div>
+        </div>
+        <div class="transcript" id="transcript"></div>
+        <form class="composer" id="composer">
+          <textarea id="composer-input" rows="3" placeholder="Message #dev-channel  (Enter to send, Shift+Enter for a new line)"></textarea>
+          <div class="row between">
+            <span class="hint" id="composer-hint"></span>
+            <button type="submit" class="primary" id="send">Send</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card slash page-slash hidden" id="slash-card">
+        <div class="card-head"><h3>Slash command</h3></div>
+        <label>Command <select id="command-select"></select></label>
+        <p class="hint" id="command-description"></p>
+        <div class="fields" id="command-options"></div>
+        <div class="row between">
+          <span class="hint" id="slash-hint"></span>
+          <button class="primary" id="run-command">Run</button>
+        </div>
+      </section>
+    </aside>
+    <div class="gutter v" data-before="left" data-after="middle" title="Drag to resize"></div>
+
+    <section class="col" data-col="middle">
+      <section class="card" id="payload-card">
+        <div class="card-head"><h3 id="payload-title">Discord MESSAGE_CREATE</h3><span class="hint">what the worker receives</span></div>
+        <pre class="json" id="payload-json">—</pre>
+      </section>
+      <section class="card" id="ai-request-card">
+        <div class="card-head"><h3>AI Gateway request</h3><span class="hint" id="ai-request-meta"></span></div>
+        <div id="ai-request"><pre class="json">—</pre></div>
+      </section>
+    </section>
+    <div class="gutter v" data-before="middle" data-after="right" title="Drag to resize"></div>
+
+    <section class="col" data-col="right">
+      <section class="card" id="ai-response-card">
+        <div class="card-head"><h3>Raw AI response</h3><span class="hint" id="ai-response-meta"></span></div>
+        <div id="ai-response"><pre class="json">—</pre></div>
+      </section>
+      <section class="card" id="parsed-card">
+        <div class="card-head"><h3 id="parsed-title">Parsed output → Discord</h3><span class="hint" id="parsed-meta"></span></div>
+        <div class="parsed" id="parsed-output">—</div>
+      </section>
+      <section class="card" id="effects-card">
+        <div class="card-head"><h3>Side effects</h3><span class="hint" id="effects-meta"></span></div>
+        <div class="effects" id="effects">—</div>
+      </section>
+    </section>
+  </main>
+
+  <aside class="drawer hidden" id="drawer">
+    <div class="card-head">
+      <h3>Replay</h3>
+      <div class="row">
+        <select id="replay-source">
+          <option value="production">production D1</option>
+          <option value="local">local D1</option>
+        </select>
+        <select id="replay-kind">
+          <option value="channel_reply,thread_reply">mentions</option>
+          <option value="ask">/ask</option>
+          <option value="">all kinds</option>
+        </select>
+        <input id="replay-search" placeholder="search prompt / user" spellcheck="false">
+        <select id="replay-limit"><option>25</option><option selected>50</option><option>100</option><option>200</option></select>
+        <button class="ghost small" id="replay-refresh">refresh</button>
+        <button class="ghost small" id="drawer-close">close</button>
+      </div>
+    </div>
+    <p class="hint" id="replay-hint"></p>
+    <div class="replay-list" id="replay-list"></div>
+  </aside>
+
+  <dialog id="config-dialog">
+    <div class="card-head"><h3>Resolved config</h3><button class="ghost small" id="config-close">close</button></div>
+    <pre class="json" id="config-json"></pre>
+  </dialog>
+
+  <script src="/app.client.js"></script>
+</body>
+</html>

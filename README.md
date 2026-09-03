@@ -53,6 +53,38 @@ op run --env-file=.env -- pnpm run d1:migrate:remote
 pnpm exec wrangler deploy                      # deploy (also `pnpm run deploy`)
 ```
 
+## Local debugging UI
+
+```sh
+pnpm run dev:ui        # http://localhost:8788
+```
+
+A local-only web console (`dev/`, `wrangler.dev.jsonc`) that feeds synthetic
+Discord events into the real bot code without touching the guild:
+
+- **Mention chat**: type a message and it is sent through the gateway
+  `MESSAGE_CREATE` handler exactly as an `@ragbot` mention (channel mode) or a
+  reply in a tracked thread (thread / `/ask` modes, with the on-screen transcript
+  served as the thread history). Panels show the Discord payload the worker
+  received, the exact AI Gateway request, the raw model response, the finalised
+  text the bot would post, and every outbound call, log line, and local D1 row.
+- **Slash commands**: run any registered command as a given user and see the
+  deferred-reply edits, follow-ups, thread creations, and generated media.
+- **Model picker**: the AI Gateway's live catalogue (`compat/models`, with
+  prices) plus temperature / max-token / history overrides, applied to that run
+  only. Config can come from the bundled files or a snapshot of the production
+  `AI_CONFIG` KV.
+- **Replay**: browse `rag_ai_interactions` from production (read-only, via the
+  Cloudflare API) or the local database and re-send any prompt as that user.
+
+Model calls are real (AI Gateway, tagged `ragbot_env: dev` in the metadata);
+Discord REST is answered by local stubs; D1 and KV are the local `wrangler dev`
+instances (migrations are applied on launch). Secrets come from 1Password
+automatically: `scripts/dev-ui.ts` resolves the `op://` references in `.env.dev`
+with the 1Password SDK (`OP_SERVICE_ACCOUNT_TOKEN`, else the desktop app, else the
+`op` CLI) and injects them as `--var`s. The dev worker has no routes and is
+never deployed.
+
 ## Deploying
 
 ```sh
