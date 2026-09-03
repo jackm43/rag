@@ -265,8 +265,19 @@ const wrapAiBinding = (ai: Ai | undefined, exchanges: AiExchange[]): Ai | undefi
       if (prop !== "run") {
         return Reflect.get(target, prop);
       }
-      return async (model: string, input: unknown, options?: unknown) => {
+      return async (model: string, input: unknown, rawOptions?: unknown) => {
         const startedAt = Date.now();
+        // Tag binding calls routed through the gateway the same way the HTTP
+        // tap tags them, so gateway logs separate dev traffic from production.
+        const options = isRecord(rawOptions) && isRecord(rawOptions.gateway)
+          ? {
+            ...rawOptions,
+            gateway: {
+              ...rawOptions.gateway,
+              metadata: tagDevMetadata(isRecord(rawOptions.gateway.metadata) ? rawOptions.gateway.metadata : {}),
+            },
+          }
+          : rawOptions;
         const exchange: AiExchange = {
           transport: "workers-ai-binding",
           model,
@@ -300,18 +311,37 @@ const summarizeBindingResult = (result: unknown): unknown => {
   return result;
 };
 
+// AI Gateway keeps at most five custom metadata keys per request. The bot's
+// own attribution already uses five on a mention (kind, request id, user,
+// channel, message), so the dev tag goes first and the least useful synthetic
+// ids are dropped to stay within the cap.
+const AIG_METADATA_MAX_KEYS = 5;
+const DEV_METADATA_DROP_ORDER = ["discord_message_id", "discord_channel_id"];
+
+const tagDevMetadata = (metadata: Record<string, unknown>): Record<string, unknown> => {
+  const tagged: Record<string, unknown> = { ragbot_env: "dev", ...metadata };
+  for (const key of DEV_METADATA_DROP_ORDER) {
+    if (Object.keys(tagged).length <= AIG_METADATA_MAX_KEYS) {
+      break;
+    }
+    delete tagged[key];
+  }
+  return tagged;
+};
+
 const withDevMetadata = (request: Request) => {
   const headers = new Headers(request.headers);
   const existing = headers.get("cf-aig-metadata");
   let metadata: Record<string, unknown> = {};
   if (existing) {
     try {
-      metadata = JSON.parse(existing);
+      const parsed: unknown = JSON.parse(existing);
+      metadata = isRecord(parsed) ? parsed : {};
     } catch {
       metadata = {};
     }
   }
-  headers.set("cf-aig-metadata", JSON.stringify({ ...metadata, ragbot_env: "dev" }));
+  headers.set("cf-aig-metadata", JSON.stringify(tagDevMetadata(metadata)));
   return new Request(request, { headers });
 };
 
