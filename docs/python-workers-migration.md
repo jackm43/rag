@@ -38,13 +38,13 @@ assess compatibility. These experimental files are outside the production
 bundle. Dependency pins record the tested Discord/aiohttp versions; transitive
 packages still resolve against the available Pyodide package index.
 
-The production client remains unchanged after this experiment. A full
-migration needs an async replacement for discord.py's internal threaded
-heartbeat, followed by validation of reconnects, fatal close codes, persisted
-operator stops and Durable Object eviction. That is a runtime adaptation of
-discord.py, not a drop-in library substitution. No claim is made that such an
-adaptation is impossible. A normal Python host supporting threads is another
-option, but changes the requested Workers architecture.
+The discord.py adaptation was subsequently tested with an asyncio heartbeat
+and Workers HTTP bridge. It passed local integration tests, but depended on
+private library interfaces while retaining our DO lifecycle and command
+framework. The final deployment uses the smaller Workers-native version. Its
+HTTP client now implements Discord bucket/global cooldowns and bounded retries,
+without importing discord.py. The compatibility experiment remains available
+for reference.
 
 Sources reviewed:
 - https://developers.cloudflare.com/workers/languages/python/

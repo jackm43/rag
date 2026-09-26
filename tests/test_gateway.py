@@ -73,6 +73,7 @@ async def test_stop_survives_recreation_and_cron(gateway):
     await gateway.start()
     assert (await gateway.health())["connected"]
     await gateway.stop()
+    assert (await gateway.health())["stopped"] is True
     recreated = Gateway(gateway.ctx, gateway.env, gateway.app, socket_factory=FakeSocket)
     assert await recreated.ensure_connected() == {"ok": False, "stopped": True}
     assert recreated.socket is None

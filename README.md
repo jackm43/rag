@@ -26,7 +26,7 @@ pnpm run test:runtime
 The Python dependencies are locked in `uv.lock`, including a project-local uv
 for the Python Workers build tool. Node is used only for Cloudflare
 Wrangler. Python Workers use Pyodide. discord.py imports and its aiohttp
-networking work here, but its gateway heartbeat requires unsupported threads;
+networking work here, but its unmodified gateway heartbeat requires unsupported threads;
 see the tested results and reproduction in the migration notes.
 
 ## Discord library and Python design
@@ -34,8 +34,8 @@ see the tested results and reproduction in the migration notes.
 [`discord-typings`](https://github.com/Bluenix2/discord-typings/) replaces the
 former `discord-api-types` dependency. It supplies Discord wire types without
 owning HTTP, WebSocket connections, or an event loop. A small async
-`DiscordClient` uses Workers Fetch, and the existing Durable Object owns the
-Discord gateway. See [migration notes](docs/python-workers-migration.md) for the
+`DiscordClient` uses Workers Fetch with per-route/global rate-limit handling
+and bounded retries. The existing Durable Object owns the Discord gateway. See [migration notes](docs/python-workers-migration.md) for the
 library decision and validation.
 
 Application services use dataclasses, async methods, a decorator-based command
@@ -49,6 +49,7 @@ src/ragbot/commands/     registry and moderation/chat/media commands
 src/ragbot/app.py        dispatch and mention handling
 src/ragbot/gateway.py    gateway lifecycle, heartbeats, deduplication
 src/ragbot/discord.py    Discord REST and capped media downloads
+src/ragbot/discord_http.py  native rate limits and bounded retries
 src/ragbot/ai.py         inference, attribution, shared /ask routing
 src/ragbot/ai_config/    editable JSON configs and Markdown prompts
 src/ragbot/config.py     KV overrides with bundled fallbacks
@@ -124,3 +125,14 @@ Object class and singleton name, storage keys, and migration history. No data
 migration is required. A deployment restarts the gateway connection; the next
 cron or authenticated `/gateway/start` reconnects it unless explicitly stopped.
 After deployment, smoke-test `/rag`, `/ragboard`, `/ask`, mentions, and media.
+
+## Discord request reliability
+
+The native client learns Discord bucket headers and waits on route/global
+limits. Rejected requests (HTTP 429) retry using Discord's delay. GET, HEAD,
+PUT, DELETE, and PATCH also retry transient network/500/502/503/504 failures.
+POST requests are not replayed after ambiguous failures, avoiding duplicate
+messages or threads. Each call allows at most four attempts within 25 seconds;
+longer rate limits fail promptly while retaining the cooldown for later calls.
+Cooldowns are local to a client, so responses from Discord remain authoritative
+across Worker isolates. Logs never include request URLs, tokens or payloads.

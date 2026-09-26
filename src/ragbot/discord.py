@@ -10,6 +10,7 @@ from urllib.parse import quote, urlencode
 
 from discord_typings import MessageData
 
+from .discord_http import DiscordHTTP
 from .policy import finalize_ai_reply, truncate_discord
 from .runtime import fetch, to_js
 
@@ -124,6 +125,7 @@ class DiscordClient:
     token: str
     transport: Transport = fetch
     _role_cache: dict = field(default_factory=dict)
+    _http: DiscordHTTP = field(default_factory=DiscordHTTP)
 
     async def request(
         self, path: str, *, method: str = "GET", data: Any = None, headers: dict | None = None
@@ -135,7 +137,7 @@ class DiscordClient:
         if data is not None:
             options["body"] = json.dumps(data)
             options["headers"]["content-type"] = "application/json"
-        return await self.transport(API_BASE + path, **options)
+        return await self._http.send(self.transport, API_BASE + path, **options)
 
     async def json_request(self, path: str, *, optional: bool = False, **options):
         response = await self.request(path, **options)
@@ -246,8 +248,8 @@ class DiscordClient:
         else:
             options.update(headers={"content-type": "application/json"}, body=json.dumps(data))
         suffix = "/messages/@original" if edit else ""
-        response = await self.transport(
-            f"{API_BASE}/webhooks/{application_id}/{token}{suffix}", **options
+        response = await self._http.send(
+            self.transport, f"{API_BASE}/webhooks/{application_id}/{token}{suffix}", **options
         )
         if not response.ok:
             log.warning("interaction_write_rejected status=%s", response.status)

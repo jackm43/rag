@@ -106,6 +106,7 @@ class Gateway:
         return {
             "connected": self.socket is not None and self.socket.ready_state == 1,
             "resumable": bool(self.session_id and self.resume_url),
+            "stopped": await self.ctx.storage.get("gatewayStopped") is True,
         }
 
     async def start(self):

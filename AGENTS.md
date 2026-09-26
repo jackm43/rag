@@ -20,6 +20,7 @@ loads `.env.dev`. Do not log secrets or resolve them into committed files.
   The registry is the single source for dispatch and command registration.
 - `src/ragbot/gateway.py`: WebSocket lifecycle, heartbeat, reconnects, dedupe.
 - `src/ragbot/discord.py`: Workers-native REST client, attachments, media caps.
+- `src/ragbot/discord_http.py`: bounded native retries and Discord rate limits.
 - `src/ragbot/ai.py`, `config.py`, `conversation.py`, `reconcile.py`: inference,
   config, shared chat/search routing, reply analytics and spend reconciliation.
 - `src/ragbot/db.py`: parameterized D1 access, bans, limits, guilds, threads.
@@ -49,6 +50,8 @@ Explicit `to_js` conversions belong only at raw JavaScript API boundaries.
   history unless explicitly changing infrastructure.
 - AI usage and AI ban checks deliberately fail open on D1 errors. `/rag` writes
   and authentication do not. Cron prunes the burst log after a day.
+- Respect Discord retry delays and global/route limits. Do not retry ambiguous
+  POST failures; they may have already created a message or thread.
 - Download media with the 25 MiB streaming cap; never replace it with unbounded
   buffering. Discord bot credentials must never accompany provider media.
 - Suppress mentions, raw IDs, and URL embeds at the shared AI reply boundary.

@@ -127,9 +127,14 @@ def main():
                 if status != 200:
                     raise AssertionError(body.decode()[:5000])
                 gateway = json.loads(body)
-                assert gateway["health"] == {"connected": True, "resumable": True}, gateway
+                assert gateway["health"] == {
+                    "connected": True,
+                    "resumable": True,
+                    "stopped": False,
+                }, gateway
                 assert gateway["processed"] == ["123456789012345699"], gateway
                 assert gateway["sequence"] == 2, gateway
+                assert gateway["heartbeat"] is True, gateway
                 assert gateway["stopped"] == {"ok": False, "stopped": True}, gateway
                 print(
                     "Python Workers runtime: signatures, bare denials, Durable Object controls, D1, /rag, /ask, spend, multipart and gateway WebSocket passed."

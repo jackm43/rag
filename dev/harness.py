@@ -116,6 +116,10 @@ def safe_headers(headers):
 class Response:
     def __init__(self, body, status=200):
         self.body, self.status, self.ok = body, status, 200 <= status < 300
+        self.headers = {"content-type": "application/json"}
+
+    async def text(self):
+        return json.dumps(self.body)
 
     async def json(self):
         return self.body
