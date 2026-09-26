@@ -8,3 +8,15 @@ dist
 terraform.tfvars
 .ragctl
 backups/
+
+# Python Workers
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+src/vendor/
+
+.venv-workers/
+python_modules/
+pylock.toml
