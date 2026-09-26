@@ -3,9 +3,6 @@
 import hmac
 import re
 import time
-from collections.abc import Awaitable, Callable
-
-Verifier = Callable[[bytes, bytes, bytes], Awaitable[bool]]
 
 
 async def webcrypto_verify(key: bytes, signature: bytes, message: bytes) -> bool:
@@ -23,9 +20,6 @@ async def verify_discord_signature(
     signature: str | None,
     timestamp: str | None,
     body: bytes,
-    *,
-    now: float | None = None,
-    verify: Verifier = webcrypto_verify,
 ) -> bool:
     if not isinstance(signature, str) or not re.fullmatch(r"[0-9a-fA-F]{128}", signature):
         return False
@@ -33,10 +27,10 @@ async def verify_discord_signature(
         return False
     if not isinstance(timestamp, str) or not re.fullmatch(r"[0-9]{1,16}", timestamp):
         return False
-    if abs((time.time() if now is None else now) - int(timestamp)) > 300:
+    if abs(time.time() - int(timestamp)) > 300:
         return False
     try:
-        return await verify(
+        return await webcrypto_verify(
             bytes.fromhex(public_key), bytes.fromhex(signature), timestamp.encode() + body
         )
     except Exception:

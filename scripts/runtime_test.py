@@ -89,30 +89,85 @@ def main():
                 assert request(
                     base, "/interactions", method="POST", body=body, headers=signed(body)
                 ) == (200, b'{"type": 1}')
-                assert request(
-                    base, "/interactions", method="POST", body=b"{}", headers=signed(body)
-                ) == (401, b"")
+                invalid_headers = [
+                    {},
+                    signed(b"{}"),
+                    *[signed(body, str(int(time.time()) + offset)) for offset in (-301, 310)],
+                    {**signed(body), "x-signature-timestamp": "bad"},
+                    {**signed(body), "x-signature-ed25519": "bad"},
+                ]
+                for headers in invalid_headers:
+                    assert request(
+                        base, "/interactions", method="POST", body=body, headers=headers
+                    ) == (401, b"")
+                for malformed in (b"[", b"[]", b"null", b'{"type":true}', b'{"type":3}'):
+                    assert request(
+                        base,
+                        "/interactions",
+                        method="POST",
+                        body=malformed,
+                        headers=signed(malformed),
+                    ) == (400, b"")
+                for path, method in (
+                    ("/gateway/start", "POST"),
+                    ("/gateway/stop", "POST"),
+                    ("/gateway/health", "GET"),
+                ):
+                    for authorization, status in (
+                        ("", 401),
+                        ("Basic x", 401),
+                        ("Bearer ", 401),
+                        ("Bearer wrong", 403),
+                    ):
+                        assert request(
+                            base, path, method=method, headers={"authorization": authorization}
+                        ) == (status, b"")
+                for path, method in (
+                    ("/interactions", "GET"),
+                    ("/gateway/start", "GET"),
+                    ("/gateway/health", "POST"),
+                    ("/missing", "GET"),
+                ):
+                    assert request(base, path, method=method) == (404, b"")
+                headers = {"authorization": "bEaReR test-control"}
+                status, body = request(base, "/gateway/health", headers=headers)
+                assert status == 200 and json.loads(body)["connected"] is False
+                assert request(base, "/gateway/stop", method="POST", headers=headers)[0] == 200
+                # Exercise the real signed entrypoint and waitUntil dispatch, with stubbed egress.
+                interaction = json.dumps(
+                    {
+                        "type": 2,
+                        "application_id": "123456789012345678",
+                        "token": "test-webhook",
+                        "guild_id": "457689460096630794",
+                        "member": {"user": {"id": "123456789012345679", "username": "tester"}},
+                        "data": {
+                            "name": "rag",
+                            "options": [{"name": "user", "value": "123456789012345682"}],
+                            "resolved": {"users": {"123456789012345682": {"username": "target"}}},
+                        },
+                    }
+                ).encode()
                 assert request(
                     base,
                     "/interactions",
                     method="POST",
-                    body=body,
-                    headers=signed(body, str(int(time.time()) - 301)),
-                ) == (401, b"")
-                assert request(
-                    base, "/interactions", method="POST", body=b"[]", headers=signed(b"[]")
-                ) == (400, b"")
-                assert request(base, "/gateway/health") == (401, b"")
-                assert request(
-                    base, "/gateway/health", headers={"authorization": "Bearer wrong"}
-                ) == (403, b"")
-                headers = {"authorization": "Bearer test-control"}
-                status, body = request(base, "/gateway/health", headers=headers)
-                assert status == 200 and json.loads(body)["connected"] is False
-                assert (
-                    request(base, "/gateway/stop", method="POST", body=b"", headers=headers)[0]
-                    == 200
-                )
+                    body=interaction,
+                    headers=signed(interaction),
+                ) == (200, b'{"type": 5}')
+                for path, method in (
+                    ("/gateway/start", "POST"),
+                    ("/gateway/stop", "POST"),
+                    ("/gateway/health", "GET"),
+                    ("/interactions", "POST"),
+                ):
+                    assert request(
+                        base,
+                        "/test/unconfigured" + path,
+                        method=method,
+                        body=body if method == "POST" else None,
+                        headers={**signed(body), **headers},
+                    ) == (401, b"")
                 status, body = request(base, "/test/scenario", method="POST", body=b"{}")
                 if status != 200:
                     raise AssertionError(body.decode()[:5000])

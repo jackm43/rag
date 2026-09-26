@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 from production import Default as ProductionDefault
@@ -13,8 +14,27 @@ from ragbot.gateway import Socket, gateway_stub
 
 
 class Default(ProductionDefault):
+    def __init__(self, ctx, env):
+        super().__init__(ctx, env)
+
+        async def discord_stub(url, **options):
+            assert url.startswith("https://discord.com/api/v10/")
+            return Response.json({"id": "123456789012345691"})
+
+        self.app = Application(env, transport=discord_stub)
+
     async def fetch(self, request):
         path = urlparse(request.url).path
+        if path.startswith("/test/unconfigured/"):
+            return await ProductionDefault.fetch(
+                SimpleNamespace(env=SimpleNamespace(), ctx=self.ctx, app=self.app),
+                SimpleNamespace(
+                    url=request.url.replace("/test/unconfigured", ""),
+                    method=request.method,
+                    headers=request.headers,
+                    bytes=request.bytes,
+                ),
+            )
         if path == "/test/upload":
             # Check the received wire format, not the sender's FormData object.
             assert request.headers.get("authorization") is None
@@ -111,12 +131,41 @@ class Default(ProductionDefault):
                 return Response.json({"id": "123456789012345690", "type": 11})
             return Response.json({"id": "123456789012345691", "type": 0})
 
-        from ragbot.discord import download_media
+        from js import ReadableStream, Uint8Array
+        from pyodide.ffi import create_proxy
+
+        from ragbot.discord import MEDIA_MAX_BYTES, MediaTooLargeError, download_media, read_media
+
+        cancelled = []
+
+        def start(controller):
+            controller.enqueue(Uint8Array.new(MEDIA_MAX_BYTES))
+            controller.enqueue(Uint8Array.new(1))
+
+        start_proxy = create_proxy(start)
+        cancel_proxy = create_proxy(lambda reason: cancelled.append(True))
+        from ragbot.runtime import to_js
+
+        stream = ReadableStream.new(to_js({"start": start_proxy, "cancel": cancel_proxy}))
+        try:
+            try:
+                await read_media(stream)
+                raise AssertionError("oversized stream accepted")
+            except MediaTooLargeError:
+                assert cancelled and not stream.locked
+        finally:
+            start_proxy.destroy()
+            cancel_proxy.destroy()
 
         media, mime = await download_media(request.url.replace("/test/scenario", "/test/media"))
         assert media == b"image-bytes" and mime == "image/png"
         app = Application(self.env, transport=transport)
         await app.db.batch([("SELECT 1 AS value", ())])
+        for _ in range(100):
+            if await app.db.first("SELECT id FROM rag_events"):
+                break
+            await asyncio.sleep(0.05)
+        assert len(await app.db.all("SELECT * FROM rag_events")) == 1
         interaction = {
             "id": "123456789012345680",
             "type": 2,
@@ -126,15 +175,9 @@ class Default(ProductionDefault):
             "channel_id": "123456789012345681",
             "member": {"user": {"id": "123456789012345679", "username": "tester"}},
             "data": {
-                "name": "rag",
-                "options": [{"name": "user", "value": "123456789012345682"}],
-                "resolved": {"users": {"123456789012345682": {"username": "target"}}},
+                "name": "ask",
+                "options": [{"name": "prompt", "value": "explain trees"}],
             },
-        }
-        await app.dispatch(interaction)
-        interaction["data"] = {
-            "name": "ask",
-            "options": [{"name": "prompt", "value": "explain trees"}],
         }
         await app.dispatch(interaction)
         from ragbot.discord import Attachment

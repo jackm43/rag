@@ -76,8 +76,9 @@ Do not edit generated platform stubs by hand.
 
 ## Testing
 
-`pnpm test` runs pytest with the actual SQLite migrations, injected HTTP
-transports and a fake gateway socket. Test behaviors and security invariants.
+`pnpm test` focuses on primary command, moderation, conversation, media, and
+spend workflows using the actual SQLite migrations and injected HTTP transports.
+Keep public HTTP authentication and routing checks in the runtime suite.
 `pnpm run test:runtime` runs an isolated local Python Worker with D1 and a
 Discord-like WebSocket peer, so FFI bugs are exercised in workerd too. Test
 workers and their credentials live only in temporary bundles. No test should
