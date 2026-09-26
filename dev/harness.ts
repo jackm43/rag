@@ -10,7 +10,6 @@
 import askWebSearchConfig from "../src/lib/ai/ai-config/ask-web-search.json";
 import responseConfig from "../src/lib/ai/ai-config/discord-response.json";
 import { loadConfig, resetConfigCache, type BotConfig } from "../src/lib/ai/config";
-import { inferenceClient } from "../src/lib/ai/inference";
 import { isRecord, type DiscordMessage } from "../src/lib/contracts";
 import { recordAiThread } from "../src/lib/db/threads";
 import type { Env } from "../src/env";
@@ -163,23 +162,12 @@ const authorFor = (identity: DevIdentity) => ({
 const transcriptToDiscordMessage = (
   entry: TranscriptEntry,
   input: Pick<MentionSimulationInput, "identity" | "botUserId" | "guildId" | "channelId">,
-): DiscordMessage =>
-  entry.role === "bot"
-    ? {
-      id: entry.id,
-      channel_id: input.channelId,
-      guild_id: input.guildId,
-      content: entry.content,
-      author: { id: input.botUserId, username: BOT_USERNAME, bot: true },
-    }
-    : {
-      id: entry.id,
-      channel_id: input.channelId,
-      guild_id: input.guildId,
-      content: entry.content,
-      author: authorFor(entry.author ?? input.identity),
-      member: { nick: (entry.author ?? input.identity).nick ?? null },
-    };
+): DiscordMessage => ({
+  id: entry.id, channel_id: input.channelId, guild_id: input.guildId, content: entry.content,
+  ...(entry.role === "bot"
+    ? { author: { id: input.botUserId, username: BOT_USERNAME, bot: true } }
+    : { author: authorFor(entry.author ?? input.identity), member: { nick: (entry.author ?? input.identity).nick ?? null } }),
+});
 
 // The gateway MESSAGE_CREATE payload for what the user typed, shaped like
 // Discord sends it (mention token in content + the mentions array, reply
@@ -361,39 +349,25 @@ type RequestBody = { headers: Headers; formData(): Promise<FormData>; text(): Pr
 // Reads a Discord message write (JSON or multipart with files) into the
 // captured shape, inlining small media so the UI can preview it.
 const readDiscordMessageWrite = async (request: RequestBody, channelId: string): Promise<CapturedDiscordMessage> => {
-  const contentType = request.headers.get("content-type") ?? "";
-  if (contentType.includes("multipart/form-data")) {
+  let data: Record<string, unknown>;
+  const attachments: CapturedAttachment[] = [];
+  if ((request.headers.get("content-type") ?? "").includes("multipart/form-data")) {
     const form = await request.formData();
     const payload = form.get("payload_json");
-    const data = typeof payload === "string" ? parseKvJson(payload, {}) : {};
+    data = typeof payload === "string" ? parseKvJson(payload, {}) : {};
     const files: File[] = [];
-    form.forEach((value) => {
-      if (typeof value !== "string") {
-        files.push(value);
-      }
-    });
-    const attachments: CapturedAttachment[] = [];
+    form.forEach((value) => { if (typeof value !== "string") files.push(value); });
     for (const value of files) {
-      const attachment: CapturedAttachment = { name: value.name, contentType: value.type, bytes: value.size };
-      if (value.size <= MAX_INLINE_ATTACHMENT_BYTES) {
-        attachment.dataUrl = bytesToDataUrl(await value.arrayBuffer(), value.type || "application/octet-stream");
-      }
-      attachments.push(attachment);
+      attachments.push({
+        name: value.name, contentType: value.type, bytes: value.size,
+        ...(value.size <= MAX_INLINE_ATTACHMENT_BYTES
+          ? { dataUrl: bytesToDataUrl(await value.arrayBuffer(), value.type || "application/octet-stream") } : {}),
+      });
     }
-    return {
-      channelId,
-      content: typeof data.content === "string" ? data.content : "",
-      allowedMentions: data.allowed_mentions,
-      attachments,
-    };
+  } else {
+    data = parseKvJson(await request.text(), {});
   }
-  const data = parseKvJson(await request.text(), {});
-  return {
-    channelId,
-    content: typeof data.content === "string" ? data.content : "",
-    allowedMentions: data.allowed_mentions,
-    attachments: [],
-  };
+  return { channelId, content: typeof data.content === "string" ? data.content : "", allowedMentions: data.allowed_mentions, attachments };
 };
 
 const DISCORD_API_PREFIX = "/api/v10";
@@ -585,59 +559,32 @@ export const resolveDevConfig = (overrides: ConfigOverrides): Promise<BotConfig>
     }
   });
 
-export type ModelProbeResult = {
-  model: string;
-  ok: boolean;
-  status: number | null;
-  responseModel: string | null;
-  error: string | null;
-  durationMs: number;
-  ai: AiExchange[];
-};
+const stubState = (
+  input: Pick<MentionSimulationInput, "channelId" | "guildId">,
+  patch: Partial<DiscordStubState> = {},
+): DiscordStubState => ({
+  channelId: input.channelId, guildId: input.guildId, isThread: false, history: [], resolvedUsers: {},
+  channelMessages: [], edits: [], followUps: [], threadsCreated: [], ...patch,
+});
 
-// A one-token request through the bot's own inference client (so it reproduces
-// exactly what a real run would send, gateway-HTTP or Workers AI binding) to
-// check a model id is actually servable before chatting with it.
-export const probeModel = (env: Env, model: string, options: SimulationOptions = {}): Promise<ModelProbeResult> =>
-  serialize(async () => {
-    const startedAt = Date.now();
-    const bindingExchanges: AiExchange[] = [];
-    const runEnv = devEnv(env, {}, bindingExchanges);
+const captureSimulation = async (
+  env: Env, overrides: ConfigOverrides | undefined, state: DiscordStubState,
+  messageId: string | null, startedAt: number, run: (env: Env) => Promise<void>, options: SimulationOptions,
+): Promise<SimulationBase> => {
+  const exchanges: AiExchange[] = [];
+  const runEnv = devEnv(env, overrides ?? {}, exchanges);
+  const spendWatermark = await maxSpendEventId(env);
+  resetConfigCache();
+  try {
+    const { calls, logs } = await runWithFetchTap(discordStub(state), () => run(runEnv), options.upstream);
+    return {
+      durationMs: Date.now() - startedAt, ai: [...gatewayExchanges(calls), ...exchanges], calls, logs,
+      db: await readDbSideEffects(env, messageId, spendWatermark),
+    };
+  } finally {
     resetConfigCache();
-    let config: BotConfig;
-    try {
-      config = await loadConfig({ AI_CONFIG: configNamespace({}) });
-    } finally {
-      resetConfigCache();
-    }
-
-    let error: string | null = null;
-    let responseModel: string | null = null;
-    const tapped = await runWithFetchTap(
-      async (request) => (new URL(request.url).hostname === "gateway.ai.cloudflare.com" ? withDevMetadata(request) : undefined),
-      async () => {
-        try {
-          const result = await inferenceClient(runEnv).chat({
-            model,
-            messages: [{ role: "user", content: "Reply with one word." }],
-            maxTokens: 1,
-            temperature: config.temperature,
-            gatewayId: config.gatewayId,
-            metadata: { ragbot_kind: "dev_probe" },
-          });
-          responseModel = isRecord(result) && typeof result.model === "string" ? result.model : null;
-        } catch (caught) {
-          error = caught instanceof Error ? caught.message : String(caught);
-        }
-      },
-      options.upstream,
-    );
-    const ai = [...gatewayExchanges(tapped.calls), ...bindingExchanges];
-    const status = ai[0]?.transport === "gateway-http" && isRecord(ai[0].response) && typeof ai[0].response.status === "number"
-      ? ai[0].response.status
-      : null;
-    return { model, ok: error === null, status, responseModel, error, durationMs: Date.now() - startedAt, ai };
-  });
+  }
+};
 
 export const simulateMention = (
   env: Env,
@@ -647,8 +594,6 @@ export const simulateMention = (
   serialize(async () => {
     const startedAt = Date.now();
     const message = buildMentionMessage(input);
-    const bindingExchanges: AiExchange[] = [];
-    const runEnv = devEnv(env, input.overrides ?? {}, bindingExchanges);
 
     // Thread modes need a tracked rag_ai_threads row for the channel; channel
     // mode must not have one, or the message resolves as a thread reply.
@@ -670,40 +615,12 @@ export const simulateMention = (
     }
     const historyEntries = isThread && initialEntry?.role === "user" ? rest : input.transcript;
 
-    const state: DiscordStubState = {
-      channelId: input.channelId,
-      guildId: input.guildId,
-      isThread,
-      history: historyEntries.map((entry) => transcriptToDiscordMessage(entry, input)),
-      resolvedUsers: {},
-      channelMessages: [],
-      edits: [],
-      followUps: [],
-      threadsCreated: [],
-    };
-
-    const spendWatermark = await maxSpendEventId(env);
-    resetConfigCache();
-    let tapped;
-    try {
-      tapped = await runWithFetchTap(
-        discordStub(state),
-        () => handleMessageCreate(message, runEnv, input.botUserId),
-        options.upstream,
-      );
-    } finally {
-      resetConfigCache();
-    }
-
-    return {
-      durationMs: Date.now() - startedAt,
-      message,
-      replies: state.channelMessages,
-      ai: [...gatewayExchanges(tapped.calls), ...bindingExchanges],
-      calls: tapped.calls,
-      logs: tapped.logs,
-      db: await readDbSideEffects(env, message.id, spendWatermark),
-    };
+    const state = stubState(input, {
+      isThread, history: historyEntries.map((entry) => transcriptToDiscordMessage(entry, input)),
+    });
+    const captured = await captureSimulation(env, input.overrides, state, message.id, startedAt,
+      (runEnv) => handleMessageCreate(message, runEnv, input.botUserId), options);
+    return { ...captured, message, replies: state.channelMessages };
   });
 
 const OPTION_TYPE_USER = 6;
@@ -750,19 +667,7 @@ export const simulateInteraction = (
   serialize(async () => {
     const startedAt = Date.now();
     const interaction = buildInteraction(env, input);
-    const bindingExchanges: AiExchange[] = [];
-    const runEnv = devEnv(env, input.overrides ?? {}, bindingExchanges);
-    const state: DiscordStubState = {
-      channelId: input.channelId,
-      guildId: input.guildId,
-      isThread: false,
-      history: [],
-      resolvedUsers: input.resolvedUsers ?? {},
-      channelMessages: [],
-      edits: [],
-      followUps: [],
-      threadsCreated: [],
-    };
+    const state = stubState(input, { resolvedUsers: input.resolvedUsers ?? {} });
 
     // dispatch runs behind waitUntil in production; collect anything it defers
     // so the run only finishes once every side effect has landed.
@@ -774,33 +679,13 @@ export const simulateInteraction = (
       passThroughOnException: () => undefined,
     } as unknown as ExecutionContext;
 
-    const spendWatermark = await maxSpendEventId(env);
-    resetConfigCache();
-    let tapped;
-    try {
-      tapped = await runWithFetchTap(
-        discordStub(state),
-        async () => {
-          await dispatch(interaction as never, runEnv, ctx);
-          await Promise.allSettled(deferred);
-        },
-        options.upstream,
-      );
-    } finally {
-      resetConfigCache();
-    }
-
+    const captured = await captureSimulation(env, input.overrides, state, null, startedAt, async (runEnv) => {
+      await dispatch(interaction as never, runEnv, ctx);
+      await Promise.allSettled(deferred);
+    }, options);
     return {
-      durationMs: Date.now() - startedAt,
-      interaction,
-      edits: state.edits,
-      followUps: state.followUps,
-      channelMessages: state.channelMessages,
-      threadsCreated: state.threadsCreated,
-      ai: [...gatewayExchanges(tapped.calls), ...bindingExchanges],
-      calls: tapped.calls,
-      logs: tapped.logs,
-      db: await readDbSideEffects(env, null, spendWatermark),
+      ...captured, interaction, edits: state.edits, followUps: state.followUps,
+      channelMessages: state.channelMessages, threadsCreated: state.threadsCreated,
     };
   });
 

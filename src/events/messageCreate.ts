@@ -1,15 +1,13 @@
-import type { ChatModelResult } from "../lib/ai/ai";
 import { runAskModeCompletion } from "../lib/ai/ask-mode";
-import { loadConfig } from "../lib/ai/config";
+import { deliverAiReply } from "../lib/ai/reply";
 import { runTrackedChatCompletion } from "../lib/ai/tracked-ai";
 import { activeAiBanForUser } from "../lib/db/bans";
 import { buildNormalThreadConversation, isAskThread } from "../lib/db/conversation";
 import { isGuildAllowed } from "../lib/db/guilds";
-import { recordAiInteraction } from "../lib/db/interactions";
 import { checkAiUsageAllowed } from "../lib/db/limits";
 import { getMessageAuthorDisplayName, stripMentionTokens } from "../lib/db/mention";
 import { findAiThread } from "../lib/db/threads";
-import { fetchBotRoleIds, finalizeAiReplyText, postChannelMessage, sendChannelReply } from "../lib/discord";
+import { fetchBotRoleIds, sendChannelReply } from "../lib/discord";
 import { isSnowflake, type AiChatJob, type DiscordMessage } from "../lib/contracts";
 import { errorMessage, logger } from "../lib/logger";
 import type { Env } from "../env";
@@ -146,55 +144,24 @@ export const resolveGatewayMessage = async (
   }
 
   const existingThread = job.guildId ? await findAiThread(env, job.channelId) : null;
+  let prompt: string | null;
   if (existingThread) {
-    const prompt = stripMentionTokens(job.content);
-    if (!prompt) {
-      return null;
-    }
-
-    if (!(await gatewayUsageAllowed(job, env, "thread_reply"))) {
-      return null;
-    }
-
-    return {
-      kind: "thread_reply",
-      channelId: job.channelId,
-      thread: existingThread,
-      messageId: job.messageId,
-      botUserId: job.botUserId,
-      requesterUserId: job.authorId,
-      requesterUsername: job.authorUsername,
-      prompt,
-      replyMessageId: job.replyMessageId,
-      replyChannelId: job.replyChannelId,
-    };
-  }
-
-  let botRoleIds: string[] = [];
-  if (job.mentionRoleIds.length > 0 && job.guildId) {
-    botRoleIds = await fetchBotRoleIds(env, job.guildId, job.botUserId);
-  }
-
-  const prompt = resolveChannelPrompt(
-    {
+    prompt = stripMentionTokens(job.content);
+  } else {
+    const botRoleIds = job.mentionRoleIds.length > 0 && job.guildId
+      ? await fetchBotRoleIds(env, job.guildId, job.botUserId) : [];
+    prompt = resolveChannelPrompt({
       content: job.content,
       mentions: job.mentionUserIds.map((id) => ({ id })),
       mention_roles: job.mentionRoleIds,
-    },
-    job.botUserId,
-    env.DISCORD_APPLICATION_ID,
-    botRoleIds,
-  );
-  if (!prompt) {
-    return null;
+    }, job.botUserId, env.DISCORD_APPLICATION_ID, botRoleIds);
   }
-
-  if (!(await gatewayUsageAllowed(job, env, "channel_reply"))) {
-    return null;
-  }
+  const kind = existingThread ? "thread_reply" : "channel_reply";
+  if (!prompt || !(await gatewayUsageAllowed(job, env, kind))) return null;
 
   return {
-    kind: "channel_reply",
+    kind,
+    ...(existingThread ? { thread: existingThread } : {}),
     channelId: job.channelId,
     messageId: job.messageId,
     botUserId: job.botUserId,
@@ -209,76 +176,20 @@ export const resolveGatewayMessage = async (
 // The gateway mention reply, run in-process (formerly the workflows consumer's
 // channel_reply/thread_reply branches). Builds the thread conversation, calls the
 // model, and posts the reply into the channel.
-const processChatJob = async (job: AiChatJob, env: Env, startedAt: number) => {
-  let model = "unknown";
-  let aiDurationMs: number | null = null;
-  let content: string | null = null;
-  let usage: ChatModelResult["usage"] | null = null;
-  const record = (status: "ok" | "error", errorText: string | null) =>
-    recordAiInteraction(env, {
-      kind: job.kind,
-      channelId: job.channelId,
-      messageId: job.messageId,
-      requesterUserId: job.requesterUserId,
-      requesterUsername: job.requesterUsername,
-      prompt: job.prompt,
-      model,
-      status,
-      responseText: content,
-      errorMessage: errorText,
-      aiDurationMs,
-      totalDurationMs: Date.now() - startedAt,
-      usage,
-    });
-
-  try {
-    const config = await loadConfig(env);
-    model = config.responseModel;
-    const attribution = {
-      kind: job.kind,
-      requesterUserId: job.requesterUserId,
-      requesterUsername: job.requesterUsername,
-      channelId: job.channelId,
-      messageId: job.messageId,
-    };
-
+const processChatJob = (job: AiChatJob, env: Env, startedAt: number) =>
+  deliverAiReply(env, job, async (config, startAi) => {
     const { messages, thread } = await buildNormalThreadConversation(env, config, job);
-    const askMode = job.kind === "thread_reply" && isAskThread(thread);
-
-    const aiStartedAt = Date.now();
-    let result: ChatModelResult;
-    let responseText: string;
-    if (askMode) {
-      ({ result, responseText } = await runAskModeCompletion(
-        env,
-        config,
-        {
-          prompt: job.prompt,
-          requesterUsername: job.requesterUsername ?? "user",
-          conversation: messages.filter((message) => message.role !== "system"),
-        },
-        attribution,
-      ));
-    } else {
-      result = await runTrackedChatCompletion(env, config, messages, attribution);
-      responseText = result.content;
+    startAi();
+    if (job.kind === "thread_reply" && isAskThread(thread)) {
+      return runAskModeCompletion(env, config, {
+        prompt: job.prompt,
+        requesterUsername: job.requesterUsername ?? "user",
+        conversation: messages.filter((message) => message.role !== "system"),
+      }, job);
     }
-    model = result.model;
-    usage = result.usage ?? null;
-    aiDurationMs = Date.now() - aiStartedAt;
-
-    // Finalise once; record exactly what is delivered.
-    content = finalizeAiReplyText(responseText);
-    const posted = await postChannelMessage(env, job.channelId, content);
-    if (!posted.ok) {
-      throw new Error(`discord_channel_post_failed_${posted.status}`);
-    }
-    await record("ok", null);
-  } catch (error) {
-    logger.error("ai_job_failed", { error: errorMessage(error) });
-    await record("error", errorMessage(error));
-  }
-};
+    const result = await runTrackedChatCompletion(env, config, messages, job);
+    return { result, responseText: result.content };
+  }, startedAt);
 
 // Gateway MESSAGE_CREATE entry point, called in-process by the DiscordGateway DO
 // (which owns dedupe before invoking this). Pre-filters that are pure and local —

@@ -1,6 +1,6 @@
 import { env as testEnv } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { assert, describe, test } from "vitest";
+import { assert, beforeEach, afterEach, describe, test } from "vitest";
 
 import worker from "../src/index";
 import type { Env } from "../src/env";
@@ -58,32 +58,15 @@ describe("operator control routes", () => {
     assert.deepEqual(calls, ["start", "stop", "health"]);
   });
 
-  test("a missing token is unauthorized (401) and dispatches nothing", async () => {
+  test.each([
+    ["a missing token is unauthorized (401) and dispatches nothing", undefined, CONTROL_TOKEN, 401],
+    ["a wrong token is forbidden (403) and dispatches nothing", "wrong-token", CONTROL_TOKEN, 403],
+    ["an unconfigured control token is unauthorized (401)", CONTROL_TOKEN, "", 401],
+  ] as const)("%s", async (_, token, configuredToken, status) => {
     const calls: string[] = [];
-    const response = await worker.fetch(request("POST", "/gateway/start"), stubGatewayEnv(calls), noopCtx);
-    assert.equal(response.status, 401);
-    assert.deepEqual(calls, []);
-  });
-
-  test("a wrong token is forbidden (403) and dispatches nothing", async () => {
-    const calls: string[] = [];
-    const response = await worker.fetch(
-      request("POST", "/gateway/start", "wrong-token"),
-      stubGatewayEnv(calls),
-      noopCtx,
-    );
-    assert.equal(response.status, 403);
-    assert.deepEqual(calls, []);
-  });
-
-  test("an unconfigured control token is unauthorized (401)", async () => {
-    const calls: string[] = [];
-    const response = await worker.fetch(
-      request("POST", "/gateway/start", CONTROL_TOKEN),
-      stubGatewayEnv(calls, { GATEWAY_CONTROL_TOKEN: "" }),
-      noopCtx,
-    );
-    assert.equal(response.status, 401);
+    const response = await worker.fetch(request("POST", "/gateway/start", token),
+      stubGatewayEnv(calls, { GATEWAY_CONTROL_TOKEN: configuredToken }), noopCtx);
+    assert.equal(response.status, status);
     assert.deepEqual(calls, []);
   });
 
@@ -113,126 +96,108 @@ class FakeWebSocket extends EventTarget {
   }
 }
 
-const withFakeWebSocket = async (body: () => Promise<void>) => {
-  const original = globalThis.WebSocket;
-  FakeWebSocket.instances = [];
-  globalThis.WebSocket = FakeWebSocket as never;
-  try {
-    await body();
-  } finally {
-    globalThis.WebSocket = original;
-  }
-};
+const gatewayFor = (name: string) => testEnv.DISCORD_GATEWAY.get(testEnv.DISCORD_GATEWAY.idFromName(name));
 
 describe("DiscordGateway durable object", () => {
+  const originalWebSocket = globalThis.WebSocket;
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket as never;
+  });
+  afterEach(() => { globalThis.WebSocket = originalWebSocket; });
   test("start RPC persists enabled state and schedules an alarm", async () => {
-    await withFakeWebSocket(async () => {
-      const id = testEnv.DISCORD_GATEWAY.idFromName(`rpc-start-${crypto.randomUUID()}`);
-      const gateway = testEnv.DISCORD_GATEWAY.get(id);
+    const gateway = gatewayFor(`rpc-start-${crypto.randomUUID()}`);
 
-      assert.deepEqual({ ...(await gateway.health()) }, { connected: false, resumable: false });
-      assert.deepEqual({ ...(await gateway.start()) }, { ok: true });
+    assert.deepEqual({ ...(await gateway.health()) }, { connected: false, resumable: false });
+    assert.deepEqual({ ...(await gateway.start()) }, { ok: true });
 
-      await runInDurableObject(gateway, async (_instance, state) => {
-        assert.equal(await state.storage.get("gatewayEnabled"), true);
-        const alarmTime = await state.storage.getAlarm();
-        assert.equal(typeof alarmTime, "number");
-        assert.ok((alarmTime ?? 0) > Date.now());
-      });
+    await runInDurableObject(gateway, async (_instance, state) => {
+      assert.equal(await state.storage.get("gatewayEnabled"), true);
+      const alarmTime = await state.storage.getAlarm();
+      assert.equal(typeof alarmTime, "number");
+      assert.ok((alarmTime ?? 0) > Date.now());
     });
   });
 
   test("stop RPC disables the gateway and prevents reconnects", async () => {
-    await withFakeWebSocket(async () => {
-      const id = testEnv.DISCORD_GATEWAY.idFromName(`rpc-stop-${crypto.randomUUID()}`);
-      const gateway = testEnv.DISCORD_GATEWAY.get(id);
+    const gateway = gatewayFor(`rpc-stop-${crypto.randomUUID()}`);
 
-      await gateway.start();
-      assert.equal(FakeWebSocket.instances.length, 1);
+    await gateway.start();
+    assert.equal(FakeWebSocket.instances.length, 1);
 
-      assert.deepEqual({ ...(await gateway.stop()) }, { ok: true });
+    assert.deepEqual({ ...(await gateway.stop()) }, { ok: true });
 
-      await runInDurableObject(gateway, async (instance, state) => {
-        assert.equal(await state.storage.get("gatewayEnabled"), undefined);
-        assert.isNull(await state.storage.getAlarm(), "stop cancels the watchdog alarm");
-        // Even a racing alarm must not reconnect after a stop.
-        await (instance as { alarm: () => Promise<void> }).alarm();
-        assert.isNull(await state.storage.getAlarm());
-      });
-
-      assert.equal(FakeWebSocket.instances.length, 1, "a stopped gateway must not reconnect");
-      assert.deepEqual({ ...(await gateway.health()) }, { connected: false, resumable: false });
-
-      assert.deepEqual({ ...(await gateway.start()) }, { ok: true });
-      assert.equal(FakeWebSocket.instances.length, 2, "start works again after a stop");
+    await runInDurableObject(gateway, async (instance, state) => {
+      assert.equal(await state.storage.get("gatewayEnabled"), undefined);
+      assert.isNull(await state.storage.getAlarm(), "stop cancels the watchdog alarm");
+      // Even a racing alarm must not reconnect after a stop.
+      await (instance as { alarm: () => Promise<void> }).alarm();
+      assert.isNull(await state.storage.getAlarm());
     });
+
+    assert.equal(FakeWebSocket.instances.length, 1, "a stopped gateway must not reconnect");
+    assert.deepEqual({ ...(await gateway.health()) }, { connected: false, resumable: false });
+
+    assert.deepEqual({ ...(await gateway.start()) }, { ok: true });
+    assert.equal(FakeWebSocket.instances.length, 2, "start works again after a stop");
   });
 
   test("a fatal close code disables the gateway instead of reconnecting every 5s", async () => {
-    await withFakeWebSocket(async () => {
-      const id = testEnv.DISCORD_GATEWAY.idFromName(`rpc-fatal-${crypto.randomUUID()}`);
-      const gateway = testEnv.DISCORD_GATEWAY.get(id);
+    const gateway = gatewayFor(`rpc-fatal-${crypto.randomUUID()}`);
 
-      await gateway.start();
-      assert.equal(FakeWebSocket.instances.length, 1);
+    await gateway.start();
+    assert.equal(FakeWebSocket.instances.length, 1);
 
-      await runInDurableObject(gateway, async (_instance, state) => {
-        // 4014 = disallowed intents: Discord documents it as "do not reconnect".
-        FakeWebSocket.instances[0].dispatchEvent(new CloseEvent("close", { code: 4014 }));
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        assert.equal(await state.storage.get("gatewayEnabled"), undefined, "enabled flag cleared");
-        assert.isNull(await state.storage.getAlarm(), "watchdog cancelled");
-      });
-
-      // Nothing is scheduled to reconnect; only a cron ensureConnected/start may.
+    await runInDurableObject(gateway, async (_instance, state) => {
+      // 4014 = disallowed intents: Discord documents it as "do not reconnect".
+      FakeWebSocket.instances[0].dispatchEvent(new CloseEvent("close", { code: 4014 }));
       await new Promise((resolve) => setTimeout(resolve, 20));
-      assert.equal(FakeWebSocket.instances.length, 1, "no reconnect after a fatal close");
-      assert.isTrue((await gateway.ensureConnected()).ok);
-      assert.equal(FakeWebSocket.instances.length, 2, "the cron path can bring it back");
+      assert.equal(await state.storage.get("gatewayEnabled"), undefined, "enabled flag cleared");
+      assert.isNull(await state.storage.getAlarm(), "watchdog cancelled");
     });
+
+    // Nothing is scheduled to reconnect; only a cron ensureConnected/start may.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(FakeWebSocket.instances.length, 1, "no reconnect after a fatal close");
+    assert.isTrue((await gateway.ensureConnected()).ok);
+    assert.equal(FakeWebSocket.instances.length, 2, "the cron path can bring it back");
   });
 
   test("a stale non-canonical instance self-decommissions instead of reconnecting", async () => {
-    await withFakeWebSocket(async () => {
-      // Regression: a leftover object from an older singleton name (e.g. the
-      // pre-"-v2" era) kept gatewayEnabled=true in its own storage and its
-      // watchdog alarm resurrected a second Discord session forever — every
-      // mention got two replies. Any instance whose id is not
-      // idFromName("discord-gateway-v2") must wipe itself on alarm, not connect.
-      const id = testEnv.DISCORD_GATEWAY.idFromName("discord-gateway");
-      const gateway = testEnv.DISCORD_GATEWAY.get(id);
+    // Regression: a leftover object from an older singleton name (e.g. the
+    // pre-"-v2" era) kept gatewayEnabled=true in its own storage and its
+    // watchdog alarm resurrected a second Discord session forever — every
+    // mention got two replies. Any instance whose id is not
+    // idFromName("discord-gateway-v2") must wipe itself on alarm, not connect.
+    const gateway = gatewayFor("discord-gateway");
 
-      await runInDurableObject(gateway, async (instance, state) => {
-        await state.storage.put("gatewayEnabled", true);
-        await state.storage.put("processed:zombie-message", Date.now());
-        await state.storage.setAlarm(Date.now() + 60_000);
+    await runInDurableObject(gateway, async (instance, state) => {
+      await state.storage.put("gatewayEnabled", true);
+      await state.storage.put("processed:zombie-message", Date.now());
+      await state.storage.setAlarm(Date.now() + 60_000);
 
-        await (instance as { alarm: () => Promise<void> }).alarm();
+      await (instance as { alarm: () => Promise<void> }).alarm();
 
-        assert.equal(await state.storage.get("gatewayEnabled"), undefined, "stale flag wiped");
-        assert.equal(await state.storage.get("processed:zombie-message"), undefined, "stale markers wiped");
-        assert.isNull(await state.storage.getAlarm(), "no alarm rescheduled — the zombie stays dead");
-      });
-
-      assert.equal(FakeWebSocket.instances.length, 0, "a non-canonical instance must never connect");
+      assert.equal(await state.storage.get("gatewayEnabled"), undefined, "stale flag wiped");
+      assert.equal(await state.storage.get("processed:zombie-message"), undefined, "stale markers wiped");
+      assert.isNull(await state.storage.getAlarm(), "no alarm rescheduled — the zombie stays dead");
     });
+
+    assert.equal(FakeWebSocket.instances.length, 0, "a non-canonical instance must never connect");
   });
 
   test("the watchdog alarm prunes processed-message markers older than 24h", async () => {
-    await withFakeWebSocket(async () => {
-      const id = testEnv.DISCORD_GATEWAY.idFromName("discord-gateway-v2");
-      const gateway = testEnv.DISCORD_GATEWAY.get(id);
+    const gateway = gatewayFor("discord-gateway-v2");
 
-      await runInDurableObject(gateway, async (instance, state) => {
-        const now = Date.now();
-        await state.storage.put("processed:old-message", now - 25 * 60 * 60_000);
-        await state.storage.put("processed:fresh-message", now - 60_000);
+    await runInDurableObject(gateway, async (instance, state) => {
+      const now = Date.now();
+      await state.storage.put("processed:old-message", now - 25 * 60 * 60_000);
+      await state.storage.put("processed:fresh-message", now - 60_000);
 
-        await (instance as { alarm: () => Promise<void> }).alarm();
+      await (instance as { alarm: () => Promise<void> }).alarm();
 
-        assert.equal(await state.storage.get("processed:old-message"), undefined, "stale marker pruned");
-        assert.equal(typeof (await state.storage.get("processed:fresh-message")), "number", "fresh marker kept");
-      });
+      assert.equal(await state.storage.get("processed:old-message"), undefined, "stale marker pruned");
+      assert.equal(typeof (await state.storage.get("processed:fresh-message")), "number", "fresh marker kept");
     });
   });
 });

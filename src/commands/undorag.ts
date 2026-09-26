@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from "../structs/slash-command-builder";
+import { commandData } from "../structs/command-data";
 
 import { idOption } from "../lib/interaction";
 import type { Command } from "../structs/command";
@@ -8,12 +8,9 @@ type RagRow = { rag_count: number };
 
 export const undorag: Command = {
   adminOnly: true,
-  data: new SlashCommandBuilder()
-    .setName("undorag")
-    .setDescription("Undo the last rag recorded against a user")
-    .addUserOption((option) =>
-      option.setName("user").setDescription("User whose last rag should be undone").setRequired(true),
-    ),
+  data: commandData("undorag", "Undo the last rag recorded against a user", [
+    { type: 6, name: "user", description: "User whose last rag should be undone", required: true },
+  ]),
   async execute({ interaction, env, editReply }) {
     const targetId = idOption(interaction, "user");
 

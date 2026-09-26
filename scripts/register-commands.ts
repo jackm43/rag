@@ -1,11 +1,11 @@
 import { commands } from "../src/commands/index";
-import type { SlashCommandJSON } from "../src/structs/slash-command-builder";
+import type { SlashCommandJSON } from "../src/structs/command-data";
 
 // Inlined from discord-api-types' Routes.applicationCommands /
 // Routes.applicationGuildCommands (rest/v10). Importing discord.js here (for
 // just those two route-string helpers) pulls in discord-api-types' runtime
 // enums, which crash under the workerd-backed vitest pool this suite runs
-// under — see src/structs/slash-command-builder.ts for the same issue. The
+// under — see src/structs/command-data.ts for the same issue. The
 // routes below are plain, stable string templates, confirmed against
 // discord-api-types@0.38.49's rest/v10/index.js.
 const applicationCommandsRoute = (applicationId: string) => `/applications/${applicationId}/commands`;
@@ -22,7 +22,7 @@ declare const process: {
 const targetGuildId = "457689460096630794";
 
 // The single source of truth for the registration payload: each command's
-// `data` builder (src/structs/slash-command-builder.ts) is already the source
+// `data` definition (src/structs/command-data.ts) is already the source
 // of truth for the name the registry keys commands by. Exported so the test
 // suite can exercise payload building under Node without touching Discord.
 export const buildCommandPayload = (): SlashCommandJSON[] =>

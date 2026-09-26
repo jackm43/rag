@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from "../structs/slash-command-builder";
+import { commandData } from "../structs/command-data";
 
 import type { Command } from "../structs/command";
 
@@ -9,7 +9,7 @@ type RagboardRow = {
 };
 
 export const ragboard: Command = {
-  data: new SlashCommandBuilder().setName("ragboard").setDescription("Show the rag leaderboard"),
+  data: commandData("ragboard", "Show the rag leaderboard"),
   async execute({ env, editReply }) {
     const result = await env.DB.prepare(
       "SELECT ragged_user_id, ragged_username, rag_count FROM rag_totals ORDER BY rag_count DESC, ragged_user_id ASC LIMIT 10",

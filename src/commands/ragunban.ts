@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from "../structs/slash-command-builder";
+import { commandData } from "../structs/command-data";
 
 import { idOption } from "../lib/interaction";
 import type { Command } from "../structs/command";
@@ -7,12 +7,9 @@ type DeleteResult = { meta?: { changes?: number } };
 
 export const ragunban: Command = {
   adminOnly: true,
-  data: new SlashCommandBuilder()
-    .setName("ragunban")
-    .setDescription("Remove a user's current /rag ban")
-    .addUserOption((option) =>
-      option.setName("user").setDescription("User to allow back onto /rag").setRequired(true),
-    ),
+  data: commandData("ragunban", "Remove a user's current /rag ban", [
+    { type: 6, name: "user", description: "User to allow back onto /rag", required: true },
+  ]),
   async execute({ interaction, env, editReply }) {
     const targetId = idOption(interaction, "user");
 

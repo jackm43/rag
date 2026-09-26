@@ -104,11 +104,6 @@ export const downloadMedia = async (url: string): Promise<DownloadedMedia> => {
 // --- REST client ---
 
 const channelRoute = (channelId: string) => `/channels/${channelId}` as const;
-const threadsRoute = (channelId: string, messageId?: string) =>
-  messageId
-    ? `/channels/${channelId}/messages/${messageId}/threads` as const
-    : `/channels/${channelId}/threads` as const;
-
 const auditLogReasonHeader = (reason: string) => encodeURIComponent(reason);
 
 const discordJsonRequest = async (
@@ -179,32 +174,12 @@ export const postChannelMessage = async (
     }),
   });
 
-export const createThreadFromMessage = async (
-  env: Env,
-  channelId: string,
-  messageId: string,
-  name: string,
-): Promise<DiscordChannel | null> => {
-  const payload = await discordJsonRequest(env, threadsRoute(channelId, messageId), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-audit-log-reason": auditLogReasonHeader("Ragbot AI conversation"),
-    },
-    body: JSON.stringify({
-      name,
-      auto_archive_duration: DISCORD_THREAD_AUTO_ARCHIVE_ONE_DAY,
-    }),
-  });
-  return isDiscordChannel(payload) ? payload : null;
-};
-
 export const createThreadWithoutMessage = async (
   env: Env,
   channelId: string,
   name: string,
 ): Promise<DiscordChannel | null> => {
-  const payload = await discordJsonRequest(env, threadsRoute(channelId), {
+  const payload = await discordJsonRequest(env, `/channels/${channelId}/threads`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -316,39 +291,32 @@ const interactionRequestInit = (
   return { method, body: form };
 };
 
-export const editOriginalInteractionResponse = async (
-  env: Env,
-  applicationId: string,
-  interactionToken: string,
-  data: InteractionMessageData,
-  files: InteractionResponseFile[] = [],
+const writeInteraction = async (
+  applicationId: string, interactionToken: string, data: InteractionMessageData,
+  files: InteractionResponseFile[], edit: boolean,
 ): Promise<boolean> => {
   const response = await discordWebhookFetch(
-    `${DISCORD_API_BASE_URL}/webhooks/${applicationId}/${interactionToken}/messages/@original`,
-    interactionRequestInit("PATCH", data, files),
+    `${DISCORD_API_BASE_URL}/webhooks/${applicationId}/${interactionToken}${edit ? "/messages/@original" : ""}`,
+    interactionRequestInit(edit ? "PATCH" : "POST", data, files),
   );
+  // Never log the URL: the interaction token authenticates webhook writes.
   if (!response.ok) {
-    // Never log the interaction token: it authenticates webhook edits.
-    logger.warn("interaction_edit_rejected", { status: response.status, applicationId });
+    logger.warn(edit ? "interaction_edit_rejected" : "interaction_followup_rejected", {
+      status: response.status, applicationId,
+    });
   }
   return response.ok;
 };
 
-export const postInteractionFollowUp = async (
-  applicationId: string,
-  interactionToken: string,
-  data: InteractionMessageData,
-  files: InteractionResponseFile[] = [],
-): Promise<boolean> => {
-  const response = await discordWebhookFetch(
-    `${DISCORD_API_BASE_URL}/webhooks/${applicationId}/${interactionToken}`,
-    interactionRequestInit("POST", data, files),
-  );
-  if (!response.ok) {
-    logger.warn("interaction_followup_rejected", { status: response.status, applicationId });
-  }
-  return response.ok;
-};
+export const editOriginalInteractionResponse = (
+  env: Env, applicationId: string, interactionToken: string,
+  data: InteractionMessageData, files: InteractionResponseFile[] = [],
+) => writeInteraction(applicationId, interactionToken, data, files, true);
+
+export const postInteractionFollowUp = (
+  applicationId: string, interactionToken: string,
+  data: InteractionMessageData, files: InteractionResponseFile[] = [],
+) => writeInteraction(applicationId, interactionToken, data, files, false);
 
 // --- final output policy (ported from responder.ts) ---
 

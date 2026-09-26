@@ -5,11 +5,8 @@ import { commands } from "../src/commands";
 import { isRecord } from "../src/lib/contracts";
 import { jsonResponse } from "../src/lib/http";
 import { errorMessage } from "../src/lib/logger";
-import { RAG_ADMIN_USER_IDS } from "../src/structs/registry";
-import { d1Select, kvKeys, kvText, ProdAccessError } from "./cloudflare-api";
 import type { DevEnv } from "./env";
 import {
-  probeModel,
   resolveDevConfig,
   simulateInteraction,
   simulateMention,
@@ -17,22 +14,12 @@ import {
   type InteractionSimulationInput,
   type MentionSimulationInput,
 } from "./harness";
-import { loadModelCatalog } from "./models";
 import appJs from "./ui/app.client.js";
 import appCss from "./ui/app.css";
 import indexHtml from "./ui/index.html";
 
-const PROD_INTERACTION_COLUMNS =
-  "id, kind, channel_id, message_id, requester_user_id, requester_username, prompt, response_text, model, ai_duration_ms, total_duration_ms, status, error_message, prompt_tokens, completion_tokens, total_tokens, created_at";
-const MAX_LIST_LIMIT = 200;
-
 const text = (body: string, contentType: string) =>
   new Response(body, { headers: { "content-type": contentType, "cache-control": "no-store" } });
-
-const clampLimit = (value: string | null, fallback = 50) => {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, MAX_LIST_LIMIT) : fallback;
-};
 
 const readJson = async (request: Request): Promise<Record<string, unknown>> => {
   const body: unknown = await request.json().catch(() => null);
@@ -139,13 +126,8 @@ const defaultGuildId = (env: DevEnv) => (env.ALLOWED_GUILD_IDS ?? "").split(",")
 
 const meta = async (env: DevEnv) => ({
   applicationId: env.DISCORD_APPLICATION_ID,
-  accountId: env.CF_ACCOUNT_ID,
-  gatewayId: env.CF_AIG_GATEWAY_ID,
   guildId: defaultGuildId(env),
-  allowedGuildIds: env.ALLOWED_GUILD_IDS ?? "",
-  adminUserIds: RAG_ADMIN_USER_IDS,
   hasAigToken: Boolean(env.CF_AIG_TOKEN),
-  hasProdAccess: Boolean(env.CLOUDFLARE_API_TOKEN),
   config: await resolveDevConfig({}),
   commands: [...commands.values()].map((command) => ({
     ...command.data.toJSON(),
@@ -154,110 +136,34 @@ const meta = async (env: DevEnv) => ({
   })),
 });
 
-const prodInteractions = async (env: DevEnv, url: URL) => {
-  const limit = clampLimit(url.searchParams.get("limit"));
-  const kinds = (url.searchParams.get("kind") ?? "")
-    .split(",")
-    .map((kind) => kind.trim())
-    .filter(Boolean);
-  const query = url.searchParams.get("q")?.trim() ?? "";
-  const clauses: string[] = [];
-  const params: unknown[] = [];
-  if (kinds.length > 0) {
-    clauses.push(`kind IN (${kinds.map(() => "?").join(", ")})`);
-    params.push(...kinds);
-  }
-  if (query) {
-    clauses.push("(prompt LIKE ? OR requester_username LIKE ? OR response_text LIKE ?)");
-    params.push(`%${query}%`, `%${query}%`, `%${query}%`);
-  }
-  const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
-  params.push(limit);
-  return d1Select(env, `SELECT ${PROD_INTERACTION_COLUMNS} FROM rag_ai_interactions${where} ORDER BY id DESC LIMIT ?`, params);
-};
-
-const prodConfig = async (env: DevEnv) => {
-  const keys = await kvKeys(env);
-  const values: Record<string, string> = {};
-  await Promise.all(
-    keys.map(async (key) => {
-      const value = await kvText(env, key);
-      if (value !== null) {
-        values[key] = value;
-      }
-    }),
-  );
-  return { keys, values, fetchedAt: new Date().toISOString() };
-};
-
-const localInteractions = async (env: DevEnv, url: URL) => {
-  const limit = clampLimit(url.searchParams.get("limit"));
-  const rows = await env.DB.prepare(`SELECT ${PROD_INTERACTION_COLUMNS} FROM rag_ai_interactions ORDER BY id DESC LIMIT ?`)
-    .bind(limit)
-    .all<Record<string, unknown>>();
-  return rows.results ?? [];
-};
-
 const resetLocalLimits = async (env: DevEnv) => {
   const result = await env.DB.prepare("DELETE FROM rag_ai_requests").run();
   return { deleted: result.meta.changes ?? 0 };
 };
 
+const assets: Record<string, [string, string]> = {
+  "/": [indexHtml, "text/html"],
+  "/app.css": [appCss, "text/css"],
+  "/app.client.js": [appJs, "text/javascript"],
+};
+
 const route = async (request: Request, env: DevEnv): Promise<Response> => {
   const url = new URL(request.url);
-  const { pathname } = url;
-  const method = request.method;
-
-  if (method === "GET" && pathname === "/") {
-    return text(indexHtml, "text/html; charset=utf-8");
+  const asset = assets[url.pathname];
+  if (request.method === "GET" && asset) return text(asset[0], `${asset[1]}; charset=utf-8`);
+  const routes: Record<string, () => Promise<unknown>> = {
+    "GET /api/meta": () => meta(env),
+    "POST /api/config": async () => resolveDevConfig(overridesFrom((await readJson(request)).overrides)),
+    "POST /api/mention": async () => simulateMention(env, mentionInputFrom(env, await readJson(request))),
+    "POST /api/interaction": async () => simulateInteraction(env, interactionInputFrom(env, await readJson(request))),
+    "POST /api/local/reset-limits": () => resetLocalLimits(env),
+  };
+  const key = `${request.method} ${url.pathname}`;
+  if (key === "POST /api/mention" && !env.CF_AIG_TOKEN) {
+    throw new HttpError(503, "CF_AIG_TOKEN is not set for the dev worker; restart via `pnpm run dev:ui`.");
   }
-  if (method === "GET" && pathname === "/app.css") {
-    return text(appCss, "text/css; charset=utf-8");
-  }
-  if (method === "GET" && pathname === "/app.client.js") {
-    return text(appJs, "text/javascript; charset=utf-8");
-  }
-
-  if (method === "GET" && pathname === "/api/meta") {
-    return jsonResponse(await meta(env));
-  }
-  if (method === "GET" && pathname === "/api/models") {
-    return jsonResponse(await loadModelCatalog(env, url.searchParams.get("refresh") === "1"));
-  }
-  if (method === "POST" && pathname === "/api/models/probe") {
-    if (!env.CF_AIG_TOKEN) {
-      throw new HttpError(503, "CF_AIG_TOKEN is not set for the dev worker; restart via `pnpm run dev:ui`.");
-    }
-    const body = await readJson(request);
-    return jsonResponse(await probeModel(env, requireString(body, "model")));
-  }
-  if (method === "POST" && pathname === "/api/config") {
-    const body = await readJson(request);
-    return jsonResponse(await resolveDevConfig(overridesFrom(body.overrides)));
-  }
-  if (method === "POST" && pathname === "/api/mention") {
-    if (!env.CF_AIG_TOKEN) {
-      throw new HttpError(503, "CF_AIG_TOKEN is not set for the dev worker; restart via `pnpm run dev:ui`.");
-    }
-    return jsonResponse(await simulateMention(env, mentionInputFrom(env, await readJson(request))));
-  }
-  if (method === "POST" && pathname === "/api/interaction") {
-    return jsonResponse(await simulateInteraction(env, interactionInputFrom(env, await readJson(request))));
-  }
-  if (method === "GET" && pathname === "/api/prod/interactions") {
-    return jsonResponse({ rows: await prodInteractions(env, url) });
-  }
-  if (method === "GET" && pathname === "/api/prod/config") {
-    return jsonResponse(await prodConfig(env));
-  }
-  if (method === "GET" && pathname === "/api/local/interactions") {
-    return jsonResponse({ rows: await localInteractions(env, url) });
-  }
-  if (method === "POST" && pathname === "/api/local/reset-limits") {
-    return jsonResponse(await resetLocalLimits(env));
-  }
-
-  return new Response("Not found", { status: 404 });
+  const handler = routes[key];
+  return handler ? jsonResponse(await handler()) : new Response("Not found", { status: 404 });
 };
 
 export default {
@@ -272,9 +178,6 @@ export default {
     } catch (error) {
       if (error instanceof HttpError) {
         return jsonResponse({ error: error.message }, error.status);
-      }
-      if (error instanceof ProdAccessError) {
-        return jsonResponse({ error: error.message }, 502);
       }
       return jsonResponse({ error: errorMessage(error) }, 500);
     }

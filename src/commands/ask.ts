@@ -1,16 +1,13 @@
-import { SlashCommandBuilder } from "../structs/slash-command-builder";
+import { commandData } from "../structs/command-data";
 
 import { runAskModeCompletion } from "../lib/ai/ask-mode";
-import { loadConfig } from "../lib/ai/config";
+import { deliverAiReply } from "../lib/ai/reply";
 import { fallbackThreadTitle } from "../lib/db/conversation";
-import { recordAiInteraction } from "../lib/db/interactions";
 import { recordAiThread } from "../lib/db/threads";
 import {
   createThreadWithoutMessage,
   fetchChannel,
-  finalizeAiReplyText,
   isThreadChannel,
-  postChannelMessage,
   sendChannelReply,
 } from "../lib/discord";
 import { errorMessage, logger } from "../lib/logger";
@@ -36,61 +33,15 @@ const generateAskReply = async (
   requesterUserId: string | undefined,
   requesterUsername: string,
 ) => {
-  const startedAt = Date.now();
-  let model = "unknown";
-  let aiDurationMs: number | null = null;
-  let content: string | null = null;
-  let usage: { promptTokens: number; completionTokens: number; totalTokens: number } | null = null;
-  const record = (status: "ok" | "error", errorText: string | null) =>
-    recordAiInteraction(env, {
-      kind: "ask",
-      channelId: threadId,
-      requesterUserId,
-      requesterUsername,
-      prompt,
-      model,
-      status,
-      responseText: content,
-      errorMessage: errorText,
-      aiDurationMs,
-      totalDurationMs: Date.now() - startedAt,
-      usage,
-    });
-
-  try {
-    const config = await loadConfig(env);
-    model = config.responseModel;
-    const attribution = { kind: "ask", requesterUserId, requesterUsername, channelId: threadId };
-
-    const aiStartedAt = Date.now();
-    const { result, responseText } = await runAskModeCompletion(
-      env,
-      config,
-      {
-        prompt,
-        requesterUsername,
-        conversation: [{ role: "user", content: `${requesterUsername}: ${prompt}` }],
-        // A fresh thread has no prior turns to feed the web-search prompt.
-        webSearchContext: [],
-      },
-      attribution,
-    );
-    model = result.model;
-    usage = result.usage ?? null;
-    aiDurationMs = Date.now() - aiStartedAt;
-    content = finalizeAiReplyText(responseText);
-
-    const posted = await postChannelMessage(env, threadId, content);
-    if (!posted.ok) {
-      throw new Error(`discord_channel_post_failed_${posted.status}`);
-    }
-    await record("ok", null);
-  } catch (error) {
-    logger.error("ai_job_failed", { error: errorMessage(error) });
-    await record("error", errorMessage(error));
-    await sendChannelReply(
-      env,
-      threadId,
+  const attribution = { kind: "ask", requesterUserId, requesterUsername, channelId: threadId };
+  const ok = await deliverAiReply(env, { ...attribution, prompt }, (config) =>
+    runAskModeCompletion(env, config, {
+      prompt, requesterUsername,
+      conversation: [{ role: "user", content: `${requesterUsername}: ${prompt}` }],
+      webSearchContext: [],
+    }, attribution));
+  if (!ok) {
+    await sendChannelReply(env, threadId,
       "I started this thread, but the AI response failed. Try again in a moment.",
     ).catch(() => undefined);
   }
@@ -98,17 +49,9 @@ const generateAskReply = async (
 
 export const ask: Command = {
   aiLimited: true,
-  data: new SlashCommandBuilder()
-    .setName("ask")
-    .setDescription("Start an AI conversation in a new thread")
-    .addStringOption((option) =>
-      option
-        .setName("prompt")
-        .setDescription("Question or topic for the new thread")
-        .setRequired(true)
-        .setMinLength(1)
-        .setMaxLength(6000),
-    ),
+  data: commandData("ask", "Start an AI conversation in a new thread", [
+    { type: 3, name: "prompt", description: "Question or topic for the new thread", required: true, min_length: 1, max_length: 6000 },
+  ]),
   async execute({ interaction, env, editReply }) {
     const prompt = stringOption(interaction, "prompt");
     const parentChannelId = interaction.channel_id;

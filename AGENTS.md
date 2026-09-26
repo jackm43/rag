@@ -23,11 +23,11 @@ operator routes; interaction handling for slash commands goes through
 - `src/env.ts` — the `Env` interface: every binding, var, and secret the
   worker uses, in one place.
 - `src/commands/` — one file per slash command, evobot-style (each exports a
-  `Command`: a `SlashCommandBuilder`-style `data` plus an `execute`).
+  `Command`: declarative `data` from `commandData` plus an `execute`).
   `src/commands/index.ts` is the registry `Map`, keyed by `data.name` — the
   single source of truth both dispatch and command registration read from.
-- `src/structs/` — `Command`/registry types, the slash-command builder
-  (`slash-command-builder.ts`), and the `DiscordGateway` Durable Object
+- `src/structs/` — `Command`/registry types, the slash-command definitions
+  (`command-data.ts`), and the `DiscordGateway` Durable Object
   (`gateway.ts`).
 - `src/events/` — gateway websocket event handlers (`messageCreate.ts` →
   mention handling → AI reply).

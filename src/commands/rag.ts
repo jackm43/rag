@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from "../structs/slash-command-builder";
+import { commandData } from "../structs/command-data";
 
 import { activeRagBanForUser, formatBanExpiry } from "../lib/db/bans";
 import { idOption, requireInvoker, getTargetUsername } from "../lib/interaction";
@@ -9,12 +9,9 @@ type RagRow = { rag_count: number };
 // /rag is a public command; a raghammer ban is the only thing that forbids it.
 // The ban lookup plus the D1 write flow run inside the deferred window.
 export const rag: Command = {
-  data: new SlashCommandBuilder()
-    .setName("rag")
-    .setDescription("Record a rag against a user")
-    .addUserOption((option) =>
-      option.setName("user").setDescription("User to mark as ragging").setRequired(true),
-    ),
+  data: commandData("rag", "Record a rag against a user", [
+    { type: 6, name: "user", description: "User to mark as ragging", required: true },
+  ]),
   async execute({ interaction, env, editReply }) {
     const invoker = requireInvoker(interaction);
     const targetId = idOption(interaction, "user");

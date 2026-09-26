@@ -142,10 +142,6 @@ const main = async () => {
       throw new Error(`${name} is required (add its op:// reference to ${SECRETS_FILES.at(-1)} or export it)`);
     }
   }
-  if (!secrets.CLOUDFLARE_API_TOKEN) {
-    console.warn("CLOUDFLARE_API_TOKEN unavailable: the production replay/config panels will be disabled.");
-  }
-
   const childEnv = {
     ...process.env,
     // wrangler dev would otherwise load the bot's .env, whose unresolved op://

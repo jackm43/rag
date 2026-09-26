@@ -29,9 +29,7 @@ export type DiscordGatewayHealth = {
   resumable: boolean;
 };
 
-// Discord requires resumes to reconnect with the same version + encoding query
-// params as the initial connect. resume_gateway_url arrives without them, so we
-// keep the suffix separate and append it to whichever host we dial.
+// Resume URLs omit the version/encoding query; reconnects need it too.
 const GATEWAY_QUERY = "/?v=10&encoding=json";
 const DISCORD_GATEWAY_URL = `wss://gateway.discord.gg${GATEWAY_QUERY}`;
 const GUILD_MESSAGES_INTENT = 1 << 9;
@@ -39,25 +37,16 @@ const DIRECT_MESSAGES_INTENT = 1 << 12;
 const MESSAGE_CONTENT_INTENT = 1 << 15;
 const GATEWAY_INTENTS = GUILD_MESSAGES_INTENT | DIRECT_MESSAGES_INTENT | MESSAGE_CONTENT_INTENT;
 const GATEWAY_ENABLED_KEY = "gatewayEnabled";
-// Set only by an explicit operator stop(). ensureConnected() (called by the
-// cron trigger) refuses to reconnect while this is set, so automatic wake-ups
-// can never resurrect a deliberate kill switch. A manual start() clears it.
+// Only manual start clears an operator stop; cron must respect the kill switch.
 const GATEWAY_STOPPED_KEY = "gatewayStopped";
 const GATEWAY_WATCHDOG_INTERVAL_MS = 5 * 60_000;
-// Per-message dedupe: Discord's at-least-once resume redelivers MESSAGE_CREATE
-// across a reconnect, so a processed marker must outlive any in-DO window. Keys
-// are pruned by the watchdog alarm once older than this (replaces the old
-// InteractionSession.claim()).
+// Persist dedupe across reconnects/evictions; the watchdog expires old markers.
 const PROCESSED_KEY_PREFIX = "processed:";
 const PROCESSED_TTL_MS = 24 * 60 * 60_000;
-// The synchronous dedupe Set is only a same-tick race guard; storage is the
-// durable record, so it can be bounded (oldest-first eviction).
+// The in-memory race guard is bounded; storage is the durable record.
 const PROCESSED_SET_MAX = 2000;
-// Close codes Discord documents as "do not reconnect": authentication failed,
-// invalid shard, sharding required, invalid API version, invalid/disallowed
-// intents. Retrying every 5s would only hammer the gateway with the same
-// rejected IDENTIFY, so the gateway is disabled instead; the next cron tick's
-// ensureConnected() (or an operator start) retries at that cadence.
+// Fatal authentication/shard/version/intent errors disable 5s retries.
+// Only the next cron tick or manual start retries these failures.
 const FATAL_CLOSE_CODES = new Set([4004, 4010, 4011, 4012, 4013, 4014]);
 // Invalid seq / session timed out: the session is gone, so resume state must be
 // dropped and the reconnect must send a fresh IDENTIFY.
@@ -79,11 +68,7 @@ const isGatewayReady = (value: unknown): value is DiscordGatewayReady =>
   (value.user === undefined ||
     (isRecord(value.user) && typeof value.user.id === "string"));
 
-// The one true singleton name. Historical deployments used older names (the
-// "-v2" suffix exists for a reason); any object addressed by another name is a
-// zombie whose persisted enabled-flag + alarm chain would maintain a SECOND
-// Discord session and double-process every mention. Non-canonical instances
-// self-decommission (see isCanonicalInstance / decommission).
+// Old singleton names must self-decommission to prevent duplicate Discord sessions.
 const GATEWAY_DO_NAME = "discord-gateway-v2";
 
 const gatewayStub = (env: Env) => {
@@ -105,10 +90,7 @@ export const stopGateway = async (env: Env) => gatewayStub(env).stop();
 
 export const getGatewayHealth = async (env: Env) => gatewayStub(env).health();
 
-// Idempotently ensure the gateway websocket is up. Called by the worker's cron
-// trigger, so the connection self-establishes after a deploy and self-heals
-// without any manual /gateway/start. A no-op while the operator has explicitly
-// stopped it, or when the DO binding is absent (e.g. unit tests with a mock env).
+// Cron self-heals the connection unless explicitly stopped (or unbound in tests).
 export const ensureGatewayConnected = async (env: Env) => {
   if (!env.DISCORD_GATEWAY) {
     return { ok: false as const };
@@ -125,9 +107,7 @@ export class DiscordGateway extends DurableObject<Env> {
   private resumeGatewayUrl: string | null = null;
   private botUserId: string | null = null;
   private heartbeatAcknowledged = true;
-  // Synchronous first-line dedupe so two deliveries racing on the same event loop
-  // tick cannot both pass the async storage check. Storage is the durable backstop
-  // for redeliveries that span a DO eviction.
+  // Claim synchronously before the durable check so concurrent deliveries cannot race.
   private readonly processedMessageIds = new Set<string>();
 
   constructor(state: DurableObjectState, env: Env) {
@@ -171,9 +151,7 @@ export class DiscordGateway extends DurableObject<Env> {
   }
 
   async start() {
-    // A manual start clears any operator stop so automatic wake-ups resume.
-    // Independent keys, so initiate together and let the output gate coalesce
-    // the writes; connectGateway() is synchronous and needs no persisted state.
+    // Coalesce independent writes before connecting; manual start clears the stop.
     await Promise.all([
       this.ctx.storage.delete(GATEWAY_STOPPED_KEY),
       this.enableGateway(),
@@ -182,9 +160,7 @@ export class DiscordGateway extends DurableObject<Env> {
     return { ok: true as const };
   }
 
-  // Auto-connect entrypoint for the cron trigger. Unless the operator has
-  // explicitly stopped the gateway, enable and connect (both idempotent:
-  // connectGateway() returns early when already open).
+  // Idempotent cron entrypoint; respect explicit operator stops.
   async ensureConnected() {
     if ((await this.ctx.storage.get<boolean>(GATEWAY_STOPPED_KEY)) === true) {
       return { ok: false, stopped: true };
@@ -194,33 +170,17 @@ export class DiscordGateway extends DurableObject<Env> {
     return { ok: true };
   }
 
-  // Operator kill switch: clear the enabled flag, cancel the watchdog alarm,
-  // close the socket, and forget the resume state so a later start begins with a
-  // fresh IDENTIFY. The alarm handler also checks isGatewayEnabled, so even a
-  // racing alarm cannot resurrect a stopped gateway.
+  // Persist the kill switch and discard the session; later start uses fresh IDENTIFY.
   async stop() {
-    // These writes hit distinct keys/alarm, so initiate them together and let the
-    // output gate coalesce them into one durable batch — the operator stop flag
-    // marks that ensureConnected() must not bring it back up until a manual
-    // start(). Overlaps the (synchronous) socket teardown below; awaited before
-    // return so the RPC still confirms durability.
+    // Coalesce distinct writes while tearing down the socket; await durability before returning.
     const persisted = Promise.all([
       this.ctx.storage.delete(GATEWAY_ENABLED_KEY),
       this.ctx.storage.put(GATEWAY_STOPPED_KEY, true),
       this.ctx.storage.deleteAlarm(),
     ]);
 
-    if (this.reconnectTimer !== undefined) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = undefined;
-    }
-    this.clearHeartbeat();
-
-    const webSocket = this.webSocket;
-    this.webSocket = null;
-    if (webSocket?.readyState === WebSocket.OPEN || webSocket?.readyState === WebSocket.CONNECTING) {
-      webSocket.close(1000, "stop");
-    }
+    this.clearReconnect();
+    this.closeSocket(1000, "stop");
 
     this.resetSession();
     await persisted;
@@ -277,28 +237,20 @@ export class DiscordGateway extends DurableObject<Env> {
       return;
     }
 
-    if (this.reconnectTimer !== undefined) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = undefined;
-    }
+    this.clearReconnect();
 
     const webSocket = new WebSocket(
       this.resumeGatewayUrl ? `${this.resumeGatewayUrl}${GATEWAY_QUERY}` : DISCORD_GATEWAY_URL,
     );
     this.webSocket = webSocket;
     webSocket.addEventListener("message", (event) => {
-      // Only the current socket handles events. A socket this object has already
-      // let go of (a reconnect or a connect race that opened a second socket)
-      // must not keep processing — otherwise it double-processes every message.
-      // The close/error handlers below guard the same way.
+      // Ignore discarded sockets to prevent duplicate message processing.
       if (this.webSocket !== webSocket) {
         return;
       }
       void this.handleMessage(event);
     });
-    // Ignore events from sockets this object has already let go of (stop() and
-    // reconnect() null out this.webSocket first), so a deliberate close does not
-    // schedule a reconnect.
+    // A deliberate close must not schedule a reconnect.
     webSocket.addEventListener("close", (event) => {
       if (this.webSocket !== webSocket) {
         return;
@@ -348,37 +300,28 @@ export class DiscordGateway extends DurableObject<Env> {
       this.lastSequence = payload.s;
     }
 
-    if (payload.op === 10 && isGatewayHello(payload.d)) {
-      this.startHeartbeat(payload.d);
-      this.identifyOrResume();
-      return;
-    }
-
-    if (payload.op === 11) {
-      this.heartbeatAcknowledged = true;
-      return;
-    }
-
-    if (payload.op === 1) {
-      this.sendHeartbeat();
-      return;
-    }
-
-    if (payload.op === 7) {
-      this.reconnect();
-      return;
-    }
-
-    if (payload.op === 9) {
-      if (payload.d !== true) {
-        this.resetSession();
-      }
-      this.reconnect();
-      return;
-    }
-
-    if (payload.op !== 0) {
-      return;
+    switch (payload.op) {
+      case 10:
+        if (isGatewayHello(payload.d)) {
+          this.startHeartbeat(payload.d);
+          this.identifyOrResume();
+        }
+        return;
+      case 11:
+        this.heartbeatAcknowledged = true;
+        return;
+      case 1:
+        this.sendHeartbeat();
+        return;
+      case 9:
+        if (payload.d !== true) this.resetSession();
+        this.reconnect();
+        return;
+      case 7:
+        this.reconnect();
+        return;
+      case 0: break;
+      default: return;
     }
 
     if (payload.t === "READY" && isGatewayReady(payload.d)) {
@@ -391,18 +334,12 @@ export class DiscordGateway extends DurableObject<Env> {
     }
 
     if (payload.t === "MESSAGE_CREATE" && isDiscordMessage(payload.d)) {
-      // Process the mention off the socket read loop: a slow model call or reply
-      // must never delay heartbeats or subsequent gateway frames, and a crashed
-      // reply must not kill the websocket. All errors are contained inside
-      // processMention.
+      // Slow or failed replies must not delay heartbeats; processMention contains errors.
       void this.processMention(payload.d);
     }
   }
 
-  // Dedupe + in-process mention handling. The synchronous Set guard runs before
-  // any await so concurrent redeliveries cannot both proceed; the storage marker
-  // is the durable backstop for redeliveries spanning a DO eviction. Every error
-  // is caught — a failed reply leaves the socket untouched.
+  // Claim in memory before awaiting storage; contain failures to preserve the socket.
   private async processMention(message: DiscordMessage) {
     const messageId = message.id;
     if (this.processedMessageIds.has(messageId)) {
@@ -479,13 +416,22 @@ export class DiscordGateway extends DurableObject<Env> {
     }
   }
 
-  private reconnect() {
+  private closeSocket(code: number, reason: string) {
     this.clearHeartbeat();
-    const webSocket = this.webSocket;
-    this.webSocket = null;
-    if (webSocket?.readyState === WebSocket.OPEN || webSocket?.readyState === WebSocket.CONNECTING) {
-      webSocket.close(4000, "reconnect");
+    const socket = this.webSocket;
+    this.webSocket = null; // Ignore close events from the discarded socket.
+    if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
+      socket.close(code, reason);
     }
+  }
+
+  private clearReconnect() {
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
+  }
+
+  private reconnect() {
+    this.closeSocket(4000, "reconnect");
     this.scheduleReconnect();
   }
 
