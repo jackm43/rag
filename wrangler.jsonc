@@ -1,18 +1,9 @@
 {
   "name": "ragbot-worker",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-04-23",
-  "rules": [
-    {
-      "type": "Text",
-      "globs": [
-        "**/*.md"
-      ],
-      "fallthrough": true
-    }
-  ],
+  "main": "src/entry.py",
+  "compatibility_date": "2026-09-26",
   "compatibility_flags": [
-    "nodejs_compat"
+    "python_workers"
   ],
   "workers_dev": false,
   "routes": [
@@ -35,8 +26,6 @@
       "migrations_dir": "migrations"
     }
   ],
-  // AI prompt/config store. loadConfig reads keys (file basenames) with a
-  // bundled fallback, so a fresh or empty namespace still works.
   "kv_namespaces": [
     {
       "binding": "AI_CONFIG",
@@ -75,5 +64,8 @@
     "crons": [
       "*/15 * * * *"
     ]
+  },
+  "build": {
+    "command": "uv run python scripts/bundle_config.py"
   }
 }

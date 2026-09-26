@@ -1,123 +1,84 @@
 # Working in this repo
 
-Read the [README](README.md) first for what the system is and how to run it.
-This file is the developer/agent guide: the architecture, the invariants you
-must not regress, and the checklists for adding things.
+Read [README.md](README.md) first. This project is one Cloudflare **Python
+Worker**, `ragbot-worker`, with a `DiscordGateway` Durable Object. There are no
+other deployed Workers, internal queues, or service-binding hops.
 
-Run `pnpm run check` (tsc --noEmit) and `pnpm test` before calling anything
-done. Wrangler needs Node 22+. Commands that touch secrets go through
-`op run --env-file=.env --`.
+Run `pnpm run check`, `pnpm test`, and `pnpm run test:runtime` before calling
+runtime changes done. Run a deployment dry run when changing packaging or
+bindings. Node 22+, pnpm, and uv 0.12.3+ are required. Commands using secrets go
+through `op run --env-file=.env --`; `pnpm run dev:ui` wraps op itself and also
+loads `.env.dev`. Do not log secrets or resolve them into committed files.
 
 ## Architecture
 
-One Cloudflare Worker, `ragbot-worker` (`wrangler.jsonc`, entry `src/index.ts`).
-No workspace, no other deployed workers, no internal queues — everything runs
-in-process. The `DiscordGateway` Durable Object (`src/structs/gateway.ts`)
-keeps the persistent Discord websocket alive and is controlled by the
-operator routes; interaction handling for slash commands goes through
-`/interactions` on the worker's own `fetch`.
+- `src/entry.py`: HTTP signature/bearer authentication, routing, cron, and
+  Worker/Durable Object entrypoints.
+- `src/ragbot/env.py`: all application bindings, variables, and secrets.
+- `src/ragbot/app.py`: dependency composition, command dispatch and mentions.
+- `src/ragbot/commands/`: decorator registry and moderation/chat/media handlers.
+  The registry is the single source for dispatch and command registration.
+- `src/ragbot/gateway.py`: WebSocket lifecycle, heartbeat, reconnects, dedupe.
+- `src/ragbot/discord.py`: Workers-native REST client, attachments, media caps.
+- `src/ragbot/ai.py`, `config.py`, `conversation.py`, `reconcile.py`: inference,
+  config, shared chat/search routing, reply analytics and spend reconciliation.
+- `src/ragbot/db.py`: parameterized D1 access, bans, limits, guilds, threads.
+- `src/ragbot/security.py`, `policy.py`: external auth and Discord output policy.
+- `dev/`: local-only UI and simulations. It imports production services, but
+  nothing in `src/` may import `dev/`. Its staged bundle has no routes,
+  `workers_dev: false`, and a `DEV_UI` guard. Never deploy it.
 
-- `src/index.ts` — the fetch handler: verifies and dispatches
-  `POST /interactions`, the `GATEWAY_CONTROL_TOKEN`-gated gateway control
-  routes, and `scheduled()` (AI spend reconciliation cron).
-- `src/env.ts` — the `Env` interface: every binding, var, and secret the
-  worker uses, in one place.
-- `src/commands/` — one file per slash command, evobot-style (each exports a
-  `Command`: declarative `data` from `commandData` plus an `execute`).
-  `src/commands/index.ts` is the registry `Map`, keyed by `data.name` — the
-  single source of truth both dispatch and command registration read from.
-- `src/structs/` — `Command`/registry types, the slash-command definitions
-  (`command-data.ts`), and the `DiscordGateway` Durable Object
-  (`gateway.ts`).
-- `src/events/` — gateway websocket event handlers (`messageCreate.ts` →
-  mention handling → AI reply).
-- `src/lib/` — everything else: Discord REST client (`discord.ts`), Ed25519
-  request verification (`verify.ts`), AI (`ai/`: inference client, per-feature
-  config loaded from `ai/ai-config` with a KV override, spend tracking,
-  reconciliation, and `ask-mode.ts`'s `runAskModeCompletion` — the one
-  web-search-vs-chat router shared by `/ask` and tracked-thread replies), D1
-  access (`db/`: bans, limits, threads, guilds, mention state, and
-  `interactions.ts` for the shared `rag_ai_interactions` analytics row), wire
-  types/validators (`contracts.ts`), logging (`logger.ts`).
+Use Python dataclasses and explicit dependency injection. `discord-typings`
+supplies wire types; do not replace the Durable Object with a socket-based bot
+framework. Use the Workers SDK with Python values for D1, KV, AI and RPC.
+Explicit `to_js` conversions belong only at raw JavaScript API boundaries.
 
-- `dev/` — the local-only debugging UI (`pnpm run dev:ui`, config
-  `wrangler.dev.jsonc`, launcher `scripts/dev-ui.ts`). `dev/harness.ts` drives
-  `handleMessageCreate` / `dispatch` with synthetic Discord events under an
-  AsyncLocalStorage fetch tap (`dev/fetch-tap.ts`) that stubs discord.com and
-  records the AI Gateway exchange; `dev/ui/` is the static page. It imports from
-  `src/` but nothing in `src/` may import from `dev/`, and it must never be
-  deployed (no routes, `workers_dev: false`, `DEV_UI` guard).
+## Invariants
 
-## Trust model (do not regress)
+- Verify Discord Ed25519 signatures on every POST `/interactions` **before**
+  parsing/dispatch. Signatures cover the timestamp plus exact raw body bytes.
+  Preserve the five-minute timestamp window.
+- `/gateway/start`, `/gateway/stop`, `/gateway/health` require the configured
+  bearer token. Authentication fails closed. Denials have bare status codes.
+- Logs must never contain request bodies, headers, tokens or secrets. Avoid
+  logging arbitrary exception messages from third-party libraries.
+- Use only the fixed Discord/AI/Cloudflare API hosts at credential injection
+  sites. Webhook URLs contain credentials and must be redacted in dev capture.
+- D1 `ragbot` is durable data. Change schema through `migrations/` only;
+  `schema.sql` is a read-only mirror. Keep existing resource IDs and migration
+  history unless explicitly changing infrastructure.
+- AI usage and AI ban checks deliberately fail open on D1 errors. `/rag` writes
+  and authentication do not. Cron prunes the burst log after a day.
+- Download media with the 25 MiB streaming cap; never replace it with unbounded
+  buffering. Discord bot credentials must never accompany provider media.
+- Suppress mentions, raw IDs, and URL embeds at the shared AI reply boundary.
+- Gateway close codes 4004 and 4010–4014 disable rapid retries. Cron or explicit
+  start can retry them. An operator stop persists across eviction and cron.
+- Keep `DiscordGateway`, singleton `discord-gateway-v2`, storage keys and
+  migration history compatible with existing Durable Objects. Retire stale
+  singleton instances rather than allowing duplicate gateway sessions.
 
-- **External edges always verify.** This is the only authentication boundary
-  in the system and must never be dropped:
-  - Discord's Ed25519 signature is verified on every `POST /interactions`
-    request before any command runs (`src/lib/verify.ts`).
-  - The gateway control routes (`/gateway/start`, `/gateway/stop`,
-    `/gateway/health`) require `Authorization: Bearer $GATEWAY_CONTROL_TOKEN`.
-- Everything past those edges is one process calling its own functions —
-  there is no internal signing, no service-binding RPC, no queue transport to
-  trust or verify.
-- **Fail closed, disclose nothing**: denials return a bare status; the reason
-  is logged, never echoed. Never log request bodies, headers, tokens, or
-  secrets.
-- Outbound HTTP (Discord REST/media, AI Gateway, Cloudflare API for spend
-  reconciliation) is a plain in-process `fetch`, credential injected at the
-  call site from `env`. Hosts are fixed and known at the call site.
-- D1 `ragbot` is the durable data: bans, spend, AI threads, guild config.
-  Change the schema via `migrations/` only; `schema.sql` is a read-only
-  mirror, never hand-edited.
+## Adding features
 
-## How to add things
+Add commands using `@command(...)` in `src/ragbot/commands/` and import the
+module in its `__init__.py`. Register with
+`op run --env-file=.env -- pnpm run register:commands` only when requested.
 
-**A new slash command:** add `src/commands/<name>.ts` exporting a `Command`
-(`data` + `execute`), add it to the array in `src/commands/index.ts`. Run
-`op run --env-file=.env -- pnpm run register:commands` to push the payload to
-Discord (guild-scoped; see `targetGuildId` in `scripts/register-commands.ts`).
+Add AI model/config/prompt files in `src/ragbot/ai_config/` and read via
+`ConfigStore` (KV-first, bundled fallback). Run `pnpm run build` after editing
+resources. `_bundled.py` is generated; do not edit it directly.
 
-**A new gateway/mention event handler:** add it under `src/events/`, wire it
-from `src/structs/gateway.ts` where the websocket dispatch happens.
-
-**A new AI feature/config:** add its JSON (and prompt `.md` if needed) to
-`src/lib/ai/ai-config/`, read it through `loadConfig` (KV-first, bundled
-fallback) — don't hardcode prompts/model ids in command code.
-
-## Key flows (mental model)
-
-```
-Discord interaction → POST /interactions → verify Ed25519 → dispatch to
-        command.execute (src/commands/<name>.ts) → D1 / AI → reply/edit
-Discord mention → DiscordGateway DO websocket → src/events/messageCreate →
-        AI + D1 → reply
-Cron → scheduled() → src/lib/ai/reconcile.ts → AI Gateway logs → D1 spend rows
-```
+Regenerate `src/js-stubs` with `pnpm run types` after binding/config changes.
+Do not edit generated platform stubs by hand.
 
 ## Testing
 
-`pnpm test` runs vitest inside workerd (`@cloudflare/vitest-pool-workers`;
-`vitest.config.ts` boots the worker from `./src/index.ts` and applies D1
-migrations before each suite). Tests live flat under `test/*.test.ts` and
-exercise the worker's fetch handler / command modules directly — no mocking
-of internal RPC, since there isn't any.
+`pnpm test` runs pytest with the actual SQLite migrations, injected HTTP
+transports and a fake gateway socket. Test behaviors and security invariants.
+`pnpm run test:runtime` runs an isolated local Python Worker with D1 and a
+Discord-like WebSocket peer, so FFI bugs are exercised in workerd too. Test
+workers and their credentials live only in temporary bundles. No test should
+contact live Discord, paid AI models, or production data.
 
-## Gotchas
-
-- Node 22+ for wrangler; `pnpm install`.
-- D1: change schema via `migrations/` only. The AI usage guard fails open on
-  D1 errors (deliberate); the Discord signature check and gateway control
-  token fail closed. The cron also prunes `rag_ai_requests` (the burst-guard
-  log) after a day, so that table never grows unbounded.
-- Generated media (`/bicture`, `/ragjam`) is downloaded through
-  `downloadMedia` in `src/lib/discord.ts`, which enforces the 25 MiB cap while
-  streaming — do not replace it with a bare `fetch(...).arrayBuffer()`.
-- The gateway DO treats Discord close codes 4004/4010–4014 as fatal: it
-  disables itself instead of reconnecting every 5 s, and the next cron
-  `ensureConnected()` (or an operator `/gateway/start`) is what retries.
-- `worker-configuration.d.ts` is generated (`wrangler types`) — regenerate it
-  after changing `wrangler.jsonc` bindings/vars, don't hand-edit it.
-- The former multi-worker platform (a separate auth/API-Gateway worker, plus
-  gateway/workflows/responder/spend workers talking over internal queues) has
-  been collapsed into this single worker. Any leftover Cloudflare-side
-  resources from that platform (extra Worker scripts, queues, KV namespaces)
-  are decommissioned out of band, not by this repo.
+Former multi-worker Cloudflare resources are decommissioned out of band,
+never by this repository migration.

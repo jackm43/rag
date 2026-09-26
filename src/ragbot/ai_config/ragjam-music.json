@@ -1,0 +1,6 @@
+{
+  "model": "minimax/music-2.6",
+  "gatewayId": "platy",
+  "isInstrumental": false,
+  "lyricsOptimizer": false
+}
