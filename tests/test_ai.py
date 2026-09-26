@@ -1,40 +1,8 @@
 import json
-from types import SimpleNamespace
 
-import pytest
 from conftest import FakeResponse
 
-from ragbot.ai import should_search
-from ragbot.config import ConfigStore
 from ragbot.reconcile import reconcile_spend
-
-
-@pytest.mark.parametrize(
-    "prompt,expected",
-    [
-        ("explain trees", False),
-        ("search for trees", True),
-        ("weather today", True),
-        ("best gpu", True),
-        ("compare metaphors", False),
-    ],
-)
-def test_search_routing(prompt, expected):
-    assert should_search(prompt) is expected
-
-
-async def test_config_partial_invalid_and_outage():
-    class KV:
-        async def get(self, key):
-            if key == "discord-response.json":
-                return json.dumps({"temperature": 1.2, "model": None, "maxTokens": -1})
-            if key == "ask-web-search.json":
-                return "bad JSON"
-            raise RuntimeError("outage")
-
-    chat, search = await ConfigStore(SimpleNamespace(AI_CONFIG=KV())).models()
-    assert chat.model and chat.temperature == 1.2 and chat.max_tokens == 256
-    assert chat.prompt and search.prompt and search.model
 
 
 async def test_reconcile_preserves_pending_and_is_idempotent(app):

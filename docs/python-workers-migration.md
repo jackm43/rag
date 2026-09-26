@@ -25,26 +25,15 @@ discord.py's heartbeat uses `threading.Thread`, which this runtime cannot start.
 The failure occurs before a usable gateway session is established. It is not an
 aiohttp import or networking failure.
 
-Reproduce without credentials or contacting Discord:
-
-```sh
-uv run python scripts/probe_discord_py.py
-```
-
-The runner stages `experiments/discord_py` in a temporary directory, boots
-workerd, prints each capability's result, and removes the temporary Worker.
-A zero exit code means the probe completed; inspect the heartbeat result to
-assess compatibility. These experimental files are outside the production
-bundle. Dependency pins record the tested Discord/aiohttp versions; transitive
-packages still resolve against the available Pyodide package index.
+The one-off compatibility probe was retired after the migration; its tested
+results are recorded above and its source remains in Git history.
 
 The discord.py adaptation was subsequently tested with an asyncio heartbeat
 and Workers HTTP bridge. It passed local integration tests, but depended on
 private library interfaces while retaining our DO lifecycle and command
 framework. The final deployment uses the smaller Workers-native version. Its
 HTTP client now implements Discord bucket/global cooldowns and bounded retries,
-without importing discord.py. The compatibility experiment remains available
-for reference.
+without importing discord.py. The historical experiment is available in Git history.
 
 Sources reviewed:
 - https://developers.cloudflare.com/workers/languages/python/
@@ -75,9 +64,8 @@ Sources reviewed:
 
 ## Validation and rollout
 
-`pnpm test` exercises commands, SQL transactions, guards, configuration,
-reconciliation, message handling, output policy, streaming caps, gateway state,
-and local simulations. `pnpm run test:runtime` stages an isolated worker with
+`pnpm test` focuses on primary command, moderation, conversation, media, and
+spend workflows. `pnpm run test:runtime` stages an isolated worker with
 local D1, test credentials, and stubbed Discord/AI responses. It exercises
 production HTTP authentication, Durable Object storage/control, real D1 batch
 conversion, slash commands, analytics, multipart bodies, and a local Discord-like

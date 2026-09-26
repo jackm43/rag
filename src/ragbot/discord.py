@@ -44,21 +44,25 @@ async def download_media(url: str, *, transport: Transport = fetch) -> tuple[byt
         if body:
             await body.cancel()
         raise MediaTooLargeError("media response exceeds 25 MiB")
-    data = bytearray()
-    if body:
-        reader = body.getReader()
-        try:
-            while True:
-                result = await reader.read()
-                if result.done:
-                    break
-                if len(data) + result.value.byteLength > MEDIA_MAX_BYTES:
-                    await reader.cancel()
-                    raise MediaTooLargeError("media response exceeds 25 MiB")
-                data.extend(result.value.to_py())
-        finally:
-            reader.releaseLock()
-    return bytes(data), response.headers.get("content-type")
+    return await read_media(body), response.headers.get("content-type")
+
+
+async def read_media(body) -> bytes:
+    """Bound streaming images and downloads before copying each chunk into Python."""
+    if not body:
+        return b""
+    reader, data = body.getReader(), bytearray()
+    try:
+        while True:
+            result = await reader.read()
+            if result.done:
+                return bytes(data)
+            if len(data) + result.value.byteLength > MEDIA_MAX_BYTES:
+                await reader.cancel()
+                raise MediaTooLargeError("media response exceeds 25 MiB")
+            data.extend(result.value.to_py())
+    finally:
+        reader.releaseLock()
 
 
 def is_message(value: Any, depth: int = 1) -> bool:

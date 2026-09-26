@@ -2,7 +2,7 @@ import base64
 import logging
 import re
 
-from ..discord import MEDIA_MAX_BYTES, Attachment, MediaTooLargeError, download_media
+from ..discord import MEDIA_MAX_BYTES, Attachment, MediaTooLargeError, download_media, read_media
 from ..policy import truncate_discord
 from .registry import CommandContext, command, text_option
 
@@ -25,19 +25,7 @@ async def image_file(result, transport) -> Attachment:
     if isinstance(result, (bytes, bytearray, memoryview)):
         data = bytes(result)
     elif hasattr(result, "getReader"):
-        reader, buffer = result.getReader(), bytearray()
-        try:
-            while True:
-                item = await reader.read()
-                if item.done:
-                    break
-                if len(buffer) + item.value.byteLength > MEDIA_MAX_BYTES:
-                    await reader.cancel()
-                    raise MediaTooLargeError("image exceeds 25 MiB")
-                buffer.extend(item.value.to_py())
-        finally:
-            reader.releaseLock()
-        data = bytes(buffer)
+        data = await read_media(result)
     else:
         value = result if isinstance(result, str) else media_string(result, "image")
         if not value and isinstance(result, dict) and result.get("data"):

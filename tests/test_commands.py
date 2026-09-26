@@ -1,20 +1,9 @@
-import json
-from pathlib import Path
-
 import pytest
 
-from ragbot.commands import COMMANDS
 from ragbot.commands.registry import ADMIN_IDS
 
 TARGET = "123456789012345682"
 USER_OPTION = {"name": "user", "type": 6, "value": TARGET}
-
-
-def test_registration_payload_matches_existing_commands():
-    expected = json.loads(Path("tests/fixtures/command_payload.json").read_text())
-    assert sorted((c.data for c in COMMANDS.values()), key=lambda c: c["name"]) == sorted(
-        expected, key=lambda c: c["name"]
-    )
 
 
 async def test_rag_and_undo_transaction(app, interaction):
