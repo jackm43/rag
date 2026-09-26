@@ -10,7 +10,7 @@ from workers import DurableObject, Response, WorkerEntrypoint
 from ragbot.app import Application
 from ragbot.gateway import Gateway, gateway_stub
 from ragbot.reconcile import reconcile_spend
-from ragbot.runtime import env_value, to_python
+from ragbot.runtime import env_value, to_python, wait_until
 from ragbot.security import authorize_control, verify_discord_signature
 
 log = logging.getLogger("ragbot")
@@ -50,7 +50,7 @@ class Default(WorkerEntrypoint):
                 return json_response({"type": 1})
             if interaction.get("type") != 2:
                 return Response(status=400)
-            self.ctx.waitUntil(self.app.dispatch(interaction))
+            wait_until(self.ctx, self.app.dispatch(interaction))
             return json_response({"type": 5})
         controls = {
             ("POST", "/gateway/start"): "start",

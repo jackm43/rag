@@ -15,6 +15,18 @@ from ragbot.gateway import Socket, gateway_stub
 class Default(ProductionDefault):
     async def fetch(self, request):
         path = urlparse(request.url).path
+        if path == "/test/upload":
+            # Check the received wire format, not the sender's FormData object.
+            assert request.headers.get("authorization") is None
+            content_type = request.headers.get("content-type")
+            raw = await request.bytes()
+            boundary = content_type.split("boundary=", 1)[1].strip('"').encode()
+            assert raw.startswith(b"--" + boundary + b"\r\n")
+            assert b'name="payload_json"' in raw
+            assert b'name="files[0]"; filename="test.png"' in raw
+            assert b"Content-Type: image/png" in raw
+            assert b"\r\n\r\nabc\r\n" in raw
+            return Response.json({"id": "123456789012345699"})
         if path == "/test/media":
             return Response(b"image-bytes", headers={"content-type": "image/png"})
         if path == "/test/upstream":
@@ -128,15 +140,15 @@ class Default(ProductionDefault):
         from ragbot.discord import Attachment
 
         async def multipart(url, **options):
-            file = options["body"].get("files[0]")
-            assert file.size == 3
-            assert file.type == "image/png"
-            return Response.json({})
+            from ragbot.runtime import fetch
+
+            return await fetch(request.url.replace("/test/scenario", "/test/upload"), **options)
 
         app.discord.transport = multipart
-        await app.discord.write_interaction(
+        assert await app.discord.write_interaction(
             "app", "token", "image", files=(Attachment("test.png", "image/png", b"abc"),)
         )
+
         return Response.json(
             {
                 "calls": calls,

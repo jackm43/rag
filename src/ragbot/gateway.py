@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .discord import is_message
-from .runtime import to_python
+from .runtime import to_python, wait_until
 
 log = logging.getLogger("ragbot")
 GATEWAY_NAME = "discord-gateway-v2"
@@ -82,7 +82,7 @@ class Gateway:
         task = asyncio.create_task(contained())
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
-        self.ctx.waitUntil(task)
+        wait_until(self.ctx, task)
 
     def canonical(self):
         return self.ctx.id.equals(self.env.DISCORD_GATEWAY.idFromName(GATEWAY_NAME))

@@ -136,6 +136,9 @@ def main():
                 assert gateway["sequence"] == 2, gateway
                 assert gateway["heartbeat"] is True, gateway
                 assert gateway["stopped"] == {"ok": False, "stopped": True}, gateway
+                logs.flush()
+                logs.seek(0)
+                assert "borrowed proxy was automatically destroyed" not in logs.read()
                 print(
                     "Python Workers runtime: signatures, bare denials, Durable Object controls, D1, /rag, /ask, spend, multipart and gateway WebSocket passed."
                 )

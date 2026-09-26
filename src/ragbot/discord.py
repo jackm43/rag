@@ -252,5 +252,12 @@ class DiscordClient:
             self.transport, f"{API_BASE}/webhooks/{application_id}/{token}{suffix}", **options
         )
         if not response.ok:
-            log.warning("interaction_write_rejected status=%s", response.status)
+            code = None
+            try:
+                error = await response.json()
+                if isinstance(error, dict) and isinstance(error.get("code"), int):
+                    code = error["code"]
+            except Exception:
+                pass
+            log.warning("interaction_write_rejected status=%s code=%s", response.status, code)
         return response.ok

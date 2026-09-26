@@ -85,9 +85,12 @@ async def bicture(ctx: CommandContext):
         )
         file = await image_file(result, ctx.app.transport)
         summary = prompt if len(prompt) <= 300 else truncate_discord(prompt, 299) + "..."
-        await ctx.reply(summary, files=(file,))
-    except Exception:
-        log.error("bicture_command_failed")
+        if not await ctx.reply(summary, files=(file,)):
+            await ctx.reply(
+                "The image was generated, but Discord rejected the upload. Please try again."
+            )
+    except Exception as error:
+        log.error("bicture_command_failed error_type=%s", type(error).__name__)
         await ctx.reply("Could not generate that image. Try a different prompt.")
 
 

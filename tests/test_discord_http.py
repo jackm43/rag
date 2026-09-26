@@ -119,3 +119,13 @@ def test_route_keys_ignore_query_and_keep_major_resources():
     )
     assert "secret" not in webhook[0][1]
     assert webhook[1] == ("webhooks", "123", "secret")
+
+
+async def test_rejected_upload_logs_only_status_and_numeric_code(app, caplog):
+    app.transport.handler = lambda url, options: FakeResponse(
+        {"code": 50035, "message": "sensitive provider detail"}, 400
+    )
+    assert not await app.discord.write_interaction("123", "webhook-token", "hello")
+    assert "status=400 code=50035" in caplog.text
+    assert "sensitive provider detail" not in caplog.text
+    assert "webhook-token" not in caplog.text
