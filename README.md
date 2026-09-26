@@ -25,8 +25,9 @@ pnpm run test:runtime
 
 The Python dependencies are locked in `uv.lock`, including a project-local uv
 for the Python Workers build tool. Node is used only for Cloudflare
-Wrangler. Python Workers use Pyodide; ordinary Python socket-based bot clients
-are not a drop-in replacement for the Workers gateway lifecycle.
+Wrangler. Python Workers use Pyodide. discord.py imports and its aiohttp
+networking work here, but its gateway heartbeat requires unsupported threads;
+see the tested results and reproduction in the migration notes.
 
 ## Discord library and Python design
 

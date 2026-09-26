@@ -7,12 +7,44 @@ not discord.js. `discord-typings==0.9.0` is the equivalent Python dependency:
 TypedDict definitions with only `typing_extensions` as a dependency. It imports
 successfully in the actual Python Workers runtime.
 
-`discord.py` is a full bot framework, but depends on `aiohttp` and, on newer
-Python, `audioop-lts`. Its gateway owns an asyncio network lifecycle rather than
-a Workers Durable Object. Importing a package is not evidence that its
-networking and reconnect behavior work in Workers. This migration therefore
-uses wire typings plus a small Workers-native async client. It does not claim
-that discord.py is categorically impossible to adapt.
+`discord.py` is a full bot framework; `discord-typings` supplies types only and
+is not a replacement for that framework. An actual Workers compatibility probe
+on 2026-09-26 tested discord.py 2.7.1 and Pyodide's aiohttp 3.13.5:
+
+| Capability | Local Python Workers result |
+| --- | --- |
+| Package resolution and deployment dry run | Passed, including audioop-lts |
+| Import discord.py and construct/close a Client | Passed |
+| aiohttp HTTP request to a local peer | Passed |
+| aiohttp WebSocket connection and HELLO receive | Passed |
+| discord.py gateway processing of the same HELLO | Failed: `RuntimeError: can't start new thread` |
+
+The last test uses the real `DiscordWebSocket.poll_event()` over a real local
+WebSocket. It reaches `received_message()` and `KeepAliveHandler.start()`;
+discord.py's heartbeat uses `threading.Thread`, which this runtime cannot start.
+The failure occurs before a usable gateway session is established. It is not an
+aiohttp import or networking failure.
+
+Reproduce without credentials or contacting Discord:
+
+```sh
+uv run python scripts/probe_discord_py.py
+```
+
+The runner stages `experiments/discord_py` in a temporary directory, boots
+workerd, prints each capability's result, and removes the temporary Worker.
+A zero exit code means the probe completed; inspect the heartbeat result to
+assess compatibility. These experimental files are outside the production
+bundle. Dependency pins record the tested Discord/aiohttp versions; transitive
+packages still resolve against the available Pyodide package index.
+
+The production client remains unchanged after this experiment. A full
+migration needs an async replacement for discord.py's internal threaded
+heartbeat, followed by validation of reconnects, fatal close codes, persisted
+operator stops and Durable Object eviction. That is a runtime adaptation of
+discord.py, not a drop-in library substitution. No claim is made that such an
+adaptation is impossible. A normal Python host supporting threads is another
+option, but changes the requested Workers architecture.
 
 Sources reviewed:
 - https://developers.cloudflare.com/workers/languages/python/
