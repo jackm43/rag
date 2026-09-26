@@ -1,16 +1,7 @@
-import { assert, describe, test } from "vitest";
+import { withFetch } from "./helpers";
+import { assert, expect, describe, test } from "vitest";
 
 import { downloadMedia, MediaTooLargeError, suppressUrlEmbeds } from "../src/lib/discord";
-
-const withFetch = async (respond: () => Response, body: () => Promise<void>) => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => respond();
-  try {
-    await body();
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-};
 
 const chunkedStream = (chunkBytes: number, chunks: number) =>
   new ReadableStream<Uint8Array>({
@@ -34,30 +25,15 @@ describe("downloadMedia", () => {
     );
   });
 
-  test("rejects an over-cap declared content-length without reading the body", async () => {
-    await withFetch(
-      () => new Response(chunkedStream(1, 1), { headers: { "content-length": String(26 * 1024 * 1024) } }),
-      async () => {
-        await downloadMedia("https://example.com/big").then(
-          () => assert.fail("expected MediaTooLargeError"),
-          (error) => assert.instanceOf(error, MediaTooLargeError),
-        );
-      },
-    );
-  });
-
-  test("enforces the cap while streaming when no content-length is declared", async () => {
-    // 26 x 1 MiB chunks, no content-length header: the old check let this
-    // buffer all 26 MiB; the streamed cap must abort past 25 MiB.
-    await withFetch(
-      () => new Response(chunkedStream(1024 * 1024, 26)),
-      async () => {
-        await downloadMedia("https://example.com/chunked").then(
-          () => assert.fail("expected MediaTooLargeError"),
-          (error) => assert.instanceOf(error, MediaTooLargeError),
-        );
-      },
-    );
+  test.each([
+    { name: "rejects an over-cap declared content-length without reading the body",
+      response: () => new Response(chunkedStream(1, 1), { headers: { "content-length": String(26 * 1024 * 1024) } }) },
+    { name: "enforces the cap while streaming when no content-length is declared",
+      response: () => new Response(chunkedStream(1024 * 1024, 26)) },
+  ].map(row => [row.name, row] as const))("%s", async (_, { response }) => {
+    await withFetch(response, async () => {
+      await expect(downloadMedia("https://example.com/big")).rejects.toBeInstanceOf(MediaTooLargeError);
+    });
   });
 
   test("throws a plain error on a non-2xx status", async () => {

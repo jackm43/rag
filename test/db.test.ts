@@ -1,3 +1,4 @@
+import { query, insertBan, clearTables } from "./helpers";
 import { env } from "cloudflare:test";
 import { assert, beforeEach, describe, test } from "vitest";
 
@@ -26,39 +27,18 @@ const THREAD_ID = "200000000000000002";
 const CHANNEL_ID = "200000000000000001";
 const MESSAGE_ID = "300000000000000001";
 
-const insertBan = (userId: string, expiresAt: string) =>
-  DB.prepare(
-    "INSERT INTO rag_command_bans (banned_user_id, banned_by_user_id, expires_at) VALUES (?, ?, ?)",
-  )
-    .bind(userId, "moderator", expiresAt)
-    .run();
-
-const throwingDbEnv = {
-  DB: {
-    prepare: () => {
-      throw new Error("d1 unavailable");
-    },
-  },
-} as unknown as Env;
+const throwingDbEnv = { DB: { prepare: () => { throw new Error("d1 unavailable"); } } } as unknown as Env;
 
 // Storage is isolated per test file, not per test, so clear the mutated tables
 // before each test to keep the row-count/budget assertions independent.
 beforeEach(async () => {
-  await DB.batch([
-    DB.prepare("DELETE FROM rag_command_bans"),
-    DB.prepare("DELETE FROM rag_ai_requests"),
-    DB.prepare("DELETE FROM rag_ai_spend_events"),
-    DB.prepare("DELETE FROM rag_ai_threads"),
-  ]);
+  await clearTables("rag_command_bans", "rag_ai_requests", "rag_ai_spend_events", "rag_ai_threads");
 });
 
 describe("bans", () => {
   test("aiBanMessage renders the expiry as a Discord relative timestamp", () => {
     const expiresAt = "2030-01-02T03:04:05.000Z";
-    assert.equal(
-      aiBanMessage(expiresAt),
-      `You cannot use AI commands until <t:${Math.floor(Date.parse(expiresAt) / 1000)}:R>.`,
-    );
+    assert.equal(aiBanMessage(expiresAt), `You cannot use AI commands until <t:${Math.floor(Date.parse(expiresAt) / 1000)}:R>.`);
     assert.equal(aiBanMessage("not-a-date"), "You cannot use AI commands until not-a-date.");
   });
 
@@ -84,19 +64,13 @@ describe("limits", () => {
     const decision = await checkAiUsageAllowed(dbEnv, ALICE_ID, "ask");
     assert.deepEqual(decision, { allowed: true });
 
-    const row = await DB.prepare(
-      "SELECT COUNT(*) AS c FROM rag_ai_requests WHERE requester_user_id = ? AND kind = ?",
-    )
-      .bind(ALICE_ID, "ask")
-      .first<{ c: number }>();
+    const row = await query("SELECT COUNT(*) AS c FROM rag_ai_requests WHERE requester_user_id = ? AND kind = ?", ALICE_ID, "ask").first<{ c: number }>();
     assert.equal(row?.c, 1);
   });
 
   test("checkAiUsageAllowed denies once the trailing-minute burst count reaches the limit", async () => {
     for (let i = 0; i < 8; i += 1) {
-      await DB.prepare("INSERT INTO rag_ai_requests (requester_user_id, kind) VALUES (?, ?)")
-        .bind(BOB_ID, "ask")
-        .run();
+      await query("INSERT INTO rag_ai_requests (requester_user_id, kind) VALUES (?, ?)", BOB_ID, "ask").run();
     }
 
     const decision = await checkAiUsageAllowed(dbEnv, BOB_ID, "ask");
@@ -108,11 +82,10 @@ describe("limits", () => {
   });
 
   test("checkAiUsageAllowed denies once trailing-24h global spend reaches the budget", async () => {
-    await DB.prepare(
+    await query(
       "INSERT INTO rag_ai_spend_events (source_id, kind, requester_user_id, model, estimated_cost_micros, status) VALUES (?, ?, ?, ?, ?, 'aggregated')",
-    )
-      .bind(createAiSpendSourceId(), "ask", ALICE_ID, "test/model", 10_000_000)
-      .run();
+      createAiSpendSourceId(), "ask", ALICE_ID, "test/model", 10_000_000,
+    ).run();
 
     const decision = await checkAiUsageAllowed(dbEnv, ALICE_ID, "bicture");
     assert.deepEqual(decision, {
@@ -123,11 +96,10 @@ describe("limits", () => {
   });
 
   test("checkAiUsageAllowed honours the AI_GLOBAL_DAILY_BUDGET_USD override", async () => {
-    await DB.prepare(
+    await query(
       "INSERT INTO rag_ai_spend_events (source_id, kind, requester_user_id, model, estimated_cost_micros, status) VALUES (?, ?, ?, ?, ?, 'aggregated')",
-    )
-      .bind(createAiSpendSourceId(), "ask", ALICE_ID, "test/model", 24_000_000)
-      .run();
+      createAiSpendSourceId(), "ask", ALICE_ID, "test/model", 24_000_000,
+    ).run();
 
     const underBudget = await checkAiUsageAllowed(
       { DB, AI_GLOBAL_DAILY_BUDGET_USD: "25.00" } as unknown as Env,
@@ -146,15 +118,13 @@ describe("limits", () => {
 
   test("pruneAiRequestLog drops request rows older than a day and keeps fresh ones", async () => {
     await DB.batch([
-      DB.prepare("INSERT INTO rag_ai_requests (requester_user_id, kind, created_at) VALUES (?, 'ask', datetime('now', '-2 days'))").bind(ALICE_ID),
-      DB.prepare("INSERT INTO rag_ai_requests (requester_user_id, kind) VALUES (?, 'ask')").bind(ALICE_ID),
+      query("INSERT INTO rag_ai_requests (requester_user_id, kind, created_at) VALUES (?, 'ask', datetime('now', '-2 days'))", ALICE_ID),
+      query("INSERT INTO rag_ai_requests (requester_user_id, kind) VALUES (?, 'ask')", ALICE_ID),
     ]);
 
     await pruneAiRequestLog(dbEnv);
 
-    const row = await DB.prepare("SELECT COUNT(*) AS c FROM rag_ai_requests WHERE requester_user_id = ?")
-      .bind(ALICE_ID)
-      .first<{ c: number }>();
+    const row = await query("SELECT COUNT(*) AS c FROM rag_ai_requests WHERE requester_user_id = ?", ALICE_ID).first<{ c: number }>();
     assert.equal(row?.c, 1);
     // Best-effort: a D1 failure is swallowed.
     await pruneAiRequestLog(throwingDbEnv);
@@ -171,26 +141,12 @@ describe("limits", () => {
 
 describe("threads", () => {
   test("recordAiThread upserts and findAiThread reads it back", async () => {
-    await recordAiThread(dbEnv, {
-      threadId: THREAD_ID,
-      parentChannelId: CHANNEL_ID,
-      sourceMessageId: MESSAGE_ID,
-      requesterUserId: ALICE_ID,
-      requesterUsername: "alice",
-      initialPrompt: "Explain queues",
-      title: "Queue chat",
-    });
-
-    const stored = await findAiThread(dbEnv, THREAD_ID);
-    assert.deepEqual(stored, {
-      threadId: THREAD_ID,
-      parentChannelId: CHANNEL_ID,
-      sourceMessageId: MESSAGE_ID,
-      requesterUserId: ALICE_ID,
-      requesterUsername: "alice",
-      initialPrompt: "Explain queues",
-      title: "Queue chat",
-    });
+    const thread = {
+      threadId: THREAD_ID, parentChannelId: CHANNEL_ID, sourceMessageId: MESSAGE_ID,
+      requesterUserId: ALICE_ID, requesterUsername: "alice", initialPrompt: "Explain queues", title: "Queue chat",
+    };
+    await recordAiThread(dbEnv, thread);
+    assert.deepEqual(await findAiThread(dbEnv, THREAD_ID), thread);
 
     // ON CONFLICT updates the existing row rather than inserting a duplicate.
     await recordAiThread(dbEnv, {
@@ -251,35 +207,16 @@ describe("spend", () => {
   test("recordAiSpendEvent inserts a pending estimate row", async () => {
     const sourceId = createAiSpendSourceId();
     await recordAiSpendEvent(dbEnv, {
-      kind: "ask",
-      requesterUserId: ALICE_ID,
-      requesterUsername: "alice",
-      model: "test/model",
-      promptTokens: 10,
-      completionTokens: 20,
-      totalTokens: 30,
-      sourceId,
+      kind: "ask", requesterUserId: ALICE_ID, requesterUsername: "alice", model: "test/model",
+      promptTokens: 10, completionTokens: 20, totalTokens: 30, sourceId,
     });
 
-    const row = await DB.prepare(
-      "SELECT kind, requester_user_id, model, prompt_tokens, total_tokens, status FROM rag_ai_spend_events WHERE source_id = ?",
-    )
-      .bind(sourceId)
-      .first<{
-        kind: string;
-        requester_user_id: string;
-        model: string;
-        prompt_tokens: number;
-        total_tokens: number;
-        status: string;
-      }>();
-
-    assert.equal(row?.kind, "ask");
-    assert.equal(row?.requester_user_id, ALICE_ID);
-    assert.equal(row?.model, "test/model");
-    assert.equal(row?.prompt_tokens, 10);
-    assert.equal(row?.total_tokens, 30);
-    assert.equal(row?.status, "pending");
+    const row = await query(
+      "SELECT kind, requester_user_id, model, prompt_tokens, total_tokens, status FROM rag_ai_spend_events WHERE source_id = ?", sourceId,
+    ).first();
+    assert.deepEqual(row, {
+      kind: "ask", requester_user_id: ALICE_ID, model: "test/model", prompt_tokens: 10, total_tokens: 30, status: "pending",
+    });
   });
 
   test("recordAiSpendEvent skips events without a requester user id", async () => {

@@ -74,35 +74,7 @@ export type AiThread = {
   title: string;
 };
 
-export type AiThreadStartJob = {
-  kind: "thread_start";
-  channelId: string;
-  messageId: string;
-  botUserId?: string;
-  requesterUserId?: string;
-  requesterUsername?: string;
-  prompt: string;
-  replyMessageId?: string;
-  replyChannelId?: string;
-};
-
-export type AiThreadReplyJob = {
-  kind: "thread_reply";
-  channelId: string;
-  // The tracked thread the resolver already looked up, so the conversation
-  // builder does not repeat the D1 read.
-  thread?: AiThread;
-  messageId?: string;
-  botUserId?: string;
-  requesterUserId?: string;
-  requesterUsername?: string;
-  prompt: string;
-  replyMessageId?: string;
-  replyChannelId?: string;
-};
-
-export type AiChannelReplyJob = {
-  kind: "channel_reply";
+type ChatJobContext = {
   channelId: string;
   messageId?: string;
   botUserId?: string;
@@ -113,6 +85,9 @@ export type AiChannelReplyJob = {
   replyChannelId?: string;
 };
 
+export type AiThreadStartJob = ChatJobContext & { kind: "thread_start"; messageId: string };
+export type AiThreadReplyJob = ChatJobContext & { kind: "thread_reply"; thread?: AiThread };
+export type AiChannelReplyJob = ChatJobContext & { kind: "channel_reply" };
 export type AiChatJob = AiThreadStartJob | AiThreadReplyJob | AiChannelReplyJob;
 
 // Media payload for a Discord interaction edit (image/audio generation output).

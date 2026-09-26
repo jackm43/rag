@@ -1,178 +1,60 @@
+import { query, baseEnv, clearTables, withFetch } from "./helpers";
 import { env } from "cloudflare:test";
 import { assert, beforeEach, test } from "vitest";
-
 import { reconcileAiSpend } from "../src/lib/ai/reconcile";
-import type { Env } from "../src/env";
 
 const ALICE_ID = "400000000000000001";
 const BOB_ID = "400000000000000002";
+const log = (id: string, cost: number | string, encoded = false) => ({
+  metadata: encoded ? JSON.stringify({ ragbot_request_id: id }) : { ragbot_request_id: id }, cost,
+});
+beforeEach(() => clearTables("rag_ai_spend_events", "rag_ai_spend_totals"));
 
-type Call = { url: string; init?: RequestInit };
-
-const baseEnv = (overrides: Record<string, unknown> = {}): Env =>
-  ({
-    DB: env.DB,
-    CF_ACCOUNT_ID: "account-id",
-    CF_AIG_GATEWAY_ID: "platy",
-    CLOUDFLARE_API_TOKEN: "cf-token",
-    ...overrides,
-  }) as unknown as Env;
-
-const insertPending = (sourceId: string, userId: string, username: string) =>
-  env.DB.prepare(
-    "INSERT INTO rag_ai_spend_events (source_id, kind, requester_user_id, requester_username, model, status) VALUES (?, 'channel_reply', ?, ?, 'grok/grok-4.3', 'pending')",
-  )
-    .bind(sourceId, userId, username)
-    .run();
-
-const withFetch = async (
-  route: (call: Call) => Response | undefined,
-  body: (calls: Call[]) => Promise<void>,
-) => {
-  const originalFetch = globalThis.fetch;
-  const calls: Call[] = [];
-  globalThis.fetch = async (url, init) => {
-    const call = { url: String(url), init };
-    calls.push(call);
-    return route(call) ?? new Response("{}", { status: 200 });
-  };
-  try {
-    await body(calls);
-  } finally {
-    globalThis.fetch = originalFetch;
+test.each([
+  {
+    name: "reconciles pending spend events against AI Gateway logs and upserts the user total",
+    pending: [["aigreq:alice-1", ALICE_ID, "alice"]],
+    logs: [log("aigreq:alice-1", 0.0005)], reconciled: 1,
+    events: [["aigreq:alice-1", 500]], totals: [[ALICE_ID, 500, 1]],
+  },
+  {
+    name: "leaves events without a matching log pending for a later sweep",
+    pending: [["aigreq:bob-1", BOB_ID, "bob"]],
+    logs: [log("someone-else", 0.01)], reconciled: 0,
+    events: [["aigreq:bob-1", null]], totals: [[BOB_ID, null, 0]],
+  },
+  {
+    name: "fetches the AI Gateway log window once per sweep, not once per pending event",
+    pending: [["aigreq:a", ALICE_ID, "alice"], ["aigreq:b", BOB_ID, "bob"], ["aigreq:c", ALICE_ID, "alice"]],
+    logs: [log("aigreq:a", 0.001), log("aigreq:c", "0.003", true)], reconciled: 2,
+    events: [["aigreq:a", 1000], ["aigreq:b", null], ["aigreq:c", 3000]], totals: [],
+  },
+  {
+    name: "continues the sweep past an unmatched event and reconciles later rows",
+    pending: [["aigreq:err-1", ALICE_ID, "alice"], ["aigreq:ok-2", BOB_ID, "bob"]],
+    logs: [log("aigreq:ok-2", 0.002)], reconciled: 1,
+    events: [["aigreq:err-1", null], ["aigreq:ok-2", 2000]], totals: [],
+  },
+].map(row => [row.name, row] as const))("%s", async (_, { pending, logs, reconciled, events, totals }) => {
+  for (const row of pending) {
+    await query("INSERT INTO rag_ai_spend_events (source_id, kind, requester_user_id, requester_username, model, status) VALUES (?, 'channel_reply', ?, ?, 'grok/grok-4.3', 'pending')", ...row).run();
   }
-};
-
-beforeEach(async () => {
-  await env.DB.batch([
-    env.DB.prepare("DELETE FROM rag_ai_spend_events"),
-    env.DB.prepare("DELETE FROM rag_ai_spend_totals"),
-  ]);
-});
-
-test("reconciles pending spend events against AI Gateway logs and upserts the user total", async () => {
-  await insertPending("aigreq:alice-1", ALICE_ID, "alice");
-
-  await withFetch(
-    (call) => {
-      if (call.url.includes("/ai-gateway/gateways/platy/logs")) {
-        // The CF API is called with the account API token.
-        assert.equal(
-          (call.init?.headers as Record<string, string>)?.authorization,
-          "Bearer cf-token",
-        );
-        return Response.json({
-          result: [{ metadata: { ragbot_request_id: "aigreq:alice-1" }, cost: 0.0005 }],
-        });
-      }
-      return undefined;
-    },
-    async () => {
-      const summary = await reconcileAiSpend(baseEnv());
-      assert.deepEqual(summary, { reconciled: 1, scanned: 1 });
-    },
-  );
-
-  const event = await env.DB.prepare(
-    "SELECT status, estimated_cost_micros FROM rag_ai_spend_events WHERE source_id = ?",
-  )
-    .bind("aigreq:alice-1")
-    .first<{ status: string; estimated_cost_micros: number }>();
-  assert.equal(event?.status, "aggregated");
-  assert.equal(event?.estimated_cost_micros, 500);
-
-  const total = await env.DB.prepare(
-    "SELECT estimated_cost_micros, event_count FROM rag_ai_spend_totals WHERE requester_user_id = ?",
-  )
-    .bind(ALICE_ID)
-    .first<{ estimated_cost_micros: number; event_count: number }>();
-  assert.equal(total?.estimated_cost_micros, 500);
-  assert.equal(total?.event_count, 1);
-});
-
-test("leaves events without a matching log pending for a later sweep", async () => {
-  await insertPending("aigreq:bob-1", BOB_ID, "bob");
-
-  await withFetch(
-    (call) =>
-      call.url.includes("/ai-gateway/gateways/platy/logs")
-        ? Response.json({ result: [{ metadata: { ragbot_request_id: "someone-else" }, cost: 0.01 }] })
-        : undefined,
-    async () => {
-      const summary = await reconcileAiSpend(baseEnv());
-      assert.deepEqual(summary, { reconciled: 0, scanned: 1 });
-    },
-  );
-
-  const event = await env.DB.prepare("SELECT status FROM rag_ai_spend_events WHERE source_id = ?")
-    .bind("aigreq:bob-1")
-    .first<{ status: string }>();
-  assert.equal(event?.status, "pending");
-
-  const total = await env.DB.prepare("SELECT requester_user_id FROM rag_ai_spend_totals WHERE requester_user_id = ?")
-    .bind(BOB_ID)
-    .first();
-  assert.equal(total, null);
-});
-
-test("fetches the AI Gateway log window once per sweep, not once per pending event", async () => {
-  await insertPending("aigreq:a", ALICE_ID, "alice");
-  await insertPending("aigreq:b", BOB_ID, "bob");
-  await insertPending("aigreq:c", ALICE_ID, "alice");
-
-  await withFetch(
-    (call) =>
-      call.url.includes("/ai-gateway/gateways/platy/logs")
-        ? Response.json({
-            result: [
-              { metadata: { ragbot_request_id: "aigreq:a" }, cost: 0.001 },
-              { metadata: JSON.stringify({ ragbot_request_id: "aigreq:c" }), cost: "0.003" },
-            ],
-          })
-        : undefined,
-    async (calls) => {
-      const summary = await reconcileAiSpend(baseEnv());
-      assert.deepEqual(summary, { reconciled: 2, scanned: 3 });
-      assert.equal(calls.filter((call) => call.url.includes("/logs")).length, 1, "one log fetch for the sweep");
-    },
-  );
-
-  const c = await env.DB.prepare("SELECT status, estimated_cost_micros FROM rag_ai_spend_events WHERE source_id = ?")
-    .bind("aigreq:c")
-    .first<{ status: string; estimated_cost_micros: number }>();
-  assert.equal(c?.status, "aggregated");
-  assert.equal(c?.estimated_cost_micros, 3000);
-});
-
-test("continues the sweep past an unmatched event and reconciles later rows", async () => {
-  await insertPending("aigreq:err-1", ALICE_ID, "alice");
-  await insertPending("aigreq:ok-2", BOB_ID, "bob");
-
-  await withFetch(
-    (call) => {
-      // Only ok-2 has a matching log; err-1 finds no match and must stay pending
-      // without aborting the sweep before ok-2 is reached.
-      if (call.url.includes("/ai-gateway/gateways/platy/logs")) {
-        return Response.json({
-          result: [{ metadata: { ragbot_request_id: "aigreq:ok-2" }, cost: 0.002 }],
-        });
-      }
-      return undefined;
-    },
-    async () => {
-      const summary = await reconcileAiSpend(baseEnv());
-      assert.equal(summary.scanned, 2);
-      assert.equal(summary.reconciled, 1);
-    },
-  );
-
-  const err = await env.DB.prepare("SELECT status FROM rag_ai_spend_events WHERE source_id = ?")
-    .bind("aigreq:err-1")
-    .first<{ status: string }>();
-  assert.equal(err?.status, "pending");
-  const ok = await env.DB.prepare("SELECT status, estimated_cost_micros FROM rag_ai_spend_events WHERE source_id = ?")
-    .bind("aigreq:ok-2")
-    .first<{ status: string; estimated_cost_micros: number }>();
-  assert.equal(ok?.status, "aggregated");
-  assert.equal(ok?.estimated_cost_micros, 2000);
+  await withFetch(call => {
+    if (!call.url.includes("/ai-gateway/gateways/platy/logs")) return undefined;
+    assert.equal(new Headers(call.init?.headers).get("authorization"), "Bearer cf-token");
+    return Response.json({ result: logs });
+  }, async calls => {
+    const summary = await reconcileAiSpend(baseEnv({ CLOUDFLARE_API_TOKEN: "cf-token" }));
+    assert.deepEqual(summary, { reconciled, scanned: pending.length });
+    assert.equal(calls.filter(call => call.url.includes("/logs")).length, 1, "one log fetch for the sweep");
+  });
+  for (const [id, cost] of events) {
+    const event = await query("SELECT status, estimated_cost_micros FROM rag_ai_spend_events WHERE source_id = ?", id).first<{ status: string; estimated_cost_micros: number }>();
+    assert.equal(event?.status, cost === null ? "pending" : "aggregated");
+    if (cost !== null) assert.equal(event?.estimated_cost_micros, cost);
+  }
+  for (const [id, cost, count] of totals) {
+    const total = await query("SELECT estimated_cost_micros, event_count FROM rag_ai_spend_totals WHERE requester_user_id = ?", id).first();
+    assert.deepEqual(total, cost === null ? null : { estimated_cost_micros: cost, event_count: count });
+  }
 });

@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from "../structs/slash-command-builder";
+import { commandData } from "../structs/command-data";
 
 import { formatUsdMicros } from "../lib/ai/spend";
 import type { Command } from "../structs/command";
@@ -11,9 +11,7 @@ type SpendTotalRow = {
 };
 
 export const ragspendboard: Command = {
-  data: new SlashCommandBuilder()
-    .setName("ragspendboard")
-    .setDescription("Show the AI ragbot spend leaderboard"),
+  data: commandData("ragspendboard", "Show the AI ragbot spend leaderboard"),
   async execute({ env, editReply }) {
     const result = await env.DB.prepare(
       "SELECT requester_user_id, requester_username, estimated_cost_micros, event_count FROM rag_ai_spend_totals ORDER BY estimated_cost_micros DESC, requester_user_id ASC LIMIT 10",

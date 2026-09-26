@@ -34,10 +34,6 @@
     "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
     "ALLOWED_GUILD_IDS": "457689460096630794",
     "CF_AIG_GATEWAY_ID": "platy",
-    // Production resources read (never written) by the "load from production"
-    // panels, over the REST API with CLOUDFLARE_API_TOKEN.
-    "PROD_D1_DATABASE_ID": "5833b0bb-7806-483e-9015-32e209ce2fb0",
-    "PROD_KV_NAMESPACE_ID": "2a6dbd4428b64d6982bfe628445c163a",
     // Unused by the simulated flows (Discord REST is stubbed) but required by
     // the Env shape.
     "DISCORD_BOT_TOKEN": "dev-unused",

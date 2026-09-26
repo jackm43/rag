@@ -149,82 +149,33 @@ export const runChatCompletion = async (
   };
 };
 
+const records = (value: unknown): Record<string, unknown>[] => Array.isArray(value) ? value.filter(isRecord) : [];
+const responseContent = (result: unknown) =>
+  records(isRecord(result) ? result.output : undefined).flatMap((item) => records(item.content));
+
 const extractResponsesText = (result: unknown): string => {
-  if (!isRecord(result)) {
-    return extractText(result);
-  }
-  if (typeof result.output_text === "string") {
-    return result.output_text;
-  }
-
-  const parts: string[] = [];
-  const output = Array.isArray(result.output) ? result.output : [];
-  for (const item of output) {
-    if (!isRecord(item) || !Array.isArray(item.content)) {
-      continue;
-    }
-    for (const content of item.content) {
-      if (isRecord(content) && typeof content.text === "string") {
-        parts.push(content.text);
-      }
-    }
-  }
-  return parts.join("\n\n") || extractText(result);
+  if (isRecord(result) && typeof result.output_text === "string") return result.output_text;
+  return responseContent(result).flatMap((part) => typeof part.text === "string" ? [part.text] : []).join("\n\n")
+    || extractText(result);
 };
 
-const extractResponsesSources = (result: unknown): WebSearchSource[] => {
-  if (!isRecord(result) || !Array.isArray(result.output)) {
-    return [];
-  }
-
+const citationSources = (annotations: Record<string, unknown>[]): WebSearchSource[] => {
   const sources = new Map<string, WebSearchSource>();
-  for (const item of result.output) {
-    if (!isRecord(item) || !Array.isArray(item.content)) {
-      continue;
-    }
-    for (const content of item.content) {
-      if (!isRecord(content) || !Array.isArray(content.annotations)) {
-        continue;
-      }
-      for (const annotation of content.annotations) {
-        if (!isRecord(annotation) || typeof annotation.url !== "string") {
-          continue;
-        }
-        sources.set(annotation.url, {
-          url: annotation.url,
-          title: typeof annotation.title === "string" ? annotation.title : undefined,
-        });
-      }
-    }
+  for (const { url, title } of annotations) {
+    if (typeof url === "string") sources.set(url, { url, title: typeof title === "string" ? title : undefined });
   }
   return [...sources.values()];
 };
 
-const extractChatCompletionSources = (result: unknown): WebSearchSource[] => {
-  if (!isRecord(result) || !Array.isArray(result.choices)) {
-    return [];
-  }
+const extractResponsesSources = (result: unknown) =>
+  citationSources(responseContent(result).flatMap((part) => records(part.annotations)));
 
-  const sources = new Map<string, WebSearchSource>();
-  for (const choice of result.choices) {
-    if (!isRecord(choice) || !isRecord(choice.message) || !Array.isArray(choice.message.annotations)) {
-      continue;
-    }
-    for (const annotation of choice.message.annotations) {
-      if (!isRecord(annotation) || annotation.type !== "url_citation" || !isRecord(annotation.url_citation)) {
-        continue;
-      }
-      const { url, title } = annotation.url_citation;
-      if (typeof url === "string") {
-        sources.set(url, {
-          url,
-          title: typeof title === "string" ? title : undefined,
-        });
-      }
-    }
-  }
-  return [...sources.values()];
-};
+const extractChatCompletionSources = (result: unknown) => citationSources(
+  records(isRecord(result) ? result.choices : undefined)
+    .flatMap((choice) => records(isRecord(choice.message) ? choice.message.annotations : undefined))
+    .flatMap((annotation) => annotation.type === "url_citation" && isRecord(annotation.url_citation)
+      ? [annotation.url_citation] : []),
+);
 
 const countWebSearchCalls = (result: unknown) =>
   isRecord(result) && Array.isArray(result.output)
@@ -236,17 +187,7 @@ export const runWebSearchCompletion = async (
   input: string,
   options: WebSearchChatOptions,
 ): Promise<WebSearchModelResult> => {
-  const result = await inferenceClient(env).webSearch({
-    model: options.model,
-    input,
-    instructions: options.instructions,
-    maxOutputTokens: options.maxOutputTokens,
-    maxTurns: options.maxTurns,
-    temperature: options.temperature,
-    searchContextSize: options.searchContextSize,
-    gatewayId: options.gatewayId,
-    metadata: options.metadata,
-  });
+  const result = await inferenceClient(env).webSearch({ ...options, input });
 
   return {
     content: extractResponsesText(result),

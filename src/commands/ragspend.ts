@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from "../structs/slash-command-builder";
+import { commandData } from "../structs/command-data";
 
 import { formatUsdMicros } from "../lib/ai/spend";
 import { requireInvoker } from "../lib/interaction";
@@ -12,7 +12,7 @@ type SpendTotalRow = {
 };
 
 export const ragspend: Command = {
-  data: new SlashCommandBuilder().setName("ragspend").setDescription("Show your AI ragbot spend"),
+  data: commandData("ragspend", "Show your AI ragbot spend"),
   async execute({ interaction, env, editReply }) {
     const invoker = requireInvoker(interaction);
 

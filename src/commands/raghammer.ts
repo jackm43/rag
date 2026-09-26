@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from "../structs/slash-command-builder";
+import { commandData } from "../structs/command-data";
 
 import { idOption, requireInvoker, getTargetUsername, stringOption } from "../lib/interaction";
 import type { Command } from "../structs/command";
@@ -38,20 +38,10 @@ const parseTimeframe = (timeframe: string) => {
 
 export const raghammer: Command = {
   adminOnly: true,
-  data: new SlashCommandBuilder()
-    .setName("raghammer")
-    .setDescription("Temporarily block a user from using /rag")
-    .addUserOption((option) =>
-      option.setName("user").setDescription("User to block from /rag").setRequired(true),
-    )
-    .addStringOption((option) =>
-      option
-        .setName("timeframe")
-        .setDescription("Examples: 5m, 1h, 1d. Use only m, h, or d.")
-        .setRequired(true)
-        .setMinLength(2)
-        .setMaxLength(12),
-    ),
+  data: commandData("raghammer", "Temporarily block a user from using /rag", [
+    { type: 6, name: "user", description: "User to block from /rag", required: true },
+    { type: 3, name: "timeframe", description: "Examples: 5m, 1h, 1d. Use only m, h, or d.", required: true, min_length: 2, max_length: 12 },
+  ]),
   async execute({ interaction, env, editReply }) {
     const invoker = requireInvoker(interaction);
     const targetId = idOption(interaction, "user");

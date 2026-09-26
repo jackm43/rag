@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { baseEnv, clearTables } from "./helpers";
 import { assert, beforeEach, describe, test } from "vitest";
 
 import {
@@ -9,24 +9,11 @@ import {
   type MentionSimulationInput,
 } from "../dev/harness";
 import { resetConfigCache } from "../src/lib/ai/config";
-import type { Env } from "../src/env";
 
 const BOT_USER_ID = "100000000000000001";
 const GUILD_ID = "100000000000000002";
 const CHANNEL_ID = "200000000000000021";
 const ALICE = { userId: "400000000000000001", username: "alice", globalName: "Alice", nick: "ally" };
-
-const baseEnv = (overrides: Record<string, unknown> = {}): Env =>
-  ({
-    DB: env.DB,
-    AI_CONFIG: undefined,
-    DISCORD_APPLICATION_ID: "application-id",
-    DISCORD_BOT_TOKEN: "bot-token",
-    CF_AIG_TOKEN: "gateway-token",
-    CF_ACCOUNT_ID: "account-id",
-    CF_AIG_GATEWAY_ID: "platy",
-    ...overrides,
-  }) as unknown as Env;
 
 type Seen = { url: string; body: Record<string, unknown>; headers: Headers };
 
@@ -47,26 +34,14 @@ const fakeGateway = (reply = "Short answer.") => {
 };
 
 const mentionInput = (overrides: Partial<MentionSimulationInput> = {}): MentionSimulationInput => ({
-  content: "Explain queues",
-  mentionBot: true,
-  identity: ALICE,
-  botUserId: BOT_USER_ID,
-  guildId: GUILD_ID,
-  channelId: CHANNEL_ID,
-  mode: "channel",
-  transcript: [],
+  content: "Explain queues", mentionBot: true, identity: ALICE, botUserId: BOT_USER_ID,
+  guildId: GUILD_ID, channelId: CHANNEL_ID, mode: "channel", transcript: [],
   ...overrides,
 });
 
 beforeEach(async () => {
   resetConfigCache();
-  await env.DB.batch([
-    env.DB.prepare("DELETE FROM rag_ai_requests"),
-    env.DB.prepare("DELETE FROM rag_ai_spend_events"),
-    env.DB.prepare("DELETE FROM rag_ai_threads"),
-    env.DB.prepare("DELETE FROM rag_ai_interactions"),
-    env.DB.prepare("DELETE FROM rag_totals"),
-  ]);
+  await clearTables("rag_ai_requests", "rag_ai_spend_events", "rag_ai_threads", "rag_ai_interactions", "rag_totals");
 });
 
 describe("buildMentionMessage", () => {
@@ -174,15 +149,13 @@ describe("simulateMention", () => {
 });
 
 describe("simulateInteraction", () => {
+  const ragInput = {
+    command: "rag", options: [{ name: "user", type: 6, value: "999000000000000002" }],
+    resolvedUsers: { "999000000000000002": { userId: "999000000000000002", username: "target" } },
+    identity: ALICE, guildId: GUILD_ID, channelId: CHANNEL_ID,
+  };
   test("builds an application command interaction with resolved users", () => {
-    const interaction = buildInteraction(baseEnv(), {
-      command: "rag",
-      options: [{ name: "user", type: 6, value: "999000000000000002" }],
-      resolvedUsers: { "999000000000000002": { userId: "999000000000000002", username: "target" } },
-      identity: ALICE,
-      guildId: GUILD_ID,
-      channelId: CHANNEL_ID,
-    });
+    const interaction = buildInteraction(baseEnv(), ragInput);
     assert.equal(interaction.type, 2);
     const data = interaction.data as { name: string; resolved: { users: Record<string, { username: string }> } };
     assert.equal(data.name, "rag");
@@ -192,14 +165,7 @@ describe("simulateInteraction", () => {
   test("dispatches /rag through the registry and captures the deferred edit", async () => {
     const result = await simulateInteraction(
       baseEnv(),
-      {
-        command: "rag",
-        options: [{ name: "user", type: 6, value: "999000000000000002" }],
-        resolvedUsers: { "999000000000000002": { userId: "999000000000000002", username: "target" } },
-        identity: ALICE,
-        guildId: GUILD_ID,
-        channelId: CHANNEL_ID,
-      },
+      ragInput,
       { upstream: fakeGateway().upstream },
     );
     assert.equal(result.edits.length, 1);

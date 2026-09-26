@@ -2,7 +2,7 @@ import type { APIChatInputApplicationCommandInteraction } from "discord-api-type
 
 import type { Env } from "../env";
 import type { InteractionResponseFile } from "../lib/discord";
-import type { SlashCommandBuilder } from "./slash-command-builder";
+import type { commandData } from "./command-data";
 
 // The message a command hands back to the caller. A bare string is the common
 // case (content locked to no mentions); the object form lets a command opt into
@@ -33,7 +33,7 @@ export type CommandContext = {
 // `adminOnly` gates to the rag-admins list; `aiLimited` pays the AI ban + usage
 // checks before execute runs.
 export interface Command {
-  data: SlashCommandBuilder;
+  data: ReturnType<typeof commandData>;
   adminOnly?: boolean;
   aiLimited?: boolean;
   execute(ctx: CommandContext): Promise<void>;

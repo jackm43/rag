@@ -1,20 +1,7 @@
 type LogData = Record<string, unknown>;
 
 const emit = (level: "debug" | "info" | "warn" | "error", message: string, data?: LogData) => {
-  const line = JSON.stringify({ level, message, ...data });
-  if (level === "debug") {
-    console.debug(line);
-    return;
-  }
-  if (level === "info") {
-    console.info(line);
-    return;
-  }
-  if (level === "warn") {
-    console.warn(line);
-    return;
-  }
-  console.error(line);
+  console[level](JSON.stringify({ level, message, ...data }));
 };
 
 export const logger = {

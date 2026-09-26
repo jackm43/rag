@@ -70,12 +70,15 @@ Discord events into the real bot code without touching the guild:
   text the bot would post, and every outbound call, log line, and local D1 row.
 - **Slash commands**: run any registered command as a given user and see the
   deferred-reply edits, follow-ups, thread creations, and generated media.
-- **Model picker**: the AI Gateway's live catalogue (`compat/models`, with
-  prices) plus temperature / max-token / history overrides, applied to that run
-  only. Config can come from the bundled files or a snapshot of the production
-  `AI_CONFIG` KV.
-- **Replay**: browse `rag_ai_interactions` from production (read-only, via the
-  Cloudflare API) or the local database and re-send any prompt as that user.
+- **Model overrides**: enter chat/search model IDs, temperature, max tokens,
+  and history depth for a single run, or leave fields blank for bundled defaults.
+  The resolved configuration is available in the results panel.
+- The console keeps one draft identity and per-channel conversations locally.
+  Use **New channel** or **Clear conversation** to start fresh. **Reset local
+  rate limits** clears only the local burst-guard log.
+
+The console uses a fixed responsive layout. It does not browse production data
+or KV, maintain saved profiles, or fetch a live model catalogue.
 
 Model calls are real (AI Gateway, tagged `ragbot_env: dev` in the metadata);
 Discord REST is answered by local stubs; D1 and KV are the local `wrangler dev`

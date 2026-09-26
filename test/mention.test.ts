@@ -1,3 +1,4 @@
+import { query, baseEnv, withFetch, clearTables } from "./helpers";
 import { env } from "cloudflare:test";
 import { assert, beforeEach, describe, test } from "vitest";
 
@@ -9,7 +10,6 @@ import {
 } from "../src/events/messageCreate";
 import { recordAiThread } from "../src/lib/db/threads";
 import { resetConfigCache } from "../src/lib/ai/config";
-import type { Env } from "../src/env";
 
 const BOT_USER_ID = "100000000000000001";
 const GUILD_ID = "100000000000000002";
@@ -20,40 +20,6 @@ const MESSAGE_ID = "300000000000000001";
 const ALICE_ID = "400000000000000001";
 const BOB_ID = "400000000000000002";
 const BOT_ROLE_ID = "800000000000000001";
-
-type Call = { url: string; init?: RequestInit };
-
-const baseEnv = (overrides: Record<string, unknown> = {}): Env =>
-  ({
-    DB: env.DB,
-    AI_CONFIG: undefined,
-    DISCORD_APPLICATION_ID: "application-id",
-    DISCORD_BOT_TOKEN: "bot-token",
-    CF_AIG_TOKEN: "gateway-token",
-    CF_ACCOUNT_ID: "account-id",
-    CF_AIG_GATEWAY_ID: "platy",
-    ...overrides,
-  }) as unknown as Env;
-
-// Swap global fetch for the duration of an async body, capturing every outbound
-// call and letting the test route the responses it cares about.
-const withFetch = async (
-  route: (call: Call) => Response | undefined,
-  body: (calls: Call[]) => Promise<void>,
-) => {
-  const originalFetch = globalThis.fetch;
-  const calls: Call[] = [];
-  globalThis.fetch = async (url, init) => {
-    const call = { url: String(url), init };
-    calls.push(call);
-    return route(call) ?? new Response("{}", { status: 200 });
-  };
-  try {
-    await body(calls);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-};
 
 const bodyText = (init: RequestInit | undefined): string => {
   const inner = init?.body;
@@ -68,14 +34,7 @@ const bodyText = (init: RequestInit | undefined): string => {
 
 beforeEach(async () => {
   resetConfigCache();
-  await env.DB.batch([
-    env.DB.prepare("DELETE FROM rag_command_bans"),
-    env.DB.prepare("DELETE FROM rag_ai_requests"),
-    env.DB.prepare("DELETE FROM rag_ai_spend_events"),
-    env.DB.prepare("DELETE FROM rag_ai_spend_totals"),
-    env.DB.prepare("DELETE FROM rag_ai_threads"),
-    env.DB.prepare("DELETE FROM rag_ai_interactions"),
-  ]);
+  await clearTables("rag_command_bans", "rag_ai_requests", "rag_ai_spend_events", "rag_ai_spend_totals", "rag_ai_threads", "rag_ai_interactions");
 });
 
 describe("mention token parsing", () => {
@@ -85,10 +44,7 @@ describe("mention token parsing", () => {
     assert.equal(extractBotMentionPrompt("hey <@bot-user-id>", "bot-user-id"), "hey");
     assert.equal(extractBotMentionPrompt("what's up <@bot-user-id>", "bot-user-id"), "what's up");
     assert.equal(extractBotMentionPrompt("<@application-id> Explain queues", "bot-user-id"), null);
-    assert.equal(
-      extractBotMentionPrompt("<@application-id> Explain queues", "bot-user-id", "application-id"),
-      "Explain queues",
-    );
+    assert.equal(extractBotMentionPrompt("<@application-id> Explain queues", "bot-user-id", "application-id"), "Explain queues");
     assert.equal(extractBotMentionPrompt("!ai Explain queues", "bot-user-id"), null);
     assert.equal(extractBotMentionPrompt("<@bot-user-id>   ", "bot-user-id"), null);
   });
@@ -96,12 +52,8 @@ describe("mention token parsing", () => {
 
 describe("resolveGatewayMessage", () => {
   const job = (overrides: Partial<GatewayMessageJob>): GatewayMessageJob => ({
-    kind: "message.received",
-    messageId: MESSAGE_ID,
-    channelId: CHANNEL_ID,
-    botUserId: BOT_USER_ID,
-    authorId: ALICE_ID,
-    authorUsername: "Alice Display",
+    kind: "message.received", messageId: MESSAGE_ID, channelId: CHANNEL_ID, botUserId: BOT_USER_ID,
+    authorId: ALICE_ID, authorUsername: "Alice Display",
     content: `hey <@${BOT_USER_ID}>`,
     mentionUserIds: [BOT_USER_ID],
     mentionRoleIds: [],
@@ -176,7 +128,7 @@ describe("resolveGatewayMessage", () => {
   });
 
   test("resolves tracked thread replies without requiring a mention", async () => {
-    await recordAiThread(baseEnv(), {
+    const thread = {
       threadId: THREAD_ID,
       parentChannelId: CHANNEL_ID,
       sourceMessageId: "300000000000000004",
@@ -184,7 +136,8 @@ describe("resolveGatewayMessage", () => {
       requesterUsername: "alice",
       initialPrompt: "Explain queues",
       title: "Queue chat",
-    });
+    };
+    await recordAiThread(baseEnv(), thread);
 
     const resolved = await resolveGatewayMessage(
       job({
@@ -204,15 +157,7 @@ describe("resolveGatewayMessage", () => {
       channelId: THREAD_ID,
       // The resolver's lookup rides along so the conversation builder does not
       // repeat the D1 read.
-      thread: {
-        threadId: THREAD_ID,
-        parentChannelId: CHANNEL_ID,
-        sourceMessageId: "300000000000000004",
-        requesterUserId: ALICE_ID,
-        requesterUsername: "alice",
-        initialPrompt: "Explain queues",
-        title: "Queue chat",
-      },
+      thread,
       messageId: MESSAGE_ID,
       botUserId: BOT_USER_ID,
       requesterUserId: BOB_ID,
@@ -232,7 +177,6 @@ describe("resolveGatewayMessage", () => {
   });
 });
 
-describe("handleMessageCreate filters", () => {
   const message = (overrides: Record<string, unknown> = {}) => ({
     id: MESSAGE_ID,
     channel_id: CHANNEL_ID,
@@ -241,6 +185,8 @@ describe("handleMessageCreate filters", () => {
     mentions: [{ id: BOT_USER_ID }],
     ...overrides,
   });
+
+describe("handleMessageCreate filters", () => {
 
   test("skips bot authors, empty prompts, and non-allowed guilds with no side effects", async () => {
     await withFetch(
@@ -275,17 +221,7 @@ describe("handleMessageCreate in-process reply", () => {
         return undefined;
       },
       async (calls) => {
-        await handleMessageCreate(
-          {
-            id: MESSAGE_ID,
-            channel_id: CHANNEL_ID,
-            content: `<@${BOT_USER_ID}> Explain queues`,
-            author: { id: ALICE_ID, username: "alice" },
-            mentions: [{ id: BOT_USER_ID }],
-          },
-          baseEnv(),
-          BOT_USER_ID,
-        );
+        await handleMessageCreate(message(), baseEnv(), BOT_USER_ID);
 
         const modelCall = calls.find((call) => call.url.includes("gateway.ai.cloudflare.com"));
         assert.ok(modelCall, "the model was called");
@@ -300,19 +236,11 @@ describe("handleMessageCreate in-process reply", () => {
         });
 
         // The interaction was recorded and a pending spend event was written.
-        const interaction = await env.DB.prepare(
-          "SELECT kind, response_text FROM rag_ai_interactions WHERE channel_id = ?",
-        )
-          .bind(CHANNEL_ID)
-          .first<{ kind: string; response_text: string }>();
+        const interaction = await query("SELECT kind, response_text FROM rag_ai_interactions WHERE channel_id = ?", CHANNEL_ID).first<{ kind: string; response_text: string }>();
         assert.equal(interaction?.kind, "channel_reply");
         assert.equal(interaction?.response_text, "Short answer.");
 
-        const spend = await env.DB.prepare(
-          "SELECT status FROM rag_ai_spend_events WHERE requester_user_id = ?",
-        )
-          .bind(ALICE_ID)
-          .first<{ status: string }>();
+        const spend = await query("SELECT status FROM rag_ai_spend_events WHERE requester_user_id = ?", ALICE_ID).first<{ status: string }>();
         assert.equal(spend?.status, "pending");
       },
     );
