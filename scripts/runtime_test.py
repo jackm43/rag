@@ -134,6 +134,11 @@ def main():
                 status, body = request(base, "/gateway/health", headers=headers)
                 assert status == 200 and json.loads(body)["connected"] is False
                 assert request(base, "/gateway/stop", method="POST", headers=headers)[0] == 200
+                # Invoke through workerd so the scheduled handler's FFI signature is exercised.
+                status, body = request(base, "/cdn-cgi/local/scheduled?cron=*/15+*+*+*+*")
+                assert status == 200, (status, body)
+                status, body = request(base, "/gateway/health", headers=headers)
+                assert status == 200 and json.loads(body)["stopped"] is True
                 # Exercise the real signed entrypoint and waitUntil dispatch, with stubbed egress.
                 interaction = json.dumps(
                     {
@@ -196,9 +201,11 @@ def main():
                 assert gateway["stopped"] == {"ok": False, "stopped": True}, gateway
                 logs.flush()
                 logs.seek(0)
-                assert "borrowed proxy was automatically destroyed" not in logs.read()
+                runtime_logs = logs.read()
+                assert "borrowed proxy was automatically destroyed" not in runtime_logs
+                assert "gateway_ensure_connected_failed" not in runtime_logs
                 print(
-                    "Python Workers runtime: signatures, bare denials, Durable Object controls, D1, /rag, /ask, multipart, immediate D1 settings refresh and gateway WebSocket passed."
+                    "Python Workers runtime: signatures, bare denials, Durable Object controls, cron, D1, /rag, /ask, multipart, immediate D1 settings refresh and gateway WebSocket passed."
                 )
             except Exception:
                 logs.flush()

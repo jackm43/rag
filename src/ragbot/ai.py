@@ -161,7 +161,10 @@ class Inference:
         return await response.json()
 
     async def binding(self, model: str, data: dict, gateway_id: str | None, metadata: dict):
-        args = [model.removeprefix("workers-ai/"), data]
+        # Resolve saved compatibility-endpoint names to the current catalog IDs.
+        provider, separator, name = model.removeprefix("workers-ai/").partition("/")
+        provider = {"grok": "xai", "google-ai-studio": "google"}.get(provider, provider)
+        args = [provider + separator + name, data]
         if gateway_id:
             args.append({"gateway": {"id": gateway_id, "metadata": metadata}})
         return to_python(await self.env.AI.run(*args))
@@ -173,31 +176,33 @@ class Inference:
         metadata = {**attribution.metadata(source_id), "ragbot_settings_revision": config.revision}
         body = {
             "messages": messages,
-            "max_tokens": config.max_tokens,
             "temperature": config.temperature,
         }
         if not config.temperature_supported:
             body.pop("temperature")
-        # Reasoning models reject the legacy token limit and sampling controls.
+        # Reasoning models reject sampling controls.
         if re.match(r"openai/(?:gpt-[5-9]|o[1-9])", config.model):
             body.pop("temperature", None)
-            body["max_completion_tokens"] = body.pop("max_tokens")
         if config.api_format == "responses":
             payload = await self.binding(
                 config.model,
                 {
                     "input": messages,
-                    "max_output_tokens": config.max_tokens,
                     **({"temperature": body["temperature"]} if "temperature" in body else {}),
+                    **(
+                        {"reasoning": {"effort": config.reasoning_effort}}
+                        if config.reasoning_effort
+                        else {}
+                    ),
                 },
                 config.gateway_id,
                 metadata,
             )
-        elif config.gateway_id and not config.model.startswith(("@cf/", "workers-ai/")):
-            payload = await self.gateway(
-                config.gateway_id, {"model": config.model, **body}, metadata
-            )
         else:
+            # Catalog models must use the catalog's credential/billing route.
+            # Legacy /compat may forward newer models without provider credentials.
+            if config.reasoning_effort:
+                body["reasoning_effort"] = config.reasoning_effort
             payload = await self.binding(config.model, body, config.gateway_id, metadata)
         result = completion(
             payload,

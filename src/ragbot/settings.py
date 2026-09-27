@@ -14,7 +14,7 @@ class DraftNamespace:
             (
                 "discord-response.json",
                 {
-                    **{k: k for k in ("model", "temperature", "maxTokens", "historyLimit")},
+                    **{k: k for k in ("model", "temperature", "historyLimit")},
                     "apiFormat": "chatApiFormat",
                     "temperatureSupported": "chatTemperatureSupported",
                 },
@@ -34,6 +34,11 @@ class DraftNamespace:
                     document = {}
             except ValueError, TypeError:
                 document = {}
+            if key == "discord-response.json":
+                document.pop("maxTokens", None)
+                if overrides.get("model") and overrides["model"] != document.get("model"):
+                    # Reasoning support is model-specific; do not carry it to another model.
+                    document.pop("reasoningEffort", None)
             for field, source in fields.items():
                 value = overrides.get(source)
                 if value is not None and value != "":
@@ -99,8 +104,8 @@ async def resolve_config(overrides, resources=None):
         "image": image,
         "responseModel": chat.model,
         "chatApiFormat": chat.api_format,
+        "chatReasoningEffort": chat.reasoning_effort,
         "systemPrompt": chat.prompt,
-        "maxTokens": chat.max_tokens,
         "temperature": chat.temperature,
         "historyLimit": chat.history_limit,
         "gatewayId": chat.gateway_id,
@@ -134,7 +139,6 @@ def validate_overrides(overrides):
     }
     numeric = {
         "temperature": (0, 2),
-        "maxTokens": (1, 32768),
         "historyLimit": (1, 100),
         "webSearchMaxTokens": (1, 32768),
     }

@@ -8,7 +8,7 @@ from .ai import Attribution, Inference
 from .commands import COMMANDS, CommandContext
 from .commands.registry import ADMIN_IDS
 from .config import ConfigStore
-from .conversation import ChatJob, display_name, process_chat, strip_mentions
+from .conversation import ChatJob, display_name, message_text, process_chat, strip_mentions
 from .db import Database, guild_allowed
 from .discord import DiscordClient, Transport, is_message
 from .env import Env
@@ -78,6 +78,28 @@ class Application:
         try:
             content = truncate_discord(message.get("content", ""), 4000)
             thread = await self.db.find_thread(message["channel_id"]) if guild_id else None
+            reference = message.get("message_reference") or {}
+            referenced = message.get("referenced_message") or {}
+            reply_id = reference.get("message_id") or referenced.get("id")
+            reply_channel = (
+                reference.get("channel_id") or referenced.get("channel_id") or message["channel_id"]
+            )
+            if (
+                not thread
+                and reply_id
+                and reply_channel == message["channel_id"]
+                and not referenced
+            ):
+                try:
+                    referenced = await self.discord.message(reply_channel, reply_id) or {}
+                except Exception:
+                    log.warning("reply_context_fetch_failed")
+                    referenced = {}
+                message = {**message, "referenced_message": referenced or None}
+            replying_to_bot = (
+                reply_channel == message["channel_id"]
+                and (referenced.get("author") or {}).get("id") == bot_user_id
+            )
             if not thread:
 
                 def snowflakes(values):
@@ -104,12 +126,13 @@ class Application:
                 for marker, identifier in re.findall(r"<@([!&]?)([^>\s]+)>", content):
                     (roles if marker == "&" else users).add(identifier)
                 if (
-                    bot_user_id not in users
+                    not replying_to_bot
+                    and bot_user_id not in users
                     and self.env.DISCORD_APPLICATION_ID not in users
                     and not roles.intersection(bot_roles)
                 ):
                     return
-            prompt = strip_mentions(content)
+            prompt = message_text(message, bot_user_id)
             if not prompt:
                 return
             user_id = (message.get("author") or {}).get("id")
@@ -125,6 +148,7 @@ class Application:
                 thread,
                 reference.get("message_id") or referenced.get("id"),
                 reference.get("channel_id") or referenced.get("channel_id"),
+                message,
             )
         except Exception:
             log.error("gateway_message_resolve_failed")

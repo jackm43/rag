@@ -67,7 +67,7 @@ class Default(WorkerEntrypoint):
             return json_response(to_python(result))
         return Response(status=404)
 
-    async def scheduled(self, controller):
+    async def scheduled(self, controller, env, ctx):
         try:
             await gateway_stub(self.env).ensure_connected()
         except Exception:

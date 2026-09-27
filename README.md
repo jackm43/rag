@@ -106,12 +106,25 @@ on **Live bot**; select Local sandbox for local-only saved settings. Choosing a 
 draft. Sending a prompt runs a local Discord simulation with real model inference;
 only the explicit save button changes the selected destination.
 
+Chat requests use the provider's default output allowance; there is no chat
+max-tokens setting or application-supplied output-token limit.
+An operator can set `reasoningEffort` in the saved chat configuration when the
+selected model supports it. Choosing a different model clears this setting so
+it is not sent to an incompatible model.
+
 Model choices come from the account's live Cloudflare catalog, without a chat or
 image model-name shortlist. Compatible Chat Completions and Responses models are
 supported, as are synchronous text-to-image models that accept a prompt and return
 an image. Models requiring extra inputs or asynchronous image jobs are excluded.
 The existing Cloudflare-credit routing checks still apply. Search settings retain
 the verified web-search model list. Refresh models updates the catalog.
+
+All chat models offered in the UI use the AI binding with Cloudflare catalog
+model IDs and account credits. Existing saved `grok/` and `google-ai-studio/`
+names remain supported. Chat Completions and Responses keep their respective
+request formats. This avoids the legacy chat compatibility endpoint, which can
+forward newer models without provider credentials even when gateway
+authentication succeeds.
 
 **Advanced settings** holds system prompts, generation controls, image profiles,
 and web search. **Prompt history** fetches and searches Live bot or Local sandbox
@@ -198,6 +211,21 @@ The migration preserves the Worker name, domain, D1/KV identifiers, Durable
 Object class and singleton name, storage keys, and migration history. A deployment restarts the gateway connection; the next
 cron or authenticated `/gateway/start` reconnects it unless explicitly stopped.
 After deployment, smoke-test `/rag`, `/ragboard`, `/ask`, mentions, and media.
+
+## Discord conversation context
+
+Channel mentions and replies to Ragbot follow the explicit reply chain, including
+when the author switches Discord's reply ping off. Answers use Discord reply
+references without pinging the author, so later replies can recover the question
+and answer together. Existing older standalone bot messages cannot reconstruct
+an absent link retroactively.
+
+The configured `historyLimit` bounds reply ancestry (at most 12 messages).
+Tracked AI threads also include their recent history and label an explicit reply
+target. Channel conversations never fetch unrelated nearby messages. Deleted or
+unavailable ancestors stop traversal; the current request can still be answered.
+Speaker names, named mentions, and line breaks are preserved. Attachment labels
+identify files but do not claim that their contents were sent to the model.
 
 ## Discord request reliability
 

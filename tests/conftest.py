@@ -2,6 +2,7 @@ import json
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -106,6 +107,21 @@ def app(monkeypatch):
         CF_AIG_TOKEN="test-ai-token",
         CF_AIG_GATEWAY_ID="test-gateway",
         CLOUDFLARE_API_TOKEN="test-cf-token",
+        AI=SimpleNamespace(
+            run=AsyncMock(
+                return_value={
+                    "model": "test-model",
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "Assistant: hello <@123456789012345678> https://example.com"
+                            }
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+                }
+            )
+        ),
     )
     transport = Transport()
     return Application(env, transport=transport)
