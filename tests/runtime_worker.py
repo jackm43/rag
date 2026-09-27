@@ -211,12 +211,17 @@ class Default(ProductionDefault):
         assert media == b"image-bytes" and mime == "image/png"
         app = Application(self.env, transport=transport)
 
+        ai_inputs = []
+
         async def ai_run(model, inputs, options):
             from ragbot.runtime import fetch
 
             assert model == "xai/grok-4.3"
             assert options["gateway"]["id"] == "platy"
             assert inputs["messages"]
+            ai_inputs.append(inputs["messages"])
+            if len(ai_inputs) > 1:
+                return {"choices": [{"message": {"content": "follow-up answer"}}]}
             assert not {"max_tokens", "max_completion_tokens", "max_output_tokens"} & inputs.keys()
             response = await fetch(
                 request.url.replace("/test/scenario", "/test/upstream"),
@@ -247,6 +252,34 @@ class Default(ProductionDefault):
             },
         }
         await app.dispatch(interaction)
+        await app.handle_message(
+            {
+                "id": "123456789012345710",
+                "channel_id": "123456789012345681",
+                "guild_id": "457689460096630794",
+                "author": {"id": "123456789012345679", "username": "tester"},
+                "content": "why?",
+                "message_reference": {"message_id": "123456789012345709"},
+                "referenced_message": {
+                    "id": "123456789012345709",
+                    "channel_id": "123456789012345681",
+                    "author": {
+                        "id": self.env.DISCORD_APPLICATION_ID,
+                        "username": "ragbot",
+                        "bot": True,
+                    },
+                    "content": "earlier answer",
+                },
+            },
+            self.env.DISCORD_APPLICATION_ID,
+        )
+        assert ai_inputs[-1][-2:] == [
+            {"role": "assistant", "content": "earlier answer"},
+            {"role": "user", "content": "tester: why?"},
+        ]
+        posted = calls[-1]["data"]
+        assert posted["message_reference"]["message_id"] == "123456789012345710"
+        assert posted["allowed_mentions"] == {"parse": [], "replied_user": False}
         from ragbot.discord import Attachment
 
         async def multipart(url, **options):

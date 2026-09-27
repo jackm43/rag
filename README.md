@@ -212,6 +212,21 @@ Object class and singleton name, storage keys, and migration history. A deployme
 cron or authenticated `/gateway/start` reconnects it unless explicitly stopped.
 After deployment, smoke-test `/rag`, `/ragboard`, `/ask`, mentions, and media.
 
+## Discord conversation context
+
+Channel mentions and replies to Ragbot follow the explicit reply chain, including
+when the author switches Discord's reply ping off. Answers use Discord reply
+references without pinging the author, so later replies can recover the question
+and answer together. Existing older standalone bot messages cannot reconstruct
+an absent link retroactively.
+
+The configured `historyLimit` bounds reply ancestry (at most 12 messages).
+Tracked AI threads also include their recent history and label an explicit reply
+target. Channel conversations never fetch unrelated nearby messages. Deleted or
+unavailable ancestors stop traversal; the current request can still be answered.
+Speaker names, named mentions, and line breaks are preserved. Attachment labels
+identify files but do not claim that their contents were sent to the model.
+
 ## Discord request reliability
 
 The native client learns Discord bucket headers and waits on route/global

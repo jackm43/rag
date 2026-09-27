@@ -154,11 +154,15 @@ class DiscordClient:
         except Exception:
             return None
 
-    async def post_message(self, channel_id: str, content: str):
+    async def post_message(self, channel_id: str, content: str, *, reply_to: str | None = None):
+        data: dict = {"content": content, "allowed_mentions": {"parse": []}}
+        if reply_to:
+            data["message_reference"] = {"message_id": reply_to, "fail_if_not_exists": False}
+            data["allowed_mentions"]["replied_user"] = False
         return await self.request(
             f"/channels/{channel_id}/messages",
             method="POST",
-            data={"content": content, "allowed_mentions": {"parse": []}},
+            data=data,
         )
 
     async def reply(self, channel_id: str, content: str):
