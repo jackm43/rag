@@ -75,7 +75,7 @@ def parse_settings(raw: str) -> dict:
 class ModelConfig:
     model: str
     prompt: str
-    max_tokens: int
+    max_tokens: int | None
     temperature: float
     gateway_id: str | None
     history_limit: int = 12
@@ -84,6 +84,7 @@ class ModelConfig:
     api_format: str = "chat-completions"
     revision: str = "bundled"
     temperature_supported: bool = True
+    reasoning_effort: str | None = None
 
 
 def number(value: Any, fallback: float, *, minimum: float = 0, maximum: float = math.inf) -> float:
@@ -141,18 +142,19 @@ class ConfigStore:
             name = data.get("model")
             gateway = data.get("gatewayId")
             size = data.get("searchContextSize")
+            effort = data.get("reasoningEffort")
             return ModelConfig(
                 revision=snapshot["revision"],
                 model=name if isinstance(name, str) and name.strip() else fallback,
                 prompt=prompt.strip(),
-                max_tokens=int(
-                    number(
-                        data.get("maxOutputTokens" if search else "maxTokens"),
-                        1200 if search else 256,
-                        minimum=1,
-                    )
-                ),
+                # Chat uses the provider default, including for old saved snapshots.
+                max_tokens=int(number(data.get("maxOutputTokens"), 1200, minimum=1))
+                if search
+                else None,
                 temperature_supported=data.get("temperatureSupported", True) is True,
+                reasoning_effort=effort
+                if not search and effort in ("low", "medium", "high", "xhigh")
+                else None,
                 temperature=number(data.get("temperature"), 0.3 if search else 0.7, maximum=2),
                 gateway_id=gateway.strip() or None if isinstance(gateway, str) else None,
                 history_limit=int(number(data.get("historyLimit"), 12, minimum=1)),

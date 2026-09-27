@@ -73,6 +73,31 @@ async def test_save_refreshes_existing_production_store_without_redeploy():
         await store.models()
 
 
+async def test_legacy_chat_token_limit_is_ignored_and_removed_on_save():
+    kv = MemoryKV()
+    legacy = json.loads(FILES["discord-response.json"]) | {"maxTokens": 1000}
+    kv.values["discord-response.json"] = json.dumps(legacy)
+    store = ConfigStore(SimpleNamespace(AI_CONFIG=kv, DB=kv.db))
+    chat, search = await store.models()
+    assert chat.max_tokens is None
+    assert search.max_tokens == 1200
+    ui = editor(kv)
+    before = await ui.initialize()
+    assert "maxTokens" not in before["config"]
+    body = {
+        "page": "chat",
+        "baseRevision": before["revision"],
+        "overrides": {"temperature": 0.4},
+    }
+    body["reviewId"] = (await ui.preview(body))["reviewId"]
+    saved = await ui.save(body)
+    assert "maxTokens" not in json.loads(saved["resources"]["discord-response.json"])
+    assert json.loads(saved["resources"]["ask-web-search.json"]) == json.loads(
+        before["resources"]["ask-web-search.json"]
+    )
+    assert (await store.models())[0].max_tokens is None
+
+
 async def test_conditional_database_writes_reject_a_concurrent_editor():
     kv = MemoryKV()
     first, second = editor(kv), editor(kv)

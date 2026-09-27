@@ -126,6 +126,8 @@ class CreditCatalog:
                 else "chat-completions"
             )
             if group == "chat" and api_format == "chat-completions":
+                # Keep UI values compatible with saved settings and browser drafts.
+                # Inference resolves these aliases to catalog IDs at the AI binding.
                 route = model_id.replace("xai/", "grok/", 1).replace(
                     "google/", "google-ai-studio/", 1
                 )

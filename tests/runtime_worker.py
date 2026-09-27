@@ -210,6 +210,23 @@ class Default(ProductionDefault):
         media, mime = await download_media(request.url.replace("/test/scenario", "/test/media"))
         assert media == b"image-bytes" and mime == "image/png"
         app = Application(self.env, transport=transport)
+
+        async def ai_run(model, inputs, options):
+            from ragbot.runtime import fetch
+
+            assert model == "xai/grok-4.3"
+            assert options["gateway"]["id"] == "platy"
+            assert inputs["messages"]
+            assert not {"max_tokens", "max_completion_tokens", "max_output_tokens"} & inputs.keys()
+            response = await fetch(
+                request.url.replace("/test/scenario", "/test/upstream"),
+                method="POST",
+                body=json.dumps(inputs),
+            )
+            return await response.json()
+
+        # Runtime tests never have a live AI binding or call a paid model.
+        app.ai.env = SimpleNamespace(AI=SimpleNamespace(run=ai_run))
         await app.db.batch([("SELECT 1 AS value", ())])
         for _ in range(100):
             if await app.db.first("SELECT id FROM rag_events"):

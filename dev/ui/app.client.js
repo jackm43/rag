@@ -4,7 +4,7 @@
   const storageKey = "ragbot-dev-console-simple";
   const identityFields = ["userId", "username", "globalName", "nick"];
   const idFields = ["botUserId", "guildId", "channelId"];
-  const overrideFields = ["model", "webSearchModel", "webSearchMaxTokens", "webSearchContextSize", "temperature", "maxTokens", "historyLimit", "systemPrompt", "webSearchSystemPrompt", "imageProfile", "imageModel", "imageAspectRatio", "imageQuality", "imageResolution"];
+  const overrideFields = ["model", "webSearchModel", "webSearchMaxTokens", "webSearchContextSize", "temperature", "historyLimit", "systemPrompt", "webSearchSystemPrompt", "imageProfile", "imageModel", "imageAspectRatio", "imageQuality", "imageResolution"];
   const fields = [...identityFields, ...idFields, "modsRole", "mode", "mentionBot", "replyLast"];
   let saved;
   try { saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}"); } catch { saved = {}; }
@@ -222,7 +222,7 @@
       $("temperature-current").textContent = "Not supported by the selected model.";
     }
     $("temperature").placeholder = config.temperature;
-    for (const [id, key] of [["model", "responseModel"], ["webSearchModel", "askWebSearchModel"], ["maxTokens", "maxTokens"], ["historyLimit", "historyLimit"], ["webSearchMaxTokens", "askWebSearchMaxOutputTokens"], ["webSearchContextSize", "askWebSearchContextSize"]]) {
+    for (const [id, key] of [["model", "responseModel"], ["webSearchModel", "askWebSearchModel"], ["historyLimit", "historyLimit"], ["webSearchMaxTokens", "askWebSearchMaxOutputTokens"], ["webSearchContextSize", "askWebSearchContextSize"]]) {
       if ($(id).tagName === "INPUT") $(id).placeholder = config[key];
       $(`${id}-current`).hidden = !value(id) || String(value(id)) === String(config[key]);
       $(`${id}-current`).textContent = `Saved: ${config[key]}${value(id) && String(value(id)) !== String(config[key]) ? " · Unsaved: " + value(id) : ""}`;

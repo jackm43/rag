@@ -70,7 +70,6 @@ FILES = {'ask-web-search-system-prompt.md': 'You are a careful web research assi
                                       'funny".',
  'discord-response.json': '{\n'
                           '  "model": "grok/grok-4.3",\n'
-                          '  "maxTokens": 1000,\n'
                           '  "temperature": 0.9,\n'
                           '  "historyLimit": 3,\n'
                           '  "gatewayId": "platy"\n'
