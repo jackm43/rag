@@ -176,7 +176,7 @@ def main():
                 assert len(result["threads"]) == 1
                 assert result["interactions"][0]["status"] == "ok"
                 assert result["interactions"][0]["response_text"] == "hello <https://example.com>"
-                assert result["spend"][0]["total_tokens"] == 15
+                assert result["spend"] == []
                 assert result["multipart"] is True
                 status, body = request(base, "/test/gateway")
                 if status != 200:
@@ -195,7 +195,7 @@ def main():
                 logs.seek(0)
                 assert "borrowed proxy was automatically destroyed" not in logs.read()
                 print(
-                    "Python Workers runtime: signatures, bare denials, Durable Object controls, D1, /rag, /ask, spend, multipart and gateway WebSocket passed."
+                    "Python Workers runtime: signatures, bare denials, Durable Object controls, D1, /rag, /ask, multipart and gateway WebSocket passed."
                 )
             except Exception:
                 logs.flush()

@@ -52,7 +52,6 @@ async def image_file(result, transport) -> Attachment:
     "bicture",
     "Generate an image with Cloudflare AI",
     [text_option("prompt", "Image prompt", 2000)],
-    ai_limited=True,
 )
 async def bicture(ctx: CommandContext):
     prompt = ctx.option("prompt")
@@ -80,56 +79,3 @@ async def bicture(ctx: CommandContext):
     except Exception as error:
         log.error("bicture_command_failed error_type=%s", type(error).__name__)
         await ctx.reply("Could not generate that image. Try a different prompt.")
-
-
-def prompt_content(prompt: str, prefix: str) -> str:
-    available = 2000 - len(prefix.encode("utf-16-le")) // 2
-    if len(prompt.encode("utf-16-le")) // 2 > available:
-        prompt = truncate_discord(prompt, max(0, available - 3)) + "..."
-    return prefix + prompt
-
-
-@command(
-    "ragjam",
-    "Generate a song with Cloudflare AI",
-    [
-        text_option("prompt", "Music style, mood, and scenario", 2000),
-        text_option("lyrics", "Song lyrics; omit to auto-generate lyrics", 3500, required=False),
-    ],
-    ai_limited=True,
-)
-async def ragjam(ctx: CommandContext):
-    prompt, lyrics = ctx.option("prompt"), ctx.option("lyrics")
-    try:
-        if not prompt:
-            await ctx.reply("A music prompt is required.")
-            return
-        profile = await ctx.app.config.document("ragjam-music.json")
-        inputs = {
-            "prompt": prompt,
-            "is_instrumental": profile["isInstrumental"],
-            "lyrics_optimizer": profile["lyricsOptimizer"] if lyrics else True,
-        }
-        if lyrics:
-            inputs["lyrics"] = lyrics
-        result = await ctx.app.ai.media(profile, inputs, ctx.attribution("ragjam"))
-        url = media_string(result, "audio")
-        if not url:
-            raise ValueError("missing_ragjam_audio")
-        file = None
-        try:
-            data, mime = await download_media(url, transport=ctx.app.transport)
-            mime = mime or "audio/mpeg"
-            extension = (
-                "wav" if "wav" in mime or re.search(r"\.wav(?:$|[?#])", url, re.I) else "mp3"
-            )
-            file = Attachment(f"ragjam.{extension}", mime, data)
-        except Exception:
-            log.warning("ragjam_audio_download_failed")
-        await ctx.reply(
-            prompt_content(prompt, "Prompt: " if file else f"Generated song: {url}\nPrompt: "),
-            files=(file,) if file else (),
-        )
-    except Exception:
-        log.error("ragjam_command_failed")
-        await ctx.reply("Could not generate that song. Try a different prompt or lyrics.")

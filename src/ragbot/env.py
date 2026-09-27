@@ -12,10 +12,7 @@ class Env(Protocol):
     ALLOWED_GUILD_IDS: str
     CF_ACCOUNT_ID: str
     CF_AIG_GATEWAY_ID: str
-    AI_BURST_LIMIT_PER_MINUTE: str | None
-    AI_GLOBAL_DAILY_BUDGET_USD: str | None
     DISCORD_BOT_TOKEN: str
     DISCORD_PUBLIC_KEY: str
     GATEWAY_CONTROL_TOKEN: str
     CF_AIG_TOKEN: str
-    CLOUDFLARE_API_TOKEN: str

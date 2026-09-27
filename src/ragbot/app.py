@@ -9,7 +9,7 @@ from .commands import COMMANDS, CommandContext
 from .commands.registry import ADMIN_IDS
 from .config import ConfigStore
 from .conversation import ChatJob, display_name, process_chat, strip_mentions
-from .db import Database, format_ban_expiry, guild_allowed
+from .db import Database, guild_allowed
 from .discord import DiscordClient, Transport, is_message
 from .env import Env
 from .policy import truncate_discord
@@ -46,17 +46,17 @@ class Application:
             if command.admin_only and invoker_id not in ADMIN_IDS:
                 await ctx.reply(f"You are not allowed to use /{name}.")
                 return
-            if command.ai_limited:
-                if invoker_id:
-                    ban = await self.db.active_ban(invoker_id, fail_open=True)
-                    if ban:
-                        await ctx.reply(
-                            f"You cannot use AI commands until {format_ban_expiry(ban['expires_at'])}."
-                        )
-                        return
-                denial = await self.db.usage_denial(self.env, invoker_id, name)
-                if denial:
-                    await ctx.reply(denial)
+            if command.required_role_id:
+                roles = (interaction.get("member") or {}).get("roles")
+                if (
+                    not interaction.get("guild_id")
+                    or not invoker_id
+                    or not isinstance(roles, list)
+                    or command.required_role_id not in roles
+                ):
+                    await ctx.reply(
+                        f"You are not allowed to use /{name}. The Mods role is required."
+                    )
                     return
             await command.execute(ctx)
         except Exception:
@@ -111,13 +111,7 @@ class Application:
             if not prompt:
                 return
             user_id = (message.get("author") or {}).get("id")
-            if user_id and await self.db.active_ban(user_id, fail_open=True):
-                return
             kind = "thread_reply" if thread else "channel_reply"
-            denial = await self.db.usage_denial(self.env, user_id, kind)
-            if denial:
-                await self.discord.reply(message["channel_id"], denial)
-                return
             reference = message.get("message_reference") or {}
             referenced = message.get("referenced_message") or {}
             job = ChatJob(

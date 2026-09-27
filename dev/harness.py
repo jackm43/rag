@@ -178,8 +178,6 @@ class Simulation:
                     "ALLOWED_GUILD_IDS",
                     "CF_ACCOUNT_ID",
                     "CF_AIG_TOKEN",
-                    "AI_BURST_LIMIT_PER_MINUTE",
-                    "AI_GLOBAL_DAILY_BUDGET_USD",
                 )
             }
         )
@@ -342,7 +340,6 @@ class Simulation:
     async def run(self, mode):
         started = time.monotonic()
         db = Database(self.env.DB)
-        watermark = await db.first("SELECT COALESCE(MAX(id), 0) AS max_id FROM rag_ai_spend_events")
         log_token = captured_logs.set(self.logs)
         try:
             identity = self.inputs["identity"]
@@ -465,10 +462,6 @@ class Simulation:
                 "logs": self.logs,
                 "db": {
                     "interaction": analytics,
-                    "spendEvents": await db.all(
-                        "SELECT * FROM rag_ai_spend_events WHERE id > ? ORDER BY id ASC",
-                        watermark["max_id"],
-                    ),
                 },
             }
         finally:

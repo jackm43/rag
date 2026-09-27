@@ -1,4 +1,4 @@
-"""Inference, spend attribution, and shared chat/search routing."""
+"""Inference, request attribution, and shared chat/search routing."""
 
 import json
 import logging
@@ -166,34 +166,6 @@ class Inference:
             args.append({"gateway": {"id": gateway_id, "metadata": metadata}})
         return to_python(await self.env.AI.run(*args))
 
-    async def record_spend(
-        self,
-        attribution: Attribution,
-        source_id: str,
-        model: str,
-        usage: dict | None = None,
-        unit_count: int = 0,
-    ):
-        if not attribution.user_id:
-            return
-        usage = usage or {}
-        try:
-            await self.db.run(
-                "INSERT INTO rag_ai_spend_events (source_id, kind, requester_user_id, requester_username, model, prompt_tokens, completion_tokens, total_tokens, unit_count, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)",
-                source_id,
-                attribution.kind,
-                attribution.user_id,
-                attribution.username,
-                model,
-                *(
-                    int(usage[k]) if k in usage else None
-                    for k in ("prompt_tokens", "completion_tokens", "total_tokens")
-                ),
-                unit_count,
-            )
-        except Exception:
-            log.warning("ai_spend_event_record_failed")
-
     async def chat(
         self, config: ModelConfig, messages: list[dict], attribution: Attribution
     ) -> Completion:
@@ -211,7 +183,6 @@ class Inference:
         else:
             payload = await self.binding(config.model, body, config.gateway_id, metadata)
         result = completion(payload, config.model.removeprefix("workers-ai/"))
-        await self.record_spend(attribution, source_id, result.model, result.usage)
         return result
 
     async def search(
@@ -250,7 +221,6 @@ class Inference:
                 metadata,
             )
         result = completion(payload, config.model, search=True)
-        await self.record_spend(attribution, source_id, result.model, result.usage)
         return result
 
     async def ask(
@@ -297,5 +267,4 @@ class Inference:
         result = await self.binding(
             profile["model"], data, profile.get("gatewayId"), attribution.metadata(source_id)
         )
-        await self.record_spend(attribution, source_id, profile["model"], unit_count=1)
         return result
