@@ -18,6 +18,15 @@
   let busy = false;
   let baseline;
   let review;
+  let historyNext = null;
+  const clearHistory = () => {
+    historyNext = null;
+    $("history-entries").replaceChildren();
+    $("more-history").hidden = true;
+    $("history-status").textContent = page === "bicture"
+      ? "Bicture history begins when recording is deployed. Fetch history to see saved image prompts."
+      : "Fetch saved chat prompts, including /ask and thread replies.";
+  };
   const invalidateReview = () => { review = undefined; $("settings-review").hidden = true; };
   const snowflake = () => (((BigInt(Date.now()) - 1420070400000n) << 22n) | BigInt(Math.floor(Math.random() * 4096))).toString();
   const value = (id) => $(id).value.trim();
@@ -55,6 +64,7 @@
     const isImage = id.startsWith("image");
     if ((page === "bicture") !== isImage) return [];
     if (!["chat", "ask", "bicture"].includes(page)) return [];
+    if (id === "temperature" && !catalog.chat.find(m => m.id === (value("model") || meta?.config.responseModel))?.temperature) return [];
     const input = value(id);
     return input ? [[id, $(id).type === "number" ? Number(input) : input]] : [];
   }));
@@ -66,7 +76,7 @@
       card.append(node("strong", entry.role === "bot" ? "ragbot" : author.nick || author.globalName || author.username || "user"), node("div", entry.content));
       return card;
     }));
-    if (!entries.length) $("transcript").append(node("p", "This channel has no conversation yet. Thread modes use this transcript as history."));
+    $("transcript").hidden = !entries.length;
     $("transcript").scrollTop = $("transcript").scrollHeight;
   };
   const renderResult = (result) => {
@@ -97,10 +107,18 @@
     for (const exchange of result.ai.filter((item) => item.error)) $("replies").append(node("p", `Model failed: ${exchange.error}. Inspect AI responses below.`));
     if (!$("replies").childElementCount) $("replies").append(node("p", "No reply was sent. Inspect worker logs and database effects below."));
   };
-  const run = async (task) => {
+  const run = async (task, { validate = false } = {}) => {
     if (busy) return;
-    for (const id of overrideFields) {
-      if (!$(id).closest("[hidden]") && !$(id).reportValidity()) return;
+    if (validate) {
+      for (const id of overrideFields) {
+        const input = $(id);
+        if (input.disabled || input.closest("[hidden]") || input.checkValidity()) continue;
+        for (let parent = input.parentElement; parent; parent = parent.parentElement) {
+          if (parent.tagName === "DETAILS") parent.open = true;
+        }
+        input.reportValidity();
+        return;
+      }
     }
     busy = true;
     save();
@@ -156,10 +174,11 @@
       entries.push({ id: result.message.id, role: "user", content: result.message.content, author: input.identity });
       for (const reply of result.replies) entries.push({ id: reply.id ?? snowflake(), role: "bot", content: reply.content });
       $("content").value = "";
+      $("replay-status").hidden = true;
       renderTranscript();
       renderResult(result);
       status(result.ai.some(item => item.error) ? "Model request failed. See the output for details." : `${result.replies.length ? "Reply received" : "No reply"} in ${result.durationMs} ms.`, result.ai.some(item => item.error));
-    });
+    }, { validate: true });
   });
   $("slash-panel").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -181,14 +200,32 @@
       const result = await api("interaction", { ...input, command: command.name, options, resolvedUsers });
       renderResult(result);
       status(result.ai.some(item => item.error) ? "Model request failed. See the output for details." : `Done in ${result.durationMs} ms.`, result.ai.some(item => item.error));
-    });
+    }, { validate: true });
   });
   const updateSettings = () => {
     if (!meta) return;
     const config = meta.config;
-    for (const [id, key] of [["model", "responseModel"], ["webSearchModel", "askWebSearchModel"], ["temperature", "temperature"], ["maxTokens", "maxTokens"], ["historyLimit", "historyLimit"], ["webSearchMaxTokens", "askWebSearchMaxOutputTokens"], ["webSearchContextSize", "askWebSearchContextSize"]]) {
+    const temperatureSpec = catalog.chat.find(m => m.id === (value("model") || config.responseModel))?.temperature;
+    $("temperature-control").hidden = !["chat", "ask"].includes(page);
+    $("temperature").disabled = $("temperature-slider").disabled = busy || !temperatureSpec;
+    $("temperature-current").hidden = false;
+    if (temperatureSpec) {
+      for (const id of ["temperature", "temperature-slider"]) {
+        $(id).min = temperatureSpec.minimum; $(id).max = temperatureSpec.maximum;
+      }
+      const current = value("temperature") === "" ? config.temperature : Number(value("temperature"));
+      $("temperature-slider").value = current;
+      $("temperature-value").textContent = current;
+      $("temperature-current").textContent = `${temperatureSpec.minimum}–${temperatureSpec.maximum} · Lower is more consistent; higher is more varied. Saved: ${config.temperature}`;
+    } else {
+      $("temperature-value").textContent = "";
+      $("temperature-current").textContent = "Not supported by the selected model.";
+    }
+    $("temperature").placeholder = config.temperature;
+    for (const [id, key] of [["model", "responseModel"], ["webSearchModel", "askWebSearchModel"], ["maxTokens", "maxTokens"], ["historyLimit", "historyLimit"], ["webSearchMaxTokens", "askWebSearchMaxOutputTokens"], ["webSearchContextSize", "askWebSearchContextSize"]]) {
       if ($(id).tagName === "INPUT") $(id).placeholder = config[key];
-      $(`${id}-current`).textContent = `Current: ${value(id) || config[key]} · Default: ${config[key]}`;
+      $(`${id}-current`).hidden = !value(id) || String(value(id)) === String(config[key]);
+      $(`${id}-current`).textContent = `Saved: ${config[key]}${value(id) && String(value(id)) !== String(config[key]) ? " · Unsaved: " + value(id) : ""}`;
     }
     for (const id of ["systemPrompt", "webSearchSystemPrompt"]) $(`${id}-current`).textContent = value(id) ? "Current: your custom prompt" : "Current: saved prompt (shown below)";
     const image = config.image;
@@ -197,9 +234,19 @@
     $("imageProfile-current").textContent = `Current: ${profileName} · Default: ${image.activeProfile}`;
     const selectedImage = value("imageModel") || profile.model;
     const imageModel = catalog.image.find(m => m.id === selectedImage);
-    $("imageModel-current").textContent = `Current: ${selectedImage} · Profile: ${profile.model}`;
+    if ($("imageModel").options[0]) {
+      $("imageModel").options[0].textContent = `${catalog.image.find(m => m.id === profile.model)?.name || profile.model} (saved)`;
+      $("imageModel").options[0].disabled = !catalog.image.some(m => m.id === profile.model);
+    }
+    $("imageModel-current").hidden = selectedImage === profile.model;
+    $("imageModel-current").textContent = `Saved for ${profileName}: ${profile.model}${selectedImage !== profile.model ? " · Unsaved: " + selectedImage : ""}`;
+
+
+    $("review-settings").textContent = baseline?.target === "live" ? "Review & save to live bot" : "Review & save locally";
+
     for (const [id, field, key] of [["imageAspectRatio", "aspect_ratio", "aspectRatio"], ["imageQuality", "quality", "quality"], ["imageResolution", "resolution", "resolution"]]) {
       const spec = imageModel?.parameters?.[field];
+      $(id).closest("label").hidden = !spec;
       const previous = value(id);
       const fallback = spec ? ((!spec.enum || spec.enum.includes(profile[key])) ? profile[key] : spec.default) : undefined;
       $(id).replaceChildren(new Option(spec ? `Default (${fallback || "model default"})` : "Not supported by this model", ""), ...(spec?.enum ?? []).map(option => new Option(option, option)));
@@ -209,7 +256,7 @@
     }
     const canChat = catalog.chat.some(m => m.id === (value("model") || config.responseModel));
     const canImage = Boolean(imageModel);
-    $("review-settings").disabled = busy || !baseline;
+    $("review-settings").disabled = busy || !baseline || !Object.keys(overrides()).length;
     $("send").disabled = busy || !baseline || !canChat;
     $("run-command").disabled = busy || !baseline || (page === "bicture" && !canImage) || (page === "ask" && !canChat);
     $("default-prompt").textContent = config.systemPrompt;
@@ -225,14 +272,20 @@
     $("mention-panel").hidden = !chat;
     $("slash-panel").hidden = chat;
     $("model-panel").hidden = !["chat", "ask", "bicture"].includes(page);
+    $("chat-model-field").hidden = image;
+    $("image-model-field").hidden = !image;
+    $("search-panel").hidden = image;
+    $("history-panel").hidden = !["chat", "ask", "bicture"].includes(page);
+    $("replay-status").hidden = true;
+    clearHistory();
     $("chat-settings").hidden = image;
     $("search-settings").hidden = image;
     $("image-settings").hidden = !image;
     $("page-title").textContent = chat ? "Chat playground" : `/${page}`;
-    $("page-description").textContent = chat ? "Adjust the system prompt, send messages, and inspect the conversation." : image ? "Choose an image profile, describe your image, and see the result." : meta.commands.find(c => c.name === page).description;
+    $("page-description").textContent = chat || image ? "Test prompts locally. Save model changes to apply them to the bot." : meta.commands.find(c => c.name === page).description;
     $("result-title").textContent = image ? "Generated image" : "Output";
     document.title = `${chat ? "Chat" : "/" + page} · ragbot dev studio`;
-    for (const link of $("pages").children) {
+    for (const link of $("pages").querySelectorAll("a")) {
       if (link.dataset.page === page) link.setAttribute("aria-current", "page");
       else link.removeAttribute("aria-current");
     }
@@ -262,7 +315,7 @@
       for (const id of ["payload", "requests", "responses", "calls", "logs", "db"]) $(id).textContent = "—";
     }
     updateSettings();
-    status("Ready. Identity and channel are filled in.");
+    status(baseline ? "Ready." : "Settings unavailable. Reload or choose Local sandbox.", !baseline);
   };
   window.addEventListener("hashchange", showPage);
   $("pages").addEventListener("click", event => { if (busy) event.preventDefault(); });
@@ -272,6 +325,10 @@
       for (const setting of ["imageAspectRatio", "imageQuality", "imageResolution"]) $(setting).value = "";
     }
     updateSettings(); save();
+  });
+  $("temperature-slider").addEventListener("input", () => {
+    $("temperature").value = $("temperature-slider").value;
+    $("temperature").dispatchEvent(new Event("input", { bubbles: true }));
   });
   $("content").addEventListener("input", save);
   $("reset-settings").addEventListener("click", () => { invalidateReview(); for (const id of overrideFields) $(id).value = ""; save(); updateSettings(); });
@@ -294,8 +351,79 @@
     json("config", await api("config", { target: baseline?.target ?? "local", baseRevision: baseline?.revision, overrides: overrides(), page }));
     $("config-panel").hidden = false;
     $("config-panel").open = true;
+    $("debug-panel").open = true;
     status("Showing resolved configuration.");
   }));
+  const loadHistory = async (older = false) => {
+    if (!older) clearHistory();
+    $("history-status").textContent = "Fetching prompt history…";
+    try {
+      const result = await api("history", {
+        target: value("history-target"), page: page === "bicture" ? "bicture" : "chat",
+        search: value("history-search"), before: older ? historyNext : null,
+      });
+      let firstNewCard;
+      for (const entry of result.entries) {
+        const card = node("details", "", "history-card");
+        firstNewCard ??= card;
+        const timestamp = new Date(entry.created_at.includes("T") ? entry.created_at : entry.created_at.replace(" ", "T") + "Z");
+        const when = Number.isNaN(timestamp.getTime()) ? entry.created_at : timestamp.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+        const summary = node("summary", "");
+        const kind = { ask: "/ask", channel_reply: "Chat", thread_reply: "Thread", bicture: "/bicture" }[entry.kind] || entry.kind;
+        summary.append(node("span", entry.prompt, "history-preview"), node("span", `${when} · ${entry.requester_username || "user"} · ${kind}${entry.status !== "ok" ? " · Failed" : ""}`, "history-meta"));
+        card.append(summary, node("p", `Model: ${entry.model}`), node("pre", entry.prompt));
+        if (entry.response_text) {
+          const response = node("details", "", "history-response");
+          response.append(node("summary", "Previous response"), node("pre", entry.response_text));
+          card.append(response);
+        }
+        const button = node("button", "Load prompt for replay");
+        button.type = "button";
+        button.addEventListener("click", () => {
+          if (busy) return;
+          const input = page === "chat" ? $("content") : $("command-options").querySelector('[data-option="prompt"][data-field="value"]');
+          input.value = entry.prompt;
+          if (page === "chat") {
+            // Isolate a replay from an unrelated local conversation.
+            $("channelId").value = snowflake();
+            $("mode").value = "channel";
+            $("mentionBot").checked = true;
+            $("replyLast").checked = false;
+            renderTranscript();
+          }
+          $("replay-status").textContent = `Loaded from ${value("history-target") === "live" ? "Live bot" : "Local sandbox"} · ${when}. Uses your current settings; previous conversation context is not included.`;
+          $("replay-status").hidden = false;
+          $("history-panel").open = false;
+          save(); input.focus({ preventScroll: true });
+          $("replay-status").scrollIntoView({ block: "start" });
+          status("Prompt loaded. Review it, then send or generate with your current settings.");
+        });
+        const actions = node("div", "", "history-actions");
+        actions.append(button);
+        card.append(actions);
+        $("history-entries").append(card);
+      }
+      historyNext = result.next;
+      $("more-history").hidden = historyNext === null;
+      if (older) firstNewCard?.scrollIntoView({ block: "nearest" });
+      $("history-status").textContent = $("history-entries").childElementCount
+        ? `${$("history-entries").childElementCount} saved prompts · newest first · times shown in your timezone.`
+        : value("history-search") ? "No saved prompts match your search. Try another phrase."
+        : page === "bicture" ? "No saved image prompts yet. Recording begins after the updated bot is deployed."
+        : "No saved chat prompts in this source yet.";
+      status("Prompt history loaded.");
+    } catch (error) {
+      $("history-status").textContent = error.message;
+      throw error;
+    }
+  };
+  $("load-history").addEventListener("click", () => run(() => loadHistory()));
+  $("more-history").addEventListener("click", () => run(() => loadHistory(true)));
+  $("history-target").addEventListener("change", clearHistory);
+  $("history-search").addEventListener("input", clearHistory);
+  $("history-search").addEventListener("keydown", event => {
+    if (event.key === "Enter") { event.preventDefault(); void run(() => loadHistory()); }
+  });
   const loadModels = async (refresh = false) => {
     $("catalog-status").textContent = "Checking Cloudflare-credit model availability…";
     try {
@@ -305,14 +433,6 @@
       catalog = { chat: [], search: [], image: [] };
       $("catalog-status").textContent = error.message;
     }
-    const table = document.createElement("table");
-    table.append(node("caption", "Configured profiles using Cloudflare credits"));
-    for (const [name, profile] of Object.entries(meta.config.image.profiles).filter(([, p]) => catalog.image.some(m => m.id === p.model))) {
-      const row = document.createElement("tr");
-      row.append(node("th", name), node("td", `${profile.model} · ${profile.resolution} · ${profile.aspectRatio} · quality: ${profile.quality}`));
-      table.append(row);
-    }
-    $("profile-options").replaceChildren(table);
     const previousProfile = value("imageProfile");
     $("imageProfile").replaceChildren(new Option(`Default (${meta.config.image.activeProfile})`, ""), ...Object.entries(meta.config.image.profiles).filter(([, p]) => catalog.image.some(m => m.id === p.model)).map(([name]) => new Option(name, name)));
     $("imageProfile").options[0].disabled = !catalog.image.some(m => m.id === meta.config.image.profiles[meta.config.image.activeProfile].model);
@@ -320,9 +440,19 @@
     for (const [id, group, fallback] of [["model", "chat", meta.config.responseModel], ["webSearchModel", "search", meta.config.askWebSearchModel], ["imageModel", "image", meta.config.image.profiles[meta.config.image.activeProfile].model]]) {
       const previous = value(id);
       const eligibleDefault = catalog[group].some(m => m.id === fallback);
-      const defaultOption = new Option(eligibleDefault ? (id === "imageModel" ? "Use profile model" : `Default (${fallback})`) : "Choose a Cloudflare-credit model", "");
+      const defaultOption = new Option(eligibleDefault ? `${catalog[group].find(m => m.id === fallback)?.name || fallback} (saved)` : "Choose an available model", "");
       defaultOption.disabled = !eligibleDefault;
-      $(id).replaceChildren(defaultOption, ...catalog[group].map(m => new Option(`${m.name} — ${m.id}`, m.id)));
+      const groups = new Map();
+      for (const model of [...catalog[group]].sort((a, b) => a.name.localeCompare(b.name))) {
+        const provider = model.provider || "Models";
+        if (!groups.has(provider)) {
+          const options = document.createElement("optgroup"); options.label = provider;
+          groups.set(provider, options);
+        }
+        const option = new Option(model.name, model.id); option.title = model.id;
+        groups.get(provider).append(option);
+      }
+      $(id).replaceChildren(defaultOption, ...groups.values());
       $(id).selectedIndex = 0;
       if (catalog[group].some(m => m.id === previous)) $(id).value = previous;
     }
@@ -337,7 +467,7 @@
     try {
       baseline = await api("settings/load", { target: value("settings-target") });
       meta.config = baseline.config;
-      $("settings-status").textContent = `Loaded ${baseline.label} · ${baseline.source === "d1" ? "D1" : "legacy defaults"} · revision ${baseline.revision}${baseline.updatedAt ? " · saved " + new Date(baseline.updatedAt).toLocaleString() : " · existing defaults"}. Changes below are drafts until saved.`;
+      $("settings-status").textContent = `${baseline.target === "live" ? "Live bot" : "Local sandbox"} · changes are drafts until saved.`;
       await loadModels();
       updateSettings();
     } catch (error) {
@@ -356,18 +486,33 @@
     const draft = { target: baseline.target, baseRevision: baseline.revision, overrides: overrides(), page };
     const result = await api("settings/review", draft);
     review = { ...draft, reviewId: result.reviewId };
-    $("review-title").textContent = `Changes for ${result.label}`;
+    $("review-title").textContent = baseline.target === "live" ? "Review production changes" : "Review local sandbox changes";
     $("settings-changes").replaceChildren(...result.changes.map(change => {
-      const item = node("details", ""); item.open = true;
-      item.append(node("summary", change.resource), node("strong", "Saved"), node("pre", change.before), node("strong", "After save"), node("pre", change.after));
+      const item = node("section", "", "settings-change");
+      const labels = { "bicture-image.json": "Bicture", "discord-response.json": "Chat", "ask-web-search.json": "Search", "discord-response-system-prompt.md": "Chat system prompt", "ask-web-search-system-prompt.md": "Search system prompt" };
+      item.append(node("h4", labels[change.resource] || change.resource));
+      if (change.resource.endsWith(".json")) {
+        const flatten = (object, prefix = "") => Object.entries(object).flatMap(([key, val]) => val && typeof val === "object" && !Array.isArray(val) ? flatten(val, `${prefix}${key}.`) : [[`${prefix}${key}`, JSON.stringify(val)]]);
+        const before = Object.fromEntries(flatten(JSON.parse(change.before))), after = Object.fromEntries(flatten(JSON.parse(change.after)));
+        const table = node("table", "");
+        const head = node("tr", "");
+        head.append(node("th", "Setting"), node("th", "Saved"), node("th", "After save")); table.append(head);
+        for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+          if (before[key] === after[key]) continue;
+          const row = node("tr", "");
+          row.append(node("th", key.replace(/^profiles\./, "").replaceAll(".", " / ")), node("td", before[key] ?? "—"), node("td", after[key] ?? "—")); table.append(row);
+        }
+        item.append(table);
+      } else item.append(node("strong", "Saved"), node("pre", change.before), node("strong", "After save"), node("pre", change.after));
       return item;
     }));
     $("save-settings").textContent = baseline.target === "live" ? "Save to live bot" : "Save to local sandbox";
     $("save-settings").hidden = !result.changes.length;
     if (!result.changes.length) $("settings-changes").append(node("p", "No changes to save."));
     $("settings-review").hidden = false;
+    $("settings-review").scrollIntoView({ block: "nearest" });
     status("Review the changes before saving.");
-  }));
+  }, { validate: true }));
   $("save-settings").addEventListener("click", () => run(async () => {
     if (!review) throw new Error("Review changes before saving.");
     baseline = await api("settings/save", review);
@@ -376,12 +521,12 @@
     for (const id of overrideFields) $(id).value = "";
     save();
     await loadModels();
-    $("settings-status").textContent = `Saved to ${baseline.label} at ${new Date(baseline.updatedAt).toLocaleTimeString()}. Revision ${baseline.revision}. New AI requests use these settings immediately.`;
+    $("settings-status").textContent = `Saved to ${baseline.target === "live" ? "live bot" : "local sandbox"}. New requests use these settings now.`;
     status("Settings saved. No redeploy needed for future setting changes.");
   }));
   const boot = async () => {
     meta = await api("meta");
-    await loadSettings();
+    try { await loadSettings(); } catch { /* Keep local settings and history accessible. */ }
     resetIdentity();
     for (const id of fields) {
       if (state[id] !== undefined) $(id)[$(id).type === "checkbox" ? "checked" : "value"] = state[id];
@@ -392,18 +537,23 @@
     if (!/^\d{17,20}$/.test(value("userId"))) $("userId").value = meta.defaults.userId;
     if (!value("username")) $("username").value = meta.defaults.username;
     $("command").replaceChildren(...meta.commands.map((command) => new Option(`/${command.name}`, command.name)));
-    $("pages").replaceChildren(...[{name: "chat"}, ...meta.commands].map(command => {
+    const links = [{name: "chat"}, ...meta.commands].map(command => {
       const link = node("a", command.name === "chat" ? "Chat" : `/${command.name}`);
       link.href = `#/${command.name}`;
       link.dataset.page = command.name;
       return link;
-    }));
+    });
+    const more = node("details", "", "nav-more"), menu = node("div", "");
+    more.append(node("summary", "Other commands"), menu);
+    for (const link of links.filter(link => !["chat", "bicture", "ask"].includes(link.dataset.page))) menu.append(link);
+    $("pages").replaceChildren(...["chat", "bicture", "ask"].map(name => links.find(link => link.dataset.page === name)).filter(Boolean), more);
+    menu.addEventListener("click", () => { more.open = false; });
 
     // Preserve pre-existing chat overrides when upgrading the old console.
     state.pages.chat ??= Object.fromEntries(overrideFields.map(id => [id, state[id] ?? ""]));
     for (const id of overrideFields) $(id).value = state.pages.chat[id] ?? "";
     $("content").value = state.pages.chat.content ?? "";
-    $("connection").textContent = meta.hasAigToken ? "AI connected · Discord stubbed" : "AI token missing";
+    $("connection").textContent = meta.hasAigToken ? "Connected · local testing" : "AI token missing";
     showPage();
     renderTranscript();
     save();

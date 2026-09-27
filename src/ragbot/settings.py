@@ -13,7 +13,11 @@ class DraftNamespace:
         for key, fields in [
             (
                 "discord-response.json",
-                {k: k for k in ("model", "temperature", "maxTokens", "historyLimit")},
+                {
+                    **{k: k for k in ("model", "temperature", "maxTokens", "historyLimit")},
+                    "apiFormat": "chatApiFormat",
+                    "temperatureSupported": "chatTemperatureSupported",
+                },
             ),
             (
                 "ask-web-search.json",
@@ -94,6 +98,7 @@ async def resolve_config(overrides, resources=None):
     return {
         "image": image,
         "responseModel": chat.model,
+        "chatApiFormat": chat.api_format,
         "systemPrompt": chat.prompt,
         "maxTokens": chat.max_tokens,
         "temperature": chat.temperature,
@@ -116,6 +121,7 @@ def validate_overrides(overrides):
 
     strings = {
         "model",
+        "chatApiFormat",
         "webSearchModel",
         "systemPrompt",
         "webSearchSystemPrompt",
@@ -134,6 +140,8 @@ def validate_overrides(overrides):
     }
     if set(overrides) - strings - numeric.keys():
         raise ValueError("unknown setting")
+    if overrides.get("chatApiFormat") not in (None, "chat-completions", "responses"):
+        raise ValueError("invalid chat API format")
     if overrides.get("webSearchContextSize") not in (None, "", "low", "medium", "high"):
         raise ValueError("invalid search context size")
     for key, value in overrides.items():

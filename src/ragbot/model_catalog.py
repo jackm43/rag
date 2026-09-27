@@ -2,8 +2,7 @@
 
 Sources: https://developers.cloudflare.com/ai-gateway/features/unified-billing/
 https://developers.cloudflare.com/ai-gateway/usage/chat-completion/
-The account catalog confirms availability; adapters deliberately limit this list
-rather than offering every provider/model the gateway can proxy with BYOK.
+Chat and image choices follow the account catalog rather than a model-name shortlist.
 """
 
 import asyncio
@@ -15,36 +14,6 @@ from urllib.parse import quote
 
 from .runtime import env_value, fetch
 
-# Existing /compat chat requests send messages, max_tokens and temperature.
-# Reasoning-only/Responses models need a different request shape and stay out.
-CHAT_IDS = {
-    "openai/gpt-4.1",
-    "openai/gpt-4.1-mini",
-    "openai/gpt-4.1-nano",
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
-    "google/gemini-2.5-flash",
-    "google/gemini-2.5-flash-lite",
-    "google/gemini-2.5-pro",
-    "xai/grok-4.3",
-    "xai/grok-4.5",
-    "xai/grok-4.6",
-    "xai/grok-4.7",
-    "xai/grok-4.20-0309-non-reasoning",
-}
-# These synchronous image families return an image URL/base64 string, which
-# bicture already decodes/downloads with its normal media size cap.
-IMAGE_IDS = {
-    "xai/grok-imagine-image",
-    "xai/grok-imagine-image-quality",
-    "xai/grok-imagine-image-2.0",
-    "google/nano-banana",
-    "google/nano-banana-2",
-    "google/nano-banana-pro",
-    "google/nano-banana-2-lite",
-    "openai/gpt-image-1.5",
-    "openai/gpt-image-2",
-}
 # Cloudflare documents Responses web search for these models.
 SEARCH_IDS = {"openai/gpt-4.1", "openai/gpt-4.1-mini", "openai/gpt-4o", "openai/gpt-4o-mini"}
 ALIASES = {"xai": {"xai", "grok"}, "google": {"google", "google-ai-studio", "google-vertex-ai"}}
@@ -136,12 +105,14 @@ class CreditCatalog:
         }
         for model in models:
             model_id = model.get("model_id", "")
-            group = "chat" if model_id in CHAT_IDS else "image" if model_id in IMAGE_IDS else None
+            group = {"Text Generation": "chat", "Text-to-Image": "image"}.get(model.get("task"))
             if not group or not credit_route(model, billing[group]):
                 continue
             if group == "chat" and (
                 model.get("task") != "Text Generation"
-                or "chat-completions" not in (model.get("request_formats") or [])
+                or not {"chat-completions", "responses"}.intersection(
+                    model.get("request_formats") or []
+                )
             ):
                 continue
             if group == "image" and (
@@ -149,7 +120,12 @@ class CreditCatalog:
             ):
                 continue
             route = model_id
-            if group == "chat":
+            api_format = (
+                "responses"
+                if "chat-completions" not in (model.get("request_formats") or [])
+                else "chat-completions"
+            )
+            if group == "chat" and api_format == "chat-completions":
                 route = model_id.replace("xai/", "grok/", 1).replace(
                     "google/", "google-ai-studio/", 1
                 )
@@ -157,6 +133,7 @@ class CreditCatalog:
                 {
                     "id": route,
                     "catalogId": model_id,
+                    "apiFormat": api_format,
                     "name": model.get("name", model_id),
                     "provider": model["provider_id"],
                     "billingProviders": [
@@ -167,10 +144,13 @@ class CreditCatalog:
 
         # Resolve the actual supported enums instead of sending Grok parameters
         # to another image provider. Only prompt-only synchronous models qualify.
+        semaphore = asyncio.Semaphore(6)
+
         async def image_details(model):
-            detail = (await self.get("ai/catalog/models/" + quote(model["catalogId"], safe="/")))[
-                "result"
-            ]
+            async with semaphore:
+                detail = (
+                    await self.get("ai/catalog/models/" + quote(model["catalogId"], safe="/"))
+                )["result"]
             schema = detail.get("schema", {})
             inputs = schema.get("input", {})
             output = schema.get("output", {}).get("properties", {})
@@ -186,7 +166,22 @@ class CreditCatalog:
             }
             return model
 
-        # Small adapter list bounds both concurrency and catalog work.
+        async def chat_details(model):
+            model["temperature"] = None
+            if re.match(r"openai/(?:gpt-[5-9]|o[1-9])", model["id"]):
+                return model
+            async with semaphore:
+                detail = (
+                    await self.get("ai/catalog/models/" + quote(model["catalogId"], safe="/"))
+                )["result"]
+            model["temperature"] = temperature_range(
+                detail.get("schema", {}).get("input", {}), model["apiFormat"]
+            )
+            return model
+
+        result["chat"] = await asyncio.gather(*(chat_details(m) for m in result["chat"]))
+
+        # Bound concurrent schema lookups as the live catalog grows.
         result["image"] = [
             m for m in await asyncio.gather(*(image_details(m) for m in result["image"])) if m
         ]
@@ -198,7 +193,7 @@ class CreditCatalog:
             and credit_route(m, billing["search"])
         ]
         result["note"] = (
-            "Only compatible models using Cloudflare credits are listed. BYOK routes and separately billed Workers AI models are excluded."
+            "Models are discovered from the live account catalog; only compatible Cloudflare-credit routes are listed. BYOK routes and separately billed Workers AI models are excluded."
         )
         _cache[key] = (time.monotonic(), result)
         return result
@@ -271,3 +266,31 @@ def image_parameters(model, profile, overrides):
         if value:
             params[field] = value
     return params
+
+
+def temperature_range(schema, api_format):
+    """Catalog schemas may describe Chat Completions and Responses in oneOf."""
+    properties = schema.get("properties", {})
+    spec = properties.get("temperature")
+    if isinstance(spec, dict):
+        minimum, maximum = max(0, spec.get("minimum", 0)), min(2, spec.get("maximum", 2))
+        return {"minimum": minimum, "maximum": maximum} if minimum < maximum else None
+    request_field = "input" if api_format == "responses" else "messages"
+    for variant in schema.get("oneOf", schema.get("anyOf", [])):
+        if request_field in variant.get("properties", {}):
+            return temperature_range(variant, api_format)
+    return None
+
+
+def chat_overrides(model, config, overrides):
+    """Only offer/send temperature when the selected model schema accepts it."""
+    spec = model.get("temperature")
+    if spec:
+        temperature = overrides.get("temperature", config["temperature"])
+        if not spec["minimum"] <= temperature <= spec["maximum"]:
+            raise ModelUnavailable(
+                f"Choose a temperature from {spec['minimum']} to {spec['maximum']} for this model."
+            )
+    elif "temperature" in overrides:
+        raise ModelUnavailable("Temperature is not supported by this model.")
+    return {"chatApiFormat": model["apiFormat"], "chatTemperatureSupported": bool(spec)}

@@ -25,7 +25,18 @@ class MemoryKV:
 
 
 def editor(kv, **kwargs):
-    catalog = SimpleNamespace(validate=AsyncMock(return_value={}))
+    async def available(config, groups):
+        return {
+            "chat": [
+                {
+                    "id": config["responseModel"],
+                    "apiFormat": "chat-completions",
+                    "temperature": {"minimum": 0, "maximum": 2},
+                }
+            ]
+        }
+
+    catalog = SimpleNamespace(validate=AsyncMock(side_effect=available))
     return SettingsEditor(
         SimpleNamespace(AI_CONFIG=kv, DB=kv.db),
         "local",
@@ -210,3 +221,31 @@ async def test_saved_image_parameters_reach_shared_handler(app):
     saved_profile, request, _ = app.ai.media.call_args.args
     assert saved_profile["model"] == "google/nano-banana-2"
     assert request == {"resolution": "1K", "aspect_ratio": "1:1", "prompt": "A tree"}
+
+
+async def test_chat_model_save_persists_server_selected_api_format():
+    kv = MemoryKV()
+    ui = editor(kv)
+    ui.catalog.validate = AsyncMock(
+        return_value={
+            "chat": [
+                {"id": "openai/example-responses", "apiFormat": "responses"},
+                {"id": "example/chat", "apiFormat": "chat-completions"},
+            ]
+        }
+    )
+    for model, expected in [
+        ("openai/example-responses", "responses"),
+        ("example/chat", "chat-completions"),
+    ]:
+        current = await ui.read()
+        body = {
+            "page": "chat",
+            "baseRevision": current["revision"],
+            "overrides": {"model": model, "chatApiFormat": "untrusted"},
+        }
+        body["reviewId"] = (await ui.preview(body))["reviewId"]
+        saved = await ui.save(body)
+        config, _ = await ConfigStore(SimpleNamespace(DB=kv.db)).models()
+        assert config.model == model and config.api_format == expected
+        assert saved["config"]["chatApiFormat"] == expected

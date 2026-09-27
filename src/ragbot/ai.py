@@ -176,13 +176,34 @@ class Inference:
             "max_tokens": config.max_tokens,
             "temperature": config.temperature,
         }
-        if config.gateway_id and not config.model.startswith(("@cf/", "workers-ai/")):
+        if not config.temperature_supported:
+            body.pop("temperature")
+        # Reasoning models reject the legacy token limit and sampling controls.
+        if re.match(r"openai/(?:gpt-[5-9]|o[1-9])", config.model):
+            body.pop("temperature", None)
+            body["max_completion_tokens"] = body.pop("max_tokens")
+        if config.api_format == "responses":
+            payload = await self.binding(
+                config.model,
+                {
+                    "input": messages,
+                    "max_output_tokens": config.max_tokens,
+                    **({"temperature": body["temperature"]} if "temperature" in body else {}),
+                },
+                config.gateway_id,
+                metadata,
+            )
+        elif config.gateway_id and not config.model.startswith(("@cf/", "workers-ai/")):
             payload = await self.gateway(
                 config.gateway_id, {"model": config.model, **body}, metadata
             )
         else:
             payload = await self.binding(config.model, body, config.gateway_id, metadata)
-        result = completion(payload, config.model.removeprefix("workers-ai/"))
+        result = completion(
+            payload,
+            config.model.removeprefix("workers-ai/"),
+            search=config.api_format == "responses",
+        )
         return result
 
     async def search(

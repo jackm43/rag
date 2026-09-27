@@ -98,31 +98,39 @@ request, and captures model requests, responses, replies, media, logs, and D1
 side effects. Model calls are real and tagged `ragbot_env: dev`. Per-run config
 overrides are isolated from other simulations and saved settings.
 
-Open Chat or a dedicated command page from the navigation (for example,
-`http://localhost:8788/#/bicture`). Identity and channel fields start with usable
-local simulation defaults, including an allowlisted admin identity and a simulated
-Mods role. You can change these to exercise authorization failures.
+Open Chat or `/bicture` from the navigation. The main screen contains a model
+picker, temperature slider and number field, prompt, output, and **Review & save**.
+Temperature uses the selected chat model’s supported range and is disabled when
+unavailable. Like the model choice, it stays a draft until saved. Settings start
+on **Live bot**; select Local sandbox for local-only saved settings. Choosing a model creates a
+draft. Sending a prompt runs a local Discord simulation with real model inference;
+only the explicit save button changes the selected destination.
 
-Chat supports channel, tracked-thread, and `/ask` thread modes, editable system
-prompts, and model overrides. The bicture page offers the configured image
-profiles, model selectors, generation settings, and inline image output. Model
-selectors are restricted to a compatible subset of the Cloudflare account's live
-Unified Billing catalog, verified with the existing gateway settings. Free-form
-model IDs, stored default provider-key routes, and separately billed Workers AI
-models are excluded. No gateway or billing settings are changed. Refresh available
-models reloads the catalog; an unavailable catalog blocks AI runs until access can
-be verified. Routing is checked again before inference. Search uses the supported
-Responses web-search tool through the existing AI binding and Cloudflare gateway.
+Model choices come from the account's live Cloudflare catalog, without a chat or
+image model-name shortlist. Compatible Chat Completions and Responses models are
+supported, as are synchronous text-to-image models that accept a prompt and return
+an image. Models requiring extra inputs or asynchronous image jobs are excluded.
+The existing Cloudflare-credit routing checks still apply. Search settings retain
+the verified web-search model list. Refresh models updates the catalog.
 
-Image controls use each model's schema, showing supported values and omitting
-unsupported parameters. Settings show current and default values. Inspect
-effective settings for the full resolved configuration. Each page remembers its own settings and prompt
-draft; the browser also retains identity and channel transcripts. Latest command
-outputs remain available while switching pages, until the browser reloads.
+**Advanced settings** holds system prompts, generation controls, image profiles,
+and web search. **Prompt history** fetches and searches Live bot or Local sandbox
+D1 prompts and loads them into the editor. A chat replay starts a new local channel;
+it uses current settings without restoring historical context or attachments.
+Bicture records full prompts, model, requester, timing, and outcome in the existing
+`rag_ai_interactions` table after deployment. No schema migration is needed, and
+history write failures do not repeat generation or prevent replies.
+
+**Discord simulation** contains identity and channel controls with usable defaults.
+Other slash commands are under **Other commands**, and captured requests, replies,
+logs, and database effects are under **Request details**. Drafts and transcripts
+persist in the browser; output remains available across page switches.
 
 Source changes rebuild the Worker automatically. UI and bundled configuration
 changes also reload the browser once any active request finishes, preserving drafts.
-The UI has its own local database state at `.wrangler/dev-state`. Simulations use local data. Settings default to local D1; selecting **Live bot** reads only the production settings row in the D1 database configured in `wrangler.jsonc`.
+The UI has its own local database state at `.wrangler/dev-state`. Simulations use
+local data. Live settings and history are read from the D1 database configured in
+`wrangler.jsonc`; local settings and history use the sandbox database.
 
 The launcher stages a separate Python bundle under `.wrangler/python-dev`,
 refreshes it when source files change, and supplies resolved secrets through the
@@ -134,14 +142,11 @@ has been removed. The dev worker has no routes, `workers_dev: false`, and a
 
 AI models, prompts, and generation settings live in `src/ragbot/ai_config`.
 `pnpm run build` generates `_bundled.py`; deployment runs this automatically.
-Use **Model and prompt settings → Settings destination** in the dev UI to choose
-Local sandbox or Live bot. Load saved settings, edit the system prompts, models or
-parameters, and try a prompt locally. **Review changes to save** shows the saved
-and proposed values; **Save to live bot** applies only the current page's changes.
-Chat settings are shared by mentions and `/ask`; image settings update the chosen
-profile. The edit-saved-prompt buttons copy the current prompt into the editor.
-Drafts are kept in your browser until explicitly saved. Switching destination
-preserves drafts so you can test locally and then review against live settings.
+The dev UI defaults to **Live bot** settings. Choose any available model on Chat
+or `/bicture`, then use **Review & save to live bot** to inspect the before/after
+values and **Save to live bot** to apply them. Chat settings are shared by mentions
+and `/ask`; image settings update the chosen profile. Changes remain drafts until
+saved. The live bot reads saved settings immediately without a redeploy.
 
 The editor uses the existing Cloudflare API token; live settings need D1 read/edit
 permission for the configured database. All management calls stay in the local
@@ -155,7 +160,7 @@ without a timer cache or replica session. Chat, search, and image generation use
 one consistent snapshot per request, even in the long-lived gateway. A request
 that reads settings after a confirmed save sees the new revision; in-flight
 requests keep their original settings. A failed primary read stops inference
-instead of silently serving old settings. The UI shows the saved revision and
+instead of silently serving old settings. Request details show
 the revision used by each model request; unsaved overrides carry a draft suffix.
 
 Saves condition the database update on the loaded revision. A concurrent update

@@ -1,6 +1,7 @@
 import base64
 import logging
 import re
+import time
 
 from ..discord import MEDIA_MAX_BYTES, Attachment, MediaTooLargeError, download_media, read_media
 from ..policy import truncate_discord
@@ -55,11 +56,15 @@ async def image_file(result, transport) -> Attachment:
 )
 async def bicture(ctx: CommandContext):
     prompt = ctx.option("prompt")
+    attribution = ctx.attribution("bicture")
+    started_at = time.monotonic()
+    model, status, error_type = "unknown", "ok", None
     try:
         snapshot = await ctx.app.config.snapshot()
         config = ctx.app.config.document_from(snapshot, "bicture-image.json")
         profiles = config["profiles"]
         profile = profiles.get(config["activeProfile"]) or profiles["standard"]
+        model = profile["model"]
         parameters = profile.get("parameters")
         if parameters is None:
             parameters = {
@@ -71,15 +76,34 @@ async def bicture(ctx: CommandContext):
         result = await ctx.app.ai.media(
             profile,
             {**parameters, "prompt": prompt},
-            ctx.attribution("bicture"),
+            attribution,
             settings_revision=snapshot["revision"],
         )
         file = await image_file(result, ctx.app.transport)
         summary = prompt if len(prompt) <= 300 else truncate_discord(prompt, 299) + "..."
         if not await ctx.reply(summary, files=(file,)):
+            status, error_type = "error", "DiscordUploadRejected"
             await ctx.reply(
                 "The image was generated, but Discord rejected the upload. Please try again."
             )
     except Exception as error:
+        status, error_type = "error", type(error).__name__
         log.error("bicture_command_failed error_type=%s", type(error).__name__)
         await ctx.reply("Could not generate that image. Try a different prompt.")
+    finally:
+        try:
+            await ctx.app.db.run(
+                "INSERT INTO rag_ai_interactions (kind, channel_id, message_id, requester_user_id, requester_username, prompt, model, total_duration_ms, status, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "bicture",
+                attribution.channel_id,
+                attribution.message_id,
+                attribution.user_id,
+                attribution.username,
+                prompt,
+                model,
+                round((time.monotonic() - started_at) * 1000),
+                status,
+                error_type,
+            )
+        except Exception:
+            log.warning("interaction_record_failed")

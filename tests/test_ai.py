@@ -2,6 +2,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 
 async def test_mention_and_ask_thread_use_shared_router(app):
     message = {
@@ -45,3 +47,56 @@ async def test_mention_and_ask_thread_use_shared_router(app):
         for url, options in app.transport.calls
         if "discord.com" in url
     )
+
+
+@pytest.mark.parametrize("supported", [True, False])
+async def test_responses_chat_preserves_conversation_and_extracts_reply(app, supported):
+    from ragbot.ai import Attribution
+    from ragbot.config import ModelConfig
+
+    app.env.AI = SimpleNamespace(
+        run=AsyncMock(
+            return_value={
+                "output": [
+                    {"type": "message", "content": [{"type": "output_text", "text": "Hello"}]}
+                ],
+                "usage": {"input_tokens": 10, "output_tokens": 3, "total_tokens": 13},
+            }
+        )
+    )
+    config = ModelConfig(
+        "openai/example-responses",
+        "system",
+        1000,
+        0.7,
+        "test",
+        api_format="responses",
+        temperature_supported=supported,
+    )
+    messages = [{"role": "system", "content": "system"}, {"role": "user", "content": "hello"}]
+    result = await app.ai.chat(config, messages, Attribution("channel_reply"))
+    assert result.content == "Hello" and result.usage["total_tokens"] == 13
+    model, request, options = app.env.AI.run.call_args.args
+    assert model == config.model and request == {
+        "input": messages,
+        "max_output_tokens": 1000,
+        **({"temperature": 0.7} if supported else {}),
+    }
+    assert options["gateway"]["id"] == "test"
+
+
+async def test_reasoning_chat_uses_completion_token_limit_without_temperature(app):
+    from ragbot.ai import Attribution
+    from ragbot.config import ModelConfig
+
+    config = ModelConfig("openai/gpt-5", "system", 2000, 0.7, "test")
+    await app.ai.chat(config, [{"role": "user", "content": "hello"}], Attribution("channel_reply"))
+    body = json.loads(
+        next(
+            options["body"]
+            for url, options in app.transport.calls
+            if "gateway.ai.cloudflare.com" in url
+        )
+    )
+    assert body["max_completion_tokens"] == 2000
+    assert "max_tokens" not in body and "temperature" not in body
