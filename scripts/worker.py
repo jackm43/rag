@@ -1,12 +1,11 @@
 """Run local Python Workers from an isolated bundle with live source updates."""
 
 import os
-import signal
 import subprocess
 import sys
 import time
 
-from stage_worker import ROOT, stage
+from stage_worker import ROOT, command, popen_kwargs, stage, stop_process
 
 SECRETS = [
     "DISCORD_PUBLIC_KEY",
@@ -52,10 +51,14 @@ def serve(*, dev_ui=False, extra=()):
         CLOUDFLARE_INCLUDE_PROCESS_ENV="true",
         CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV="true",
     )
+    if dev_ui:
+        # Mounted Windows/Docker directories do not reliably emit file events.
+        env.setdefault("CHOKIDAR_USEPOLLING", "true")
+        env.setdefault("CHOKIDAR_INTERVAL", "500")
     state = ROOT / ".wrangler" / ("dev-state" if dev_ui else "state")
     if dev_ui:
         subprocess.run(
-            [
+            command(
                 "pnpm",
                 "exec",
                 "wrangler",
@@ -68,13 +71,13 @@ def serve(*, dev_ui=False, extra=()):
                 str(state),
                 "-c",
                 str(destination / "wrangler.jsonc"),
-            ],
+            ),
             cwd=ROOT,
             env=env,
             check=True,
         )
     process = subprocess.Popen(
-        [
+        command(
             "uv",
             "run",
             "--project",
@@ -84,10 +87,10 @@ def serve(*, dev_ui=False, extra=()):
             "--persist-to",
             str(state),
             *extra,
-        ],
+        ),
         cwd=destination,
         env=env,
-        start_new_session=True,
+        **popen_kwargs(),
     )
     try:
         signature = watch_signature()
@@ -101,12 +104,7 @@ def serve(*, dev_ui=False, extra=()):
     except KeyboardInterrupt:
         return 0
     finally:
-        if process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
+        stop_process(process)
 
 
 if __name__ == "__main__":

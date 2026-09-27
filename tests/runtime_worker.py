@@ -35,6 +35,56 @@ class Default(ProductionDefault):
                     bytes=request.bytes,
                 ),
             )
+        if path == "/test/settings":
+            from ragbot._bundled import FILES
+            from ragbot.config import ConfigStore
+            from ragbot.settings_storage import WRITE_SETTINGS
+
+            store = ConfigStore(self.env)
+            before, _ = await store.models()
+            resources = dict(FILES)
+            resources["discord-response-system-prompt.md"] = "Runtime saved prompt"
+            chat = json.loads(resources["discord-response.json"])
+            chat.update(model="openai/gpt-4.1-mini", temperature=0.2)
+            resources["discord-response.json"] = json.dumps(chat)
+            try:
+                await (
+                    self.env.DB.prepare(WRITE_SETTINGS)
+                    .bind(
+                        "runtime-1",
+                        json.dumps(
+                            {"schemaVersion": 1, "resources": resources, "revision": "runtime-1"}
+                        ),
+                        None,
+                    )
+                    .run()
+                )
+                after, search = await store.models()
+                assert after.prompt == "Runtime saved prompt"
+                assert after.model == "openai/gpt-4.1-mini"
+                assert after.temperature == 0.2
+                assert before.prompt != after.prompt
+                assert after.revision == search.revision == "runtime-1"
+                resources["discord-response-system-prompt.md"] = "Immediate second version"
+                await (
+                    self.env.DB.prepare(WRITE_SETTINGS)
+                    .bind(
+                        "runtime-2",
+                        json.dumps(
+                            {"schemaVersion": 1, "resources": resources, "revision": "runtime-2"}
+                        ),
+                        "runtime-1",
+                    )
+                    .run()
+                )
+                assert (await store.models())[0].prompt == "Immediate second version"
+                stale = (
+                    await self.env.DB.prepare(WRITE_SETTINGS).bind("stale", "{}", "runtime-1").run()
+                )
+                assert stale["meta"]["changes"] == 0
+                return Response.json({"refreshed": True})
+            finally:
+                await self.env.DB.prepare("DELETE FROM ai_runtime_settings WHERE id = 1").run()
         if path == "/test/upload":
             # Check the received wire format, not the sender's FormData object.
             assert request.headers.get("authorization") is None

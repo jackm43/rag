@@ -19,7 +19,8 @@ FILES = {'ask-web-search-system-prompt.md': 'You are a careful web research assi
                                     '- Keep the answer under 1,800 characters unless the user '
                                     'explicitly asks for more detail.\n',
  'ask-web-search.json': '{\n'
-                        '  "model": "openai/gpt-4o-search-preview",\n'
+                        '  "model": "openai/gpt-4.1-mini",\n'
+                        '  "apiFormat": "responses",\n'
                         '  "maxOutputTokens": 1200,\n'
                         '  "temperature": 0.3,\n'
                         '  "maxTurns": 4,\n'

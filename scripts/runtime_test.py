@@ -11,7 +11,7 @@ import urllib.request
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from stage_worker import ROOT, stage
+from stage_worker import ROOT, command, popen_kwargs, stage, stop_process
 
 
 def request(base, path, *, method="GET", body=None, headers=None):
@@ -34,7 +34,7 @@ def main():
         )
         with (destination / "runtime.log").open("w+") as logs:
             subprocess.run(
-                [
+                command(
                     "pnpm",
                     "exec",
                     "wrangler",
@@ -45,21 +45,22 @@ def main():
                     "--local",
                     "-c",
                     str(destination / "wrangler.jsonc"),
-                ],
+                ),
                 cwd=ROOT,
                 env=env,
                 check=True,
                 stdout=logs,
                 stderr=subprocess.STDOUT,
             )
-            # Use the project's locked tooling rather than downloading another environment.
             process = subprocess.Popen(
-                ["uv", "run", "--project", str(ROOT), "pywrangler", "dev", "--port", str(port)],
+                command(
+                    "uv", "run", "--project", str(ROOT), "pywrangler", "dev", "--port", str(port)
+                ),
                 cwd=destination,
                 env=env,
                 stdout=logs,
                 stderr=subprocess.STDOUT,
-                start_new_session=True,
+                **popen_kwargs(),
             )
             base = f"http://127.0.0.1:{port}"
             try:
@@ -178,6 +179,8 @@ def main():
                 assert result["interactions"][0]["response_text"] == "hello <https://example.com>"
                 assert result["spend"] == []
                 assert result["multipart"] is True
+                status, body = request(base, "/test/settings")
+                assert status == 200 and json.loads(body)["refreshed"] is True
                 status, body = request(base, "/test/gateway")
                 if status != 200:
                     raise AssertionError(body.decode()[:5000])
@@ -195,7 +198,7 @@ def main():
                 logs.seek(0)
                 assert "borrowed proxy was automatically destroyed" not in logs.read()
                 print(
-                    "Python Workers runtime: signatures, bare denials, Durable Object controls, D1, /rag, /ask, multipart and gateway WebSocket passed."
+                    "Python Workers runtime: signatures, bare denials, Durable Object controls, D1, /rag, /ask, multipart, immediate D1 settings refresh and gateway WebSocket passed."
                 )
             except Exception:
                 logs.flush()
@@ -203,14 +206,7 @@ def main():
                 print(logs.read()[-12000:])
                 raise
             finally:
-                import signal
-
-                os.killpg(process.pid, signal.SIGTERM)
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.wait()
+                stop_process(process)
 
 
 if __name__ == "__main__":

@@ -56,19 +56,23 @@ async def image_file(result, transport) -> Attachment:
 async def bicture(ctx: CommandContext):
     prompt = ctx.option("prompt")
     try:
-        config = await ctx.app.config.document("bicture-image.json")
+        snapshot = await ctx.app.config.snapshot()
+        config = ctx.app.config.document_from(snapshot, "bicture-image.json")
         profiles = config["profiles"]
         profile = profiles.get(config["activeProfile"]) or profiles["standard"]
-        result = await ctx.app.ai.media(
-            profile,
-            {
-                "prompt": prompt,
+        parameters = profile.get("parameters")
+        if parameters is None:
+            parameters = {
                 "response_format": profile["responseFormat"],
                 "aspect_ratio": profile["aspectRatio"],
                 "quality": profile["quality"],
                 "resolution": profile["resolution"],
-            },
+            }
+        result = await ctx.app.ai.media(
+            profile,
+            {**parameters, "prompt": prompt},
             ctx.attribution("bicture"),
+            settings_revision=snapshot["revision"],
         )
         file = await image_file(result, ctx.app.transport)
         summary = prompt if len(prompt) <= 300 else truncate_discord(prompt, 299) + "..."

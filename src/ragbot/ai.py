@@ -170,7 +170,7 @@ class Inference:
         self, config: ModelConfig, messages: list[dict], attribution: Attribution
     ) -> Completion:
         source_id = f"aigreq:{uuid.uuid4()}"
-        metadata = attribution.metadata(source_id)
+        metadata = {**attribution.metadata(source_id), "ragbot_settings_revision": config.revision}
         body = {
             "messages": messages,
             "max_tokens": config.max_tokens,
@@ -189,8 +189,25 @@ class Inference:
         self, config: ModelConfig, prompt: str, attribution: Attribution
     ) -> Completion:
         source_id = f"aigreq:{uuid.uuid4()}"
-        metadata = attribution.metadata(source_id)
-        if config.gateway_id:
+        metadata = {**attribution.metadata(source_id), "ragbot_settings_revision": config.revision}
+        if config.api_format == "responses":
+            payload = await self.binding(
+                config.model,
+                {
+                    "input": prompt,
+                    "instructions": config.prompt,
+                    "max_output_tokens": config.max_tokens,
+                    "tools": [
+                        {
+                            "type": "web_search_preview",
+                            "search_context_size": config.search_context_size,
+                        }
+                    ],
+                },
+                config.gateway_id,
+                metadata,
+            )
+        elif config.gateway_id:
             payload = await self.gateway(
                 config.gateway_id,
                 {
@@ -231,8 +248,9 @@ class Inference:
         attribution: Attribution,
         *,
         web_context: list[dict] | None = None,
+        models: tuple[ModelConfig, ModelConfig] | None = None,
     ) -> Completion:
-        chat, search = await self.config.models()
+        chat, search = models if models is not None else await self.config.models()
         if should_search(prompt):
             lines = [
                 f"Current date: {datetime.now(UTC).date()}",
@@ -262,9 +280,19 @@ class Inference:
             chat, [{"role": "system", "content": system}, *conversation], attribution
         )
 
-    async def media(self, profile: dict, data: dict, attribution: Attribution):
+    async def media(
+        self,
+        profile: dict,
+        data: dict,
+        attribution: Attribution,
+        *,
+        settings_revision: str = "bundled",
+    ):
         source_id = f"aigreq:{uuid.uuid4()}"
         result = await self.binding(
-            profile["model"], data, profile.get("gatewayId"), attribution.metadata(source_id)
+            profile["model"],
+            data,
+            profile.get("gatewayId"),
+            {**attribution.metadata(source_id), "ragbot_settings_revision": settings_revision},
         )
         return result
