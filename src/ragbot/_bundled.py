@@ -73,10 +73,4 @@ FILES = {'ask-web-search-system-prompt.md': 'You are a careful web research assi
                           '  "temperature": 0.9,\n'
                           '  "historyLimit": 3,\n'
                           '  "gatewayId": "platy"\n'
-                          '}\n',
- 'ragjam-music.json': '{\n'
-                      '  "model": "minimax/music-2.6",\n'
-                      '  "gatewayId": "platy",\n'
-                      '  "isInstrumental": false,\n'
-                      '  "lyricsOptimizer": false\n'
-                      '}\n'}
+                          '}\n'}

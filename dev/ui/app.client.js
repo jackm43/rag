@@ -100,7 +100,7 @@
   };
   const renderCommand = () => {
     const command = meta.commands.find((item) => item.name === $("command").value);
-    $("command-description").textContent = `${command.description}${command.adminOnly ? " · admin only" : ""}${command.aiLimited ? " · AI usage limits apply" : ""}`;
+    $("command-description").textContent = `${command.description}${command.adminOnly ? " · admin only" : ""}${command.requiredRoleId ? " · Mods role required" : ""}`;
     $("command-options").replaceChildren();
     for (const option of command.options ?? []) {
       for (const field of option.type === 6 ? ["value", "username"] : ["value"]) {
@@ -170,7 +170,6 @@
   $("command").addEventListener("change", renderCommand);
   $("new-channel").addEventListener("click", () => { $("channelId").value = snowflake(); save(); renderTranscript(); });
   $("clear-transcript").addEventListener("click", () => { state.transcripts[value("channelId")] = []; save(); renderTranscript(); });
-  $("reset-limits").addEventListener("click", () => run(async () => status(`Cleared ${(await api("local/reset-limits", {})).deleted} local rate-limit records.`)));
   $("show-config").addEventListener("click", () => run(async () => {
     json("config", await api("config", { overrides: overrides() }));
     $("config-panel").hidden = false;

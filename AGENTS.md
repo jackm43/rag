@@ -21,9 +21,9 @@ loads `.env.dev`. Do not log secrets or resolve them into committed files.
 - `src/ragbot/gateway.py`: WebSocket lifecycle, heartbeat, reconnects, dedupe.
 - `src/ragbot/discord.py`: Workers-native REST client, attachments, media caps.
 - `src/ragbot/discord_http.py`: bounded native retries and Discord rate limits.
-- `src/ragbot/ai.py`, `config.py`, `conversation.py`, `reconcile.py`: inference,
-  config, shared chat/search routing, reply analytics and spend reconciliation.
-- `src/ragbot/db.py`: parameterized D1 access, bans, limits, guilds, threads.
+- `src/ragbot/ai.py`, `config.py`, `conversation.py`: inference,
+  config, shared chat/search routing, reply analytics.
+- `src/ragbot/db.py`: parameterized D1 access, bans, guilds, threads.
 - `src/ragbot/security.py`, `policy.py`: external auth and Discord output policy.
 - `dev/`: local-only UI and simulations. It imports production services, but
   nothing in `src/` may import `dev/`. Its staged bundle has no routes,
@@ -48,8 +48,10 @@ Explicit `to_js` conversions belong only at raw JavaScript API boundaries.
 - D1 `ragbot` is durable data. Change schema through `migrations/` only;
   `schema.sql` is a read-only mirror. Keep existing resource IDs and migration
   history unless explicitly changing infrastructure.
-- AI usage and AI ban checks deliberately fail open on D1 errors. `/rag` writes
-  and authentication do not. Cron prunes the burst log after a day.
+- AI has no budget cap, request limit, spend tracking, or moderation-ban checks.
+  `/rag` bans and writes fail closed on D1 errors. Cron maintains the gateway.
+- `/undorag` and `/raghammer` require Mods role `457695154892177418`.
+  `/ragunban` retains its administrator user allowlist.
 - Respect Discord retry delays and global/route limits. Do not retry ambiguous
   POST failures; they may have already created a message or thread.
 - Download media with the 25 MiB streaming cap; never replace it with unbounded
@@ -76,8 +78,8 @@ Do not edit generated platform stubs by hand.
 
 ## Testing
 
-`pnpm test` focuses on primary command, moderation, conversation, media, and
-spend workflows using the actual SQLite migrations and injected HTTP transports.
+`pnpm test` focuses on primary command, moderation, conversation, and media
+workflows using the actual SQLite migrations and injected HTTP transports.
 Keep public HTTP authentication and routing checks in the runtime suite.
 `pnpm run test:runtime` runs an isolated local Python Worker with D1 and a
 Discord-like WebSocket peer, so FFI bugs are exercised in workerd too. Test

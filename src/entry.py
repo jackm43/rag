@@ -1,6 +1,5 @@
 """Cloudflare Python Worker and the existing DiscordGateway Durable Object."""
 
-import asyncio
 import json
 import logging
 from urllib.parse import urlparse
@@ -9,7 +8,6 @@ from workers import DurableObject, Response, WorkerEntrypoint
 
 from ragbot.app import Application
 from ragbot.gateway import Gateway, gateway_stub
-from ragbot.reconcile import reconcile_spend
 from ragbot.runtime import env_value, to_python, wait_until
 from ragbot.security import authorize_control, verify_discord_signature
 
@@ -70,17 +68,10 @@ class Default(WorkerEntrypoint):
         return Response(status=404)
 
     async def scheduled(self, controller):
-        async def contained(action, name):
-            try:
-                await action
-            except Exception:
-                log.error(name)
-
-        await asyncio.gather(
-            contained(gateway_stub(self.env).ensure_connected(), "gateway_ensure_connected_failed"),
-            contained(reconcile_spend(self.app), "ai_spend_reconcile_failed"),
-            self.app.db.prune_requests(),
-        )
+        try:
+            await gateway_stub(self.env).ensure_connected()
+        except Exception:
+            log.error("gateway_ensure_connected_failed")
 
 
 class DiscordGateway(DurableObject):

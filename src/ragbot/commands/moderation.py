@@ -1,14 +1,10 @@
-"""Rag counts, bans, and spend reports."""
+"""Rag counts and bans."""
 
 import re
 from datetime import UTC, datetime, timedelta
 
 from ..db import format_ban_expiry, now_iso
-from .registry import CommandContext, command, text_option, user_option
-
-
-def usd(micros: int) -> str:
-    return f"${max(0, micros) / 1_000_000:.2f}"
+from .registry import MODS_ROLE_ID, CommandContext, command, text_option, user_option
 
 
 @command("rag", "Record a rag against a user", [user_option("User to mark as ragging")])
@@ -56,7 +52,7 @@ async def ragboard(ctx: CommandContext):
     "undorag",
     "Undo the last rag recorded against a user",
     [user_option("User whose last rag should be undone")],
-    admin_only=True,
+    required_role_id=MODS_ROLE_ID,
 )
 async def undorag(ctx: CommandContext):
     target = ctx.option("user")
@@ -86,7 +82,7 @@ async def undorag(ctx: CommandContext):
         user_option("User to block from /rag"),
         text_option("timeframe", "Examples: 5m, 1h, 1d. Use only m, h, or d.", 12, minimum=2),
     ],
-    admin_only=True,
+    required_role_id=MODS_ROLE_ID,
 )
 async def raghammer(ctx: CommandContext):
     invoker = ctx.require_invoker()
@@ -135,28 +131,3 @@ async def ragunban(ctx: CommandContext):
         else f"<@{target}> does not have an active /rag ban."
     )
     await ctx.reply(text, users=[target])
-
-
-@command("ragspend", "Show your AI ragbot spend")
-async def ragspend(ctx: CommandContext):
-    user_id = ctx.require_invoker()["id"]
-    row = await ctx.db.first(
-        "SELECT requester_user_id, requester_username, estimated_cost_micros, event_count FROM rag_ai_spend_totals WHERE requester_user_id = ?",
-        user_id,
-    )
-    await ctx.reply(f"<@{user_id}> has spent {usd((row or {}).get('estimated_cost_micros', 0))}")
-
-
-@command("ragspendboard", "Show the AI ragbot spend leaderboard")
-async def ragspendboard(ctx: CommandContext):
-    rows = await ctx.db.all(
-        "SELECT requester_user_id, requester_username, estimated_cost_micros, event_count FROM rag_ai_spend_totals ORDER BY estimated_cost_micros DESC, requester_user_id ASC LIMIT 10"
-    )
-    if not rows:
-        await ctx.reply("No AI spend has been recorded yet.")
-        return
-    lines = []
-    for index, row in enumerate(rows, 1):
-        name = (row["requester_username"] or "").strip() or f"User {row['requester_user_id']}"
-        lines.append(f"{index}. {name} - {usd(row['estimated_cost_micros'])}")
-    await ctx.reply("Ragspendboard\n" + "\n".join(lines))

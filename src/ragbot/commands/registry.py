@@ -11,9 +11,10 @@ class Command:
     data: dict
     execute: Callable[["CommandContext"], Awaitable[None]]
     admin_only: bool = False
-    ai_limited: bool = False
+    required_role_id: str | None = None
 
 
+MODS_ROLE_ID = "457695154892177418"
 COMMANDS: dict[str, Command] = {}
 ADMIN_IDS = frozenset(
     {"107426926909517824", "116163000339136518", "102637456385392640", "114128631474683907"}
@@ -26,7 +27,7 @@ def command(
     options: list[dict] | None = None,
     *,
     admin_only: bool = False,
-    ai_limited: bool = False,
+    required_role_id: str | None = None,
 ):
     def register(handler):
         data: dict = {"name": name, "description": description}
@@ -34,7 +35,7 @@ def command(
             data["options"] = options
         if name in COMMANDS:
             raise ValueError(f"Duplicate command {name}")
-        COMMANDS[name] = Command(data, handler, admin_only, ai_limited)
+        COMMANDS[name] = Command(data, handler, admin_only, required_role_id)
         return handler
 
     return register

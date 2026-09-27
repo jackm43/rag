@@ -11,7 +11,6 @@ log = logging.getLogger("ragbot")
     "ask",
     "Start an AI conversation in a new thread",
     [text_option("prompt", "Question or topic for the new thread", 6000)],
-    ai_limited=True,
 )
 async def ask(ctx: CommandContext):
     prompt = ctx.option("prompt")

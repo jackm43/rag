@@ -113,7 +113,9 @@ def app(monkeypatch):
 
 @pytest.fixture
 def interaction():
-    def make(name, *, user="123456789012345679", options=None, guild="457689460096630794"):
+    def make(
+        name, *, user="123456789012345679", options=None, guild="457689460096630794", roles=None
+    ):
         return {
             "id": "123456789012345680",
             "type": 2,
@@ -121,7 +123,7 @@ def interaction():
             "token": "test-webhook-token",
             "guild_id": guild,
             "channel_id": "123456789012345681",
-            "member": {"user": {"id": user, "username": "requester"}},
+            "member": {"user": {"id": user, "username": "requester"}, "roles": roles or []},
             "data": {
                 "name": name,
                 "options": options or [],

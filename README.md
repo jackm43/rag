@@ -3,11 +3,14 @@
 A Discord bot running as one **Cloudflare Python Worker**, `ragbot-worker`, with
 one `DiscordGateway` Durable Object maintaining the Discord WebSocket.
 Commands: `/rag`, `/ragboard`, `/raghammer`, `/ragunban`, `/undorag`, `/ask`,
-`/bicture`, `/ragjam`, `/ragspend`, `/ragspendboard`.
+`/bicture`.
+
+`/undorag` and `/raghammer` require the Mods role (`457695154892177418`).
+`/ragunban` uses the existing administrator user allowlist.
 
 Discord interaction signatures and gateway control bearer tokens are verified at
 the external edges. Denials have empty bodies. Commands, mentions, AI calls, and
-spend reconciliation run in-process; there are no internal queues or services.
+replies run in-process; there are no internal queues or services.
 
 ## Setup
 
@@ -53,8 +56,7 @@ src/ragbot/discord_http.py  native rate limits and bounded retries
 src/ragbot/ai.py         inference, attribution, shared /ask routing
 src/ragbot/ai_config/    editable JSON configs and Markdown prompts
 src/ragbot/config.py     KV overrides with bundled fallbacks
-src/ragbot/db.py         D1 access, bans, usage limits, threads
-src/ragbot/reconcile.py  cron spend reconciliation
+src/ragbot/db.py         D1 access, bans, threads
 src/ragbot/security.py   external authentication
 src/js-stubs/            generated Workers API type hints
 migrations/             existing D1 schema migrations
@@ -91,9 +93,8 @@ side effects. Model calls are real and tagged `ragbot_env: dev`. Per-run config
 overrides are isolated from other simulations and production KV.
 
 Use channel, tracked-thread, or `/ask` thread modes, or any slash command. The
-browser retains the draft identity and channel transcripts. Reset local rate
-limits clears only the local request log. The UI has its own local database
-state at `.wrangler/dev-state`; it never connects to production D1 or KV.
+browser retains the draft identity and channel transcripts. The UI has its own
+local database state at `.wrangler/dev-state`; it never connects to production D1 or KV.
 
 The launcher stages a separate Python bundle under `.wrangler/python-dev`,
 refreshes it when source files change, and supplies resolved secrets through the
@@ -108,17 +109,15 @@ AI models, prompts, and generation settings live in `src/ragbot/ai_config`.
 `AI_CONFIG` KV can override resources by basename. Chat/search config is cached
 per application instance; invalid overrides and KV outages use bundled defaults.
 
-AI usage limits remain 8 requests per user per minute and a trailing 24-hour
-$10 server budget unless overridden by `AI_BURST_LIMIT_PER_MINUTE` and
-`AI_GLOBAL_DAILY_BUDGET_USD`. D1 failures deliberately fail open for AI guards.
+AI has no daily budget cap, per-minute request limit, or moderation-ban checks.
+`/raghammer` bans apply only to `/rag`. Historical spend and request data is retained.
 `ALLOWED_GUILD_IDS` fails closed when configured; an unset value allows with a
 warning. Generated-media downloads enforce a 25 MiB cap while streaming.
 
 Operator routes require `Authorization: Bearer $GATEWAY_CONTROL_TOKEN`:
 `POST /gateway/start`, `POST /gateway/stop`, and `GET /gateway/health`.
 An operator stop persists across eviction and cron runs. Fatal Discord close
-codes disable rapid retries; cron or an explicit start can retry. Cron also
-reconciles AI Gateway costs and prunes old request logs.
+codes disable rapid retries; cron or an explicit start can retry.
 
 The migration preserves the Worker name, domain, D1/KV identifiers, Durable
 Object class and singleton name, storage keys, and migration history. No data

@@ -7,7 +7,6 @@ from harness import Simulation, resolve_config
 from workers import Response, WorkerEntrypoint
 
 from ragbot.commands import COMMANDS
-from ragbot.db import Database
 from ragbot.runtime import env_value
 
 
@@ -30,16 +29,13 @@ class Default(WorkerEntrypoint):
                     "hasAigToken": bool(env_value(self.env, "CF_AIG_TOKEN")),
                     "config": await resolve_config({}),
                     "commands": [
-                        dict(c.data, adminOnly=c.admin_only, aiLimited=c.ai_limited)
+                        dict(c.data, adminOnly=c.admin_only, requiredRoleId=c.required_role_id)
                         for c in COMMANDS.values()
                     ],
                 }
             )
         if request.method != "POST":
             return Response(status=404)
-        if path == "/api/local/reset-limits":
-            result = await Database(self.env.DB).run("DELETE FROM rag_ai_requests")
-            return Response.json({"deleted": result.get("meta", {}).get("changes", 0)})
         try:
             body = await request.json()
             if not isinstance(body, dict):
