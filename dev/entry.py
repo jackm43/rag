@@ -17,6 +17,7 @@ from ragbot.model_catalog import (
     CatalogUnavailable,
     CreditCatalog,
     ModelUnavailable,
+    chat_overrides,
     image_parameters,
 )
 from ragbot.runtime import env_value
@@ -82,6 +83,10 @@ class Default(WorkerEntrypoint):
             if not isinstance(body, dict):
                 raise ValueError("expected a JSON object body")
             editor = SettingsEditor(self.env, body.get("target", "local"))
+            if path == "/api/history":
+                return Response.json(
+                    await editor.history(body), headers={"cache-control": "no-store"}
+                )
             if path == "/api/settings/load":
                 return Response.json(await editor.read())
             if path == "/api/settings/review":
@@ -106,6 +111,8 @@ class Default(WorkerEntrypoint):
             overrides = dict(body.get("overrides") or {})
             # Only server-verified image parameters may reach the real handler.
             overrides.pop("imageParameters", None)
+            overrides.pop("chatApiFormat", None)
+            overrides.pop("chatTemperatureSupported", None)
             validate_overrides(overrides)
             config = await resolve_config(overrides, resources)
             if body.get("command") == "bicture" or body.get("page") == "bicture":
@@ -129,7 +136,12 @@ class Default(WorkerEntrypoint):
                 )
                 uses_ask = body.get("command") == "ask" or body.get("mode") == "ask_thread"
                 group = "search" if uses_ask and should_search(prompt) else "chat"
-                await catalog.validate(config, [group])
+                available = await catalog.validate(config, [group])
+                if group == "chat":
+                    selected = next(
+                        m for m in available["chat"] if m["id"] == config["responseModel"]
+                    )
+                    overrides.update(chat_overrides(selected, config, overrides))
             body["overrides"] = overrides
             if path == "/api/config":
                 return Response.json(config)

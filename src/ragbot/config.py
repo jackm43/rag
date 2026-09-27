@@ -83,6 +83,7 @@ class ModelConfig:
     search_context_size: str = "medium"
     api_format: str = "chat-completions"
     revision: str = "bundled"
+    temperature_supported: bool = True
 
 
 def number(value: Any, fallback: float, *, minimum: float = 0, maximum: float = math.inf) -> float:
@@ -151,6 +152,7 @@ class ConfigStore:
                         minimum=1,
                     )
                 ),
+                temperature_supported=data.get("temperatureSupported", True) is True,
                 temperature=number(data.get("temperature"), 0.3 if search else 0.7, maximum=2),
                 gateway_id=gateway.strip() or None if isinstance(gateway, str) else None,
                 history_limit=int(number(data.get("historyLimit"), 12, minimum=1)),

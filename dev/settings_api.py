@@ -8,12 +8,22 @@ from datetime import datetime, timezone
 
 from ragbot._bundled import FILES
 from ragbot.config import SETTINGS_KEY, legacy_snapshot, parse_settings
-from ragbot.model_catalog import CreditCatalog, image_parameters
+from ragbot.model_catalog import CreditCatalog, chat_overrides, image_parameters
 from ragbot.runtime import env_value, fetch, to_python
 from ragbot.settings import DraftNamespace, resolve_config, validate_overrides
 from ragbot.settings_storage import READ_SETTINGS, WRITE_SETTINGS
 
 _lock = asyncio.Lock()
+
+READ_HISTORY = """
+SELECT id, kind, prompt, response_text, model, status, requester_username, created_at
+FROM rag_ai_interactions
+WHERE ((? = 'bicture' AND kind = 'bicture')
+    OR (? = 'chat' AND kind IN ('ask', 'channel_reply', 'thread_reply')))
+  AND (? IS NULL OR id < ?)
+  AND (? = '' OR instr(lower(prompt), lower(?)) > 0)
+ORDER BY id DESC LIMIT 26
+"""
 
 
 class SettingsError(Exception):
@@ -58,7 +68,7 @@ class SettingsEditor:
         return await response.text()
 
     async def query(self, sql, params=()):
-        if sql not in (READ_SETTINGS, WRITE_SETTINGS):
+        if sql not in (READ_SETTINGS, WRITE_SETTINGS, READ_HISTORY):
             raise SettingsError("Invalid settings query.")
         if self.target == "local":
             statement = self.env.DB.prepare(sql)
@@ -96,6 +106,22 @@ class SettingsEditor:
                 "D1 did not confirm the operation. Check migrations and reload settings.", 503
             )
         return results[0]
+
+    async def history(self, body):
+        page = body.get("page")
+        before = body.get("before")
+        search = body.get("search", "")
+        if (
+            page not in ("chat", "bicture")
+            or (before is not None and (type(before) is not int or before < 1))
+            or not isinstance(search, str)
+            or len(search) > 500
+        ):
+            raise SettingsError("Invalid prompt history filter.")
+        rows = (await self.query(READ_HISTORY, (page, page, before, before, search, search)))[
+            "results"
+        ]
+        return {"entries": rows[:25], "next": rows[24]["id"] if len(rows) > 25 else None}
 
     async def read(self):
         rows = (await self.query(READ_SETTINGS))["results"]
@@ -160,6 +186,8 @@ class SettingsEditor:
                 "Settings changed since you loaded them. Reload and review again.", 409
             )
         overrides = dict(body.get("overrides") or {})
+        overrides.pop("chatApiFormat", None)
+        overrides.pop("chatTemperatureSupported", None)
         validate_overrides(overrides)
         config = await resolve_config(overrides, current["resources"])
         page = body.get("page")
@@ -175,6 +203,9 @@ class SettingsEditor:
             profile = config["image"]["profiles"][config["image"]["activeProfile"]]
             model = next(m for m in available["image"] if m["id"] == profile["model"])
             overrides["imageParameters"] = image_parameters(model, profile, overrides)
+        elif "model" in overrides or "temperature" in overrides:
+            selected = next(m for m in available["chat"] if m["id"] == config["responseModel"])
+            overrides.update(chat_overrides(selected, config, overrides))
         resources = DraftNamespace(overrides, current["resources"]).values
         changes = [
             {"resource": key, "before": current["resources"][key], "after": value}

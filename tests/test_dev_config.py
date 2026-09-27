@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ragbot._bundled import FILES
+from ragbot.ai import Attribution
 from ragbot.commands.media import bicture
 from ragbot.config import ConfigStore
 from ragbot.settings import DraftNamespace as ConfigNamespace
@@ -47,7 +48,7 @@ async def test_dev_image_profile_reaches_real_command(app):
     ctx = SimpleNamespace(
         app=app,
         option=lambda name: "a tree",
-        attribution=lambda kind: None,
+        attribution=lambda kind: Attribution(kind),
         reply=AsyncMock(return_value=True),
     )
     await bicture(ctx)

@@ -129,13 +129,30 @@ async def test_catalog_limits_choices_to_compatible_credit_routes(monkeypatch):
             "request_formats": ["responses"],
         },
         {
-            "model_id": "unlisted/byok-only",
-            "provider_id": "unlisted",
+            "model_id": "new-provider/new-chat",
+            "provider_id": "new-provider",
             "task": "Text Generation",
             "request_formats": ["chat-completions"],
         },
         {"model_id": "xai/grok-imagine-image", "provider_id": "xai", "task": "Text-to-Image"},
         {"model_id": "google/nano-banana-2", "provider_id": "google", "task": "Text-to-Image"},
+        {
+            "model_id": "new-provider/new-image",
+            "provider_id": "new-provider",
+            "task": "Text-to-Image",
+        },
+        {
+            "model_id": "new-provider/async-image",
+            "provider_id": "new-provider",
+            "task": "Text-to-Image",
+            "supports_async": True,
+        },
+        {
+            "model_id": "new-provider/image-edit",
+            "provider_id": "new-provider",
+            "task": "Text-to-Image",
+        },
+        {"model_id": "new-provider/audio", "provider_id": "new-provider", "task": "Text-to-Speech"},
     ]
     instance = CreditCatalog(SimpleNamespace(CF_ACCOUNT_ID="unit-test-account"))
 
@@ -150,10 +167,11 @@ async def test_catalog_limits_choices_to_compatible_credit_routes(monkeypatch):
             "result": {
                 "schema": {
                     "input": {
-                        "required": ["prompt"],
+                        "required": ["prompt", "image"] if "image-edit" in path else ["prompt"],
                         "properties": {
                             "prompt": {"type": "string"},
                             "resolution": {"enum": ["1K", "2K"]},
+                            "temperature": {"minimum": 0, "maximum": 1},
                         },
                     },
                     "output": {"properties": {"image": {"type": "string"}}},
@@ -174,7 +192,54 @@ async def test_catalog_limits_choices_to_compatible_credit_routes(monkeypatch):
     assert {m["id"] for m in models["chat"]} == {
         "openai/gpt-4.1-mini",
         "google-ai-studio/gemini-2.5-flash",
+        "openai/gpt-5.5-pro",
+        "new-provider/new-chat",
     }
-    assert [m["id"] for m in models["image"]] == ["google/nano-banana-2"]
+    assert [m["id"] for m in models["image"]] == ["google/nano-banana-2", "new-provider/new-image"]
+    assert (
+        next(m for m in models["chat"] if m["id"] == "openai/gpt-5.5-pro")["apiFormat"]
+        == "responses"
+    )
     assert models["image"][0]["parameters"] == {"resolution": {"enum": ["1K", "2K"]}}
+    assert next(m for m in models["chat"] if m["id"] == "openai/gpt-5.5-pro")["temperature"] is None
+    assert next(m for m in models["chat"] if m["id"] == "google-ai-studio/gemini-2.5-flash")[
+        "temperature"
+    ] == {"minimum": 0, "maximum": 1}
     module._cache.clear()
+
+
+@pytest.mark.parametrize("value", [0, 0.4, 1])
+def test_temperature_schema_range_accepts_supported_values(value):
+    from ragbot.model_catalog import chat_overrides
+
+    model = {"apiFormat": "chat-completions", "temperature": {"minimum": 0, "maximum": 1}}
+    assert chat_overrides(model, {"temperature": 0.7}, {"temperature": value}) == {
+        "chatApiFormat": "chat-completions",
+        "chatTemperatureSupported": True,
+    }
+
+
+def test_temperature_rejects_unsupported_and_out_of_range_values():
+    from ragbot.model_catalog import chat_overrides
+
+    model = {"apiFormat": "responses", "temperature": None}
+    assert chat_overrides(model, {"temperature": 0.7}, {})["chatTemperatureSupported"] is False
+    with pytest.raises(ModelUnavailable, match="not supported"):
+        chat_overrides(model, {"temperature": 0.7}, {"temperature": 0.4})
+    model["temperature"] = {"minimum": 0, "maximum": 1}
+    with pytest.raises(ModelUnavailable, match="0 to 1"):
+        chat_overrides(model, {"temperature": 0.7}, {"temperature": 1.5})
+
+
+def test_temperature_uses_matching_catalog_request_variant():
+    from ragbot.model_catalog import temperature_range
+
+    schema = {
+        "oneOf": [
+            {"properties": {"input": {}, "temperature": {"minimum": 0, "maximum": 1}}},
+            {"properties": {"messages": {}, "temperature": {"minimum": 0, "maximum": 2}}},
+        ]
+    }
+    assert temperature_range(schema, "chat-completions") == {"minimum": 0, "maximum": 2}
+    assert temperature_range(schema, "responses") == {"minimum": 0, "maximum": 1}
+    assert temperature_range({"properties": {}}, "chat-completions") is None
