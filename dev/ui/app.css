@@ -39,3 +39,20 @@ pre { padding: 14px; margin: 0; max-height: 450px; overflow: auto; font: 12px/1.
 [hidden] { display: none !important; }
 @media (max-width: 850px) { main { grid-template-columns: 1fr; padding: 16px; } header { padding: 16px; gap: 12px; } }
 @media (max-width: 420px) { .fields { grid-template-columns: 1fr; } }
+#pages { max-width: 1600px; margin: 0 auto; padding: 20px 24px 0; gap: 8px; }
+#pages a { color: #b9c3d4; text-decoration: none; padding: 8px 16px; border: 1px solid #303847; border-radius: 6px; }
+#pages a[aria-current="page"] { color: white; background: #4263c7; border-color: #557af0; }
+#page-title { font-size: 24px; margin-bottom: 4px; }
+#page-description { margin-top: 0; }
+summary span, small { font-size: 12px; font-weight: normal; color: #96a8c5; overflow-wrap: anywhere; }
+summary span { margin-left: 8px; }
+.wide { grid-column: 1 / -1; }
+.settings-actions { padding: 0 14px 14px; margin: 0; }
+#replies { min-height: 160px; background: #171c26; border: 1px solid #303847; border-radius: 8px; padding: 18px; margin-bottom: 20px; }
+#replies img { max-height: 700px; border-radius: 6px; margin-top: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+caption { text-align: left; color: #b9c3d4; margin-bottom: 8px; }
+th, td { text-align: left; padding: 8px; border: 1px solid #303847; overflow-wrap: anywhere; }
+#command-options:has(textarea) { grid-template-columns: 1fr; }
+#pages a:hover { border-color: #94b1ff; color: white; }
+#settings-status, #settings-used { overflow-wrap: anywhere; }

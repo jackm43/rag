@@ -120,8 +120,6 @@ async def deliver_reply(
     started_at = time.monotonic() if started_at is None else started_at
     model, status, response_text, error, usage, ai_duration = "unknown", "ok", None, None, {}, None
     try:
-        chat, _ = await app.config.models()
-        model = chat.model
         ai_start = time.monotonic()
         result = await complete()
         ai_duration = round((time.monotonic() - ai_start) * 1000)
@@ -159,11 +157,16 @@ async def deliver_reply(
 
 async def process_chat(app, job: ChatJob, started_at: float):
     async def complete():
-        chat, _ = await app.config.models()
+        models = await app.config.models()
+        chat, _ = models
         messages = await build_conversation(app, job, chat.history_limit)
         if job.thread and not job.thread.get("source_message_id"):
             return await app.ai.ask(
-                job.prompt, job.attribution.username or "user", messages, job.attribution
+                job.prompt,
+                job.attribution.username or "user",
+                messages,
+                job.attribution,
+                models=models,
             )
         system = (
             chat.prompt

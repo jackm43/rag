@@ -1,4 +1,6 @@
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 
 async def test_mention_and_ask_thread_use_shared_router(app):
@@ -22,6 +24,9 @@ async def test_mention_and_ask_thread_use_shared_router(app):
             "requester_username": "tester",
         }
     )
+    app.env.AI = SimpleNamespace(
+        run=AsyncMock(return_value={"output_text": "Clear skies", "output": []})
+    )
     message["content"] = "weather today"
     await app.handle_message(message, app.env.DISCORD_APPLICATION_ID)
     ai_calls = [
@@ -30,4 +35,13 @@ async def test_mention_and_ask_thread_use_shared_router(app):
         if "gateway.ai.cloudflare.com" in url
     ]
     assert "web_search_options" not in ai_calls[0]
-    assert "web_search_options" in ai_calls[-1]
+    model, request, options = app.env.AI.run.call_args.args
+    assert model == "openai/gpt-4.1-mini"
+    assert request["tools"] == [{"type": "web_search_preview", "search_context_size": "medium"}]
+    assert "weather today" in request["input"]
+    assert options["gateway"]["id"] == "platy"
+    assert any(
+        "Clear skies" in str(options.get("body", ""))
+        for url, options in app.transport.calls
+        if "discord.com" in url
+    )

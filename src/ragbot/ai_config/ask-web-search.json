@@ -1,5 +1,6 @@
 {
-  "model": "openai/gpt-4o-search-preview",
+  "model": "openai/gpt-4.1-mini",
+  "apiFormat": "responses",
   "maxOutputTokens": 1200,
   "temperature": 0.3,
   "maxTurns": 4,

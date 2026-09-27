@@ -8,7 +8,8 @@ Run `pnpm run check`, `pnpm test`, and `pnpm run test:runtime` before calling
 runtime changes done. Run a deployment dry run when changing packaging or
 bindings. Node 22+, pnpm, and uv 0.12.3+ are required. Commands using secrets go
 through `op run --env-file=.env --`; `pnpm run dev:ui` wraps op itself and also
-loads `.env.dev`. Do not log secrets or resolve them into committed files.
+loads `.env.dev`. On Windows that command uses Docker Desktop. Do not log
+secrets or resolve them into committed files.
 
 ## Architecture
 
@@ -70,8 +71,9 @@ module in its `__init__.py`. Register with
 `op run --env-file=.env -- pnpm run register:commands` only when requested.
 
 Add AI model/config/prompt files in `src/ragbot/ai_config/` and read via
-`ConfigStore` (KV-first, bundled fallback). Run `pnpm run build` after editing
-resources. `_bundled.py` is generated; do not edit it directly.
+`ConfigStore` (D1-first; legacy KV/bundled fallback only before initialization).
+Live settings use a fresh primary D1 snapshot per AI request. Run `pnpm run build`
+after editing resources. `_bundled.py` is generated; do not edit it directly.
 
 Regenerate `src/js-stubs` with `pnpm run types` after binding/config changes.
 Do not edit generated platform stubs by hand.

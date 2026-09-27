@@ -19,11 +19,13 @@ log = logging.getLogger("ragbot")
 
 
 class Application:
-    def __init__(self, env: Env, *, transport: Transport = fetch):
+    def __init__(
+        self, env: Env, *, transport: Transport = fetch, config: ConfigStore | None = None
+    ):
         self.env, self.transport = env, transport
         self.db = Database(env.DB)
         self.discord = DiscordClient(env.DISCORD_BOT_TOKEN, transport)
-        self.config = ConfigStore(env)
+        self.config = config if config is not None else ConfigStore(env)
         self.ai = Inference(env, self.db, self.config, transport)
 
     async def dispatch(self, interaction: dict):

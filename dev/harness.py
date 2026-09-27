@@ -9,11 +9,11 @@ import time
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
-from ragbot._bundled import FILES
 from ragbot.app import Application
-from ragbot.config import ConfigStore
+from ragbot.commands.registry import MODS_ROLE_ID
 from ragbot.db import Database
 from ragbot.runtime import fetch, to_python
+from ragbot.settings import draft_store
 
 captured_logs = contextvars.ContextVar("captured_logs", default=None)
 
@@ -49,51 +49,6 @@ def display_name(identity):
         ),
         "user",
     )
-
-
-class ConfigNamespace:
-    def __init__(self, overrides):
-        self.values = dict(overrides.get("kv") or {})
-        for key, fields in [
-            (
-                "discord-response.json",
-                {k: k for k in ("model", "temperature", "maxTokens", "historyLimit")},
-            ),
-            ("ask-web-search.json", {"model": "webSearchModel"}),
-        ]:
-            try:
-                document = json.loads(self.values.get(key, FILES[key]))
-                if not isinstance(document, dict):
-                    document = {}
-            except ValueError, TypeError:
-                document = {}
-            for field, source in fields.items():
-                value = overrides.get(source)
-                if value is not None and value != "":
-                    document[field] = value
-            self.values[key] = json.dumps(document)
-
-    async def get(self, key):
-        return self.values.get(key)
-
-
-async def resolve_config(overrides):
-    chat, search = await ConfigStore(SimpleNamespace(AI_CONFIG=ConfigNamespace(overrides))).models()
-    return {
-        "responseModel": chat.model,
-        "systemPrompt": chat.prompt,
-        "maxTokens": chat.max_tokens,
-        "temperature": chat.temperature,
-        "historyLimit": chat.history_limit,
-        "gatewayId": chat.gateway_id,
-        "askWebSearchModel": search.model,
-        "askWebSearchSystemPrompt": search.prompt,
-        "askWebSearchMaxOutputTokens": search.max_tokens,
-        "askWebSearchTemperature": search.temperature,
-        "askWebSearchMaxTurns": search.max_turns,
-        "askWebSearchContextSize": search.search_context_size,
-        "askWebSearchGatewayId": search.gateway_id,
-    }
 
 
 def dev_metadata(metadata):
@@ -136,6 +91,10 @@ class BindingTap:
             options["gateway"]["metadata"] = dev_metadata(options["gateway"].get("metadata", {}))
         exchange = {
             "transport": "workers-ai-binding",
+            "settingsRevision": (options or {})
+            .get("gateway", {})
+            .get("metadata", {})
+            .get("ragbot_settings_revision"),
             "model": model,
             "request": {"binding": "AI", "model": model, "input": inputs, "options": options},
             "response": None,
@@ -181,9 +140,16 @@ class Simulation:
                 )
             }
         )
-        self.run_env.AI_CONFIG = ConfigNamespace(inputs.get("overrides") or {})
         self.run_env.AI = BindingTap(getattr(env, "AI", None), self.ai)
-        self.app = Application(self.run_env, transport=self.transport)
+        self.app = Application(
+            self.run_env,
+            transport=self.transport,
+            config=draft_store(
+                inputs.get("overrides") or {},
+                inputs.get("baseResources"),
+                inputs.get("settingsRevision"),
+            ),
+        )
 
     def transcript_message(self, entry):
         identity = entry.get("author") or self.inputs["identity"]
@@ -274,6 +240,9 @@ class Simulation:
                 self.ai.append(
                     {
                         "transport": "gateway-http",
+                        "settingsRevision": json.loads(
+                            options.get("headers", {}).get("cf-aig-metadata", "{}")
+                        ).get("ragbot_settings_revision"),
                         "model": (body or {}).get("model", "unknown"),
                         "request": {k: call[k] for k in ("method", "url", "headers", "body")},
                         "response": call["response"],
@@ -434,7 +403,11 @@ class Simulation:
                     "token": "dev-interaction-" + snowflake(),
                     "guild_id": self.inputs["guildId"],
                     "channel_id": self.inputs["channelId"],
-                    "member": {"user": author(identity), "nick": identity.get("nick"), "roles": []},
+                    "member": {
+                        "user": author(identity),
+                        "nick": identity.get("nick"),
+                        "roles": [MODS_ROLE_ID] if self.inputs.get("modsRole", True) else [],
+                    },
                     "data": {
                         "id": snowflake(),
                         "type": 1,
