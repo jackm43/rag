@@ -5,8 +5,9 @@ import re
 import time
 
 from .ai import Attribution, Inference
+from .builds import BuildRequests, BuildScope, build_status_text
 from .commands import COMMANDS, CommandContext
-from .commands.registry import ADMIN_IDS
+from .commands.registry import ADMIN_IDS, MODS_ROLE_ID
 from .config import ConfigStore
 from .conversation import ChatJob, display_name, message_text, process_chat, strip_mentions
 from .db import Database, guild_allowed
@@ -26,6 +27,7 @@ class Application:
         self.db = Database(env.DB)
         self.discord = DiscordClient(env.DISCORD_BOT_TOKEN, transport)
         self.config = config if config is not None else ConfigStore(env)
+        self.builds = BuildRequests(self.db, env, self.config)
         self.ai = Inference(env, self.db, self.config, transport)
 
     async def dispatch(self, interaction: dict):
@@ -73,6 +75,78 @@ class Application:
             return
         guild_id = message.get("guild_id")
         if not guild_allowed(self.env, guild_id) or not strip_mentions(message.get("content", "")):
+            return
+        directed = re.fullmatch(
+            rf"<@!?{re.escape(bot_user_id)}>\s+([\s\S]+)",
+            message.get("content", "").strip(),
+        )
+        if directed and guild_id and not message.get("webhook_id"):
+            configured = getattr(self.env, "ALLOWED_GUILD_IDS", "") or ""
+            if guild_id not in {value.strip() for value in configured.split(",")}:
+                return
+            try:
+                scope = BuildScope(guild_id, message["channel_id"], message["author"]["id"])
+                project = await self.builds.in_thread(scope)
+                if project:
+                    prompt = directed[1].strip()
+                    if prompt.lower() in ("status", "progress", "help"):
+                        current = await self.builds.sync(project)
+                        text = build_status_text(current)
+                    elif not 1 <= len(prompt) <= 6000:
+                        text = "Describe the change in 1–6000 characters."
+                    else:
+                        roles = (message.get("member") or {}).get("roles", [])
+                        moderator = isinstance(roles, list) and MODS_ROLE_ID in roles
+                        if scope.user_id != project["requester_user_id"] and not moderator:
+                            text = "The app owner or Mods can request changes. You can discuss bugs here for them to pick up."
+                        else:
+                            try:
+                                result = await self.builds.manage(
+                                    scope,
+                                    project["id"],
+                                    "edit",
+                                    moderator=moderator,
+                                    prompt=prompt,
+                                    source_id=message["id"],
+                                )
+                                text = f"Working on that change (revision {result.get('revision', 1)}). The current release stays live."
+                            except Exception:
+                                text = "Could not start that change. A build may already be running; use `/buildstatus` here and try again when it finishes."
+                    await self.discord.post_message(scope.channel_id, text, reply_to=message["id"])
+                    return
+            except Exception:
+                log.warning("build_thread_resolve_failed")
+                return  # Fail closed rather than route a possible edit into ordinary chat.
+        build_match = re.fullmatch(
+            rf"<@!?{re.escape(bot_user_id)}>\s+(build|feature)\s+([\s\S]+)",
+            message.get("content", "").strip(),
+            re.IGNORECASE,
+        )
+        if build_match and guild_id and not message.get("webhook_id"):
+            configured = getattr(self.env, "ALLOWED_GUILD_IDS", "") or ""
+            if guild_id not in {value.strip() for value in configured.split(",")}:
+                return
+            try:
+                scope = BuildScope(guild_id, message["channel_id"], message["author"]["id"])
+                row = await self.builds.submit(
+                    scope,
+                    message["id"],
+                    "site" if build_match[1].lower() == "build" else "feature",
+                    build_match[2],
+                )
+                try:
+                    row = await self.builds.sync(row)
+                except Exception:
+                    log.warning("build_submission_pending")
+                row = await self.builds.ensure_thread(row, self.discord)
+                await self.discord.post_message(
+                    message["channel_id"], build_status_text(row), reply_to=message["id"]
+                )
+            except Exception:
+                log.warning("build_mention_failed")
+                await self.discord.post_message(
+                    message["channel_id"], "Could not save that build request."
+                )
             return
         started_at = time.monotonic()
         try:

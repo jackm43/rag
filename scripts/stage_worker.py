@@ -89,6 +89,7 @@ def stage(destination: Path, *, dev: bool = False, runtime_test: bool = False):
     config.pop("rules", None)
     config.pop("build", None)
     config.pop("triggers", None)
+    config.pop("services", None)
     for db in config.get("d1_databases", []):
         db["migrations_dir"] = str(ROOT / "migrations")
     if dev:
@@ -125,6 +126,9 @@ def stage(destination: Path, *, dev: bool = False, runtime_test: bool = False):
         shutil.copy(ROOT / "tests/runtime_worker.py", source / "entry.py")
         config["name"] = "ragbot-python-runtime-test"
         config.pop("ai", None)
+        config["services"] = [
+            {"binding": "BUILDER", "service": config["name"], "entrypoint": "BuilderTest"}
+        ]
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 

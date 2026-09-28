@@ -238,6 +238,8 @@ type WorkflowRetentionDuration = WorkflowSleepDuration
 
 type WorkflowInstanceLocationHint = Literal['wnam', 'enam', 'sam', 'weur', 'eeur', 'apac', 'apac-ne', 'apac-se', 'oc', 'afr', 'me']
 
+type Service[T=None] = Any
+
 type WeakKey = Any
 
 type EventListener[EventType=Event] = Callable[[EventType], None]
@@ -3276,6 +3278,7 @@ class __BaseEnv_Env_iface(Protocol): # type:ignore[misc, unused-ignore]
     AI_CONFIG: KVNamespace_iface = ... # type:ignore[assignment,unused-ignore]
     DB: D1Database = ... # type:ignore[assignment,unused-ignore]
     AI: Ai[AiModels_iface] = ... # type:ignore[assignment,unused-ignore]
+    BUILDER_ENABLED: Literal["false"] = ... # type:ignore[assignment,unused-ignore]
     CF_ACCOUNT_ID: Literal["314e7e015b5f4429c4e2da1e6ec93271"] = ... # type:ignore[assignment,unused-ignore]
     ALLOWED_GUILD_IDS: Literal["457689460096630794"] = ... # type:ignore[assignment,unused-ignore]
     CF_AIG_GATEWAY_ID: Literal["platy"] = ... # type:ignore[assignment,unused-ignore]
@@ -3286,6 +3289,7 @@ class __BaseEnv_Env_iface(Protocol): # type:ignore[misc, unused-ignore]
     GATEWAY_CONTROL_TOKEN: str = ... # type:ignore[assignment,unused-ignore]
     CLOUDFLARE_API_TOKEN: str = ... # type:ignore[assignment,unused-ignore]
     DISCORD_GATEWAY: DurableObjectNamespace[None] = ... # type:ignore[assignment,unused-ignore]
+    BUILDER: Service[None] = ... # type:ignore[assignment,unused-ignore]
 
 class CacheContext_iface(Protocol): # type:ignore[misc, unused-ignore]
     @overload

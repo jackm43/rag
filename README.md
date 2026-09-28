@@ -10,7 +10,24 @@ Commands: `/rag`, `/ragboard`, `/raghammer`, `/ragunban`, `/undorag`, `/ask`,
 
 Discord interaction signatures and gateway control bearer tokens are verified at
 the external edges. Denials have empty bodies. Commands, mentions, AI calls, and
-replies run in-process; there are no internal queues or services.
+ordinary chat replies run in-process. Coding jobs use the separate builder service.
+
+## Discord Builder
+
+Guild members can request apps with `@ragbot build ...` or `/build`, and propose
+Ragbot changes with `/feature`. A separate Cloudflare Containers builder runs
+Codex, validates artifacts and publishes authenticated browser apps or draft
+PRs. Apps support Discord login, personal one-use passcodes and durable shared
+rooms. `/buildstatus`, `/buildedit`, `/buildcancel`, `/buildrollback`, `/buildpass`
+and `/builddelete` manage the lifecycle. Each build from a text channel gets an
+app workspace thread. There, the owner or Mods can say `@ragbot fix the keyboard`
+or `@ragbot add a leaderboard`; management commands infer the app without IDs.
+
+See the [connection and deployment guide](docs/discord-builder-setup.md) for
+account setup, supported app APIs, verification and operations, and the
+[PRD](docs/discord-builder-prd.md) for product requirements and research.
+`BUILDER_ENABLED` stays false until setup. Apply migrations 0004–0007 before
+using the builder. The existing Python gateway and its resource IDs are preserved.
 
 ## Setup
 

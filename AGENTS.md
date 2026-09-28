@@ -1,8 +1,9 @@
 # Working in this repo
 
 Read [README.md](README.md) first. This project is one Cloudflare **Python
-Worker**, `ragbot-worker`, with a `DiscordGateway` Durable Object. There are no
-other deployed Workers, internal queues, or service-binding hops.
+Worker**, `ragbot-worker`, with a `DiscordGateway` Durable Object. The optional `builder/` TypeScript Worker adds Cloudflare Containers,
+project/auth/room Durable Objects and private R2 for coding jobs through the
+`BUILDER` service binding. Ordinary bot commands remain in-process.
 
 Run `pnpm run check`, `pnpm test`, and `pnpm run test:runtime` before calling
 runtime changes done. Run a deployment dry run when changing packaging or
@@ -90,3 +91,13 @@ contact live Discord, paid AI models, or production data.
 
 Former multi-worker Cloudflare resources are decommissioned out of band,
 never by this repository migration.
+
+## Discord Builder
+
+For builder changes, also run `pnpm --dir builder check`, `pnpm --dir builder test`,
+`node --test builder/runner/server.test.mjs`, and the documented Docker smoke after
+runner changes. Dry-run both Workers after binding or packaging changes. Never
+pass provider, GitHub, Discord or deployment secrets into build containers;
+model credentials belong in the trusted outbound broker. Keep R2 private, public
+control routes absent, OAuth/session boundaries outside generated code, and
+feature PRs unmerged. `docs/discord-builder-setup.md` documents the runtime contract.

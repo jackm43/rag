@@ -4,6 +4,8 @@ from typing import Any, Protocol
 
 
 class Env(Protocol):
+    BUILDER: Any
+    BUILDER_ENABLED: str
     DB: Any
     AI_CONFIG: Any
     AI: Any

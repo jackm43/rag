@@ -49,7 +49,16 @@ class Default(WorkerEntrypoint):
             if interaction.get("type") != 2:
                 return Response(status=400)
             wait_until(self.ctx, self.app.dispatch(interaction))
-            return json_response({"type": 5})
+            return json_response(
+                {
+                    "type": 5,
+                    **(
+                        {"data": {"flags": 64}}
+                        if interaction.get("data", {}).get("name") == "buildpass"
+                        else {}
+                    ),
+                }
+            )
         controls = {
             ("POST", "/gateway/start"): "start",
             ("POST", "/gateway/stop"): "stop",
@@ -68,6 +77,14 @@ class Default(WorkerEntrypoint):
         return Response(status=404)
 
     async def scheduled(self, controller, env, ctx):
+        try:
+            await self.app.builds.reconcile(self.app.discord)
+        except Exception:
+            log.error("build_reconcile_failed")
+        # The build reconciler ticks every minute; preserve the gateway's 15-minute cadence.
+        scheduled = getattr(controller, "scheduledTime", None)
+        if scheduled is not None and int(scheduled / 60000) % 15:
+            return
         try:
             await gateway_stub(self.env).ensure_connected()
         except Exception:

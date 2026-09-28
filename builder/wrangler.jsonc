@@ -1,0 +1,42 @@
+{
+  "name": "ragbot-builder",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "vars": {
+    "APP_DOMAIN": "apps.example.invalid",
+    "AUTH_ORIGIN": "https://login.apps.example.invalid",
+    "ALLOWED_GUILD_IDS": "457689460096630794",
+    "DISCORD_CLIENT_ID": "REPLACE_AT_SETUP",
+    "GITHUB_REPOSITORY": "REPLACE_AT_SETUP",
+    "GITHUB_BASE_BRANCH": "main",
+  },
+  "containers": [
+    {
+      "class_name": "BuildContainer",
+      "image": "./Dockerfile",
+      "max_instances": 10,
+      "instance_type": "standard-2",
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "RUNNERS", "class_name": "BuildContainer" },
+      { "name": "PROJECTS", "class_name": "Project" },
+      { "name": "AUTH", "class_name": "Auth" },
+      { "name": "ROOMS", "class_name": "Room" },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["BuildContainer", "Project", "Auth", "Room"],
+    },
+  ],
+  "r2_buckets": [
+    { "binding": "ARTIFACTS", "bucket_name": "ragbot-build-artifacts" },
+  ],
+  "observability": { "enabled": false },
+}

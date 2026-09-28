@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 from production import Default as ProductionDefault
 from production import DiscordGateway as ProductionGateway
-from workers import Response
+from workers import Response, WorkerEntrypoint
 
 from ragbot.app import Application
 from ragbot.gateway import Socket, gateway_stub
@@ -280,6 +280,34 @@ class Default(ProductionDefault):
         posted = calls[-1]["data"]
         assert posted["message_reference"]["message_id"] == "123456789012345710"
         assert posted["allowed_mentions"] == {"parse": [], "replied_user": False}
+        build_interaction = {
+            **interaction,
+            "id": "123456789012345720",
+            "data": {
+                "name": "build",
+                "options": [{"name": "prompt", "value": "A multiplayer word game"}],
+            },
+        }
+        await app.dispatch(build_interaction)
+        await app.dispatch(build_interaction)
+        builds = await app.db.all("SELECT id, status FROM build_requests")
+        assert len(builds) == 1 and builds[0]["status"] == "submitted"
+        assert "waiting for the builder connection" in calls[-1]["data"]["content"]
+        await app.dispatch(
+            {
+                **interaction,
+                "data": {
+                    "name": "buildstatus",
+                    "options": [{"name": "request", "value": builds[0]["id"]}],
+                },
+            }
+        )
+        assert "submitted" in calls[-1]["data"]["content"]
+        app.builds.env = SimpleNamespace(BUILDER=self.env.BUILDER, BUILDER_ENABLED="true")
+        row = (await app.db.all("SELECT * FROM build_requests"))[0]
+        synced = await app.builds.sync(row)
+        assert synced["remote_status"] == "building"
+
         from ragbot.discord import Attachment
 
         async def multipart(url, **options):
@@ -300,6 +328,7 @@ class Default(ProductionDefault):
                 "interactions": await app.db.all("SELECT * FROM rag_ai_interactions"),
                 "spend": await app.db.all("SELECT * FROM rag_ai_spend_events"),
                 "multipart": True,
+                "build_intake": True,
             }
         )
 
@@ -329,3 +358,13 @@ class DiscordGateway(ProductionGateway):
         result["stopped"] = await self.gateway.ensure_connected()
         await self.gateway.alarm()
         return result
+
+
+class BuilderTest(WorkerEntrypoint):
+    async def submit(self, value):
+        from ragbot.runtime import to_python
+
+        value = to_python(value)
+        assert value["kind"] == "site"
+        assert value["guild_id"] == "457689460096630794"
+        return {"status": "building", "revision": 1}

@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Word Together</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#12161c;color:#eef2f7}body{max-width:640px;margin:0 auto;padding:24px}header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #38404b}h1{font-size:30px;letter-spacing:-1px}p{color:#aebccd;line-height:1.5}.rooms{display:flex;gap:8px;margin:24px 0}input,button{font:inherit;border-radius:8px;padding:12px;border:1px solid #495463;background:#202833;color:inherit}button{cursor:pointer;background:#81d8b5;color:#10211c;font-weight:650}button:disabled{opacity:.5;cursor:wait}input{min-width:0;flex:1}#board{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;max-width:350px;margin:30px auto}.tile{aspect-ratio:1;display:grid;place-items:center;font-size:28px;font-weight:700;border:2px solid #394350;border-radius:8px}.correct{background:#277655}.present{background:#92731a}.absent{background:#38404b}form{display:flex;gap:8px}#message{min-height:3em}footer{margin-top:32px;font-size:14px}a{color:#81d8b5}
+</style>
+<header><h1>Word Together</h1><span>GUILD EDITION</span></header>
+<p>One word. Six guesses. Your whole room plays the same board.</p>
+<div class="rooms"><input id="room" aria-label="Room name" value="lobby" maxlength="64" pattern="[a-zA-Z0-9_-]+"><button id="join">Join room</button></div>
+<div id="board" aria-label="Shared game board"></div>
+<form id="guess-form"><input id="guess" aria-label="Five letter guess" placeholder="Five-letter word" minlength="5" maxlength="5" pattern="[a-zA-Z]{5}" autocomplete="off" required><button id="submit">Guess</button></form>
+<p id="message" role="status" aria-live="polite">Connecting to your room…</p><button id="reset" hidden>Play another round</button>
+<footer>Share this page and room name with your server. Progress is saved automatically.<form action="/_auth/logout" method="POST"><button>Sign out</button></form></footer>
+<script src="/app.js"></script></html>
