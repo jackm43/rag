@@ -292,7 +292,7 @@ class Default(ProductionDefault):
         await app.dispatch(build_interaction)
         builds = await app.db.all("SELECT id, status FROM build_requests")
         assert len(builds) == 1 and builds[0]["status"] == "submitted"
-        assert "waiting for the builder connection" in calls[-1]["data"]["content"]
+        assert "as soon as the builder is available" in calls[-1]["data"]["content"]
         await app.dispatch(
             {
                 **interaction,
@@ -302,11 +302,19 @@ class Default(ProductionDefault):
                 },
             }
         )
-        assert "submitted" in calls[-1]["data"]["content"]
+        assert "waiting for the builder" in calls[-1]["data"]["content"]
+        # Real RPC through a service binding, with Python values on both sides.
         app.builds.env = SimpleNamespace(BUILDER=self.env.BUILDER, BUILDER_ENABLED="true")
         row = (await app.db.all("SELECT * FROM build_requests"))[0]
-        synced = await app.builds.sync(row)
-        assert synced["remote_status"] == "building"
+        assert (await app.builds.refresh(row))["status"] == "queued"
+        await app.builds.reconcile(app.discord)
+        result = calls[-1]["data"]["content"]
+        assert result.startswith(
+            "**Word game** is ready: <https://apps.example.com/word-game-1234/>"
+        )
+        assert "<@" not in result and "123456789012345678" not in result
+        await app.builds.reconcile(app.discord)
+        assert calls[-1]["data"]["content"] == result
 
         from ragbot.discord import Attachment
 
@@ -365,6 +373,19 @@ class BuilderTest(WorkerEntrypoint):
         from ragbot.runtime import to_python
 
         value = to_python(value)
-        assert value["kind"] == "site"
         assert value["guild_id"] == "457689460096630794"
-        return {"status": "building", "revision": 1}
+        assert value["prompt"] == "A multiplayer word game" and value["moderator"] is False
+        return {"status": "queued", "revision": 1, "releases": []}
+
+    async def status(self, value):
+        from ragbot.runtime import to_python
+
+        assert set(to_python(value)) == {"id", "guild_id", "channel_id", "user_id", "moderator"}
+        return {
+            "status": "ready",
+            "revision": 1,
+            "active": 1,
+            "url": "https://apps.example.com/word-game-1234/",
+            "title": "Word game",
+            "summary": "Play with <@123456789012345678> now.",
+        }

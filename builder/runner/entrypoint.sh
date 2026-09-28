@@ -1,7 +1,4 @@
 #!/bin/sh
-set -eu
-if [ -f /etc/cloudflare/certs/cloudflare-containers-ca.crt ]; then
-  cp /etc/cloudflare/certs/cloudflare-containers-ca.crt /usr/local/share/ca-certificates/cloudflare-containers-ca.crt
-  update-ca-certificates >/dev/null 2>&1
-fi
+# Cloudflare injects /etc/cloudflare/certs/cloudflare-containers-ca.crt when it
+# intercepts outbound HTTPS; server.mjs points the agent's tools at it.
 exec node /opt/runner/server.mjs

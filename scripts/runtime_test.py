@@ -109,25 +109,6 @@ def main():
                         body=malformed,
                         headers=signed(malformed),
                     ) == (400, b"")
-                passcode_interaction = json.dumps(
-                    {
-                        "type": 2,
-                        "application_id": "123456789012345678",
-                        "token": "test-webhook",
-                        "data": {"name": "buildpass"},
-                    }
-                ).encode()
-                passcode_status, passcode_body = request(
-                    base,
-                    "/interactions",
-                    method="POST",
-                    body=passcode_interaction,
-                    headers=signed(passcode_interaction),
-                )
-                assert passcode_status == 200 and json.loads(passcode_body) == {
-                    "type": 5,
-                    "data": {"flags": 64},
-                }
                 for path, method in (
                     ("/gateway/start", "POST"),
                     ("/gateway/stop", "POST"),
@@ -142,25 +123,6 @@ def main():
                         assert request(
                             base, path, method=method, headers={"authorization": authorization}
                         ) == (status, b"")
-                passcode_interaction = json.dumps(
-                    {
-                        "type": 2,
-                        "application_id": "123456789012345678",
-                        "token": "test-webhook",
-                        "data": {"name": "buildpass"},
-                    }
-                ).encode()
-                passcode_status, passcode_body = request(
-                    base,
-                    "/interactions",
-                    method="POST",
-                    body=passcode_interaction,
-                    headers=signed(passcode_interaction),
-                )
-                assert passcode_status == 200 and json.loads(passcode_body) == {
-                    "type": 5,
-                    "data": {"flags": 64},
-                }
                 for path, method in (
                     ("/interactions", "GET"),
                     ("/gateway/start", "GET"),
@@ -199,25 +161,6 @@ def main():
                     body=interaction,
                     headers=signed(interaction),
                 ) == (200, b'{"type": 5}')
-                passcode_interaction = json.dumps(
-                    {
-                        "type": 2,
-                        "application_id": "123456789012345678",
-                        "token": "test-webhook",
-                        "data": {"name": "buildpass"},
-                    }
-                ).encode()
-                passcode_status, passcode_body = request(
-                    base,
-                    "/interactions",
-                    method="POST",
-                    body=passcode_interaction,
-                    headers=signed(passcode_interaction),
-                )
-                assert passcode_status == 200 and json.loads(passcode_body) == {
-                    "type": 5,
-                    "data": {"flags": 64},
-                }
                 for path, method in (
                     ("/gateway/start", "POST"),
                     ("/gateway/stop", "POST"),

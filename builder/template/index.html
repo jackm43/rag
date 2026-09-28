@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ragbot app</title>
+    <link rel="icon" href="./favicon.svg" />
+  </head>
+  <body>
+    <main>
+      <h1>Hello<span id="name"></span></h1>
+      <p id="status" role="status">Connecting…</p>
+      <button id="cheer" type="button" disabled>Cheer <span id="count">0</span></button>
+      <h2>Here now</h2>
+      <ul id="peers" aria-live="polite"></ul>
+    </main>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

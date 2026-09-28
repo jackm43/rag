@@ -47,10 +47,7 @@ def parse_settings(raw: str) -> dict:
     if not isinstance(data, dict) or data.get("schemaVersion") != 1:
         raise ValueError("invalid settings version")
     resources = data.get("resources")
-    # Accept the exact pre-builder resource set during the deployment/migration
-    # window. Coding requests still fail closed until their resource is migrated.
-    legacy_resources = set(FILES) - {"coding-agent.json"}
-    if not isinstance(resources, dict) or set(resources) not in (set(FILES), legacy_resources):
+    if not isinstance(resources, dict) or set(resources) != set(FILES):
         raise ValueError("incomplete settings snapshot")
     if any(not isinstance(value, str) or len(value) > 100000 for value in resources.values()):
         raise ValueError("invalid settings resource")

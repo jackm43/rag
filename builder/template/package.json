@@ -1,0 +1,12 @@
+{
+  "name": "ragbot-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "vite": "8.3.1"
+  }
+}

@@ -1,9 +1,10 @@
 **
 !Dockerfile
-!runner/
 !runner/package.json
-!runner/pnpm-lock.yaml
+!runner/package-lock.json
 !runner/server.mjs
 !runner/agent.mjs
-!runner/template.json
 !runner/entrypoint.sh
+!template/
+template/node_modules
+template/dist

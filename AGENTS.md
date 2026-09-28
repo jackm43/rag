@@ -1,9 +1,10 @@
 # Working in this repo
 
 Read [README.md](README.md) first. This project is one Cloudflare **Python
-Worker**, `ragbot-worker`, with a `DiscordGateway` Durable Object. The optional `builder/` TypeScript Worker adds Cloudflare Containers,
-project/auth/room Durable Objects and private R2 for coding jobs through the
-`BUILDER` service binding. Ordinary bot commands remain in-process.
+Worker**, `ragbot-worker`, with a `DiscordGateway` Durable Object. The optional
+`builder/` TypeScript Worker builds and hosts members-only web apps (Cloudflare
+Containers, Durable Objects, private R2) behind the `BUILDER` service binding.
+Ordinary bot commands remain in-process.
 
 Run `pnpm run check`, `pnpm test`, and `pnpm run test:runtime` before calling
 runtime changes done. Run a deployment dry run when changing packaging or
@@ -92,12 +93,22 @@ contact live Discord, paid AI models, or production data.
 Former multi-worker Cloudflare resources are decommissioned out of band,
 never by this repository migration.
 
-## Discord Builder
+## Discord app builder
 
-For builder changes, also run `pnpm --dir builder check`, `pnpm --dir builder test`,
-`node --test builder/runner/server.test.mjs`, and the documented Docker smoke after
-runner changes. Dry-run both Workers after binding or packaging changes. Never
-pass provider, GitHub, Discord or deployment secrets into build containers;
-model credentials belong in the trusted outbound broker. Keep R2 private, public
-control routes absent, OAuth/session boundaries outside generated code, and
-feature PRs unmerged. `docs/discord-builder-setup.md` documents the runtime contract.
+For builder changes, also run `pnpm --dir builder check`, `pnpm --dir builder test`
+and `node --test builder/runner/server.test.mjs`. Run `pnpm --dir builder e2e`
+(Docker, real container, fake AI Gateway and Discord, real browsers) after
+changes to the runner, template, auth, rooms or build flow. Dry-run both Workers
+after binding or packaging changes. `docs/discord-builder-setup.md` documents
+the runtime contract; `builder/template/AGENTS.md` is the contract given to the
+coding agent and must match what the host serves.
+
+- Every app route, asset, API call and WebSocket requires Discord OAuth and
+  current guild membership (re-checked within five minutes). Never add another
+  way in, public or preview URLs, or a public R2 bucket.
+- No credential enters build containers. Model calls go to AI Gateway through
+  the outbound handler, which adds `cf-aig-authorization`; npm reads are the
+  only other egress. Keep `BuildContainer.outbound = ...` an assignment.
+- `fetch` in Workers must not use `redirect: "error"` (unsupported); use
+  `"manual"` and treat 3xx as failure.
+- The builder has no public control routes; the bot calls `BuilderControl`.

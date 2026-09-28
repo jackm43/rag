@@ -1,44 +1,105 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  mkdtemp,
-  writeFile,
-  symlink,
   mkdir,
-  rm,
+  mkdtemp,
   readFile,
+  rm,
+  symlink,
+  writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { collect, validateSite, safePath } from "./server.mjs";
-test("artifact collection rejects symlinks and oversize files", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "rag-artifact-"));
+import path from "node:path";
+import { test } from "node:test";
+import { manifest, titleOf } from "./server.mjs";
+
+async function dist(files) {
+  const root = await mkdtemp(path.join(tmpdir(), "ragbot-dist-"));
+  for (const [name, body] of Object.entries(files)) {
+    await mkdir(path.dirname(path.join(root, name)), { recursive: true });
+    await writeFile(path.join(root, name), body);
+  }
+  return root;
+}
+
+test("lists publishable build output", async () => {
+  const root = await dist({
+    "index.html": "<title>x</title>",
+    "assets/app-1.js": "1",
+    "models/ship.glb": Buffer.from([0, 1, 2]),
+  });
   try {
-    await writeFile(join(dir, "index.html"), "hello");
-    assert.deepEqual(await collect(dir), { "index.html": "hello" });
-    await assert.rejects(() => collect(dir, 2));
-    await symlink("/etc/passwd", join(dir, "secret"));
-    await assert.rejects(() => collect(dir));
+    assert.deepEqual(await manifest(root), [
+      { path: "assets/app-1.js", size: 1 },
+      { path: "index.html", size: 16 },
+      { path: "models/ship.glb", size: 3 },
+    ]);
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   }
 });
-test("only deployable bounded text assets are accepted", () => {
-  validateSite({ "index.html": "hello", "app.js": "void 0" });
-  for (const value of [
-    { "index.html": "hello", "../secret": "bad" },
-    { "index.html": "hello", "x.exe": "bad" },
-    {},
-  ])
-    assert.throws(() => validateSite(value));
-  assert.equal(safePath("../secret"), false);
-  assert.equal(safePath(".env.production"), false);
+
+test("refuses output the host would not serve", async () => {
+  for (const files of [
+    { "app.js": "no index" },
+    { "index.html": "x", ".env": "SECRET=1" },
+    { "index.html": "x", "_api/rooms/x": "shadow" },
+    { "index.html": "x", "bad name.js": "x" },
+  ]) {
+    const root = await dist(files);
+    try {
+      await assert.rejects(
+        () => manifest(root),
+        JSON.stringify(Object.keys(files)),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+  const root = await dist({ "index.html": "x" });
+  try {
+    await symlink("/etc/passwd", path.join(root, "passwd.txt"));
+    await assert.rejects(() => manifest(root), /Not a regular file/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
-test("checked-in template has a game UI and no answer in browser code", async () => {
-  const template = JSON.parse(
-    await readFile(new URL("template.json", import.meta.url), "utf8"),
+
+test("refuses a dist/ that links outside the app", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ragbot-app-"));
+  try {
+    await symlink("/etc", path.join(root, "dist"));
+    await assert.rejects(
+      () => manifest(path.join(root, "dist")),
+      /must be a directory/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reads the page title for Discord and the hub", () => {
+  assert.equal(
+    titleOf("<html><title> Tom &amp; Jerry&#39;s </title>"),
+    "Tom & Jerry's",
   );
-  assert.match(template["public/app.js"], /\/_wordle\//);
-  assert.match(template["public/index.html"], /aria-live/);
-  assert.ok(template["test/site.test.mjs"]);
+  assert.equal(titleOf("<h1>none</h1>"), "");
+});
+
+test("the template's platform contract matches the host", async () => {
+  const sdk = await readFile(
+    new URL("../template/src/ragbot.js", import.meta.url),
+    "utf8",
+  );
+  const agents = await readFile(
+    new URL("../template/AGENTS.md", import.meta.url),
+    "utf8",
+  );
+  assert.match(sdk, /_api\/rooms\//);
+  assert.match(sdk, /_api\/me/);
+  assert.match(agents, /never\s+`\/logo\.png`/);
+  const vite = await readFile(
+    new URL("../template/vite.config.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(vite, /base: "\.\/"/);
 });

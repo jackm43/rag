@@ -1,383 +1,268 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   type Env,
-  token,
+  type Member,
+  allowedGuilds,
   hash,
-  json,
-  project,
-  idPattern,
-  boundedJSON,
-  validScope,
+  readJSON,
+  snowflake,
+  token,
 } from "./types";
+
+// Discord OAuth is the only way in. Every app is served from one origin, so a
+// single login covers all of them. A session only proves who the browser is;
+// membership of the app's guild is verified with Discord on first use and at
+// least every five minutes after, and any failure denies access.
+
+const DISCORD = "https://discord.com/api/v10";
+const SESSION = "__Host-ragbot-session";
+const BROWSER = "__Host-ragbot-login";
+const SESSION_MS = 8 * 3600_000;
+const RECHECK_MS = 5 * 60_000;
+
+type Login = { browser: string; back: string };
+type Membership = { member: Member | null; checked: number };
 type Session = {
-  project: string;
-  guild: string;
   user: string;
-  access?: string;
+  access: string;
   expires: number;
-  checked: number;
+  guilds: Record<string, Membership>;
 };
-const cookieName = "__Host-rag-session";
-export const cookies = (r: Request) =>
-  Object.fromEntries(
-    (r.headers.get("cookie") || "")
-      .split(";")
-      .map((s) => s.trim().split("=").slice(0, 2)),
-  );
-export const cookie = (name: string, value: string, age: number) =>
-  `${name}=${value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${age}`;
-export function redirect(url: string, values: string[] = []) {
+
+/** The member's profile if the token's user is a full (non-pending) guild member. */
+export async function verifyMember(
+  guild: string,
+  access: string,
+): Promise<Member | null> {
+  const response = await fetch(`${DISCORD}/users/@me/guilds/${guild}/member`, {
+    headers: { authorization: `Bearer ${access}` },
+    redirect: "manual",
+  });
+  if (!response.ok) return null;
+  const member = await readJSON(response, 64 * 1024);
+  const user = member?.user;
+  if (!user || !snowflake.test(user.id) || member.pending) return null;
+  const avatar = member.avatar
+    ? `https://cdn.discordapp.com/guilds/${guild}/users/${user.id}/avatars/${member.avatar}.png?size=128`
+    : user.avatar
+      ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=128`
+      : `https://cdn.discordapp.com/embed/avatars/${Number((BigInt(user.id) >> 22n) % 6n)}.png`;
+  const name = String(
+    member.nick || user.global_name || user.username || "member",
+  ).slice(0, 64);
+  return { id: user.id, name, avatar };
+}
+
+export class Auth extends DurableObject<Env> {
+  async begin(login: Login) {
+    const state = token();
+    await this.put("state:" + (await hash(state)), login, 600_000);
+    return state;
+  }
+
+  /** Exchange an OAuth code. Returns a session only for members of an allowed guild. */
+  async finish(state: string, browser: string, code: string) {
+    const login = await this.take<Login>("state:" + (await hash(state)));
+    if (!login || !browser || login.browser !== browser) return null;
+    const response = await fetch(DISCORD + "/oauth2/token", {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: this.env.DISCORD_CLIENT_ID,
+        client_secret: this.env.DISCORD_CLIENT_SECRET,
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: new URL("/_auth/callback", this.env.APP_ORIGIN).href,
+      }),
+    });
+    if (!response.ok) return null;
+    const grant = await readJSON(response, 16 * 1024);
+    if (typeof grant.access_token !== "string") return null;
+    if (
+      !String(grant.scope || "")
+        .split(" ")
+        .includes("guilds.members.read")
+    )
+      return null;
+    const guilds: Record<string, Membership> = {};
+    let user = "";
+    for (const guild of allowedGuilds(this.env)) {
+      const member = await verifyMember(guild, grant.access_token);
+      guilds[guild] = { member, checked: Date.now() };
+      user ||= member?.id ?? "";
+    }
+    if (!user) return null;
+    const expires =
+      Date.now() + Math.min(Number(grant.expires_in) * 1000 || 0, SESSION_MS);
+    const session = token();
+    await this.put(
+      "session:" + (await hash(session)),
+      { user, access: grant.access_token, expires, guilds } satisfies Session,
+      expires - Date.now(),
+    );
+    return { session, expires, back: login.back };
+  }
+
+  /** The session's member profile in `guild`, re-verified with Discord when stale. */
+  async member(session: string, guild: string): Promise<Member | null> {
+    if (!session) return null;
+    const key = "session:" + (await hash(session));
+    const value = await this.get<Session>(key);
+    if (!value) return null;
+    const known = value.guilds[guild];
+    if (known && Date.now() - known.checked < RECHECK_MS) return known.member;
+    const member = await verifyMember(guild, value.access);
+    if (member && member.id !== value.user) return null;
+    value.guilds[guild] = { member, checked: Date.now() };
+    await this.put(key, value, value.expires - Date.now());
+    return member;
+  }
+
+  async close(session: string) {
+    if (session)
+      await this.ctx.storage.delete("session:" + (await hash(session)));
+  }
+
+  private async put(key: string, value: object, ttl: number) {
+    await this.ctx.storage.put(key, { value, expires: Date.now() + ttl });
+    if (!(await this.ctx.storage.getAlarm()))
+      await this.ctx.storage.setAlarm(Date.now() + 600_000);
+  }
+
+  private async get<T>(key: string): Promise<T | null> {
+    const entry = await this.ctx.storage.get<{ value: T; expires: number }>(
+      key,
+    );
+    return entry && entry.expires > Date.now() ? entry.value : null;
+  }
+
+  private async take<T>(key: string): Promise<T | null> {
+    const value = await this.get<T>(key);
+    await this.ctx.storage.delete(key);
+    return value;
+  }
+
+  async alarm() {
+    const entries = await this.ctx.storage.list<{ expires: number }>();
+    const expired = [...entries]
+      .filter(([, e]) => e.expires <= Date.now())
+      .map(([key]) => key);
+    for (let i = 0; i < expired.length; i += 128)
+      await this.ctx.storage.delete(expired.slice(i, i + 128));
+    if (entries.size > expired.length)
+      await this.ctx.storage.setAlarm(Date.now() + 600_000);
+  }
+}
+
+const auth = (env: Env) => env.AUTH.get(env.AUTH.idFromName("sessions"));
+
+export function cookies(request: Request) {
+  const out: Record<string, string> = {};
+  for (const part of (request.headers.get("cookie") || "").split(";")) {
+    const at = part.indexOf("=");
+    if (at > 0) out[part.slice(0, at).trim()] = part.slice(at + 1).trim();
+  }
+  return out;
+}
+
+const cookie = (name: string, value: string, seconds: number) =>
+  `${name}=${value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${Math.max(0, Math.floor(seconds))}`;
+
+function redirect(location: string, setCookies: string[] = []) {
   const headers = new Headers({
-    location: url,
+    location,
     "cache-control": "no-store",
     "referrer-policy": "no-referrer",
   });
-  for (const v of values) headers.append("set-cookie", v);
+  for (const value of setCookies) headers.append("set-cookie", value);
   return new Response(null, { status: 303, headers });
 }
-export function auth(env: Env) {
-  return env.AUTH.get(env.AUTH.idFromName("auth-v1"));
-}
-export async function authCall(env: Env, path: string, data: unknown) {
-  return auth(env).fetch(
-    new Request("https://auth" + path, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  );
-}
-async function member(env: Env, guild: string, user: string, access?: string) {
-  const path = access
-    ? `users/@me/guilds/${guild}/member`
-    : `guilds/${guild}/members/${user}`;
-  const r = await fetch(`https://discord.com/api/v10/${path}`, {
-    headers: {
-      authorization: access
-        ? `Bearer ${access}`
-        : `Bot ${env.DISCORD_BOT_TOKEN}`,
-    },
-    redirect: "error",
-  });
-  if (!r.ok) return false;
-  const value = await boundedJSON(r, 100000);
-  return value.user?.id === user && !value.pending;
-}
-export class Auth extends DurableObject<Env> {
-  async fetch(request: Request) {
-    const path = new URL(request.url).pathname;
-    const d = await boundedJSON(request, 20000);
-    if (path === "/state") {
-      const value = { ...d, expires: Date.now() + 600000 };
-      const state = token();
-      await this.ctx.storage.put("state:" + (await hash(state)), value);
-      await this.schedule();
-      return json({ state });
-    }
-    if (path === "/exchange") {
-      const key = "state:" + (await hash(d.state || ""));
-      const state = await this.ctx.storage.transaction(async (tx) => {
-        const s = await tx.get<any>(key);
-        await tx.delete(key);
-        return s;
-      });
-      if (!state || state.expires < Date.now() || state.browser !== d.browser)
-        return json({}, 403);
-      const result = await fetch("https://discord.com/api/v10/oauth2/token", {
-        method: "POST",
-        redirect: "error",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          client_id: this.env.DISCORD_CLIENT_ID,
-          client_secret: this.env.DISCORD_CLIENT_SECRET,
-          grant_type: "authorization_code",
-          code: d.code,
-          redirect_uri: this.env.AUTH_ORIGIN + "/_auth/callback",
-        }),
-      });
-      if (!result.ok) return json({}, 403);
-      const tokens = await boundedJSON(result, 10000);
-      const who = await fetch("https://discord.com/api/v10/users/@me", {
-        headers: { authorization: `Bearer ${tokens.access_token}` },
-        redirect: "error",
-      });
-      if (!who.ok) return json({}, 403);
-      const user = await boundedJSON(who, 10000);
-      if (
-        !/^\d{17,20}$/.test(user.id) ||
-        !(await member(this.env, state.guild, user.id, tokens.access_token))
-      )
-        return json({}, 403);
-      const ticket = token();
-      await this.ctx.storage.put("ticket:" + (await hash(ticket)), {
-        project: state.project,
-        guild: state.guild,
-        user: user.id,
-        access: tokens.access_token,
-        nonce: state.nonce,
-        expires: Date.now() + 60000,
-        tokenExpires:
-          Date.now() + Math.min(Number(tokens.expires_in) || 0, 28800) * 1000,
-      });
-      return json({ ticket, project: state.project });
-    }
-    if (path === "/complete") {
-      const key = "ticket:" + (await hash(d.ticket || ""));
-      const t = await this.ctx.storage.transaction(async (tx) => {
-        const t = await tx.get<any>(key);
-        if (t && t.project === d.project && t.nonce === d.nonce)
-          await tx.delete(key);
-        return t;
-      });
-      if (
-        !t ||
-        t.project !== d.project ||
-        t.nonce !== d.nonce ||
-        t.expires < Date.now()
-      )
-        return json({}, 403);
-      return this.session({
-        ...t,
-        expires: t.tokenExpires,
-        checked: Date.now(),
-      });
-    }
-    if (path === "/session") {
-      const key = "session:" + (await hash(d.session || ""));
-      const s = await this.ctx.storage.get<Session>(key);
-      if (!s || s.project !== d.project || s.expires < Date.now())
-        return json({}, 401);
-      if (Date.now() - s.checked >= 300000) {
-        if (!(await member(this.env, s.guild, s.user, s.access))) {
-          await this.ctx.storage.delete(key);
-          return json({}, 401);
-        }
-        s.checked = Date.now();
-        await this.ctx.storage.put(key, s);
-      }
-      return json({ user: s.user, guild: s.guild, expires: s.expires });
-    }
-    if (path === "/logout") {
-      await this.ctx.storage.delete("session:" + (await hash(d.session || "")));
-      return json({});
-    }
-    if (path === "/invite") {
-      if (!validScope(d, this.env) || !idPattern.test(d.project))
-        return json({}, 403);
-      const meta = await project(this.env, d.project).fetch(
-        new Request("https://project/meta"),
-      );
-      if (!meta.ok || (await meta.json<any>()).guild_id !== d.guild_id)
-        return json({}, 403);
-      if (!(await member(this.env, d.guild_id, d.user_id)))
-        return json({}, 403);
-      const code = token().slice(0, 24);
-      await this.ctx.storage.put("code:" + (await hash(code)), {
-        project: d.project,
-        guild: d.guild_id,
-        user: d.user_id,
-        expires: Date.now() + 600000,
-      });
-      await this.schedule();
-      return json({ code });
-    }
-    if (path === "/redeem") {
-      // Authentication throttling only; this does not throttle AI requests.
-      const bucket = "attempt:" + (await hash(String(d.ip)));
-      const attempt = await this.ctx.storage.get<any>(bucket);
-      if (attempt && attempt.expires > Date.now() && attempt.count >= 10)
-        return json({}, 429);
-      await this.ctx.storage.put(bucket, {
-        count: attempt && attempt.expires > Date.now() ? attempt.count + 1 : 1,
-        expires: Date.now() + 60000,
-      });
-      const key = "code:" + (await hash(d.code || ""));
-      const s = await this.ctx.storage.transaction(async (tx) => {
-        const s = await tx.get<any>(key);
-        if (s?.project === d.project) await tx.delete(key);
-        return s;
-      });
-      if (
-        !s ||
-        s.project !== d.project ||
-        s.expires < Date.now() ||
-        !(await member(this.env, s.guild, s.user))
-      )
-        return json({}, 403);
-      return this.session({
-        ...s,
-        expires: Date.now() + 8 * 3600000,
-        checked: Date.now(),
-      });
-    }
-    return json({}, 404);
-  }
-  async session(s: Session) {
-    const value = token();
-    await this.ctx.storage.put("session:" + (await hash(value)), s);
-    await this.schedule();
-    return json({ session: value });
-  }
-  async schedule() {
-    await this.ctx.storage.setAlarm(Date.now() + 600000);
-  }
-  async alarm() {
-    const entries = await this.ctx.storage.list<any>();
-    for (const [key, value] of entries)
-      if (value.expires < Date.now()) await this.ctx.storage.delete(key);
-    if (entries.size) await this.schedule();
-  }
-}
-export async function authRoute(
-  request: Request,
-  env: Env,
-  projectId?: string,
-): Promise<Response | null> {
-  const u = new URL(request.url),
-    c = cookies(request);
-  if (u.origin === env.AUTH_ORIGIN) {
-    if (u.pathname === "/_auth/login") {
-      const p = u.searchParams.get("project") || "",
-        nonce = u.searchParams.get("nonce") || "";
-      if (!idPattern.test(p) || !/^[a-f0-9]{64}$/.test(nonce))
-        return new Response(null, { status: 400 });
-      const r = await project(env, p).fetch(
-        new Request("https://project/meta"),
-      );
-      if (!r.ok) return new Response(null, { status: 404 });
-      const meta = await r.json<any>(),
-        browser = token();
-      if (
-        !env.ALLOWED_GUILD_IDS.split(",")
-          .map((v) => v.trim())
-          .includes(meta.guild_id)
-      )
-        return new Response(null, { status: 403 });
-      const state = await (
-        await authCall(env, "/state", {
-          project: p,
-          guild: meta.guild_id,
-          nonce,
-          browser,
-        })
-      ).json<any>();
-      const target = new URL("https://discord.com/oauth2/authorize");
-      target.search = new URLSearchParams({
-        client_id: env.DISCORD_CLIENT_ID,
-        redirect_uri: env.AUTH_ORIGIN + "/_auth/callback",
-        response_type: "code",
-        scope: "identify guilds.members.read",
-        state: state.state,
-      }).toString();
-      return redirect(target.href, [cookie("__Host-rag-oauth", browser, 600)]);
-    }
-    if (u.pathname === "/_auth/callback") {
-      const r = await authCall(env, "/exchange", {
-        state: u.searchParams.get("state"),
-        code: u.searchParams.get("code"),
-        browser: c["__Host-rag-oauth"],
-      });
-      if (!r.ok)
-        return new Response("Login failed. Please start again.", {
-          status: 403,
-        });
-      const d = await r.json<any>();
-      return redirect(
-        `https://${d.project}.${env.APP_DOMAIN}/_auth/complete?ticket=${d.ticket}`,
-        [cookie("__Host-rag-oauth", "", 0)],
-      );
-    }
-    return new Response(null, { status: 404 });
-  }
-  if (!projectId) return null;
-  if (u.pathname === "/_auth/login") {
-    const nonce = token();
-    return redirect(
-      env.AUTH_ORIGIN +
-        "/_auth/login?" +
-        new URLSearchParams({ project: projectId, nonce }),
-      [cookie("__Host-rag-nonce", nonce, 600)],
-    );
-  }
-  if (u.pathname === "/_auth/complete") {
-    const r = await authCall(env, "/complete", {
-      project: projectId,
-      nonce: c["__Host-rag-nonce"],
-      ticket: u.searchParams.get("ticket"),
-    });
-    if (!r.ok)
-      return new Response("Login failed. Please start again.", { status: 403 });
-    const d = await r.json<any>();
-    return redirect("/", [
-      cookie(cookieName, d.session, 28800),
-      cookie("__Host-rag-nonce", "", 0),
-    ]);
-  }
-  if (u.pathname === "/_auth/logout" && request.method === "POST") {
-    if (request.headers.get("origin") !== u.origin)
-      return new Response(null, { status: 403 });
-    await authCall(env, "/logout", { session: c[cookieName] });
-    return redirect("/", [cookie(cookieName, "", 0)]);
-  }
-  if (u.pathname === "/_auth/passcode" && request.method === "POST") {
-    if (request.headers.get("origin") !== u.origin)
-      return new Response(null, { status: 403 });
-    if (Number(request.headers.get("content-length") || 0) > 2000)
-      return new Response(null, { status: 413 });
-    // Bound form bodies before parsing, including chunked requests.
-    const reader = request.body?.getReader();
-    let raw = "";
-    if (reader)
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          raw += new TextDecoder().decode(value);
-          if (raw.length > 2000) {
-            await reader.cancel();
-            return new Response(null, { status: 413 });
-          }
-        }
-      } finally {
-        reader.releaseLock();
-      }
-    const form = new URLSearchParams(raw);
-    if (!c["__Host-rag-nonce"] || form.get("nonce") !== c["__Host-rag-nonce"])
-      return new Response(null, { status: 403 });
-    const r = await authCall(env, "/redeem", {
-      project: projectId,
-      code: form.get("code"),
-      ip: request.headers.get("cf-connecting-ip") || "unknown",
-    });
-    if (!r.ok)
-      return new Response("Code is invalid or expired.", { status: r.status });
-    const d = await r.json<any>();
-    return redirect("/", [
-      cookie(cookieName, d.session, 28800),
-      cookie("__Host-rag-nonce", "", 0),
-    ]);
-  }
-  return null;
-}
-export async function authenticate(request: Request, env: Env, p: string) {
-  const r = await authCall(env, "/session", {
-    project: p,
-    session: cookies(request)[cookieName],
-  });
-  return r.ok ? r.json<{ user: string; guild: string }>() : null;
-}
-export function loginPage() {
-  const nonce = token();
+
+const escape = (value: string) =>
+  value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+export function page(title: string, body: string, status = 200) {
   return new Response(
-    `<!doctype html><meta name="viewport" content="width=device-width"><title>Join this guild app</title><style>body{font:18px system-ui;max-width:30rem;margin:12vh auto;padding:2rem;background:#10141d;color:#eee}a,button{display:block;padding:1rem;background:#7289da;color:white;border:0;border-radius:8px;margin:1rem 0}input{padding:.8rem;width:90%}</style><h1>Join this guild app</h1><p>Sign in with Discord to verify your server membership.</p><a href="/_auth/login">Continue with Discord</a><p>Or use your personal code from /buildpass in Discord. Codes expire in ten minutes and work once.</p><form action="/_auth/passcode" method="POST"><input name="code" autocomplete="one-time-code" required maxlength="24"><input type="hidden" name="nonce" value="${nonce}"><button>Use passcode</button></form>`,
+    `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title><style>body{margin:0;min-height:100dvh;font:17px/1.5 system-ui,sans-serif;background:#1e1f22;color:#f2f3f5}main{max-width:40rem;margin:0 auto;padding:10vh 1.25rem 2rem}.center{text-align:center}a.button,button{display:inline-block;margin-top:1rem;padding:.75rem 1.3rem;border:0;border-radius:8px;background:#5865f2;color:#fff;text-decoration:none;font:inherit;font-weight:600;cursor:pointer}p,small{color:#b5bac1}ul{list-style:none;padding:0}li{margin:.75rem 0;padding:1rem;border-radius:10px;background:#2b2d31}li a{color:#fff;font-weight:600;font-size:1.1rem}header{display:flex;justify-content:space-between;align-items:center;gap:1rem}header button{margin:0;background:#4e5058}</style><main>${body}</main></html>`,
     {
-      status: 401,
+      status,
       headers: {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
-        "set-cookie": cookie("__Host-rag-nonce", nonce, 600),
         "content-security-policy":
           "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+        "x-content-type-options": "nosniff",
       },
     },
   );
+}
+
+export function loginPage(back: string) {
+  return page(
+    "Sign in",
+    `<div class="center"><h1>Members only</h1><p>These apps were built for a Discord server. Sign in with Discord so we can check that you are a member.</p><a class="button" href="/_auth/login?back=${encodeURIComponent(back)}">Continue with Discord</a></div>`,
+    401,
+  );
+}
+
+const denied = () =>
+  page(
+    "Sign-in failed",
+    `<div class="center"><h1>Could not sign you in</h1><p>Only members of the Discord server can use these apps.</p><a class="button" href="/">Try again</a></div>`,
+    403,
+  );
+
+export function safeBack(value: string | null) {
+  return value && /^\/(?!\/)[^\\\s]*$/.test(value) && value.length < 512
+    ? value
+    : "/";
+}
+
+/** Handles /_auth/*; returns null for every other path. */
+export async function authRoute(request: Request, env: Env) {
+  const url = new URL(request.url);
+  if (!url.pathname.startsWith("/_auth/")) return null;
+  if (url.pathname === "/_auth/login" && request.method === "GET") {
+    const browser = token();
+    const state = await auth(env).begin({
+      browser,
+      back: safeBack(url.searchParams.get("back")),
+    });
+    const target = new URL("https://discord.com/oauth2/authorize");
+    target.search = new URLSearchParams({
+      client_id: env.DISCORD_CLIENT_ID,
+      redirect_uri: new URL("/_auth/callback", env.APP_ORIGIN).href,
+      response_type: "code",
+      scope: "identify guilds.members.read",
+      prompt: "none",
+      state,
+    }).toString();
+    return redirect(target.href, [cookie(BROWSER, browser, 600)]);
+  }
+  if (url.pathname === "/_auth/callback" && request.method === "GET") {
+    const state = url.searchParams.get("state") || "";
+    const code = url.searchParams.get("code") || "";
+    const result =
+      state && code
+        ? await auth(env).finish(state, cookies(request)[BROWSER] || "", code)
+        : null;
+    if (!result) return denied();
+    return redirect(result.back, [
+      cookie(SESSION, result.session, (result.expires - Date.now()) / 1000),
+      cookie(BROWSER, "", 0),
+    ]);
+  }
+  if (url.pathname === "/_auth/logout" && request.method === "POST") {
+    if (request.headers.get("origin") !== url.origin)
+      return new Response(null, { status: 403 });
+    await auth(env).close(cookies(request)[SESSION] || "");
+    return redirect("/", [cookie(SESSION, "", 0)]);
+  }
+  return new Response(null, { status: 404 });
+}
+
+/** The verified member for `guild`, or null. */
+export function currentMember(request: Request, env: Env, guild: string) {
+  return auth(env).member(cookies(request)[SESSION] || "", guild);
 }

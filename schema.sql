@@ -106,3 +106,22 @@ CREATE TABLE IF NOT EXISTS rag_ai_spend_totals (
   event_count INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS build_requests (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL UNIQUE,
+    guild_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    requester_user_id TEXT NOT NULL,
+    prompt TEXT NOT NULL CHECK (length(prompt) BETWEEN 1 AND 6000),
+    status TEXT NOT NULL DEFAULT 'submitted',
+    revision INTEGER NOT NULL DEFAULT 1,
+    url TEXT,
+    thread_id TEXT,
+    thread_attempted INTEGER NOT NULL DEFAULT 0,
+    announced_revision INTEGER NOT NULL DEFAULT 0,
+    last_polled INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS build_requests_pending ON build_requests (announced_revision, revision, last_polled);
+CREATE UNIQUE INDEX IF NOT EXISTS build_requests_thread ON build_requests (thread_id) WHERE thread_id IS NOT NULL;

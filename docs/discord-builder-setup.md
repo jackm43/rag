@@ -1,207 +1,188 @@
-# Connect and deploy Discord Builder
+# Discord app builder
 
-The code is included in this repository. Setup needs Cloudflare, Discord,
-OpenAI and GitHub account configuration. No hosted Codex/Agents API integration
-is required: the pinned Codex SDK runs in Cloudflare Containers and calls the
-Responses API through a trusted credential-injecting outbound handler.
-
-## Account setup
-
-1. **Cloudflare:** enable Workers Paid, Containers, Durable Objects and R2 on
-   the bot's existing account. Choose an app domain in a Cloudflare-managed
-   zone. Add proxied wildcard DNS and ensure the certificate covers
-   `*.APP_DOMAIN` (including `login.APP_DOMAIN`). For nested subdomains this
-   may require an advanced certificate or a dedicated zone. Keep the R2 bucket
-   private: no `r2.dev` URL, public bucket or custom bucket domain.
-2. **OpenAI:** create a project API key permitted to use Responses and the
-   configured coding model. The default is `gpt-6-sol`; model and instructions
-   use `coding-agent.json` through the bot’s D1-backed ConfigStore. Each new build
-   or revision captures a fresh settings snapshot. This uses the OpenAI API account, not existing Cloudflare
-   model credits or a personal ChatGPT login.
-3. **Discord:** in the existing application's OAuth2 configuration, register
-   `https://login.APP_DOMAIN/_auth/callback` exactly. Supply its client secret
-   and the existing bot token. Grant View Channel, Send Messages, Create Public
-   Threads, and Send Messages in Threads in the channels used for builds. Login requests `identify guilds.members.read`;
-   no email scope. The bot must remain a member of the configured guild.
-4. **GitHub:** create a fine-grained token limited to the Ragbot repository,
-   with Contents read/write and Pull requests read/write. Configure the repo
-   and base branch. The token is used by the trusted Worker only. Protect the
-   base branch and require review; builds never merge or deploy Ragbot changes.
-   Leave GitHub Actions requiring maintainer approval for bot-created code;
-   do not expose CI/deployment secrets to generated code.
-5. **Deployment token:** the existing Cloudflare token needs Workers scripts,
-   Containers/image deployment, Durable Objects, R2, D1 migrations and routes
-   permissions for the configured account/zone. Docker Desktop must be running
-   when deploying the container image.
-
-## Supply configuration and deploy
-
-Copy `builder/.env.example` to `.env.builder` at the repository root. Set the
-non-secret domain/repository values and replace the `op://` references with
-your 1Password item references. Existing Discord and Cloudflare values are
-loaded from `.env`. Do not put resolved secrets in tracked files.
-
-```sh
-op run --env-file=.env --env-file=.env.builder -- uv run python scripts/setup_builder.py
-op run --env-file=.env --env-file=.env.builder -- uv run python scripts/setup_builder.py --apply
-```
-
-The first command validates settings. The second writes non-secret Wrangler
-settings, creates the private artifact bucket if absent, installs the locked
-builder dependencies, deploys the builder and container, uploads secrets,
-deploys the backward-compatible bot reader, applies additive D1 migrations,
-enables the service binding, regenerates types,
-and deploys Ragbot. It preserves the existing gateway and resource IDs.
-If a stage fails, fix account permissions/configuration and rerun; successful
-stages can be repeated. A live provider smoke test remains necessary after
-account setup; local verification uses fake providers and spends nothing.
-
-When ready to expose the new commands, explicitly run:
-
-```sh
-op run --env-file=.env -- pnpm run register:commands
-```
-
-Command registration is deliberately separate, following this repository's
-registration rule. Build mentions work after deployment without registration.
+Members ask Ragbot for a web app in Discord and get a link to a working app
+that only members of the server can open. Anything that runs in a browser is
+fair game: a one-off site, a multiplayer game, a three.js demo, a tool.
 
 ## Using it
 
-- `@ragbot build a wordle clone we can play together` or `/build prompt:...`:
-  create a build and a named workspace thread within the originating text channel.
-  Ragbot links the thread in its reply and posts progress and the app URL there.
-  Threads inherit the parent channel’s visibility; a private channel stays private.
-- `/feature prompt:...`: implement a repository change and open a draft PR.
-- `/buildstatus request:...`: refresh status and show the current release URL.
-- `/buildedit request:... prompt:...`: build a revision from the saved source.
-  Requester and Mods can manage builds. A failed revision keeps the old app live.
-- `/buildcancel request:...`: stop an active build. Once publication starts,
-  wait for it to finish and then roll back or delete; a committed publication
-  cannot be cancelled halfway through.
-- `/buildrollback request:... revision:...`: restore an earlier site release.
-- `/buildpass request:...`: receive an **ephemeral**, personal, one-use code.
-  Enter it on the app's login page within ten minutes. It represents the issuing
-  Discord member and must not be shared. Discord membership is checked again
-  on redemption and periodically during the session.
-- `/builddelete request:...`: remove the site, saved source and room data after
-  the build stops. Existing GitHub PRs remain for normal repository review.
-- `https://PROJECT.APP_DOMAIN/_source`: requester-only source download after
-  login. Feature-repository source is never served through an app hostname.
+- `@Ragbot build a pixel-art guestbook for the server` (or `/build prompt:...`)
+  in a server text channel. Ragbot opens a workspace thread, builds the app and
+  posts its link and a short summary there, usually within a few minutes.
+- In the thread, the app's owner or Mods mention Ragbot with a change:
+  `@Ragbot make the board bigger and add sound`. Each change is a new revision
+  at the same URL; the previous version stays live until the new one is ready,
+  and stays live if the change fails. `@Ragbot status` reports progress. Other
+  messages in the thread are ordinary discussion.
+- `/buildstatus`, `/buildedit`, `/buildcancel`, `/buildrollback revision:N` and
+  `/builddelete` manage an app. In its thread no ID is needed; elsewhere use the
+  build ID from the channel where it was requested.
+- `https://apps.jsmunro.me/` lists the server's apps after signing in.
 
-### Request changes in the app thread
+## How it works
 
-The app owner or Mods can write `@ragbot fix the keyboard after an invalid guess`
-or `@ragbot add a leaderboard`. Ragbot resolves the app from the thread, builds
-from its saved source and publishes a revision at the same URL. Other members
-can discuss bugs there; only the owner and Mods can trigger changes. Mention the
-actual bot, rather than typing its name as plain text. Ordinary discussion does
-not start a build. `@ragbot status` reports progress.
-
-Inside the workspace, omit `request:` from `/buildstatus`, `/buildedit`,
-`/buildcancel`, `/buildrollback`, `/buildpass` and `/builddelete`. Passcodes remain
-ephemeral. Outside it, use the original request ID from the originating channel.
-An in-progress build must finish or be cancelled before another edit starts;
-follow-up requests are not silently queued.
-
-For an existing app, `/buildstatus request:ID` in its original channel creates
-and links its workspace on first use. Apply migration `0007_build_threads.sql`
-before deploying this version, and register the updated slash-command definitions
-when ready. The setup script applies migrations automatically.
-
-If thread creation fails, the app build continues and the ID-based commands stay
-available. Ambiguous Discord POST failures are never automatically retried. Builds
-requested inside an existing thread or a non-text channel do not create broader
-sibling threads; use ID-based commands there. Archived workspace threads can be
-reopened in Discord, subject to channel permissions.
-
-Discord documents [thread permission inheritance](https://github.com/discord/discord-api-docs/blob/main/developers/topics/permissions.mdx).
-
-## Implemented application runtime
-
-Generated apps use HTML, CSS, JavaScript, JSON and SVG assets, served from R2
-behind authentication. They can implement games, dashboards, tools and other
-browser experiences with durable shared data. Every project has its own origin.
-The agent receives documented host APIs:
-
-- `GET /_room/NAME` → `{version, data}`.
-- `PUT /_room/NAME` with `{version, data}` → updated state; stale versions return
-  HTTP 409. State is shared by authenticated project members; keep secrets out
-  of this general-purpose room data. Maximum request body: 32 KB.
-- `GET /_wordle/NAME` → shared board; the answer is hidden until the round ends.
-- `POST /_wordle/NAME` with `{version, guess}` → validated move, or HTTP 409
-  after a concurrent move. `{version, reset:true}` starts a new completed-round
-  game. Guesses accept five-letter alphabetic words; the built-in answer list
-  is intentionally compact.
-
-Clients poll for changes (the starter uses two seconds). This release does not
-host arbitrary generated server processes or external integrations. Those are
-outside the supported app runtime, not account-configuration steps. The coding
-agent can change the browser app and use the supplied durable APIs; it cannot
-change the trusted authentication or room services. No Workers for Platforms
-subscription is needed for this runtime.
-
-## Isolation and operations
-
-The Python bot remains the gateway/Discord application. A new TypeScript
-`ragbot-builder` Worker owns project, auth, room and container Durable Objects,
-and a private R2 bucket. One container runs each project revision. Build polling
-uses DO alarms; bot progress reconciliation runs each minute while gateway
-maintenance retains its 15-minute cadence. No public job-control HTTP endpoint
-exists; control uses a named service-binding entrypoint.
-
-Containers run generated code as UID 1000; the supervisor runs separately.
-The OpenAI key is injected outside the container at the fixed provider endpoint.
-Container egress permits only the model broker and package/source download
-hosts. GitHub and Discord credentials never enter the container. External app
-requests are limited by CSP to the app's own origin. Membership checks fail
-closed and repeat at most five minutes apart. Sessions expire within eight hours.
-
-Artifacts are bounded text bundles (up to 500 source files and 4 MiB collected
-source; total exported payload at most 6 MiB), with symlink/path checks. Build
-execution has a 40-minute lifecycle deadline. Container capacity is configured
-in Wrangler; this does not add a bot AI budget or request quota. No spend data
-is recorded. A capacity/runner error leaves a failed request that can be retried
-with `/buildedit`.
-
-Feature builds run the repository's check, test and runtime-test commands in the
-container. Changes to CI, deployment, migrations, authentication entrypoints and
-builder infrastructure are rejected by the publisher; those changes need normal
-maintainer development. Draft PRs use deterministic branch names and are looked
-up before creation so an uncertain response can be reconciled.
-
-Keep successful app/source revisions until project deletion. Request prompts are
-redacted in D1 after 30 days and in the builder 30 days after completion. Failed
-artifacts and staging inputs are removed after 24 hours. Short-lived auth state and sessions
-are cleaned by alarms. Roll back by disabling the builder on this code version; pre-builder code does
-not understand the expanded settings snapshot. Disable `BUILDER_ENABLED` to stop new submissions from
-the bot; cancel existing jobs individually before suspending the builder.
-
-## Local verification
-
-```sh
-pnpm install
-pnpm --dir builder install --frozen-lockfile
-pnpm run check
-pnpm test
-pnpm run test:runtime
-pnpm --dir builder check
-pnpm --dir builder test
-node --test builder/runner/server.test.mjs
-pnpm --dir builder dry-run
-uv run pywrangler deploy --dry-run
-
-docker build -t ragbot-builder-local builder
-docker run --rm --network none \
-  -v "$PWD/builder/test/container-smoke.mjs:/test/container-smoke.mjs:ro" \
-  ragbot-builder-local node /test/container-smoke.mjs
+```text
+Discord ── ragbot-worker (Python) ──service binding──▶ ragbot-builder (TypeScript)
+             D1 build_requests                           BuilderControl  (RPC only)
+             cron: post results once                     Project DO      one per app: builds, revisions, rollback
+                                                         BuildContainer  Cloudflare Container: supervisor + Codex
+                                                           └─ egress ──▶ AI Gateway (token added here) / npm only
+                                                         R2 (private)    published files + source per revision
+                                                         Auth DO         Discord OAuth state and sessions
+                                                         Rooms DO        one per app: WebSocket rooms, shared state
+                                                         Directory DO    URL slugs and the hub listing
+Browser ─────────────────────────────────────────────▶ https://apps.jsmunro.me/<app>/  (members only)
 ```
 
-Use the repository-local uv (0.12.3+) if the system uv is older. Workerd tests
-exercise job persistence, duplicate delivery, OAuth state/tickets, membership
-revocation, project isolation, two-member room concurrency and rollback with
-fake external services. The Docker smoke runs the real Codex binary against a
-local fake Responses endpoint, then runs tests and collects the starter app.
-It does not measure real model build quality or validate account permissions.
-After connecting accounts, submit one site and one feature request, verify login
-with two guild members and denial for a non-member, and check that the PR stays
-a draft and the production bot is unchanged.
+1. The bot records the request in D1 (idempotent per Discord message) and calls
+   `BuilderControl.submit`. The builder has no public control routes.
+2. The app's `Project` Durable Object starts a container for the revision. The
+   supervisor copies the template (`builder/template`), restores the previous
+   revision's source for a change, and runs Codex as an unprivileged user with
+   the template's `AGENTS.md` as its instructions. Codex may run `npm install`,
+   `npm run build` and `npm test`; if the checks fail it gets two attempts to
+   fix them. The supervisor then re-runs the build and tests itself, stops
+   anything the agent left running, and lists `dist/`.
+3. The Durable Object validates the file list (paths, 400 files, 10 MiB each,
+   25 MiB total), copies the files and a source archive to R2, and marks the
+   revision live. Builds that fail, time out (45 minutes) or lose their
+   container more than twice are reported as failed.
+4. The bot's per-minute cron polls unfinished builds and posts each result once
+   (claimed in D1 first, so an uncertain Discord POST is never repeated). Model
+   written titles and summaries pass through the reply policy: no mentions,
+   raw IDs or link embeds.
+
+## Inference through AI Gateway
+
+There is no OpenAI API key anywhere. Codex in the container is configured the
+way Cloudflare documents for Codex: a Responses API provider at
+`https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/openai`, with a
+placeholder key. Every request the container makes is intercepted by the
+builder Worker's outbound handler, which for that path only:
+
+- drops the placeholder `Authorization` header (and any `x-api-key` or cookie),
+- adds `cf-aig-authorization: Bearer $CF_AIG_TOKEN` and `cf-aig-metadata`,
+- pins `model` to `CODING_MODEL`, and forwards the stream unbuffered.
+
+AI Gateway then bills the request through Unified Billing credits, or uses an
+OpenAI key stored on the gateway (BYOK) if one is configured. Neither needs a
+code change. The only other host a build can reach is `registry.npmjs.org`
+(reads only); everything else is refused, so the container holds no secrets and
+cannot send data anywhere else.
+
+`CODING_MODEL` (default `gpt-5.5`) and `CODING_REASONING_EFFORT` are Wrangler
+vars in `builder/wrangler.jsonc`. Codex works with OpenAI Responses models.
+Unified Billing allows 200 requests per minute per gateway, so consider a
+dedicated gateway for builds (`AI_GATEWAY_ID`). Spend limits, if wanted, are
+configured on the gateway rather than in this code. Gateway logs include
+prompts and generated code.
+
+## Access: Discord members only
+
+- The only way in is Discord OAuth (`identify guilds.members.read`, `prompt=none`
+  so returning members skip the consent screen). Login state is single-use,
+  bound to the browser and expires in ten minutes. A session is issued only to
+  a full (not pending) member of a configured guild.
+- Membership of the app's guild is checked again at least every five minutes
+  using the member's own token; a failed or denied check ends access.
+- Every path under an app requires it: pages, assets, `_api`, and WebSocket
+  upgrades. Anything that changes state, including WebSocket upgrades, must come
+  from the apps origin (`Origin` check). Cookies are `__Host-`, `Secure`,
+  `HttpOnly`, `SameSite=Lax` and last at most eight hours.
+- The Worker answers only on `APP_ORIGIN`: `workers_dev` and preview URLs are
+  off, and the R2 bucket stays private.
+- All apps share one origin, so one sign-in covers them all. The trade-off is
+  that an app's code runs as the signed-in member on that origin and could call
+  another app's room API. Every viewer is already a verified member, so this
+  stays inside the server; room state is not a place for secrets.
+
+## What generated apps can use
+
+The agent-facing contract is `builder/template/AGENTS.md`; the host SDK is
+`builder/template/src/ragbot.js`.
+
+- Vite and any npm packages (three.js is pre-cached in the image). Output is
+  served from `/<app>/` with relative URLs, so apps use `base: "./"`.
+- Content security policy: scripts, styles, fonts, media and connections to the
+  apps origin only, plus Discord avatar images. No CDNs or third-party APIs.
+- `GET ./_api/me` → `{id, name, avatar}` for the signed-in member.
+- Realtime rooms at `./_api/rooms/<name>` (WebSocket): presence (`join`/`leave`),
+  relayed messages (up to 64 KiB, not stored) and shared JSON state (up to
+  128 KiB, stored, with versioned updates and conflict detection). `GET` and
+  `PUT` on the same path read and write the state over HTTP.
+- There is no generated server code: rooms relay and store but do not enforce
+  game rules. Server-side logic per app would be a natural next step with
+  Dynamic Workers and Durable Object Facets.
+
+## One-time setup
+
+1. **Cloudflare.** Workers Paid (for Containers) and R2 on the bot's account.
+   The builder serves `apps.jsmunro.me` as a Worker custom domain (Wrangler
+   creates the DNS record and certificate on deploy). To use another host,
+   change `APP_ORIGIN` and `routes` in `builder/wrangler.jsonc` together.
+2. **AI Gateway.** Use the existing `platy` gateway or create one for builds and
+   set `AI_GATEWAY_ID`. Authentication must be on. Either buy Unified Billing
+   credits or add an OpenAI provider key to the gateway. `CF_AIG_TOKEN` (the
+   bot's existing token) needs the AI Gateway Run permission.
+3. **Discord.** In the application's OAuth2 settings add the redirect
+   `https://apps.jsmunro.me/_auth/callback` and store the client secret in
+   1Password. In build channels the bot needs View Channel, Send Messages,
+   Create Public Threads and Send Messages in Threads.
+4. **Deploy the builder.** Copy `builder/.env.example` to `.env.builder` at the
+   repository root, point it at the client secret, then run (Docker must be
+   running; the container image is built locally):
+
+   ```sh
+   op run --env-file=.env --env-file=.env.builder -- uv run python scripts/setup_builder.py
+   ```
+
+   It creates the private bucket if needed, deploys the Worker and container,
+   and uploads `DISCORD_CLIENT_SECRET` and `CF_AIG_TOKEN` as secrets.
+5. **Connect the bot.** Apply the D1 migration, set `BUILDER_ENABLED` to `"true"`
+   in `wrangler.jsonc`, deploy, and register commands when you want them:
+
+   ```sh
+   op run --env-file=.env -- pnpm run d1:migrate:remote
+   op run --env-file=.env -- pnpm run deploy
+   op run --env-file=.env -- pnpm run register:commands
+   ```
+
+Setting `BUILDER_ENABLED` back to `"false"` stops new builds; published apps keep
+working. The cron runs every minute for build results; gateway maintenance keeps
+its fifteen-minute cadence.
+
+## Verification
+
+```sh
+pnpm --dir builder check                 # TypeScript
+pnpm --dir builder test                  # Workers runtime: builds, auth, rooms, egress
+node --test builder/runner/server.test.mjs
+pnpm test                                # bot: intake, threads, mentions, commands, results
+pnpm --dir builder e2e                   # everything together, see below
+```
+
+`pnpm --dir builder e2e` needs Docker, `openssl`, a Chromium build for
+Playwright (`npx playwright@1.56.1 install chromium`, or set `E2E_CHROMIUM`)
+and permission to bind port 443. It builds the real image and runs the builder
+under `wrangler dev` with Cloudflare's local container egress interception.
+Only AI Gateway and Discord are replaced, by local fakes (`builder/test`), and
+the fake model drives the real Codex binary through tool calls. It checks:
+
+- the build publishes a three.js app, and every model request reached "AI
+  Gateway" with `cf-aig-authorization` and without the placeholder key;
+- anonymous, cross-site and path-traversal requests are refused;
+- two members sign in through the Discord OAuth redirect flow, see each other's
+  presence and share state live in real browsers, and the state survives a
+  reload;
+- a non-member is refused a session;
+- only the owner or a Mod can manage the app;
+- a revision restores the saved source, then rolls back;
+- deletion removes the app and its hub entry.
+
+`builder/test/container-smoke.mjs` runs the image alone with networking
+disabled. In a build environment that intercepts TLS, pass its CA as the
+`E2E_BUILD_CA` path (or `docker build --secret id=ca,src=...`).
+
+Real model quality, AI Gateway billing and the live Discord application still
+need checking after deployment: request one app, open it as two members and as
+a non-member, request a change, and delete it.

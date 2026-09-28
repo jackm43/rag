@@ -49,16 +49,7 @@ class Default(WorkerEntrypoint):
             if interaction.get("type") != 2:
                 return Response(status=400)
             wait_until(self.ctx, self.app.dispatch(interaction))
-            return json_response(
-                {
-                    "type": 5,
-                    **(
-                        {"data": {"flags": 64}}
-                        if interaction.get("data", {}).get("name") == "buildpass"
-                        else {}
-                    ),
-                }
-            )
+            return json_response({"type": 5})
         controls = {
             ("POST", "/gateway/start"): "start",
             ("POST", "/gateway/stop"): "stop",

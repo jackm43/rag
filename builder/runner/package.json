@@ -4,6 +4,5 @@
   "type": "module",
   "dependencies": {
     "@openai/codex-sdk": "0.157.1"
-  },
-  "packageManager": "pnpm@10.33.2"
+  }
 }
