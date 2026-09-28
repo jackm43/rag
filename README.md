@@ -10,7 +10,26 @@ Commands: `/rag`, `/ragboard`, `/raghammer`, `/ragunban`, `/undorag`, `/ask`,
 
 Discord interaction signatures and gateway control bearer tokens are verified at
 the external edges. Denials have empty bodies. Commands, mentions, AI calls, and
-replies run in-process; there are no internal queues or services.
+ordinary chat replies run in-process. App builds use the separate builder service.
+
+## Discord app builder
+
+Members can say `@ragbot build a three.js galaxy we can fly through` (or use
+`/build`) and get a link to a working web app that only members of the server
+can open. Ragbot opens a workspace thread for each app; there the owner or Mods
+mention Ragbot with changes, and each change becomes a new revision at the same
+URL. `/buildstatus`, `/buildedit`, `/buildcancel`, `/buildrollback` and
+`/builddelete` manage apps.
+
+The separate `builder/` TypeScript Worker does the work: a coding agent runs in
+a Cloudflare Container with inference through AI Gateway (no provider API key),
+apps are served from private R2 at `https://apps.jsmunro.me/<app>/` behind
+Discord login and guild-membership checks, Durable Objects provide realtime
+multiplayer rooms, and an app's optional server rules (hidden answers, private
+hands) run sandboxed in Dynamic Workers. See the
+[setup and runtime guide](docs/discord-builder-setup.md) and the
+[requirements](docs/discord-builder-prd.md). `BUILDER_ENABLED` stays `false`
+until setup is done; apply migration 0004 before enabling it.
 
 ## Setup
 

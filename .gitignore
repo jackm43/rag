@@ -21,3 +21,8 @@ src/vendor/
 .venv-workers/
 python_modules/
 pylock.toml
+
+# Local builder integration references and Wrangler secret files
+.env.builder
+builder/.dev.vars*
+builder/.env.local*

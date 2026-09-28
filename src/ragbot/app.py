@@ -5,8 +5,9 @@ import re
 import time
 
 from .ai import Attribution, Inference
+from .builds import Builds, BuildScope, build_guild, status_text
 from .commands import COMMANDS, CommandContext
-from .commands.registry import ADMIN_IDS
+from .commands.registry import ADMIN_IDS, MODS_ROLE_ID
 from .config import ConfigStore
 from .conversation import ChatJob, display_name, message_text, process_chat, strip_mentions
 from .db import Database, guild_allowed
@@ -26,6 +27,7 @@ class Application:
         self.db = Database(env.DB)
         self.discord = DiscordClient(env.DISCORD_BOT_TOKEN, transport)
         self.config = config if config is not None else ConfigStore(env)
+        self.builds = Builds(self.db, env)
         self.ai = Inference(env, self.db, self.config, transport)
 
     async def dispatch(self, interaction: dict):
@@ -68,11 +70,57 @@ class Application:
             except Exception:
                 log.warning("command_failure_notice_failed")
 
+    async def build_mention(self, message: dict, bot_user_id: str) -> bool:
+        """`@Ragbot build ...` anywhere, or any mention inside an app's workspace
+        thread, goes to the builder instead of chat. Returns True if handled."""
+        directed = re.fullmatch(
+            rf"<@!?{re.escape(bot_user_id)}>\s+([\s\S]+)", message.get("content", "").strip()
+        )
+        if (
+            not directed
+            or message.get("webhook_id")
+            or not build_guild(self.env, message.get("guild_id"))
+        ):
+            return False
+        roles = (message.get("member") or {}).get("roles")
+        try:
+            scope = BuildScope(
+                message["guild_id"],
+                message["channel_id"],
+                message["author"]["id"],
+                isinstance(roles, list) and MODS_ROLE_ID in roles,
+            )
+        except KeyError, ValueError:
+            return False
+        text = directed[1].strip()
+        request = re.fullmatch(r"build\s+([\s\S]+)", text, re.IGNORECASE)
+        try:
+            if request:
+                reply = await self.builds.start(
+                    scope, message["id"], request[1], display_name(message), self.discord
+                )
+            else:
+                project = await self.builds.in_thread(scope)
+                if project is None:
+                    return False
+                if text.lower() in ("status", "progress", "help"):
+                    reply = status_text(await self.builds.refresh(project))
+                else:
+                    reply = await self.builds.change(scope, project, text, message["id"])
+        except Exception:
+            # Fail closed: never let a build request fall through to chat.
+            log.warning("build_mention_failed")
+            reply = "I couldn't handle that build request. Try again in a moment."
+        await self.discord.post_message(scope.channel_id, reply, reply_to=message["id"])
+        return True
+
     async def handle_message(self, message: dict, bot_user_id: str | None):
         if not is_message(message) or (message.get("author") or {}).get("bot") or not bot_user_id:
             return
         guild_id = message.get("guild_id")
         if not guild_allowed(self.env, guild_id) or not strip_mentions(message.get("content", "")):
+            return
+        if await self.build_mention(message, bot_user_id):
             return
         started_at = time.monotonic()
         try:

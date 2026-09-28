@@ -1,0 +1,10 @@
+**
+!Dockerfile
+!runner/package.json
+!runner/package-lock.json
+!runner/server.mjs
+!runner/agent.mjs
+!runner/entrypoint.sh
+!template/
+template/node_modules
+template/dist

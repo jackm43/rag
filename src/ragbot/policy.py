@@ -3,6 +3,14 @@
 import re
 
 
+def suppress_mentions(text: str) -> str:
+    text = re.sub(r"<@[!&]?[0-9]+>", "", text)
+    text = re.sub(r"\b[0-9]{17,20}\b", "", text)
+    text = re.sub(r"@(everyone|here)", r"\1", text)
+    text = "\n".join(re.sub(r"[ \t]+", " ", line).strip() for line in text.split("\n"))
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
 def sanitize_ai_text(value: str) -> str:
     lines = value.lstrip("\n \t\r").split("\n")
     if lines:
@@ -10,12 +18,7 @@ def sanitize_ai_text(value: str) -> str:
         colon = first.find(":")
         if 0 < colon <= 32 and first[colon + 1 :].lstrip():
             lines[0] = first[colon + 1 :].lstrip()
-    text = "\n".join(lines)
-    text = re.sub(r"<@[!&]?[0-9]+>", "", text)
-    text = re.sub(r"\b[0-9]{17,20}\b", "", text)
-    text = re.sub(r"@(everyone|here)", r"\1", text)
-    text = "\n".join(re.sub(r"[ \t]+", " ", line).strip() for line in text.split("\n"))
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
+    return suppress_mentions("\n".join(lines))
 
 
 def suppress_url_embeds(text: str) -> str:

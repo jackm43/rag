@@ -13,11 +13,13 @@
     }
   ],
   "vars": {
+    "BUILDER_ENABLED": "false",
     "DISCORD_APPLICATION_ID": "1496842508251172895",
     "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
     "ALLOWED_GUILD_IDS": "457689460096630794",
     "CF_AIG_GATEWAY_ID": "platy"
   },
+  "services": [{"binding": "BUILDER", "service": "ragbot-builder", "entrypoint": "BuilderControl"}],
   "d1_databases": [
     {
       "binding": "DB",
@@ -62,7 +64,7 @@
   ],
   "triggers": {
     "crons": [
-      "*/15 * * * *"
+      "* * * * *"
     ]
   },
   "build": {

@@ -184,6 +184,7 @@ def main():
                 assert result["interactions"][0]["response_text"] == "hello <https://example.com>"
                 assert result["spend"] == []
                 assert result["multipart"] is True
+                assert result["build_intake"] is True
                 status, body = request(base, "/test/settings")
                 assert status == 200 and json.loads(body)["refreshed"] is True
                 status, body = request(base, "/test/gateway")

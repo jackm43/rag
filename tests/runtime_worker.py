@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 from production import Default as ProductionDefault
 from production import DiscordGateway as ProductionGateway
-from workers import Response
+from workers import Response, WorkerEntrypoint
 
 from ragbot.app import Application
 from ragbot.gateway import Socket, gateway_stub
@@ -280,6 +280,42 @@ class Default(ProductionDefault):
         posted = calls[-1]["data"]
         assert posted["message_reference"]["message_id"] == "123456789012345710"
         assert posted["allowed_mentions"] == {"parse": [], "replied_user": False}
+        build_interaction = {
+            **interaction,
+            "id": "123456789012345720",
+            "data": {
+                "name": "build",
+                "options": [{"name": "prompt", "value": "A multiplayer word game"}],
+            },
+        }
+        await app.dispatch(build_interaction)
+        await app.dispatch(build_interaction)
+        builds = await app.db.all("SELECT id, status FROM build_requests")
+        assert len(builds) == 1 and builds[0]["status"] == "submitted"
+        assert "as soon as the builder is available" in calls[-1]["data"]["content"]
+        await app.dispatch(
+            {
+                **interaction,
+                "data": {
+                    "name": "buildstatus",
+                    "options": [{"name": "request", "value": builds[0]["id"]}],
+                },
+            }
+        )
+        assert "waiting for the builder" in calls[-1]["data"]["content"]
+        # Real RPC through a service binding, with Python values on both sides.
+        app.builds.env = SimpleNamespace(BUILDER=self.env.BUILDER, BUILDER_ENABLED="true")
+        row = (await app.db.all("SELECT * FROM build_requests"))[0]
+        assert (await app.builds.refresh(row))["status"] == "queued"
+        await app.builds.reconcile(app.discord)
+        result = calls[-1]["data"]["content"]
+        assert result.startswith(
+            "**Word game** is ready: <https://apps.example.com/word-game-1234/>"
+        )
+        assert "<@" not in result and "123456789012345678" not in result
+        await app.builds.reconcile(app.discord)
+        assert calls[-1]["data"]["content"] == result
+
         from ragbot.discord import Attachment
 
         async def multipart(url, **options):
@@ -300,6 +336,7 @@ class Default(ProductionDefault):
                 "interactions": await app.db.all("SELECT * FROM rag_ai_interactions"),
                 "spend": await app.db.all("SELECT * FROM rag_ai_spend_events"),
                 "multipart": True,
+                "build_intake": True,
             }
         )
 
@@ -329,3 +366,26 @@ class DiscordGateway(ProductionGateway):
         result["stopped"] = await self.gateway.ensure_connected()
         await self.gateway.alarm()
         return result
+
+
+class BuilderTest(WorkerEntrypoint):
+    async def submit(self, value):
+        from ragbot.runtime import to_python
+
+        value = to_python(value)
+        assert value["guild_id"] == "457689460096630794"
+        assert value["prompt"] == "A multiplayer word game" and value["moderator"] is False
+        return {"status": "queued", "revision": 1, "releases": []}
+
+    async def status(self, value):
+        from ragbot.runtime import to_python
+
+        assert set(to_python(value)) == {"id", "guild_id", "channel_id", "user_id", "moderator"}
+        return {
+            "status": "ready",
+            "revision": 1,
+            "active": 1,
+            "url": "https://apps.example.com/word-game-1234/",
+            "title": "Word game",
+            "summary": "Play with <@123456789012345678> now.",
+        }

@@ -1,0 +1,48 @@
+{
+  "name": "ragbot-builder",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-22",
+  "compatibility_flags": ["nodejs_compat"],
+  // Apps are reachable only on APP_ORIGIN; no workers.dev or preview URLs.
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "apps.jsmunro.me", "custom_domain": true }],
+  "vars": {
+    "APP_ORIGIN": "https://apps.jsmunro.me",
+    "ALLOWED_GUILD_IDS": "457689460096630794",
+    "DISCORD_CLIENT_ID": "1496842508251172895",
+    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
+    "AI_GATEWAY_ID": "platy",
+    "CODING_MODEL": "gpt-5.5",
+    "CODING_REASONING_EFFORT": "medium",
+  },
+  // Secrets: DISCORD_CLIENT_SECRET, CF_AIG_TOKEN (AI Gateway Run token).
+  "containers": [
+    {
+      "class_name": "BuildContainer",
+      "image": "./Dockerfile",
+      "instance_type": "standard-2",
+      "max_instances": 5,
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "RUNNERS", "class_name": "BuildContainer" },
+      { "name": "PROJECTS", "class_name": "Project" },
+      { "name": "AUTH", "class_name": "Auth" },
+      { "name": "ROOMS", "class_name": "Rooms" },
+      { "name": "DIRECTORY", "class_name": "Directory" },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["BuildContainer", "Project", "Auth", "Rooms", "Directory"],
+    },
+  ],
+  // Runs each app's optional server logic (server/room.js) in its own isolate.
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "ragbot-build-artifacts" }],
+  // Invocation logs would record OAuth callback URLs.
+  "observability": { "enabled": false },
+}

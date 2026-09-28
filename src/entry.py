@@ -69,6 +69,14 @@ class Default(WorkerEntrypoint):
 
     async def scheduled(self, controller, env, ctx):
         try:
+            await self.app.builds.reconcile(self.app.discord)
+        except Exception:
+            log.error("build_reconcile_failed")
+        # The build reconciler ticks every minute; preserve the gateway's 15-minute cadence.
+        scheduled = getattr(controller, "scheduledTime", None)
+        if scheduled is not None and int(scheduled / 60000) % 15:
+            return
+        try:
             await gateway_stub(self.env).ensure_connected()
         except Exception:
             log.error("gateway_ensure_connected_failed")
