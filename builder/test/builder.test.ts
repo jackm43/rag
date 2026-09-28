@@ -572,36 +572,40 @@ describe("Discord login and access", () => {
   });
 });
 
-describe("rooms", () => {
-  async function socket(slug: string, cookie: string) {
-    const response = await worker.fetch(
-      new Request(`${ORIGIN}/${slug}/_api/rooms/lobby`, {
-        headers: { cookie, origin: ORIGIN, upgrade: "websocket" },
-      }),
-      e,
-    );
-    expect(response.status).toBe(101);
-    const ws = response.webSocket!;
-    const inbox: any[] = [];
-    ws.addEventListener("message", (event) =>
-      inbox.push(JSON.parse(event.data as string)),
-    );
-    ws.accept();
-    const next = async (type: string) => {
-      for (let i = 0; i < 100; i++) {
-        const index = inbox.findIndex((m) => m.t === type);
-        if (index >= 0) return inbox.splice(index, 1)[0];
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      throw new Error(`no ${type} message`);
-    };
-    return {
-      ws,
-      next,
-      send: (value: unknown) => ws.send(JSON.stringify(value)),
-    };
-  }
+/** A room WebSocket through the real Worker, with every message it receives. */
+async function socket(slug: string, cookie: string, room = "lobby") {
+  const response = await worker.fetch(
+    new Request(`${ORIGIN}/${slug}/_api/rooms/${room}`, {
+      headers: { cookie, origin: ORIGIN, upgrade: "websocket" },
+    }),
+    e,
+  );
+  expect(response.status).toBe(101);
+  const ws = response.webSocket!;
+  const inbox: any[] = [];
+  const seen: string[] = [];
+  ws.addEventListener("message", (event) => {
+    seen.push(event.data as string);
+    inbox.push(JSON.parse(event.data as string));
+  });
+  ws.accept();
+  const next = async (type: string) => {
+    for (let i = 0; i < 100; i++) {
+      const index = inbox.findIndex((m) => m.t === type);
+      if (index >= 0) return inbox.splice(index, 1)[0];
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    throw new Error(`no ${type} message`);
+  };
+  return {
+    ws,
+    seen,
+    next,
+    send: (value: unknown) => ws.send(JSON.stringify(value)),
+  };
+}
 
+describe("rooms", () => {
   it("relays messages, tracks presence and versions shared state", async () => {
     const view = await build();
     const [alice, bob] = [await login(ALICE), await login(BOB)];
@@ -796,4 +800,159 @@ it("derives readable, stable slugs", () => {
   expect(slugFor("make a cool three.js demo", id)).toBe("cool-three-js-abcd");
   expect(slugFor("!!!", id)).toBe("app-abcd");
   expect(slugFor("x", id, 8)).toBe("x-abcdef01");
+});
+
+describe("server logic", () => {
+  const GAME = `
+export function join(room, peer) {
+  room.secret.answer ??= 42;
+  room.state ??= { guesses: 0, solved: null };
+  room.send(peer.sid, { hello: peer.name });
+}
+export function message(room, peer, data) {
+  if (data?.start) return room.wakeIn(100);
+  room.state = { ...room.state, guesses: room.state.guesses + 1 };
+  if (data.guess === room.secret.answer) {
+    room.state = { ...room.state, solved: peer.name };
+    room.broadcast({ winner: peer.name });
+  } else room.send(peer.sid, { hint: data.guess < room.secret.answer ? "higher" : "lower" });
+}
+export function leave(room, peer) {
+  room.state = { ...room.state, left: peer.name };
+}
+export function tick(room) {
+  room.state = { ...room.state, ticks: (room.state.ticks ?? 0) + 1 };
+  if (room.state.ticks < 2) room.wakeIn(100);
+}`;
+  const rooms = (id: string) => e.ROOMS.get(e.ROOMS.idFromName(id));
+
+  async function app(server: string) {
+    const id = fresh();
+    await runner(id).configure({ server });
+    const view = await build(id);
+    expect(await e.ARTIFACTS.head(`${id}/1/server.js`)).not.toBeNull();
+    return { id, view };
+  }
+
+  it("keeps secrets on the server and talks to players individually", async () => {
+    const { id, view } = await app(GAME);
+    expect(await e.ARTIFACTS.head(`${id}/1/site/server.js`)).toBeNull();
+    const [alice, bob] = [await login(ALICE), await login(BOB)];
+    const a = await socket(view.slug, alice.cookie);
+    expect((await a.next("welcome")).server).toBe(true);
+    expect(await a.next("message")).toMatchObject({
+      from: { sid: "server" },
+      data: { hello: "Alice" },
+    });
+    expect((await a.next("state")).state).toEqual({ guesses: 0, solved: null });
+    const b = await socket(view.slug, bob.cookie);
+    expect(await b.next("message")).toMatchObject({ data: { hello: "user2" } });
+
+    a.send({ t: "send", data: { guess: 10 } });
+    expect((await a.next("message")).data).toEqual({ hint: "higher" });
+    expect((await a.next("state")).state).toMatchObject({ guesses: 1 });
+    expect((await b.next("state")).state).toMatchObject({ guesses: 1 });
+    b.send({ t: "set", state: { guesses: 99 }, ref: "x" });
+    expect(await b.next("error")).toMatchObject({
+      error: "server_owned",
+      ref: "x",
+    });
+    b.send({ t: "send", data: { guess: 42 } });
+    expect((await a.next("message")).data).toEqual({ winner: "user2" });
+    expect((await a.next("state")).state).toMatchObject({
+      guesses: 2,
+      solved: "user2",
+    });
+
+    const url = `${ORIGIN}/${view.slug}/_api/rooms/lobby`;
+    const http = await (
+      await worker.fetch(
+        new Request(url, { headers: { cookie: alice.cookie } }),
+        e,
+      )
+    ).json<any>();
+    expect(http.state).toEqual({ guesses: 2, solved: "user2" });
+    const put = await worker.fetch(
+      new Request(url, {
+        method: "PUT",
+        headers: { cookie: alice.cookie, origin: ORIGIN },
+        body: JSON.stringify({ state: {} }),
+      }),
+      e,
+    );
+    expect(put.status).toBe(409);
+    // Only the logic ever sees the secret.
+    for (const message of [...a.seen, ...b.seen])
+      expect(message).not.toContain("answer");
+    expect(a.seen.join("")).not.toContain('user2","data":{"hint');
+
+    b.ws.close();
+    expect((await a.next("state")).state).toMatchObject({ left: "user2" });
+    a.ws.close();
+  });
+
+  it("delivers ticks while someone is connected", async () => {
+    const { id, view } = await app(GAME);
+    const a = await socket(view.slug, (await login(ALICE)).cookie, "clock");
+    await a.next("welcome");
+    a.send({ t: "send", data: { start: true } });
+    for (const ticks of [1, 2]) {
+      for (let i = 0; i < 50 && !(await runDurableObjectAlarm(rooms(id))); i++)
+        await new Promise((r) => setTimeout(r, 20));
+      await expect
+        .poll(async () => (await a.next("state")).state.ticks)
+        .toBe(ticks);
+    }
+    a.ws.close();
+  });
+
+  it("contains broken, slow or networked logic", async () => {
+    for (const code of [
+      "export function message() { throw new Error('bug'); }",
+      "export async function message() { await fetch('https://example.com/steal'); }",
+      "export function message(room) { room.state = 'x'.repeat(200000); }",
+      // CPU is capped by the platform (cpuMs); the host also bounds wall time.
+      "export function message() { return new Promise(() => {}); }",
+    ]) {
+      const { view } = await app(code);
+      const a = await socket(view.slug, (await login(ALICE)).cookie);
+      await a.next("welcome");
+      a.send({ t: "send", data: 1 });
+      expect(await a.next("error")).toMatchObject({ error: "server_error" });
+      const http = await (
+        await worker.fetch(
+          new Request(`${ORIGIN}/${view.slug}/_api/rooms/lobby`, {
+            headers: { cookie: (await login(ALICE)).cookie },
+          }),
+          e,
+        )
+      ).json<any>();
+      expect(http).toMatchObject({ version: 0, state: null });
+      a.ws.close();
+    }
+  });
+
+  it("ignores revision and identity headers sent by the browser", async () => {
+    const { view } = await app(GAME);
+    const { cookie } = await login(ALICE);
+    const response = await worker.fetch(
+      new Request(`${ORIGIN}/${view.slug}/_api/rooms/lobby`, {
+        headers: {
+          cookie,
+          "x-revision": "0",
+          "x-member": JSON.stringify({ id: BOB, name: "Bob", avatar: null }),
+        },
+      }),
+      e,
+    );
+    const put = await worker.fetch(
+      new Request(`${ORIGIN}/${view.slug}/_api/rooms/lobby`, {
+        method: "PUT",
+        headers: { cookie, origin: ORIGIN, "x-revision": "0" },
+        body: JSON.stringify({ state: 1 }),
+      }),
+      e,
+    );
+    expect([response.status, put.status]).toEqual([200, 409]);
+  });
 });

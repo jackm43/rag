@@ -27,6 +27,7 @@ export default defineConfig({
           RUNNERS: { className: "FakeRunner", useSQLite: true },
         },
         r2Buckets: ["ARTIFACTS"],
+        workerLoaders: { LOADER: {} },
       },
     }),
   ],

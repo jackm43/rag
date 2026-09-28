@@ -6,7 +6,7 @@ import http from "node:http";
 import { appendFileSync } from "node:fs";
 
 export const APP_SCRIPT = String.raw`set -e
-mkdir -p src test
+mkdir -p src test server
 cat > index.html <<'HTML'
 <!doctype html>
 <html lang="en">
@@ -20,6 +20,9 @@ cat > index.html <<'HTML'
     <p id="who" role="status">Connecting…</p>
     <p>Taps: <output id="taps">0</output></p>
     <button id="tap" type="button">Tap together</button>
+    <form id="guess-form"><input id="guess" type="number" aria-label="Guess the number" /><button>Guess</button></form>
+    <p id="hint" aria-live="polite"></p>
+    <p id="winner" aria-live="polite"></p>
     <ul id="peers"></ul>
     <script type="module" src="./src/main.js"></script>
   </body>
@@ -28,12 +31,24 @@ HTML
 cat > src/count.js <<'JS'
 export const increment = (state) => ({ ...state, taps: (state?.taps ?? 0) + 1 });
 JS
+cat > server/room.js <<'JS'
+import { increment } from "../src/count.js";
+export function join(room) {
+  room.secret.answer ??= 7;
+  room.state ??= { taps: 0, winner: null };
+}
+export function message(room, peer, data) {
+  if (data?.tap) room.state = increment(room.state);
+  if (typeof data?.guess !== "number") return;
+  if (data.guess === room.secret.answer) room.state = { ...room.state, winner: peer.name };
+  else room.send(peer.sid, { hint: data.guess < room.secret.answer ? "higher" : "lower" });
+}
+JS
 cat > src/main.js <<'JS'
 import * as THREE from "three";
 import { getMe, joinRoom } from "./ragbot.js";
-import { increment } from "./count.js";
-const canvas = document.getElementById("scene");
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+const $ = (id) => document.getElementById(id);
+const renderer = new THREE.WebGLRenderer({ canvas: $("scene"), antialias: true, preserveDrawingBuffer: true });
 renderer.setSize(320, 240, false);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, 4 / 3, 0.1, 100);
@@ -42,20 +57,35 @@ const cube = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshNormalMateria
 scene.add(cube);
 renderer.setAnimationLoop(() => { cube.rotation.x += 0.01; cube.rotation.y += 0.02; renderer.render(scene, camera); });
 const me = await getMe();
-document.getElementById("who").textContent = "Signed in as " + me.name;
+$("who").textContent = "Signed in as " + me.name;
 const room = joinRoom("party", {
-  onState: (state) => { document.getElementById("taps").textContent = String(state?.taps ?? 0); },
+  onState: (state) => {
+    $("taps").textContent = String(state?.taps ?? 0);
+    $("winner").textContent = state?.winner ? state.winner + " found the number!" : "";
+  },
+  onMessage: (data) => { if (data?.hint) $("hint").textContent = "Try " + data.hint; },
   onPeers: (peers) => {
-    document.getElementById("peers").replaceChildren(...peers.map((p) => Object.assign(document.createElement("li"), { textContent: p.name })));
+    $("peers").replaceChildren(...peers.map((p) => Object.assign(document.createElement("li"), { textContent: p.name })));
   },
 });
-document.getElementById("tap").addEventListener("click", () => room.setState(increment));
+$("tap").addEventListener("click", () => room.send({ tap: true }));
+$("guess-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  room.send({ guess: Number($("guess").value) });
+});
 JS
 cat > test/count.test.js <<'JS'
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { increment } from "../src/count.js";
+import * as logic from "../server/room.js";
 test("increments from empty state", () => assert.equal(increment(null).taps, 1));
+test("hints only to the guesser", () => {
+  const room = { state: null, secret: {}, sent: [], send(sid, data) { this.sent.push({ sid, data }); } };
+  logic.join(room);
+  logic.message(room, { sid: "a", name: "A" }, { guess: 1 });
+  assert.deepEqual(room.sent, [{ sid: "a", data: { hint: "higher" } }]);
+});
 JS
 npm install three
 npm run build
@@ -63,12 +93,12 @@ npm test`;
 
 // A later revision: proves the previous source was restored before the change.
 export const CHANGE_SCRIPT = String.raw`set -e
-test -f src/count.js
+test -f src/count.js && test -f server/room.js
 node -e 'const fs = require("fs"); fs.writeFileSync("index.html", fs.readFileSync("index.html", "utf8").replace("Spinning Cube Party</title>", "Spinning Cube Party v2</title>"))'
 npm run build`;
 
 const SUMMARY =
-  "Built Spinning Cube Party: a three.js cube with a shared tap counter. Everyone in the server sees the same count and who is online.";
+  "Built Spinning Cube Party: a three.js cube with a shared tap counter and a secret-number game the server referees. Everyone in the server sees the same count and who is online.";
 
 let sequence = 0;
 

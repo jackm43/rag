@@ -10,7 +10,8 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { manifest, titleOf } from "./server.mjs";
+import { spawnSync } from "node:child_process";
+import { bundleServer, manifest, SERVER_EVENTS, titleOf } from "./server.mjs";
 
 async function dist(files) {
   const root = await mkdtemp(path.join(tmpdir(), "ragbot-dist-"));
@@ -77,6 +78,54 @@ test("refuses a dist/ that links outside the app", async () => {
   }
 });
 
+async function app(files) {
+  const root = await dist(files);
+  // The bundler runs as the agent user (uid 1000) when tests run as root.
+  if (process.getuid?.() === 0) spawnSync("chown", ["-R", "1000:1000", root]);
+  return root;
+}
+
+test("bundles optional server logic with its imports", async () => {
+  const root = await app({
+    "server/room.js":
+      'import { score } from "../src/rules.js";\nexport function message(room, peer, data) { room.state = { score: score(data) }; }\nexport function join() {}',
+    "src/rules.js": "export const score = (n) => n * 2;",
+  });
+  try {
+    const bytes = await bundleServer(root, path.join(root, "out"));
+    const code = bytes.toString("utf8");
+    assert.match(code, /n \* 2/);
+    assert.match(code, /export\s*\{/);
+    assert.equal(
+      await bundleServer(await dist({}), path.join(root, "none")),
+      null,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects server logic the host cannot run", async () => {
+  for (const [code, pattern] of [
+    [
+      "export function message() {}\nexport const secret = 1;",
+      /also exports secret/,
+    ],
+    ["export const message = ;", /did not bundle/],
+    ["const x = 1;", /may only export/],
+  ]) {
+    const root = await app({ "server/room.js": code });
+    try {
+      await assert.rejects(
+        () => bundleServer(root, path.join(root, "out")),
+        pattern,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("reads the page title for Discord and the hub", () => {
   assert.equal(
     titleOf("<html><title> Tom &amp; Jerry&#39;s </title>"),
@@ -96,6 +145,9 @@ test("the template's platform contract matches the host", async () => {
   );
   assert.match(sdk, /_api\/rooms\//);
   assert.match(sdk, /_api\/me/);
+  assert.match(sdk, /this\.server = Boolean\(message\.server\)/);
+  for (const event of SERVER_EVENTS)
+    assert.match(agents, new RegExp(`export function ${event}\\(`));
   assert.match(agents, /never\s+`\/logo\.png`/);
   const vite = await readFile(
     new URL("../template/vite.config.js", import.meta.url),

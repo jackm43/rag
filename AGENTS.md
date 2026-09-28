@@ -112,3 +112,6 @@ coding agent and must match what the host serves.
 - `fetch` in Workers must not use `redirect: "error"` (unsupported); use
   `"manual"` and treat 3xx as failure.
 - The builder has no public control routes; the bot calls `BuilderControl`.
+- App server logic runs only in Dynamic Workers with `globalOutbound: null`, no
+  bindings, CPU limits and the host's wall-clock bound. It gets data in and
+  returns data out; never hand it storage, sockets or other bindings.

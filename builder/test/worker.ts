@@ -11,6 +11,7 @@ import { DurableObject } from "cloudflare:workers";
 // Stands in for BuildContainer (vitest cannot run containers). Speaks the
 // runner protocol; tests steer it through `configure`.
 type Setup = {
+  server?: string;
   files?: { path: string; body: string }[];
   phase?: string;
   error?: string;
@@ -34,23 +35,27 @@ export class FakeRunner extends DurableObject {
   }
   async fetch(request: Request) {
     const url = new URL(request.url);
+    // Read the body before touching storage, then record the call and its
+    // effect in one write, so a concurrent destroy() sees both or neither.
+    const body = request.method === "GET" ? "" : await request.text();
     const setup = {
       ...defaults,
       ...(await this.ctx.storage.get<Setup>("setup")),
     };
-    await this.ctx.storage.put("calls", [
+    const calls = [
       ...(await this.calls()),
       `${request.method} ${url.pathname}`,
-    ]);
+    ];
     if (url.pathname === "/source" && request.method === "PUT") {
-      await this.ctx.storage.put("seed", await request.text());
+      await this.ctx.storage.put({ calls, seed: body });
       return Response.json({});
     }
     if (url.pathname === "/start") {
-      const job = await request.json();
-      await this.ctx.storage.put({ job, started: job });
+      const job = JSON.parse(body);
+      await this.ctx.storage.put({ calls, job, started: job });
       return Response.json({}, { status: 202 });
     }
+    await this.ctx.storage.put("calls", calls);
     const job = await this.ctx.storage.get<{ seeded: boolean }>("job");
     if (url.pathname === "/status") {
       if (!job) return Response.json({ phase: "idle" });
@@ -64,6 +69,9 @@ export class FakeRunner extends DurableObject {
           path: file.path,
           size: new TextEncoder().encode(file.body).byteLength,
         })),
+        server: setup.server
+          ? new TextEncoder().encode(setup.server).byteLength
+          : 0,
       });
     }
     if (url.pathname.startsWith("/file/")) {
@@ -74,6 +82,8 @@ export class FakeRunner extends DurableObject {
         ? new Response(file.body)
         : new Response(null, { status: 404 });
     }
+    if (url.pathname === "/server" && setup.server)
+      return new Response(setup.server);
     if (url.pathname === "/source")
       return new Response(`source-of-${JSON.stringify(job)}`);
     return new Response(null, { status: 404 });

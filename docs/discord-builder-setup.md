@@ -30,6 +30,7 @@ Discord ── ragbot-worker (Python) ──service binding──▶ ragbot-buil
                                                          R2 (private)    published files + source per revision
                                                          Auth DO         Discord OAuth state and sessions
                                                          Rooms DO        one per app: WebSocket rooms, shared state
+                                                           └─ LOADER ──▶ Dynamic Worker: the app's server/room.js
                                                          Directory DO    URL slugs and the hub listing
 Browser ─────────────────────────────────────────────▶ https://apps.jsmunro.me/<app>/  (members only)
 ```
@@ -110,9 +111,38 @@ The agent-facing contract is `builder/template/AGENTS.md`; the host SDK is
   relayed messages (up to 64 KiB, not stored) and shared JSON state (up to
   128 KiB, stored, with versioned updates and conflict detection). `GET` and
   `PUT` on the same path read and write the state over HTTP.
-- There is no generated server code: rooms relay and store but do not enforce
-  game rules. Server-side logic per app would be a natural next step with
-  Dynamic Workers and Durable Object Facets.
+- Optional server logic in `server/room.js`, for rules players must not see or
+  bend (hidden answers, private hands, turn order, timers). It exports any of
+  `join`, `leave`, `message` and `tick`; see below.
+
+### Server logic
+
+The runner bundles `server/room.js` (with anything it imports) using esbuild,
+running as the agent user, and checks that it exports only the four handlers.
+The bundle is stored in R2 with the revision and never served as an asset.
+
+When a room of that app is used, the Rooms object loads the bundle into a
+[Dynamic Worker](https://developers.cloudflare.com/dynamic-workers/) (Worker
+Loader binding `LOADER`), one per app revision, with `globalOutbound: null` (no
+`fetch` or other network), no bindings, and a 100 ms CPU limit per event. The
+host also abandons any call after two seconds. Each event receives the room's
+public state and a private `secret`; the host validates what comes back (state
+128 KiB, secret 256 KiB, up to 200 messages of 64 KiB) and then stores it,
+broadcasts the state and delivers messages, to one connection or everyone.
+Events for one room run one at a time. A handler that throws, times out or
+returns something invalid changes nothing, and the sender gets `server_error`.
+
+With server logic, clients cannot write the state (`setState` and HTTP `PUT`
+are refused) and `room.send` goes to the logic instead of other players. `tick`
+runs after `room.wakeIn(ms)` from the Rooms object's alarm, only while someone
+is connected. Sockets keep the revision they connected with; after a new
+release or rollback, reconnecting picks up the new logic.
+
+Dynamic Workers are in open beta on Workers Paid and are billed per distinct
+Worker in use (here, one per app revision with server logic) beyond a monthly
+allowance, plus normal request and CPU pricing; check Cloudflare's Dynamic
+Workers pricing page before enabling it widely. Locally (`wrangler dev`,
+vitest) the CPU limit is not enforced; the wall-clock bound is.
 
 ## One-time setup
 
@@ -171,6 +201,9 @@ the fake model drives the real Codex binary through tool calls. It checks:
 - the build publishes a three.js app, and every model request reached "AI
   Gateway" with `cf-aig-authorization` and without the placeholder key;
 - anonymous, cross-site and path-traversal requests are refused;
+- server logic (a secret-number game): a guess gets a private hint the other
+  player never receives, the room state never contains the answer, clients
+  cannot overwrite server-owned state, and the logic survives a revision;
 - two members sign in through the Discord OAuth redirect flow, see each other's
   presence and share state live in real browsers, and the state survives a
   reload;

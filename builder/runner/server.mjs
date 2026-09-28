@@ -1,14 +1,16 @@
 // Build supervisor. Runs as root inside the container; the coding agent and
 // everything it starts run as the unprivileged `agent` user. The Worker drives
 // it over HTTP: PUT /source (optional seed), POST /start, GET /status, then
-// GET /file/<path> and GET /source to publish. No credentials exist here.
+// GET /file/<path>, GET /server and GET /source to publish. No credentials
+// exist here.
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import {
   chown,
   cp,
   lstat,
   mkdir,
+  open,
   readdir,
   readFile,
   realpath,
@@ -28,12 +30,16 @@ const RESULT = path.join(WORK, "result.json");
 const CA = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 const AGENT_UID = 1000;
 const PLATFORM_FILES = ["AGENTS.md", "src/ragbot.js"];
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const SERVER_ENTRY = "server/room.js";
+export const SERVER_EVENTS = ["join", "leave", "message", "tick"];
 
 export const LIMITS = {
   files: 400,
   file: 10 * 1024 * 1024,
   total: 25 * 1024 * 1024,
   source: 20 * 1024 * 1024,
+  server: 1024 * 1024,
 };
 const segment = /^[A-Za-z0-9_@+~-][A-Za-z0-9._@+~-]*$/;
 
@@ -74,6 +80,60 @@ export async function manifest(root) {
     throw new Error(`More than ${LIMITS.files} files in dist/`);
   if (total > LIMITS.total) throw new Error("dist/ is larger than 25 MiB");
   return files;
+}
+
+/** Read a regular file without following links the agent may have planted. */
+export async function readRegular(file) {
+  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    if (!(await handle.stat()).isFile())
+      throw new Error(`Not a regular file: ${file}`);
+    return await handle.readFile();
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Bundle the app's optional server/room.js into one module for the host to
+ * run. Returns null when there is none; throws a message meant for the agent.
+ */
+export async function bundleServer(app, outdir) {
+  if (!existsSync(path.join(app, SERVER_ENTRY))) return null;
+  const outfile = path.join(outdir, "room.js");
+  const metafile = path.join(outdir, "meta.json");
+  await rm(outdir, { recursive: true, force: true });
+  const built = await run(
+    path.join(HERE, "node_modules/.bin/esbuild"),
+    [
+      SERVER_ENTRY,
+      "--bundle",
+      "--format=esm",
+      "--platform=browser",
+      "--target=es2022",
+      `--outfile=${outfile}`,
+      `--metafile=${metafile}`,
+      "--log-level=error",
+    ],
+    { timeout: 120000, cwd: app },
+  );
+  if (built.code)
+    throw new Error(
+      `server/room.js did not bundle:\n${built.output.slice(-3000)}`,
+    );
+  await killAgentProcesses();
+  const meta = JSON.parse((await readRegular(metafile)).toString("utf8"));
+  const exported = Object.values(meta.outputs ?? {})[0]?.exports ?? [];
+  const unknown = exported.filter((name) => !SERVER_EVENTS.includes(name));
+  if (!exported.length || unknown.length)
+    throw new Error(
+      `server/room.js may only export ${SERVER_EVENTS.join(", ")}` +
+        (unknown.length ? `; it also exports ${unknown.join(", ")}` : ""),
+    );
+  const bytes = await readRegular(outfile);
+  if (bytes.length > LIMITS.server)
+    throw new Error("server/room.js bundles to more than 1 MiB");
+  return bytes;
 }
 
 export function titleOf(html) {
@@ -229,15 +289,23 @@ async function execute(job) {
     } catch {
       throw new Error("invalid_output");
     }
+    let server;
+    try {
+      server = await bundleServer(APP, path.join(WORK, "server-out"));
+    } catch {
+      throw new Error("server_invalid");
+    }
     const source = await tarball();
     const contents = new Map();
     for (const file of files) {
-      const bytes = await readFile(path.join(APP, "dist", file.path));
-      if (bytes.length !== file.size) throw new Error("invalid_output");
+      const bytes = await readRegular(path.join(APP, "dist", file.path)).catch(
+        () => null,
+      );
+      if (bytes?.length !== file.size) throw new Error("invalid_output");
       contents.set(file.path, bytes);
     }
     const result = JSON.parse(await readFile(RESULT, "utf8").catch(() => "{}"));
-    output = { contents, source };
+    output = { contents, source, server };
     state = {
       phase: "done",
       summary:
@@ -246,6 +314,7 @@ async function execute(job) {
           : "",
       title: titleOf(contents.get("index.html").toString("utf8")).slice(0, 80),
       files,
+      server: server ? server.length : 0,
     };
   } catch (error) {
     state = {
@@ -335,6 +404,12 @@ export function server() {
           ? send(200, file, "application/octet-stream")
           : send(404, {});
       }
+      if (
+        request.method === "GET" &&
+        url.pathname === "/server" &&
+        output?.server
+      )
+        return send(200, output.server, "text/javascript");
       if (request.method === "GET" && url.pathname === "/source" && output)
         return send(200, output.source, "application/gzip");
       return send(404, {});

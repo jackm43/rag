@@ -28,6 +28,7 @@ export const LIMITS = {
   file: 10 * 1024 * 1024,
   total: 25 * 1024 * 1024,
   source: 20 * 1024 * 1024,
+  server: 1024 * 1024,
 };
 const DEADLINE_MS = 45 * 60_000;
 const POLL_MS = 5_000;
@@ -311,7 +312,8 @@ export class Project extends DurableObject<Env> {
         String(state.error || "build_failed").slice(0, 40),
       );
     if (state.phase !== "done") return;
-    if (!validManifest(state.files))
+    const server = Number(state.server) || 0;
+    if (!validManifest(state.files) || server < 0 || server > LIMITS.server)
       return this.finish(job, "failed", "invalid_output");
     job.status = "publishing";
     job.summary =
@@ -322,12 +324,15 @@ export class Project extends DurableObject<Env> {
       typeof state.title === "string" && state.title.trim()
         ? state.title.trim().slice(0, 80)
         : undefined;
-    await this.ctx.storage.put("manifest", state.files);
+    await this.ctx.storage.put("manifest", { files: state.files, server });
     await this.save(job);
   }
 
   private async publish(job: Job) {
-    const files = (await this.ctx.storage.get<Manifest>("manifest")) ?? [];
+    const { files, server } = (await this.ctx.storage.get<{
+      files: Manifest;
+      server: number;
+    }>("manifest")) ?? { files: [], server: 0 };
     const runner = this.runner(job);
     const prefix = `${job.id}/${job.revision}`;
     for (const file of files) {
@@ -340,6 +345,14 @@ export class Project extends DurableObject<Env> {
       if (!body || body.byteLength !== file.size)
         return this.finish(job, "failed", "invalid_output");
       await this.env.ARTIFACTS.put(key, body);
+    }
+    if (server) {
+      // The app's server logic; run by the Rooms object, never served as an asset.
+      const response = await runner.fetch("http://runner/server");
+      const code = response.ok ? await response.arrayBuffer() : null;
+      if (!code || code.byteLength !== server)
+        return this.finish(job, "failed", "invalid_output");
+      await this.env.ARTIFACTS.put(`${prefix}/server.js`, code);
     }
     const source = await runner.fetch("http://runner/source");
     const archive = source.ok ? await source.arrayBuffer() : null;

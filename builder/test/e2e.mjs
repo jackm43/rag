@@ -123,6 +123,7 @@ const config = {
     },
   ],
   r2_buckets: [{ binding: "ARTIFACTS", bucket_name: "ragbot-build-artifacts" }],
+  worker_loaders: [{ binding: "LOADER" }],
   dev: {
     ip: "127.0.0.1",
     port: 443,
@@ -444,6 +445,43 @@ try {
   await alice.screenshot({ path: path.join(out, "2-app-alice.png") });
   await bob.screenshot({ path: path.join(out, "3-app-bob.png") });
 
+  step("Server logic referees a secret and messages players privately");
+  await alice.getByLabel("Guess the number").fill("3");
+  await alice.getByRole("button", { name: "Guess" }).click();
+  await alice.getByText("Try higher").waitFor();
+  await bob.waitForTimeout(500);
+  assert.equal(
+    await bob.locator("#hint").textContent(),
+    "",
+    "hints are private",
+  );
+  const snapshot = JSON.parse(
+    (
+      await raw(`${appPath}_api/rooms/party`, {
+        headers: { cookie: aliceCookie },
+      })
+    ).text,
+  );
+  assert.deepEqual(
+    snapshot.state,
+    { taps: 2, winner: null },
+    "the answer never leaves the server",
+  );
+  const overwrite = await raw(`${appPath}_api/rooms/party`, {
+    method: "PUT",
+    headers: { cookie: aliceCookie, origin: ORIGIN },
+    body: JSON.stringify({ state: { taps: 999, winner: "Alice" } }),
+  });
+  assert.equal(
+    overwrite.status,
+    409,
+    "clients cannot write server-owned state",
+  );
+  await bob.getByLabel("Guess the number").fill("7");
+  await bob.getByRole("button", { name: "Guess" }).click();
+  await alice.getByText("Bob found the number!").waitFor();
+  await alice.screenshot({ path: path.join(out, "2b-server-logic.png") });
+
   step("A non-member cannot get in");
   const malloryContext = await member("mallory");
   const mallory = await malloryContext.newPage();
@@ -496,6 +534,9 @@ try {
   await alice.reload();
   assert.equal(await alice.title(), "Spinning Cube Party v2");
   await alice.locator("#taps", { hasText: "2" }).waitFor();
+  await alice.getByLabel("Guess the number").fill("9");
+  await alice.getByRole("button", { name: "Guess" }).click();
+  await alice.getByText("Try lower").waitFor();
   assert.equal(
     (await control("rollback", { id, ...scope(), revision: 1 })).active,
     1,

@@ -4,7 +4,7 @@
 import { Codex } from "@openai/codex-sdk";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { manifest, run } from "./server.mjs";
+import { bundleServer, manifest, run } from "./server.mjs";
 
 const job = JSON.parse(await readFile(process.env.RAGBOT_JOB, "utf8"));
 const app = process.env.RAGBOT_APP;
@@ -47,6 +47,11 @@ async function check() {
     await manifest(path.join(app, "dist"));
   } catch (error) {
     return `The build output cannot be published: ${error.message}`;
+  }
+  try {
+    await bundleServer(app, path.join(path.dirname(app), "server-check"));
+  } catch (error) {
+    return error.message;
   }
   return null;
 }

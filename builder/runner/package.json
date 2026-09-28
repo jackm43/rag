@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@openai/codex-sdk": "0.157.1"
+    "@openai/codex-sdk": "0.157.1",
+    "esbuild": "0.28.2"
   }
 }

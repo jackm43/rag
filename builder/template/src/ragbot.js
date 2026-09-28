@@ -28,6 +28,8 @@ export class Room {
     this.state = null;
     this.version = 0;
     this.status = "connecting";
+    // True when the app has server/room.js: it owns the state and gets messages.
+    this.server = false;
     this.pending = new Map();
     this.retry = 0;
     this.closed = false;
@@ -60,6 +62,7 @@ export class Room {
       case "welcome":
         this.retry = 0;
         this.me = message.you;
+        this.server = Boolean(message.server);
         this.peers = message.peers;
         this.applyState(message, null);
         this.setStatus("open");
@@ -116,7 +119,10 @@ export class Room {
     return true;
   }
 
-  /** Relay data to every other connection in the room (or one peer by sid). Not stored. */
+  /**
+   * Send data to every other connection (or one peer by sid), not stored. When
+   * the app has server/room.js, it goes to the server's `message` handler instead.
+   */
   send(data, to) {
     return this.raw({ t: "send", data, ...(to ? { to } : {}) });
   }
@@ -126,6 +132,8 @@ export class Room {
    * latest state and retried if someone else wrote first.
    */
   setState(update) {
+    if (this.server)
+      return Promise.reject(new Error("State is controlled by server/room.js"));
     return new Promise((resolve, reject) => {
       let attempts = 0;
       const attempt = () => {

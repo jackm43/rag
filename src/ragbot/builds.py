@@ -20,6 +20,7 @@ FAILURES = {
     "build_failed": "the app did not build",
     "tests_failed": "the app's tests failed",
     "invalid_output": "the build output could not be published",
+    "server_invalid": "its server logic could not be bundled",
     "install_failed": "its npm packages could not be installed",
     "timeout": "it ran out of time",
     "runner_lost": "the build machine kept restarting",

@@ -40,6 +40,8 @@
       "new_sqlite_classes": ["BuildContainer", "Project", "Auth", "Rooms", "Directory"],
     },
   ],
+  // Runs each app's optional server logic (server/room.js) in its own isolate.
+  "worker_loaders": [{ "binding": "LOADER" }],
   "r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "ragbot-build-artifacts" }],
   // Invocation logs would record OAuth callback URLs.
   "observability": { "enabled": false },

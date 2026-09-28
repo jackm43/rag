@@ -4,6 +4,7 @@ export interface Env {
   AUTH: DurableObjectNamespace<import("./auth").Auth>;
   ROOMS: DurableObjectNamespace<import("./rooms").Rooms>;
   DIRECTORY: DurableObjectNamespace<import("./directory").Directory>;
+  LOADER: WorkerLoader;
   ARTIFACTS: R2Bucket;
   APP_ORIGIN: string;
   ALLOWED_GUILD_IDS: string;

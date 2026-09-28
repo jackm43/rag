@@ -75,6 +75,11 @@ try {
   );
   const html = await (await fetch(base + "/file/index.html")).text();
   assert.match(html, /src="\.\/assets\//, "asset URLs are relative");
+  assert.ok(state.server > 0, "server/room.js was bundled");
+  const logic = await (await fetch(base + "/server")).text();
+  assert.equal(logic.length, state.server);
+  assert.match(logic, /secret\.answer/);
+  assert.match(logic, /taps/, "imports from src/ are bundled in");
   const source = Buffer.from(
     await (await fetch(base + "/source")).arrayBuffer(),
   );

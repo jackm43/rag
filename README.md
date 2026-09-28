@@ -24,10 +24,12 @@ URL. `/buildstatus`, `/buildedit`, `/buildcancel`, `/buildrollback` and
 The separate `builder/` TypeScript Worker does the work: a coding agent runs in
 a Cloudflare Container with inference through AI Gateway (no provider API key),
 apps are served from private R2 at `https://apps.jsmunro.me/<app>/` behind
-Discord login and guild-membership checks, and Durable Objects provide realtime
-multiplayer rooms. See the [setup and runtime guide](docs/discord-builder-setup.md)
-and the [requirements](docs/discord-builder-prd.md). `BUILDER_ENABLED` stays
-`false` until setup is done; apply migration 0004 before enabling it.
+Discord login and guild-membership checks, Durable Objects provide realtime
+multiplayer rooms, and an app's optional server rules (hidden answers, private
+hands) run sandboxed in Dynamic Workers. See the
+[setup and runtime guide](docs/discord-builder-setup.md) and the
+[requirements](docs/discord-builder-prd.md). `BUILDER_ENABLED` stays `false`
+until setup is done; apply migration 0004 before enabling it.
 
 ## Setup
 

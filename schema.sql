@@ -107,6 +107,12 @@ CREATE TABLE IF NOT EXISTS rag_ai_spend_totals (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS ai_runtime_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    revision TEXT NOT NULL,
+    document TEXT NOT NULL CHECK (json_valid(document))
+);
+
 CREATE TABLE IF NOT EXISTS build_requests (
     id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL UNIQUE,

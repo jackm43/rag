@@ -177,7 +177,7 @@ async function route(request: Request, env: Env, url: URL) {
   if (rest === "/_api/me") return json(member);
   const room = rest.match(/^\/_api\/rooms\/([^/]+)$/);
   if (room && roomName.test(room[1]))
-    return rooms(request, env, id, room[1], member);
+    return rooms(request, env, id, meta.active, room[1], member);
   if (rest.startsWith("/_api/")) return notFound();
   if (!safe) return new Response(null, { status: 405 });
   if (!meta.active)
@@ -193,11 +193,15 @@ function rooms(
   request: Request,
   env: Env,
   id: string,
+  revision: number | undefined,
   name: string,
   member: Member,
 ) {
+  // Identity and the live revision (whose server logic runs) come only from here.
   const forwarded = new Request(`https://rooms/${name}`, request);
   forwarded.headers.set("x-member", JSON.stringify(member));
+  forwarded.headers.set("x-app", id);
+  forwarded.headers.set("x-revision", String(revision ?? 0));
   return env.ROOMS.get(env.ROOMS.idFromName(id)).fetch(forwarded);
 }
 
