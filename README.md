@@ -20,8 +20,7 @@ replies run in-process; there are no internal queues or services.
 - Node **22+**, pnpm, and **uv 0.12.3+**. Python is installed by uv.
 - `op` (1Password CLI) for commands using secrets. `.env` and `.env.dev` contain
   `op://` references; do not replace them with plaintext secrets.
-- Docker Desktop on Windows for `pnpm run dev:ui` (Python Workers Pyodide cannot
-  create its venv on native Windows).
+- Docker Desktop is optional; set `DEV_UI_DOCKER=1` to run the debugging UI in Docker.
 
 ```sh
 pnpm install
@@ -34,8 +33,23 @@ pnpm run test:runtime
 On Windows, `uv sync --locked` creates a native Windows `.venv` with uv-managed
 Python. Checks and tests run from PowerShell without activating it. Virtual
 environments cannot be shared with WSL or Linux; if an existing `.venv` came
-from Linux, move it aside before running `uv sync --locked` again. The Docker
-debugging UI uses its own Python and Worker build environments.
+from Linux, move it aside before running `uv sync --locked` again.
+
+For a project on `D:`, keep uv's managed interpreters and cache on `D:` as well.
+Pyodide currently loses drive letters when resolving paths across drives. Set
+these user-level Windows settings once, then reopen your terminal:
+
+```powershell
+[Environment]::SetEnvironmentVariable('UV_PYTHON_INSTALL_DIR', 'D:\tools\uv\python', 'User')
+[Environment]::SetEnvironmentVariable('UV_CACHE_DIR', 'D:\tools\uv\cache', 'User')
+uv python install 3.14 cpython-3.14.2-emscripten-wasm32-musl
+uv sync --locked
+```
+
+If `.venv-workers` was created with interpreters on another drive, move it aside
+and run `uv run pywrangler sync --force` to recreate it. Python dependencies are
+prepared with uv/Pywrangler, and Wrangler performs the upload. Development,
+checks, runtime tests, and deployment run natively on Windows.
 
 The Python dependencies are locked in `uv.lock`, including a project-local uv
 for the Python Workers build tool. Node is used only for Cloudflare
@@ -98,10 +112,9 @@ Registration is guild-scoped and reads the same Python registry as dispatch.
 ## Local debugging UI
 
 `pnpm run dev:ui` serves the existing console on **http://localhost:8788**.
-On Windows it starts a Linux Docker container so Wrangler can build the Pyodide
-venv; 1Password still resolves secrets on the host and passes them in as
-environment variables. Linux and macOS run the Worker on the host. Set
-`DEV_UI_DOCKER=1` to force Docker, or `DEV_UI_DOCKER=0` to force the host path.
+It runs natively on Windows, Linux, and macOS; 1Password resolves secrets and
+passes them as environment variables. Set `DEV_UI_DOCKER=1` to opt into Docker.
+Docker uses separate Python and Worker build environments.
 The Python harness calls the real application handlers, stubs every Discord API
 request, and captures model requests, responses, replies, media, logs, and D1
 side effects. Model calls are real and tagged `ragbot_env: dev`. Per-run config

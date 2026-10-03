@@ -24,7 +24,9 @@ def request(base, path, *, method="GET", body=None, headers=None):
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="ragbot-runtime-") as directory:
+    temporary_root = ROOT / ".wrangler"
+    temporary_root.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="ragbot-runtime-", dir=temporary_root) as directory:
         destination = stage(Path(directory), runtime_test=True)
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))

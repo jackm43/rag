@@ -8,8 +8,10 @@ Run `pnpm run check`, `pnpm test`, and `pnpm run test:runtime` before calling
 runtime changes done. Run a deployment dry run when changing packaging or
 bindings. Node 22+, pnpm, and uv 0.12.3+ are required. Commands using secrets go
 through `op run --env-file=.env --`; `pnpm run dev:ui` wraps op itself and also
-loads `.env.dev`. On Windows that command uses Docker Desktop. Do not log
-secrets or resolve them into committed files.
+loads `.env.dev`. Development and deployment run natively on Windows; Docker
+is opt-in via `DEV_UI_DOCKER=1`. Keep uv interpreters, cache, and temporary Worker
+bundles on the project drive to avoid the Pyodide cross-drive path bug. Do not
+log secrets or resolve them into committed files.
 
 ## Architecture
 

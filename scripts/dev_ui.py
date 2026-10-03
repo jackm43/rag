@@ -16,7 +16,7 @@ def use_docker():
         return True
     if flag == "0":
         return False
-    return os.name == "nt"
+    return False
 
 
 def run_docker():
@@ -32,7 +32,7 @@ def run_docker():
         )
     except FileNotFoundError:
         raise SystemExit(
-            "Docker is required to run the debugging UI on Windows. Install Docker Desktop and retry."
+            "Docker was requested with DEV_UI_DOCKER=1. Install Docker Desktop and retry."
         )
     return subprocess.run(argv, cwd=ROOT, env=os.environ).returncode
 
