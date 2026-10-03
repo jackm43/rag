@@ -31,6 +31,12 @@ pnpm test
 pnpm run test:runtime
 ```
 
+On Windows, `uv sync --locked` creates a native Windows `.venv` with uv-managed
+Python. Checks and tests run from PowerShell without activating it. Virtual
+environments cannot be shared with WSL or Linux; if an existing `.venv` came
+from Linux, move it aside before running `uv sync --locked` again. The Docker
+debugging UI uses its own Python environment.
+
 The Python dependencies are locked in `uv.lock`, including a project-local uv
 for the Python Workers build tool. Node is used only for Cloudflare
 Wrangler. Python Workers use Pyodide. discord.py imports and its aiohttp

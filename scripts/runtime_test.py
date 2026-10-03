@@ -32,7 +32,7 @@ def main():
         env = dict(
             os.environ, CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV="false", WRANGLER_SEND_METRICS="false"
         )
-        with (destination / "runtime.log").open("w+") as logs:
+        with (destination / "runtime.log").open("w+", encoding="utf-8") as logs:
             subprocess.run(
                 command(
                     "pnpm",
