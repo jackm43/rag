@@ -282,6 +282,10 @@ class Default(ProductionDefault):
         assert posted["allowed_mentions"] == {"parse": [], "replied_user": False}
         from ragbot.discord import Attachment
 
+        interaction["data"] = {"name": "coinflip"}
+        await app.dispatch(interaction)
+        assert calls[-1]["data"]["content"] in ("heads", "tails")
+
         async def multipart(url, **options):
             from ragbot.runtime import fetch
 

@@ -3,10 +3,13 @@
 A Discord bot running as one **Cloudflare Python Worker**, `ragbot-worker`, with
 one `DiscordGateway` Durable Object maintaining the Discord WebSocket.
 Commands: `/rag`, `/ragboard`, `/raghammer`, `/ragunban`, `/undorag`, `/ask`,
-`/bicture`.
+`/bicture`, `/coinflip`.
 
 `/undorag` and `/raghammer` require the Mods role (`457695154892177418`).
 `/ragunban` uses the existing administrator user allowlist.
+
+`/coinflip` replies with `heads` or `tails`, each with an equal probability,
+using a fresh cryptographically secure random bit for every invocation.
 
 Discord interaction signatures and gateway control bearer tokens are verified at
 the external edges. Denials have empty bodies. Commands, mentions, AI calls, and
