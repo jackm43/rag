@@ -82,6 +82,21 @@ registry, native dictionaries, and explicit dependency injection. SDK bindings
 accept Python values directly; raw JavaScript APIs are isolated to Web Crypto,
 WebSockets, multipart files, and capped stream reads.
 
+HTTP ingress verifies the signature and routes the interaction type once. Command
+handlers, gateway events, and Discord REST responses then use Discord's documented
+wire fields directly, with defaults for optional fields. Permission checks and
+failure handling stay at the operations they protect. D1, AI, storage, and RPC
+results use the SDK's Python conversion; `wait_until` manages the task proxy at
+the raw JavaScript background-work boundary. AI requests pass one fresh settings
+snapshot through conversation building and inference so a reply uses one revision.
+Use `match` for interaction types, gateway opcodes, and provider response formats.
+Keep required Discord fields explicit, normalize optional fields once, and keep
+ordinary `if` guards for permissions, connection state, limits, and failures.
+
+AI replies preserve the model's text and formatting, with a length limit and an
+empty-response fallback. Discord's `allowed_mentions` and message flags prevent
+mention pings and URL previews without rewriting the reply.
+
 ```text
 src/entry.py             Worker and DiscordGateway entrypoints
 src/ragbot/commands/     registry and moderation/media commands

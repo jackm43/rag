@@ -1,7 +1,6 @@
 """Authentication at the two external HTTP edges."""
 
 import hmac
-import re
 import time
 
 
@@ -21,15 +20,11 @@ async def verify_discord_signature(
     timestamp: str | None,
     body: bytes,
 ) -> bool:
-    if not isinstance(signature, str) or not re.fullmatch(r"[0-9a-fA-F]{128}", signature):
-        return False
-    if not isinstance(public_key, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", public_key):
-        return False
-    if not isinstance(timestamp, str) or not re.fullmatch(r"[0-9]{1,16}", timestamp):
-        return False
-    if abs(time.time() - int(timestamp)) > 300:
+    if not public_key or not signature or not timestamp:
         return False
     try:
+        if abs(time.time() - int(timestamp)) > 300:
+            return False
         return await webcrypto_verify(
             bytes.fromhex(public_key), bytes.fromhex(signature), timestamp.encode() + body
         )

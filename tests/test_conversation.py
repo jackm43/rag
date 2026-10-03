@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock
 
 import pytest
+from conftest import FakeResponse
 
 from ragbot.ai import Attribution
 from ragbot.conversation import ChatJob, build_conversation
@@ -44,6 +45,29 @@ async def test_pingless_reply_preserves_question_answer_and_links_reply_without_
     sent = app.transport.writes()[-1]
     assert sent["message_reference"] == {"message_id": incoming["id"], "fail_if_not_exists": False}
     assert sent["allowed_mentions"] == {"parse": [], "replied_user": False}
+    assert sent["flags"] == 4
+
+
+@pytest.mark.parametrize(
+    "reply,expected",
+    [
+        (
+            "Assistant: <@123456789012345678> @everyone @here 123456789012345679\n\n\n"
+            "```python\n    print('hello')\n```\n[link](https://example.com)  ",
+            "Assistant: <@123456789012345678> @everyone @here 123456789012345679\n\n\n"
+            "```python\n    print('hello')\n```\n[link](https://example.com)  ",
+        ),
+        (" \n\t", "I could not generate a response."),
+        ("\U0001f600" * 1000, "\U0001f600" * 950),
+    ],
+)
+async def test_ai_reply_preserves_content_with_discord_delivery_limits(app, reply, expected):
+    app.env.AI.run.return_value = {"response": reply}
+    await app.handle_message(message(4, f"<@{BOT}> explain this"), BOT)
+    sent = app.transport.writes()[-1]
+    assert sent["content"] == expected
+    assert sent["allowed_mentions"] == {"parse": [], "replied_user": False}
+    assert sent["flags"] == 4
 
 
 @pytest.mark.parametrize("author,called", [(BOT, True), (USER, False)])
@@ -96,3 +120,23 @@ async def test_unavailable_reply_still_answers_explicit_mention(app):
     app.discord.message = AsyncMock(side_effect=RuntimeError("unavailable"))
     await app.handle_message(incoming, BOT)
     app.env.AI.run.assert_awaited_once()
+
+
+async def test_rest_reply_with_nested_references_preserves_entire_chain(app):
+    question = message(1, "original question")
+    answer = message(2, "first answer", BOT, question, referenced_message=question)
+    followup = message(3, "follow-up question", reply=answer, referenced_message=answer)
+    incoming = message(4, f"<@{BOT}> explain further", reply=followup)
+    app.transport.handler = lambda url, options: (
+        FakeResponse(followup) if url.endswith(f"/messages/{followup['id']}") else None
+    )
+
+    await app.handle_message(incoming, BOT)
+
+    _, payload, _ = app.env.AI.run.await_args.args
+    assert payload["messages"][1:] == [
+        {"role": "user", "content": "tester: original question"},
+        {"role": "assistant", "content": "first answer"},
+        {"role": "user", "content": "tester: follow-up question"},
+        {"role": "user", "content": "tester: explain further"},
+    ]

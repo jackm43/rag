@@ -8,14 +8,10 @@ from workers import DurableObject, Response, WorkerEntrypoint
 
 from ragbot.app import Application
 from ragbot.gateway import Gateway, gateway_stub
-from ragbot.runtime import env_value, to_python, wait_until
+from ragbot.runtime import wait_until
 from ragbot.security import authorize_control, verify_discord_signature
 
 log = logging.getLogger("ragbot")
-
-
-def json_response(value: dict) -> Response:
-    return Response(json.dumps(value), headers={"content-type": "application/json"})
 
 
 class Default(WorkerEntrypoint):
@@ -29,7 +25,7 @@ class Default(WorkerEntrypoint):
             # Verify the exact bytes Discord signed before JSON decoding or dispatch.
             body = await request.bytes()
             valid = await verify_discord_signature(
-                env_value(self.env, "DISCORD_PUBLIC_KEY", ""),
+                getattr(self.env, "DISCORD_PUBLIC_KEY", ""),
                 request.headers.get("x-signature-ed25519"),
                 request.headers.get("x-signature-timestamp"),
                 body,
@@ -42,14 +38,14 @@ class Default(WorkerEntrypoint):
             except ValueError, UnicodeError:
                 log.warning("interaction_body_unparseable")
                 return Response(status=400)
-            if not isinstance(interaction, dict) or isinstance(interaction.get("type"), bool):
-                return Response(status=400)
-            if interaction.get("type") == 1:
-                return json_response({"type": 1})
-            if interaction.get("type") != 2:
-                return Response(status=400)
-            wait_until(self.ctx, self.app.dispatch(interaction))
-            return json_response({"type": 5})
+            match interaction["type"]:
+                case 1:
+                    return Response.from_json({"type": 1})
+                case 2:
+                    wait_until(self.ctx, self.app.dispatch(interaction))
+                    return Response.from_json({"type": 5})
+                case _:
+                    return Response(status=400)
         controls = {
             ("POST", "/gateway/start"): "start",
             ("POST", "/gateway/stop"): "stop",
@@ -58,13 +54,14 @@ class Default(WorkerEntrypoint):
         action = controls.get((request.method, path))
         if action:
             denial = authorize_control(
-                env_value(self.env, "GATEWAY_CONTROL_TOKEN"), request.headers.get("authorization")
+                getattr(self.env, "GATEWAY_CONTROL_TOKEN", None),
+                request.headers.get("authorization"),
             )
             if denial:
                 log.warning("gateway_control_denied status=%s", denial)
                 return Response(status=denial)
             result = await getattr(gateway_stub(self.env), action)()
-            return json_response(to_python(result))
+            return Response.from_json(result)
         return Response(status=404)
 
     async def scheduled(self, controller, env, ctx):

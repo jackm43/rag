@@ -19,11 +19,16 @@ class Bucket:
 
 def route_key(url, method):
     parts = urlsplit(url).path.removeprefix("/api/v10").split("/")
-    major = tuple(parts[1:3]) if len(parts) > 2 and parts[1] in {"channels", "guilds"} else ()
-    if len(parts) > 3 and parts[1] == "webhooks":
-        major = tuple(parts[1:4])
+    major: tuple[str, ...]
+    match parts:
+        case ["", "channels" | "guilds" as resource, identifier, *_]:
+            major = (resource, identifier)
+        case ["", "webhooks", application_id, token, *_]:
+            major = ("webhooks", application_id, token)
+        case _:
+            major = ()
     normalized = [":id" if part.isdecimal() else part for part in parts]
-    if len(parts) > 3 and parts[1] == "webhooks":
+    if major and major[0] == "webhooks":
         normalized[3] = ":token"
     return (method, "/".join(normalized)), major
 
@@ -37,8 +42,7 @@ def seconds(value):
 
 
 def header(response, name):
-    headers = getattr(response, "headers", {})
-    return headers.get(name) or headers.get(name.lower())
+    return response.headers.get(name) or response.headers.get(name.lower())
 
 
 class DiscordHTTP:

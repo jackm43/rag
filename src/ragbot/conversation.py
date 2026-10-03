@@ -3,27 +3,26 @@
 import logging
 import re
 import time
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from .ai import Attribution, Completion
+from .ai import Attribution
 from .policy import finalize_ai_reply, truncate_discord
 
 log = logging.getLogger("ragbot")
 
 
 def strip_mentions(content: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"<@[!&]?[^>\s]+>", " ", content)).strip()
+    return " ".join(re.sub(r"<@[!&]?[^>\s]+>", " ", content).split())
 
 
 def display_name(message: dict) -> str:
-    author = message.get("author") or {}
+    author = message["author"]
     for value in (
-        (message.get("member") or {}).get("nick"),
+        message.get("member", {}).get("nick"),
         author.get("global_name"),
-        author.get("username"),
+        author["username"],
     ):
-        if isinstance(value, str) and value.strip():
+        if value and value.strip():
             return value.strip()
     return "user"
 
@@ -39,11 +38,7 @@ class ChatJob:
 
 
 def message_text(message: dict, bot_user_id: str) -> str:
-    names = {
-        user["id"]: display_name({"author": user})
-        for user in message.get("mentions", [])
-        if isinstance(user, dict) and user.get("id")
-    }
+    names = {user["id"]: display_name({"author": user}) for user in message.get("mentions", [])}
 
     def mention(match):
         marker, identifier = match.groups()
@@ -51,10 +46,12 @@ def message_text(message: dict, bot_user_id: str) -> str:
             return ""
         return names.get(identifier, "[role]" if marker == "&" else "[user]")
 
-    text = re.sub(r"<@([!&]?)([^>\s]+)>", mention, message.get("content", ""))
-    parts = [text.strip()] if text.strip() else []
+    text = re.sub(r"<@([!&]?)([^>\s]+)>", mention, message["content"]).strip()
+    parts = []
+    if text:
+        parts.append(text)
     for attachment in message.get("attachments", [])[:5]:
-        parts.append(f"[attachment: {attachment.get('filename', 'file')}; contents not provided]")
+        parts.append(f"[attachment: {attachment['filename']}; contents not provided]")
     return truncate_discord("\n".join(parts), 4000)
 
 
@@ -71,9 +68,7 @@ async def build_conversation(app, job: ChatJob, history_limit: int) -> list[dict
         if not reference_id or reference_id in seen or channel_id != a.channel_id:
             break
         seen.add(reference_id)
-        referenced = (
-            embedded if isinstance(embedded, dict) and embedded.get("id") == reference_id else None
-        )
+        referenced = embedded if embedded and embedded["id"] == reference_id else None
         if referenced is None:
             try:
                 referenced = await app.discord.message(channel_id, reference_id)
@@ -82,22 +77,18 @@ async def build_conversation(app, job: ChatJob, history_limit: int) -> list[dict
                 break
         if (
             not referenced
-            or referenced.get("id") != reference_id
-            or referenced.get("channel_id") != a.channel_id
+            or referenced["id"] != reference_id
+            or referenced["channel_id"] != a.channel_id
         ):
             break
         chain.append(referenced)
-        reference = referenced.get("message_reference") or {}
+        reference = referenced.get("message_reference", {})
         embedded = referenced.get("referenced_message")
-        reference_id = reference.get("message_id") or (embedded or {}).get("id")
-        channel_id = reference.get("channel_id") or a.channel_id
+        reference_id = reference.get("message_id")
+        channel_id = reference.get("channel_id", a.channel_id)
 
     ordered = list(reversed(chain))
-    names = {}
-    for message in ordered:
-        author_id = (message.get("author") or {}).get("id")
-        if author_id:
-            names[author_id] = display_name(message)
+    names = {message["author"]["id"]: display_name(message) for message in ordered}
     if a.user_id:
         names[a.user_id] = a.username or "user"
     messages: list[dict] = []
@@ -105,33 +96,32 @@ async def build_conversation(app, job: ChatJob, history_limit: int) -> list[dict
         content = message_text(message, job.bot_user_id)
         if not content:
             continue
-        author_id = (message.get("author") or {}).get("id")
+        author_id = message["author"]["id"]
         if author_id == job.bot_user_id:
-            if re.search(r"\b(?:has )?just ragged\.", content) or content.startswith("Ragboard\n"):
+            if re.search(r"\bjust ragged\.", content) or content.startswith("Ragboard\n"):
                 continue
             messages.append({"role": "assistant", "content": content})
         else:
-            messages.append(
-                {"role": "user", "content": f"{names.get(author_id, 'user')}: {content}"}
-            )
-    prompt = message_text(job.source_message, job.bot_user_id) if job.source_message else job.prompt
-    messages.append({"role": "user", "content": f"{a.username or 'user'}: {prompt}"})
+            messages.append({"role": "user", "content": f"{names[author_id]}: {content}"})
+    messages.append({"role": "user", "content": f"{a.username or 'user'}: {job.prompt}"})
     return messages
 
 
-async def deliver_reply(
-    app,
-    attribution: Attribution,
-    prompt: str,
-    complete: Callable[[], Awaitable[Completion]],
-    *,
-    started_at: float | None = None,
-) -> bool:
-    started_at = time.monotonic() if started_at is None else started_at
-    model, status, response_text, error, usage, ai_duration = "unknown", "ok", None, None, {}, None
+async def process_chat(app, job: ChatJob, started_at: float):
+    attribution = job.attribution
+    model = "unknown"
+    status = "ok"
+    response_text: str | None = None
+    error: str | None = None
+    usage: dict = {}
+    ai_duration: int | None = None
     try:
         ai_start = time.monotonic()
-        result = await complete()
+        chat = await app.config.chat()
+        messages = await build_conversation(app, job, chat.history_limit)
+        result = await app.ai.chat(
+            chat, [{"role": "system", "content": chat.prompt}, *messages], attribution
+        )
         ai_duration = round((time.monotonic() - ai_start) * 1000)
         model, usage = result.model, result.usage or {}
         response_text = finalize_ai_reply(result.content)
@@ -153,7 +143,7 @@ async def deliver_reply(
             attribution.message_id,
             attribution.user_id,
             attribution.username,
-            prompt,
+            job.prompt,
             response_text,
             model,
             ai_duration,
@@ -164,15 +154,3 @@ async def deliver_reply(
         )
     except Exception:
         log.warning("interaction_record_failed")
-    return status == "ok"
-
-
-async def process_chat(app, job: ChatJob, started_at: float):
-    async def complete():
-        chat = await app.config.chat()
-        messages = await build_conversation(app, job, chat.history_limit)
-        return await app.ai.chat(
-            chat, [{"role": "system", "content": chat.prompt}, *messages], job.attribution
-        )
-
-    await deliver_reply(app, job.attribution, job.prompt, complete, started_at=started_at)

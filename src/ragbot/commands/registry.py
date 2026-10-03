@@ -1,5 +1,6 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Any
 
 from ..ai import Attribution
@@ -67,47 +68,38 @@ class CommandContext:
     def db(self):
         return self.app.db
 
-    @property
+    @cached_property
     def invoker(self) -> dict:
-        return (
-            (self.interaction.get("member") or {}).get("user") or self.interaction.get("user") or {}
-        )
+        member = self.interaction.get("member")
+        return member["user"] if member else self.interaction["user"]
 
-    @property
+    @cached_property
     def display_name(self) -> str:
-        member = self.interaction.get("member") or {}
-        return (
-            member.get("nick")
-            or self.invoker.get("global_name")
-            or self.invoker.get("username")
-            or "user"
-        ).strip() or "user"
-
-    def require_invoker(self) -> dict:
-        if not self.invoker:
-            raise ValueError("missing_invoker")
-        return self.invoker
+        member = self.interaction.get("member", {})
+        for name in (member.get("nick"), self.invoker.get("global_name"), self.invoker["username"]):
+            if name and name.strip():
+                return name.strip()
+        return "user"
 
     def option(self, name: str) -> str:
-        for option in self.interaction.get("data", {}).get("options", []):
-            if option.get("name") == name:
-                value = option.get("value")
-                return value.strip() if isinstance(value, str) else ""
+        for option in self.interaction["data"].get("options", []):
+            if option["name"] == name:
+                return option["value"].strip()
         return ""
 
     async def target_username(self, target_id: str) -> str | None:
-        resolved = self.interaction.get("data", {}).get("resolved", {}).get("users", {})
-        return (resolved.get(target_id) or {}).get("username") or await self.app.discord.username(
-            target_id
-        )
+        users = self.interaction["data"].get("resolved", {}).get("users", {})
+        if target_id in users:
+            return users[target_id]["username"]
+        return await self.app.discord.username(target_id)
 
     def attribution(self, kind: str, *, channel_id: str | None = None) -> Attribution:
         return Attribution(
             kind,
-            self.invoker.get("id"),
+            self.invoker["id"],
             self.display_name,
             channel_id or self.interaction.get("channel_id"),
-            self.interaction.get("id"),
+            self.interaction["id"],
         )
 
     async def reply(

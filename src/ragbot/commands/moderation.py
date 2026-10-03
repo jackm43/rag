@@ -9,7 +9,7 @@ from .registry import MODS_ROLE_ID, CommandContext, command, text_option, user_o
 
 @command("rag", "Record a rag against a user", [user_option("User to mark as ragging")])
 async def rag(ctx: CommandContext):
-    invoker = ctx.require_invoker()
+    invoker = ctx.invoker
     target = ctx.option("user")
     ban = await ctx.db.active_ban(invoker["id"])
     if ban:
@@ -85,7 +85,7 @@ async def undorag(ctx: CommandContext):
     required_role_id=MODS_ROLE_ID,
 )
 async def raghammer(ctx: CommandContext):
-    invoker = ctx.require_invoker()
+    invoker = ctx.invoker
     target = ctx.option("user")
     match = re.fullmatch(r"([1-9][0-9]*)([mhd])", ctx.option("timeframe").lower())
     if not match or len(match[1]) > 16 or int(match[1]) > 2**53 - 1:
@@ -125,9 +125,8 @@ async def ragunban(ctx: CommandContext):
         target,
         now_iso(),
     )
-    text = (
-        f"<@{target}> can use /rag again."
-        if result.get("meta", {}).get("changes", 0)
-        else f"<@{target}> does not have an active /rag ban."
-    )
+    if result["meta"]["changes"]:
+        text = f"<@{target}> can use /rag again."
+    else:
+        text = f"<@{target}> does not have an active /rag ban."
     await ctx.reply(text, users=[target])

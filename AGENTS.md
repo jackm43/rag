@@ -65,6 +65,13 @@ supplies wire types; do not replace the Durable Object with a socket-based bot
 framework. Use the Workers SDK with Python values for D1, KV, AI and RPC.
 Explicit `to_js` conversions belong only at raw JavaScript API boundaries.
 
+Favor straightforward control flow. Route interaction types, gateway opcodes,
+and provider formats with `match`. After authentication, trust Discord's wire
+schema: access required fields directly and resolve optional fields once. Do
+not repeat shape/type checks inside handlers or add speculative fallback chains.
+Keep guards for permissions, lifecycle state, rate limits, media caps, editable
+settings, and actual failure handling at the operations they protect.
+
 ## Invariants
 
 - Verify Discord Ed25519 signatures on every POST `/interactions` **before**
@@ -87,7 +94,9 @@ Explicit `to_js` conversions belong only at raw JavaScript API boundaries.
   POST failures; they may have already created a message or thread.
 - Download media with the 25 MiB streaming cap; never replace it with unbounded
   buffering. Discord bot credentials must never accompany provider media.
-- Suppress mentions, raw IDs, and URL embeds at the shared AI reply boundary.
+- Preserve AI reply text and formatting. Disable mention pings with
+  `allowed_mentions`, suppress URL previews with Discord message flags, and
+  retain the reply length limit and empty-response fallback.
 - Gateway close codes 4004 and 4010–4014 disable rapid retries. Cron or explicit
   start can retry them. An operator stop persists across eviction and cron.
 - Keep `DiscordGateway`, singleton `discord-gateway-v2`, storage keys and

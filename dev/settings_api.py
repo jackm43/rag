@@ -10,7 +10,7 @@ from model_catalog import CreditCatalog, chat_overrides, image_parameters
 from settings import DraftNamespace, resolve_config, validate_overrides
 
 from ragbot.config import parse_settings
-from ragbot.runtime import env_value, fetch, to_python
+from ragbot.runtime import fetch
 from ragbot.settings_storage import READ_SETTINGS, WRITE_SETTINGS
 
 _lock = asyncio.Lock()
@@ -54,7 +54,7 @@ class SettingsEditor:
             statement = self.env.DB.prepare(sql)
             if params:
                 statement = statement.bind(*params)
-            return to_python(await statement.all())
+            return await statement.all()
         account, database = self.destination["account"], self.destination["database"]
         if not re.fullmatch(r"[a-f0-9]{32}", account) or not re.fullmatch(
             r"[a-f0-9-]{36}", database
@@ -64,7 +64,7 @@ class SettingsEditor:
             f"https://api.cloudflare.com/client/v4/accounts/{account}/d1/database/{database}/query",
             method="POST",
             headers={
-                "Authorization": f"Bearer {env_value(self.env, 'CLOUDFLARE_API_TOKEN', '')}",
+                "Authorization": f"Bearer {getattr(self.env, 'CLOUDFLARE_API_TOKEN', '')}",
                 "content-type": "application/json",
             },
             body=json.dumps({"sql": sql, "params": list(params)}),

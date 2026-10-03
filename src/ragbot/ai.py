@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import ModelConfig
-from .runtime import to_python
 
 
 @dataclass(frozen=True)
@@ -40,19 +39,26 @@ class Completion:
 
 
 def extract_text(payload: Any) -> str:
-    if isinstance(payload, str):
-        return payload
-    if not isinstance(payload, dict):
-        return ""
-    if isinstance(payload.get("response"), str):
-        return payload["response"]
-    choices = payload.get("choices") or []
-    message = choices[0].get("message", {}) if choices and isinstance(choices[0], dict) else {}
-    return message.get("content", "") if isinstance(message.get("content"), str) else ""
-
-
-def records(value: Any) -> list[dict]:
-    return [entry for entry in value if isinstance(entry, dict)] if isinstance(value, list) else []
+    match payload:
+        case str(text):
+            return text
+        case {"output_text": str(text)} if text:
+            return text
+        case {"output": list(outputs)} if outputs:
+            parts = []
+            for output in outputs:
+                if output.get("type") != "message":
+                    continue
+                for part in output.get("content", []):
+                    if part.get("type") == "output_text":
+                        parts.append(part["text"])
+            return "\n\n".join(parts)
+        case {"response": str(text)}:
+            return text
+        case {"choices": [{"message": {"content": str(text)}}, *_]}:
+            return text
+        case _:
+            return ""
 
 
 def completion(payload: Any, model: str) -> Completion:
@@ -60,32 +66,18 @@ def completion(payload: Any, model: str) -> Completion:
     usage = data.get("usage")
 
     def count(value):
-        return (
-            value if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0 else 0
-        )
+        if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0:
+            return value
+        return 0
 
-    parsed_usage = (
-        None
-        if not isinstance(usage, dict)
-        else {
+    parsed_usage = None
+    if isinstance(usage, dict):
+        parsed_usage = {
             "prompt_tokens": count(usage.get("prompt_tokens", usage.get("input_tokens"))),
             "completion_tokens": count(usage.get("completion_tokens", usage.get("output_tokens"))),
             "total_tokens": count(usage.get("total_tokens")),
         }
-    )
-    result = Completion(extract_text(payload), data.get("model") or model, parsed_usage)
-    if data.get("output") or data.get("output_text"):
-        parts = [
-            part
-            for output in records(data.get("output"))
-            for part in records(output.get("content"))
-        ]
-        result.content = (
-            data.get("output_text")
-            or "\n\n".join(p["text"] for p in parts if isinstance(p.get("text"), str))
-            or result.content
-        )
-    return result
+    return Completion(extract_text(payload), data.get("model") or model, parsed_usage)
 
 
 class Inference:
@@ -93,44 +85,35 @@ class Inference:
         self.env = env
 
     async def binding(self, model: str, data: dict, gateway_id: str | None, metadata: dict):
-        args = [model, data]
         if gateway_id:
-            args.append({"gateway": {"id": gateway_id, "metadata": metadata}})
-        return to_python(await self.env.AI.run(*args))
+            return await self.env.AI.run(
+                model, data, {"gateway": {"id": gateway_id, "metadata": metadata}}
+            )
+        return await self.env.AI.run(model, data)
 
     async def chat(
         self, config: ModelConfig, messages: list[dict], attribution: Attribution
     ) -> Completion:
         source_id = f"aigreq:{uuid.uuid4()}"
         metadata = {**attribution.metadata(source_id), "ragbot_settings_revision": config.revision}
-        body = {
-            "messages": messages,
-            "temperature": config.temperature,
-        }
-        if not config.temperature_supported:
-            body.pop("temperature")
+        body: dict
+        match config.api_format:
+            case "responses":
+                body = {"input": messages}
+                if config.reasoning_effort:
+                    body["reasoning"] = {"effort": config.reasoning_effort}
+            case "chat-completions":
+                body = {"messages": messages}
+                if config.reasoning_effort:
+                    body["reasoning_effort"] = config.reasoning_effort
+            case _:
+                raise ValueError("unsupported chat API format")
         # Reasoning models reject sampling controls.
-        if re.match(r"openai/(?:gpt-[5-9]|o[1-9])", config.model):
-            body.pop("temperature", None)
-        if config.api_format == "responses":
-            payload = await self.binding(
-                config.model,
-                {
-                    "input": messages,
-                    **({"temperature": body["temperature"]} if "temperature" in body else {}),
-                    **(
-                        {"reasoning": {"effort": config.reasoning_effort}}
-                        if config.reasoning_effort
-                        else {}
-                    ),
-                },
-                config.gateway_id,
-                metadata,
-            )
-        else:
-            if config.reasoning_effort:
-                body["reasoning_effort"] = config.reasoning_effort
-            payload = await self.binding(config.model, body, config.gateway_id, metadata)
+        if config.temperature_supported and not re.match(
+            r"openai/(?:gpt-[5-9]|o[1-9])", config.model
+        ):
+            body["temperature"] = config.temperature
+        payload = await self.binding(config.model, body, config.gateway_id, metadata)
         return completion(payload, config.model)
 
     async def media(
@@ -142,10 +125,9 @@ class Inference:
         settings_revision: str = "unspecified",
     ):
         source_id = f"aigreq:{uuid.uuid4()}"
-        result = await self.binding(
+        return await self.binding(
             profile["model"],
             data,
             profile.get("gatewayId"),
             {**attribution.metadata(source_id), "ragbot_settings_revision": settings_revision},
         )
-        return result

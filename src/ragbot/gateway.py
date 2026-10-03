@@ -3,14 +3,12 @@
 import asyncio
 import json
 import logging
-import math
 import time
 from collections import OrderedDict
 from typing import Any
 from urllib.parse import urlparse
 
-from .discord import is_message
-from .runtime import to_python, wait_until
+from .runtime import wait_until
 
 log = logging.getLogger("ragbot")
 GATEWAY_NAME = "discord-gateway-v2"
@@ -151,7 +149,7 @@ class Gateway:
         await self.initialize()
         if not self.canonical():
             return
-        markers = to_python(await self.ctx.storage.list({"prefix": "processed:"}))
+        markers = await self.ctx.storage.list({"prefix": "processed:"})
         cutoff = time.time() * 1000 - 86400000
         stale = [key for key, at in markers.items() if at <= cutoff]
         if stale:
@@ -167,14 +165,11 @@ class Gateway:
         self.clear_reconnect()
         self.close_socket(4000, "reconnect")
         # Discord sends regional resume endpoints. Do not send the bot token to arbitrary hosts.
-        host = urlparse(self.resume_url or "").hostname or ""
-        base = (
-            self.resume_url
-            if self.resume_url
-            and host.endswith(".discord.gg")
-            and self.resume_url.startswith("wss://")
-            else "wss://gateway.discord.gg"
-        )
+        base = "wss://gateway.discord.gg"
+        if self.resume_url:
+            resume = urlparse(self.resume_url)
+            if resume.scheme == "wss" and (resume.hostname or "").endswith(".discord.gg"):
+                base = self.resume_url
         socket: Any = self.socket_factory(
             base.rstrip("/") + "/?v=10&encoding=json",
             lambda text: self.on_message(socket, text),
@@ -188,44 +183,32 @@ class Gateway:
             return
         try:
             payload = json.loads(str(text))
-            if not isinstance(payload, dict) or not isinstance(payload.get("op"), int):
-                return
             sequence = payload.get("s")
             if sequence is not None:
-                if not isinstance(sequence, int):
-                    return
                 self.sequence = sequence
         except TypeError, ValueError:
             log.warning("gateway_payload_parse_failed")
             return
-        op, data = payload["op"], payload.get("d")
-        if op == 10:
-            interval = data.get("heartbeat_interval") if isinstance(data, dict) else None
-            if isinstance(interval, (int, float)) and math.isfinite(interval) and interval > 0:
-                self.start_heartbeat(interval / 1000)
+        data = payload.get("d")
+        match (payload["op"], payload.get("t")):
+            case (10, _):  # Hello
+                self.start_heartbeat(data["heartbeat_interval"] / 1000)
                 self.identify_or_resume()
-        elif op == 11:
-            self.heartbeat_acknowledged = True
-        elif op == 1:
-            self.send_heartbeat()
-        elif op == 9:
-            if data is not True:
-                self.reset_session()
-            self.reconnect()
-        elif op == 7:
-            self.reconnect()
-        elif op == 0:
-            if (
-                payload.get("t") == "READY"
-                and isinstance(data, dict)
-                and isinstance(data.get("session_id"), str)
-            ):
+            case (11, _):  # Heartbeat acknowledged
+                self.heartbeat_acknowledged = True
+            case (1, _):  # Heartbeat requested
+                self.send_heartbeat()
+            case (9, _):  # Invalid session
+                if not data:
+                    self.reset_session()
+                self.reconnect()
+            case (7, _):  # Reconnect requested
+                self.reconnect()
+            case (0, "READY"):
                 self.session_id = data["session_id"]
-                self.resume_url = data.get("resume_gateway_url") or self.resume_url
-                self.bot_user_id = (data.get("user") or {}).get("id") or self.bot_user_id
-            elif (
-                payload.get("t") == "MESSAGE_CREATE" and isinstance(data, dict) and is_message(data)
-            ):
+                self.resume_url = data["resume_gateway_url"]
+                self.bot_user_id = data["user"]["id"]
+            case (0, "MESSAGE_CREATE"):
                 # Claim before scheduling/awaiting; duplicate events cannot race.
                 if data["id"] in self.processed:
                     return

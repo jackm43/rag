@@ -5,7 +5,6 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-from .runtime import env_value, to_python
 from .settings_storage import READ_SETTINGS
 
 RESOURCE_NAMES = (
@@ -24,14 +23,13 @@ def parse_settings(raw: str) -> dict:
         raise ValueError("incomplete settings snapshot")
     if any(not isinstance(value, str) or len(value) > 100000 for value in resources.values()):
         raise ValueError("invalid settings resource")
-    for key, value in resources.items():
-        if key.endswith(".json") and not isinstance(json.loads(value), dict):
-            raise ValueError("invalid settings document")
-    for key in ("discord-response.json",):
-        model = json.loads(resources[key]).get("model")
-        if not isinstance(model, str) or not model.strip():
-            raise ValueError("missing settings model")
+    chat = json.loads(resources["discord-response.json"])
     image = json.loads(resources["bicture-image.json"])
+    if not isinstance(chat, dict) or not isinstance(image, dict):
+        raise ValueError("invalid settings document")
+    model = chat.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError("missing settings model")
     profiles = image.get("profiles")
     if not isinstance(profiles, dict) or image.get("activeProfile") not in profiles:
         raise ValueError("invalid image profiles")
@@ -64,7 +62,9 @@ class ModelConfig:
 def number(value: Any, fallback: float, *, minimum: float = 0, maximum: float = math.inf) -> float:
     try:
         parsed = float(value)
-        return parsed if math.isfinite(parsed) and minimum <= parsed <= maximum else fallback
+        if math.isfinite(parsed) and minimum <= parsed <= maximum:
+            return parsed
+        return fallback
     except ValueError, TypeError:
         return fallback
 
@@ -77,11 +77,11 @@ class ConfigStore:
     async def snapshot(self) -> dict:
         if self._fixed is not None:
             return parse_settings(json.dumps(self._fixed))
-        db = env_value(self.env, "DB")
+        db = self.env.DB
         if db is None:
             raise ValueError("D1 settings binding is required")
         # Without a Sessions API replica session, D1 bindings query the primary.
-        row = to_python(await db.prepare(READ_SETTINGS).first())
+        row = await db.prepare(READ_SETTINGS).first()
         if row is None:
             raise ValueError("AI settings are not initialized in D1")
         snapshot = parse_settings(row["document"])
@@ -101,14 +101,22 @@ class ConfigStore:
         data = self.document_from(snapshot, "discord-response.json")
         gateway = data.get("gatewayId")
         effort = data.get("reasoningEffort")
+        gateway_id = None
+        if isinstance(gateway, str) and gateway.strip():
+            gateway_id = gateway.strip()
+        if effort not in ("low", "medium", "high", "xhigh"):
+            effort = None
+        api_format = data.get("apiFormat", "chat-completions")
+        if api_format not in ("chat-completions", "responses"):
+            raise ValueError("unsupported chat API format")
         return ModelConfig(
             revision=snapshot["revision"],
             model=data["model"].strip(),
             prompt=snapshot["resources"]["discord-response-system-prompt.md"].strip(),
             temperature_supported=data.get("temperatureSupported", True) is True,
-            reasoning_effort=effort if effort in ("low", "medium", "high", "xhigh") else None,
+            reasoning_effort=effort,
             temperature=number(data.get("temperature"), 0.7, maximum=2),
-            gateway_id=gateway.strip() or None if isinstance(gateway, str) else None,
+            gateway_id=gateway_id,
             history_limit=int(number(data.get("historyLimit"), 12, minimum=1)),
-            api_format="responses" if data.get("apiFormat") == "responses" else "chat-completions",
+            api_format=api_format,
         )

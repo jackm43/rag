@@ -1,14 +1,27 @@
 from types import SimpleNamespace
 
+import pytest
+
 from ragbot.ai import Attribution
 
 
-async def test_bicture_reports_rejected_upload_without_regenerating(app):
+@pytest.mark.parametrize(
+    "result",
+    [
+        b"abc",
+        "YWJj",
+        {"image": "YWJj"},
+        {"result": {"result": {"image": "YWJj"}}},
+        {"data": [{"b64_json": "YWJj"}]},
+        "data:image/png;base64,YWJj",
+    ],
+)
+async def test_bicture_reports_rejected_upload_without_regenerating(app, result):
     from unittest.mock import AsyncMock
 
     from ragbot.commands.media import bicture
 
-    app.ai.media = AsyncMock(return_value={"data": [{"b64_json": "YWJj"}]})
+    app.ai.media = AsyncMock(return_value=result)
     ctx = SimpleNamespace(
         app=app,
         option=lambda name: "a tree",
@@ -68,3 +81,25 @@ async def test_bicture_history_failure_does_not_repeat_generation_or_reply(app):
     await bicture(ctx)
     app.ai.media.assert_awaited_once()
     ctx.reply.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "result",
+    ["data:image/png,YWJj", "data:image/png;base64", "data:image/png;base64,"],
+)
+async def test_bicture_invalid_data_uri_reports_failure_without_upload(app, result):
+    from unittest.mock import AsyncMock
+
+    from ragbot.commands.media import bicture
+
+    app.ai.media = AsyncMock(return_value=result)
+    ctx = SimpleNamespace(
+        app=app,
+        option=lambda name: "a tree",
+        attribution=lambda kind: Attribution(kind),
+        reply=AsyncMock(return_value=True),
+    )
+    await bicture(ctx)
+    app.ai.media.assert_awaited_once()
+    ctx.reply.assert_awaited_once_with("Could not generate that image. Try a different prompt.")
+    assert (await app.db.first("SELECT status FROM rag_ai_interactions"))["status"] == "error"

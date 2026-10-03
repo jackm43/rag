@@ -10,15 +10,6 @@ def to_js(value: Any) -> Any:
     return convert(value, dict_converter=Object.fromEntries)
 
 
-def to_python(value: Any) -> Any:
-    return value.to_py() if hasattr(value, "to_py") else value
-
-
-def env_value(env: Any, name: str, default: Any = None) -> Any:
-    value = getattr(env, name, None)
-    return default if value is None else value
-
-
 async def fetch(url: str, *, timeout_ms: int = 15000, **options: Any) -> Any:
     from js import AbortSignal, Request
     from workers import fetch as worker_fetch
@@ -39,7 +30,11 @@ async def fetch(url: str, *, timeout_ms: int = 15000, **options: Any) -> Any:
 
 
 def wait_until(ctx: Any, awaitable: Any) -> None:
-    """Retain the Python task's JS proxy until background work settles."""
+    """Keep post-response work alive and release its raw JS task proxy on completion.
+
+    ExecutionContext.waitUntil is a raw JS API, unlike SDK binding methods.
+    The SDK's ASGI adapter uses the same explicit proxy lifetime management.
+    """
     import asyncio
     import sys
 

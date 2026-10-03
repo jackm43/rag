@@ -94,7 +94,9 @@ async def test_grok_draft_simulation_uses_binding_and_leaves_saved_settings_unch
     )
     result = await simulation.run("mention")
     assert result["db"]["interaction"]["status"] == "ok"
-    assert result["replies"][0]["content"] == "hello <https://example.com>"
+    assert result["replies"][0]["content"] == (
+        "Assistant: hello <@123456789012345678> https://example.com"
+    )
     assert len(result["ai"]) == 1
     exchange = result["ai"][0]
     assert exchange["transport"] == "workers-ai-binding"
