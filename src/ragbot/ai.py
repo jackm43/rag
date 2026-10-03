@@ -307,7 +307,7 @@ class Inference:
         data: dict,
         attribution: Attribution,
         *,
-        settings_revision: str = "bundled",
+        settings_revision: str = "unspecified",
     ):
         source_id = f"aigreq:{uuid.uuid4()}"
         result = await self.binding(

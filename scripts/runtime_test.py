@@ -185,7 +185,10 @@ def main():
                 assert result["spend"] == []
                 assert result["multipart"] is True
                 status, body = request(base, "/test/settings")
-                assert status == 200 and json.loads(body)["refreshed"] is True
+                assert status == 200 and json.loads(body) == {
+                    "refreshed": True,
+                    "requiresD1": True,
+                }
                 status, body = request(base, "/test/gateway")
                 if status != 200:
                     raise AssertionError(body.decode()[:5000])

@@ -70,10 +70,11 @@ Add commands using `@command(...)` in `src/ragbot/commands/` and import the
 module in its `__init__.py`. Register with
 `op run --env-file=.env -- pnpm run register:commands` only when requested.
 
-Add AI model/config/prompt files in `src/ragbot/ai_config/` and read via
-`ConfigStore` (D1-first; legacy KV/bundled fallback only before initialization).
-Live settings use a fresh primary D1 snapshot per AI request. Run `pnpm run build`
-after editing resources. `_bundled.py` is generated; do not edit it directly.
+AI model/config/prompt settings are read through `ConfigStore` from a fresh
+primary D1 snapshot per AI request. D1 must be initialized; there is no runtime
+KV or file fallback. `config/ai/` contains operator inputs for explicit D1
+initialization only. Do not bundle these files into the Worker. Initialization
+must preserve any existing D1 settings.
 
 Regenerate `src/js-stubs` with `pnpm run types` after binding/config changes.
 Do not edit generated platform stubs by hand.

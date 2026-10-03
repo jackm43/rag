@@ -43,6 +43,13 @@ if __name__ == "__main__":
         raise SystemExit("Run pnpm run dev:ui so op run supplies CF_AIG_TOKEN.")
     extra = list(sys.argv[1:])
     if os.environ.get("DEV_UI_IN_CONTAINER") == "1":
+        # A fresh Docker volume is already a directory; pywrangler otherwise
+        # tries to remove that mount point before creating its build environment.
+        if not (ROOT / ".venv-workers/pyvenv.cfg").is_file():
+            subprocess.run(
+                command("uv", "venv", str(ROOT / ".venv-workers"), "--python", "3.14"),
+                check=True,
+            )
         raise SystemExit(serve(dev_ui=True, extra=extra))
     if use_docker():
         raise SystemExit(run_docker())

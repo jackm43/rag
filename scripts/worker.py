@@ -35,7 +35,6 @@ def serve(*, dev_ui=False, extra=()):
     destination = ROOT / ".wrangler" / ("python-dev" if dev_ui else "python-local")
 
     def prepare():
-        subprocess.run([sys.executable, str(ROOT / "scripts/bundle_config.py")], check=True)
         stage(destination, dev=dev_ui)
         config_path = destination / "wrangler.jsonc"
         config = json.loads(config_path.read_text())
@@ -72,6 +71,20 @@ def serve(*, dev_ui=False, extra=()):
                 "-c",
                 str(destination / "wrangler.jsonc"),
             ),
+            cwd=ROOT,
+            env=env,
+            check=True,
+        )
+        # Bootstrap only an empty local sandbox before starting the Worker.
+        # This operator step never changes existing settings or the live database.
+        subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/migrate_ai_settings.py"),
+                "--local",
+                "--persist-to",
+                str(state),
+            ],
             cwd=ROOT,
             env=env,
             check=True,

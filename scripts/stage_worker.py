@@ -103,11 +103,6 @@ def stage(destination: Path, *, dev: bool = False, runtime_test: bool = False):
                 for binding in production["d1_databases"]
                 if binding["binding"] == "DB"
             ),
-            "namespace": next(
-                binding["id"]
-                for binding in production["kv_namespaces"]
-                if binding["binding"] == "AI_CONFIG"
-            ),
         }
         (source / "dev_target.py").write_text("TARGET = " + repr(target) + "\n")
         assets = {
@@ -123,6 +118,11 @@ def stage(destination: Path, *, dev: bool = False, runtime_test: bool = False):
     if runtime_test:
         shutil.copy(source / "entry.py", source / "production.py")
         shutil.copy(ROOT / "tests/runtime_worker.py", source / "entry.py")
+        from settings_seed import load_resources
+
+        (source / "test_config.py").write_text(
+            "RESOURCES = " + pprint.pformat(load_resources()) + "\n", encoding="utf-8"
+        )
         config["name"] = "ragbot-python-runtime-test"
         config.pop("ai", None)
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey

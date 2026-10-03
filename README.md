@@ -35,7 +35,7 @@ On Windows, `uv sync --locked` creates a native Windows `.venv` with uv-managed
 Python. Checks and tests run from PowerShell without activating it. Virtual
 environments cannot be shared with WSL or Linux; if an existing `.venv` came
 from Linux, move it aside before running `uv sync --locked` again. The Docker
-debugging UI uses its own Python environment.
+debugging UI uses its own Python and Worker build environments.
 
 The Python dependencies are locked in `uv.lock`, including a project-local uv
 for the Python Workers build tool. Node is used only for Cloudflare
@@ -65,7 +65,7 @@ src/ragbot/gateway.py    gateway lifecycle, heartbeats, deduplication
 src/ragbot/discord.py    Discord REST and capped media downloads
 src/ragbot/discord_http.py  native rate limits and bounded retries
 src/ragbot/ai.py         inference, attribution, shared /ask routing
-src/ragbot/ai_config/    editable JSON configs and Markdown prompts
+config/ai/              operator inputs for initial D1 settings
 src/ragbot/config.py     per-request D1 configuration snapshots
 src/ragbot/db.py         D1 access, bans, threads
 src/ragbot/security.py   external authentication
@@ -79,11 +79,11 @@ dev/                   local-only Python debugging UI and browser assets
 ## Everyday commands
 
 ```sh
-pnpm run build                               # regenerate bundled AI config
-pnpm run check                               # Ruff, formatting, mypy, config freshness
+pnpm run check                               # Ruff, formatting, mypy
 pnpm test                                    # Python behavior tests with real SQLite schema
 pnpm run test:runtime                         # actual local Python Worker, no live services
 pnpm run d1:migrate:local
+pnpm run settings:init:local                  # initialize local D1 once
 op run --env-file=.env -- pnpm run dev
 pnpm run dev:ui                              # op run loads .env + .env.dev automatically
 op run --env-file=.env -- pnpm run register:commands
@@ -148,8 +148,8 @@ Other slash commands are under **Other commands**, and captured requests, replie
 logs, and database effects are under **Request details**. Drafts and transcripts
 persist in the browser; output remains available across page switches.
 
-Source changes rebuild the Worker automatically. UI and bundled configuration
-changes also reload the browser once any active request finishes, preserving drafts.
+Source changes rebuild the Worker automatically. UI changes also reload the
+browser once any active request finishes, preserving drafts.
 The UI has its own local database state at `.wrangler/dev-state`. Simulations use
 local data. Live settings and history are read from the D1 database configured in
 `wrangler.jsonc`; local settings and history use the sandbox database.
@@ -162,8 +162,10 @@ has been removed. The dev worker has no routes, `workers_dev: false`, and a
 
 ## Configuration and operations
 
-AI models, prompts, and generation settings live in `src/ragbot/ai_config`.
-`pnpm run build` generates `_bundled.py`; deployment runs this automatically.
+AI models, prompts, and generation settings are stored in D1. Production reads
+D1 only; no prompt files or generated configuration module are packaged with
+the Worker. `config/ai/` holds operator inputs for initial setup, not runtime
+fallbacks. Editing those files does not change an initialized database.
 The dev UI defaults to **Live bot** settings. Choose any available model on Chat
 or `/bicture`, then use **Review & save to live bot** to inspect the before/after
 values and **Save to live bot** to apply them. Chat settings are shared by mentions
@@ -198,13 +200,32 @@ op run --env-file=.env -- uv run python scripts/migrate_ai_settings.py
 op run --env-file=.env -- pnpm run deploy
 ```
 
-The migration script preserves all current KV values, verifies the D1 readback,
-and does nothing if settings are already present in D1. It leaves legacy KV
-untouched. The new runtime reads KV/bundled defaults only when the D1 table exists
-but has no settings row; a missing table is an error. The dev launcher applies
-local schema migrations, and the first local save initializes its settings row.
-Once D1 settings exist they take precedence over KV and future bundled changes.
-Future settings edits need no redeployment.
+The initialization script preserves current KV values on a live database that
+has not been initialized, using `config/ai/` only for missing initial values.
+Existing D1 settings are preserved, and legacy KV remains untouched. Runtime
+and editor reads require an initialized D1 row; a missing row, missing binding,
+or failed read stops AI inference. Future settings edits need no redeployment.
+
+For a new local database, apply migrations and initialize settings explicitly:
+
+```sh
+pnpm run d1:migrate:local
+pnpm run settings:init:local
+# The debugging UI uses a separate local state directory:
+pnpm exec wrangler d1 migrations apply ragbot --local --persist-to .wrangler/dev-state
+pnpm run settings:init:local --persist-to .wrangler/dev-state
+```
+
+The debugging UI launcher applies migrations and initializes an empty local
+sandbox before starting the Worker, including inside Docker. This setup step
+reads `config/ai/`; the running Worker still reads D1 only.
+
+Initialization is idempotent and never replaces existing D1 settings. Verify
+live settings without writes using:
+
+```sh
+op run --env-file=.env -- uv run python scripts/migrate_ai_settings.py --check
+```
 
 AI has no daily budget cap, per-minute request limit, or moderation-ban checks.
 `/raghammer` bans apply only to `/rag`. Historical spend and request data is retained.

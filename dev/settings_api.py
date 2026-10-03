@@ -6,8 +6,7 @@ import json
 import re
 from datetime import datetime, timezone
 
-from ragbot._bundled import FILES
-from ragbot.config import SETTINGS_KEY, legacy_snapshot, parse_settings
+from ragbot.config import parse_settings
 from ragbot.model_catalog import CreditCatalog, chat_overrides, image_parameters
 from ragbot.runtime import env_value, fetch, to_python
 from ragbot.settings import DraftNamespace, resolve_config, validate_overrides
@@ -46,26 +45,6 @@ class SettingsEditor:
         self.env, self.target, self.destination = env, target, destination
         self.transport = transport
         self.catalog = catalog or CreditCatalog(env)
-
-    async def remote(self, key):
-        # Read-only legacy migration source. New settings never write KV.
-        account, namespace = self.destination["account"], self.destination["namespace"]
-        if not all(
-            re.fullmatch(r"[a-f0-9]{32}", part) for part in (account, namespace)
-        ) or key not in (*FILES, SETTINGS_KEY):
-            raise SettingsError("Invalid configured settings destination.")
-        response = await self.transport(
-            f"https://api.cloudflare.com/client/v4/accounts/{account}/storage/kv/namespaces/{namespace}/values/{key}",
-            headers={"Authorization": f"Bearer {env_value(self.env, 'CLOUDFLARE_API_TOKEN', '')}"},
-        )
-        if response.status == 404:
-            return None
-        if not response.ok:
-            raise SettingsError(
-                "Cannot read legacy settings. Check the API token's Workers KV Storage permissions.",
-                503,
-            )
-        return await response.text()
 
     async def query(self, sql, params=()):
         if sql not in (READ_SETTINGS, WRITE_SETTINGS, READ_HISTORY):
@@ -132,16 +111,10 @@ class SettingsEditor:
                 raise SettingsError("Saved settings revision is invalid.", 409)
             source, storage_revision = "d1", row["revision"]
         else:
-
-            async def get(key):
-                return (
-                    await self.remote(key)
-                    if self.target == "live"
-                    else await self.env.AI_CONFIG.get(key)
-                )
-
-            snapshot = await legacy_snapshot(get)
-            source, storage_revision = "legacy", None
+            raise SettingsError(
+                "AI settings are not initialized in D1. Run the settings initialization command for this destination.",
+                503,
+            )
         return await self.describe(snapshot, source, storage_revision)
 
     async def describe(self, snapshot, source="d1", storage_revision=None):
@@ -171,13 +144,6 @@ class SettingsEditor:
         if result.get("meta", {}).get("changes") != 1:
             raise SettingsError("Settings changed during your save. Reload and review again.", 409)
         return await self.describe(snapshot, storage_revision=snapshot["revision"])
-
-    async def initialize(self):
-        """Operator migration; copy legacy settings only if D1 is still empty."""
-        current = await self.read()
-        if current["source"] == "d1":
-            return current
-        return await self.write(current["resources"], None)
 
     async def prepare(self, body):
         current = await self.read()

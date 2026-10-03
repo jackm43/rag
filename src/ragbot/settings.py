@@ -2,14 +2,12 @@
 
 import json
 
-from ._bundled import FILES
 from .config import ConfigStore, resource_revision
 
 
 class DraftNamespace:
-    def __init__(self, overrides, resources=None):
-        self.values = dict(FILES if resources is None else resources)
-        self.values.update(overrides.get("kv") or {})
+    def __init__(self, overrides, resources):
+        self.values = dict(resources)
         for key, fields in [
             (
                 "discord-response.json",
@@ -29,7 +27,7 @@ class DraftNamespace:
             ),
         ]:
             try:
-                document = json.loads(self.values.get(key, FILES[key]))
+                document = json.loads(self.values[key])
                 if not isinstance(document, dict):
                     document = {}
             except ValueError, TypeError:
@@ -53,7 +51,7 @@ class DraftNamespace:
         ):
             if isinstance(overrides.get(field), str) and overrides[field].strip():
                 self.values[key] = overrides[field]
-        image = json.loads(self.values.get("bicture-image.json", FILES["bicture-image.json"]))
+        image = json.loads(self.values["bicture-image.json"])
         profile_name = overrides.get("imageProfile") or image["activeProfile"]
         if profile_name not in image["profiles"]:
             raise ValueError("unknown image profile")
@@ -71,15 +69,12 @@ class DraftNamespace:
             profile["parameters"] = overrides["imageParameters"]
         self.values["bicture-image.json"] = json.dumps(image)
 
-    async def get(self, key):
-        return self.values.get(key)
 
-
-def draft_store(overrides, resources=None, revision=None):
-    baseline = FILES if resources is None else resources
+def draft_store(overrides, resources, revision=None):
+    baseline = resources
     values = DraftNamespace(overrides, baseline).values
     checksum = resource_revision(values)
-    base_revision = revision or "legacy-" + resource_revision(baseline)
+    base_revision = revision or "snapshot-" + resource_revision(baseline)
     used_revision = (
         base_revision
         if checksum == resource_revision(baseline)
@@ -96,7 +91,7 @@ def draft_store(overrides, resources=None, revision=None):
     )
 
 
-async def resolve_config(overrides, resources=None):
+async def resolve_config(overrides, resources):
     store = draft_store(overrides, resources)
     chat, search = await store.models()
     image = await store.document("bicture-image.json")
