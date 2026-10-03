@@ -46,16 +46,24 @@ class Default(ProductionDefault):
 
     async def fetch(self, request):
         path = urlparse(request.url).path
-        if path.startswith("/test/unconfigured/"):
-            return await ProductionDefault.fetch(
-                SimpleNamespace(env=SimpleNamespace(), ctx=self.ctx, app=self.app),
-                SimpleNamespace(
-                    url=request.url.replace("/test/unconfigured", ""),
-                    method=request.method,
-                    headers=request.headers,
-                    bytes=request.bytes,
-                ),
-            )
+        for prefix, public_key in (
+            ("/test/unconfigured", None),
+            ("/test/invalid-key", "aa" * 31),
+        ):
+            if path.startswith(prefix + "/"):
+                return await ProductionDefault.fetch(
+                    SimpleNamespace(
+                        env=SimpleNamespace(DISCORD_PUBLIC_KEY=public_key),
+                        ctx=self.ctx,
+                        app=self.app,
+                    ),
+                    SimpleNamespace(
+                        url=request.url.replace(prefix, ""),
+                        method=request.method,
+                        headers=request.headers,
+                        bytes=request.bytes,
+                    ),
+                )
         if path == "/test/settings":
             from test_config import RESOURCES as FILES
 
@@ -289,6 +297,8 @@ class Default(ProductionDefault):
         posted = calls[-1]["data"]
         assert posted["message_reference"]["message_id"] == "123456789012345710"
         assert posted["allowed_mentions"] == {"parse": [], "replied_user": False}
+        assert posted["flags"] == 4
+        assert posted["content"] == ("Assistant: hello <@123456789012345678> https://example.com")
         from ragbot.discord import Attachment
 
         interaction = {

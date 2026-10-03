@@ -125,9 +125,8 @@ async def ragunban(ctx: CommandContext):
         target,
         now_iso(),
     )
-    text = (
-        f"<@{target}> can use /rag again."
-        if result.get("meta", {}).get("changes", 0)
-        else f"<@{target}> does not have an active /rag ban."
-    )
+    if result["meta"]["changes"]:
+        text = f"<@{target}> can use /rag again."
+    else:
+        text = f"<@{target}> does not have an active /rag ban."
     await ctx.reply(text, users=[target])

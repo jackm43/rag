@@ -1,7 +1,6 @@
 """D1 access with native Python results and parameterized statements."""
 
 import logging
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -25,7 +24,12 @@ def guild_allowed(env: Any, guild_id: str | None) -> bool:
     if not configured.strip():
         log.warning("allowed_guild_ids_unset")
         return True
-    allowed = {v.strip() for v in configured.split(",") if re.fullmatch(r"[0-9]{17,20}", v.strip())}
+    identifiers = (value.strip() for value in configured.split(","))
+    allowed = {
+        identifier
+        for identifier in identifiers
+        if identifier.isascii() and identifier.isdecimal() and 17 <= len(identifier) <= 20
+    }
     return guild_id in allowed
 
 

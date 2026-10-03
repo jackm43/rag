@@ -12,6 +12,7 @@ from .policy import truncate_discord
 from .runtime import fetch, to_js
 
 API_BASE = "https://discord.com/api/v10"
+SUPPRESS_EMBEDS = 1 << 2
 MEDIA_MAX_BYTES = 25 * 1024 * 1024
 log = logging.getLogger("ragbot")
 Transport = Callable[..., Awaitable[Any]]
@@ -87,13 +88,14 @@ class DiscordClient:
             if optional:
                 return None
             raise RuntimeError(f"Discord API request failed ({response.status})")
-        try:
-            return await response.json()
-        except Exception:
-            return None
+        return await response.json()
 
     async def post_message(self, channel_id: str, content: str, *, reply_to: str | None = None):
-        data: dict = {"content": content, "allowed_mentions": {"parse": []}}
+        data: dict = {
+            "content": content,
+            "allowed_mentions": {"parse": []},
+            "flags": SUPPRESS_EMBEDS,
+        }
         if reply_to:
             data["message_reference"] = {"message_id": reply_to, "fail_if_not_exists": False}
             data["allowed_mentions"]["replied_user"] = False
@@ -172,8 +174,9 @@ class DiscordClient:
             code = None
             try:
                 error = await response.json()
-                if isinstance(error, dict) and isinstance(error.get("code"), int):
-                    code = error["code"]
+                match error:
+                    case {"code": int(error_code)}:
+                        code = error_code
             except Exception:
                 pass
             log.warning("interaction_write_rejected status=%s code=%s", response.status, code)

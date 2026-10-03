@@ -68,7 +68,7 @@ async def test_invalid_ban_duration(app, interaction, timeframe):
 
 
 @pytest.mark.parametrize("name", ["undorag", "raghammer"])
-@pytest.mark.parametrize("roles", [None, [], ["123456789012345678"], MODS_ROLE_ID])
+@pytest.mark.parametrize("roles", [[], ["123456789012345678"]])
 @pytest.mark.parametrize("user", ["123456789012345679", *sorted(ADMIN_IDS)])
 async def test_mod_commands_deny_without_role(app, interaction, name, roles, user):
     await app.dispatch(interaction("rag", options=[USER_OPTION]))

@@ -38,14 +38,14 @@ class Default(WorkerEntrypoint):
             except ValueError, UnicodeError:
                 log.warning("interaction_body_unparseable")
                 return Response(status=400)
-            if not isinstance(interaction, dict) or isinstance(interaction.get("type"), bool):
-                return Response(status=400)
-            if interaction.get("type") == 1:
-                return Response.from_json({"type": 1})
-            if interaction.get("type") != 2:
-                return Response(status=400)
-            wait_until(self.ctx, self.app.dispatch(interaction))
-            return Response.from_json({"type": 5})
+            match interaction["type"]:
+                case 1:
+                    return Response.from_json({"type": 1})
+                case 2:
+                    wait_until(self.ctx, self.app.dispatch(interaction))
+                    return Response.from_json({"type": 5})
+                case _:
+                    return Response(status=400)
         controls = {
             ("POST", "/gateway/start"): "start",
             ("POST", "/gateway/stop"): "stop",

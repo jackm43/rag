@@ -75,13 +75,11 @@ class CommandContext:
 
     @cached_property
     def display_name(self) -> str:
-        member = self.interaction.get("member") or {}
-        return (
-            member.get("nick")
-            or self.invoker.get("global_name")
-            or self.invoker.get("username")
-            or "user"
-        ).strip() or "user"
+        member = self.interaction.get("member", {})
+        for name in (member.get("nick"), self.invoker.get("global_name"), self.invoker["username"]):
+            if name and name.strip():
+                return name.strip()
+        return "user"
 
     def option(self, name: str) -> str:
         for option in self.interaction["data"].get("options", []):
@@ -90,18 +88,18 @@ class CommandContext:
         return ""
 
     async def target_username(self, target_id: str) -> str | None:
-        resolved = self.interaction.get("data", {}).get("resolved", {}).get("users", {})
-        return (resolved.get(target_id) or {}).get("username") or await self.app.discord.username(
-            target_id
-        )
+        users = self.interaction["data"].get("resolved", {}).get("users", {})
+        if target_id in users:
+            return users[target_id]["username"]
+        return await self.app.discord.username(target_id)
 
     def attribution(self, kind: str, *, channel_id: str | None = None) -> Attribution:
         return Attribution(
             kind,
-            self.invoker.get("id"),
+            self.invoker["id"],
             self.display_name,
             channel_id or self.interaction.get("channel_id"),
-            self.interaction.get("id"),
+            self.interaction["id"],
         )
 
     async def reply(

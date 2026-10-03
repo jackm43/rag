@@ -1,6 +1,5 @@
 import base64
 import logging
-import re
 import time
 
 from ..discord import MEDIA_MAX_BYTES, Attachment, MediaTooLargeError, download_media, read_media
@@ -10,42 +9,55 @@ from .registry import CommandContext, command, text_option
 log = logging.getLogger("ragbot")
 
 
-def media_string(result, field):
+def image_source(result) -> str:
+    """Read the documented image/base64/URL fields from provider envelopes."""
     for _ in range(3):
-        if not isinstance(result, dict):
-            return None
-        value = result.get(field)
-        if isinstance(value, str) and value:
-            return value
-        result = result.get("result")
-    return None
+        match result:
+            case str(value) | {"image": str(value)} if value:
+                return value
+            case {"data": [{"b64_json": str(value)}, *_]} if value:
+                return value
+            case {"data": [{"url": str(value)}, *_]} if value:
+                return value
+            case {"result": nested}:
+                result = nested
+            case _:
+                break
+    raise ValueError("missing_bicture_image")
 
 
 async def image_file(result, transport) -> Attachment:
     content_type = "image/jpeg"
-    if isinstance(result, (bytes, bytearray, memoryview)):
-        data = bytes(result)
-    elif hasattr(result, "getReader"):
-        data = await read_media(result)
-    else:
-        value = result if isinstance(result, str) else media_string(result, "image")
-        if not value and isinstance(result, dict) and result.get("data"):
-            value = result["data"][0].get("b64_json") or result["data"][0].get("url")
-        if not value:
-            raise ValueError("missing_bicture_image")
-        if value.lower().startswith("https://"):
-            data, mime = await download_media(value, transport=transport)
-            content_type = mime or content_type
-        else:
-            match = re.fullmatch(r"data:([^;]+);base64,(.+)", value, re.I)
-            if match:
-                content_type, value = match.groups()
-            if len(value) > (MEDIA_MAX_BYTES + 2) // 3 * 4:
-                raise MediaTooLargeError("image exceeds 25 MiB")
-            data = base64.b64decode(value, validate=True)
+    match result:
+        case bytes() | bytearray() | memoryview():
+            data = bytes(result)
+        case stream if hasattr(stream, "getReader"):
+            data = await read_media(stream)
+        case _:
+            value = image_source(result)
+            if value.lower().startswith("https://"):
+                data, mime = await download_media(value, transport=transport)
+                content_type = mime or content_type
+            else:
+                if value.lower().startswith("data:"):
+                    metadata, separator, value = value.partition(",")
+                    if not separator or not metadata.lower().endswith(";base64"):
+                        raise ValueError("invalid image data URI")
+                    content_type = metadata[5:-7]
+                    if not content_type or not value:
+                        raise ValueError("invalid image data URI")
+                if len(value) > (MEDIA_MAX_BYTES + 2) // 3 * 4:
+                    raise MediaTooLargeError("image exceeds 25 MiB")
+                data = base64.b64decode(value, validate=True)
     if len(data) > MEDIA_MAX_BYTES:
         raise MediaTooLargeError("image exceeds 25 MiB")
-    extension = "png" if "png" in content_type else "webp" if "webp" in content_type else "jpg"
+    match content_type.split(";")[0].strip():
+        case "image/png":
+            extension = "png"
+        case "image/webp":
+            extension = "webp"
+        case _:
+            extension = "jpg"
     return Attachment(f"bicture.{extension}", content_type, data)
 
 
@@ -62,8 +74,7 @@ async def bicture(ctx: CommandContext):
     try:
         snapshot = await ctx.app.config.snapshot()
         config = ctx.app.config.document_from(snapshot, "bicture-image.json")
-        profiles = config["profiles"]
-        profile = profiles[config["activeProfile"]]
+        profile = config["profiles"][config["activeProfile"]]
         model = profile["model"]
         parameters = profile.get("parameters")
         if parameters is None:

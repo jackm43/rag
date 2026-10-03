@@ -24,7 +24,14 @@ async def test_responses_chat_preserves_conversation_and_extracts_reply(app, sup
         run=AsyncMock(
             return_value={
                 "output": [
-                    {"type": "message", "content": [{"type": "output_text", "text": "Hello"}]}
+                    {"type": "reasoning", "summary": []},
+                    {
+                        "type": "message",
+                        "content": [
+                            {"type": "output_text", "text": "Hello"},
+                            {"type": "output_text", "text": "World"},
+                        ],
+                    },
                 ],
                 "usage": {"input_tokens": 10, "output_tokens": 3, "total_tokens": 13},
             }
@@ -40,7 +47,7 @@ async def test_responses_chat_preserves_conversation_and_extracts_reply(app, sup
     )
     messages = [{"role": "system", "content": "system"}, {"role": "user", "content": "hello"}]
     result = await app.ai.chat(config, messages, Attribution("channel_reply"))
-    assert result.content == "Hello" and result.usage["total_tokens"] == 13
+    assert result.content == "Hello\n\nWorld" and result.usage["total_tokens"] == 13
     model, request, options = app.env.AI.run.call_args.args
     assert model == config.model and request == {
         "input": messages,

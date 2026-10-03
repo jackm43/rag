@@ -45,6 +45,29 @@ async def test_pingless_reply_preserves_question_answer_and_links_reply_without_
     sent = app.transport.writes()[-1]
     assert sent["message_reference"] == {"message_id": incoming["id"], "fail_if_not_exists": False}
     assert sent["allowed_mentions"] == {"parse": [], "replied_user": False}
+    assert sent["flags"] == 4
+
+
+@pytest.mark.parametrize(
+    "reply,expected",
+    [
+        (
+            "Assistant: <@123456789012345678> @everyone @here 123456789012345679\n\n\n"
+            "```python\n    print('hello')\n```\n[link](https://example.com)  ",
+            "Assistant: <@123456789012345678> @everyone @here 123456789012345679\n\n\n"
+            "```python\n    print('hello')\n```\n[link](https://example.com)  ",
+        ),
+        (" \n\t", "I could not generate a response."),
+        ("\U0001f600" * 1000, "\U0001f600" * 950),
+    ],
+)
+async def test_ai_reply_preserves_content_with_discord_delivery_limits(app, reply, expected):
+    app.env.AI.run.return_value = {"response": reply}
+    await app.handle_message(message(4, f"<@{BOT}> explain this"), BOT)
+    sent = app.transport.writes()[-1]
+    assert sent["content"] == expected
+    assert sent["allowed_mentions"] == {"parse": [], "replied_user": False}
+    assert sent["flags"] == 4
 
 
 @pytest.mark.parametrize("author,called", [(BOT, True), (USER, False)])

@@ -165,14 +165,11 @@ class Gateway:
         self.clear_reconnect()
         self.close_socket(4000, "reconnect")
         # Discord sends regional resume endpoints. Do not send the bot token to arbitrary hosts.
-        host = urlparse(self.resume_url or "").hostname or ""
-        base = (
-            self.resume_url
-            if self.resume_url
-            and host.endswith(".discord.gg")
-            and self.resume_url.startswith("wss://")
-            else "wss://gateway.discord.gg"
-        )
+        base = "wss://gateway.discord.gg"
+        if self.resume_url:
+            resume = urlparse(self.resume_url)
+            if resume.scheme == "wss" and (resume.hostname or "").endswith(".discord.gg"):
+                base = self.resume_url
         socket: Any = self.socket_factory(
             base.rstrip("/") + "/?v=10&encoding=json",
             lambda text: self.on_message(socket, text),
@@ -192,26 +189,26 @@ class Gateway:
         except TypeError, ValueError:
             log.warning("gateway_payload_parse_failed")
             return
-        op, data = payload["op"], payload.get("d")
-        if op == 10:
-            self.start_heartbeat(data["heartbeat_interval"] / 1000)
-            self.identify_or_resume()
-        elif op == 11:
-            self.heartbeat_acknowledged = True
-        elif op == 1:
-            self.send_heartbeat()
-        elif op == 9:
-            if data is not True:
-                self.reset_session()
-            self.reconnect()
-        elif op == 7:
-            self.reconnect()
-        elif op == 0:
-            if payload["t"] == "READY":
+        data = payload.get("d")
+        match (payload["op"], payload.get("t")):
+            case (10, _):  # Hello
+                self.start_heartbeat(data["heartbeat_interval"] / 1000)
+                self.identify_or_resume()
+            case (11, _):  # Heartbeat acknowledged
+                self.heartbeat_acknowledged = True
+            case (1, _):  # Heartbeat requested
+                self.send_heartbeat()
+            case (9, _):  # Invalid session
+                if not data:
+                    self.reset_session()
+                self.reconnect()
+            case (7, _):  # Reconnect requested
+                self.reconnect()
+            case (0, "READY"):
                 self.session_id = data["session_id"]
                 self.resume_url = data["resume_gateway_url"]
                 self.bot_user_id = data["user"]["id"]
-            elif payload["t"] == "MESSAGE_CREATE":
+            case (0, "MESSAGE_CREATE"):
                 # Claim before scheduling/awaiting; duplicate events cannot race.
                 if data["id"] in self.processed:
                     return

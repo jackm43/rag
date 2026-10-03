@@ -92,18 +92,31 @@ def main():
                 assert request(
                     base, "/interactions", method="POST", body=body, headers=signed(body)
                 ) == (200, b'{"type": 1}')
+                assert request(
+                    base,
+                    "/test/invalid-key/interactions",
+                    method="POST",
+                    body=body,
+                    headers=signed(body),
+                ) == (401, b"")
                 invalid_headers = [
                     {},
                     signed(b"{}"),
                     *[signed(body, str(int(time.time()) + offset)) for offset in (-301, 310)],
                     {**signed(body), "x-signature-timestamp": "bad"},
+                    {**signed(body), "x-signature-timestamp": "1.5"},
+                    {**signed(body), "x-signature-timestamp": "9" * 100},
                     {**signed(body), "x-signature-ed25519": "bad"},
+                    {**signed(body), "x-signature-ed25519": "aa" * 63},
+                    {**signed(body), "x-signature-ed25519": "aa" * 65},
                 ]
                 for headers in invalid_headers:
                     assert request(
                         base, "/interactions", method="POST", body=body, headers=headers
                     ) == (401, b"")
-                for malformed in (b"[", b"[]", b"null", b'{"type":true}', b'{"type":3}'):
+                # Signed Discord payloads follow its schema; retain JSON decoding
+                # failures and unsupported interaction types at the HTTP boundary.
+                for malformed in (b"[", b'{"type":3}'):
                     assert request(
                         base,
                         "/interactions",
@@ -182,7 +195,9 @@ def main():
                 result = json.loads(body)
                 assert result["totals"][0]["rag_count"] == 1
                 assert result["interactions"][0]["status"] == "ok"
-                assert result["interactions"][0]["response_text"] == "hello <https://example.com>"
+                assert result["interactions"][0]["response_text"] == (
+                    "Assistant: hello <@123456789012345678> https://example.com"
+                )
                 assert result["multipart"] is True
                 status, body = request(base, "/test/settings")
                 assert status == 200 and json.loads(body) == {
