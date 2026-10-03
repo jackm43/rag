@@ -6,16 +6,18 @@ from unittest.mock import AsyncMock
 import pytest
 from conftest import SQLiteBinding
 from settings_api import SettingsEditor, SettingsError
+from settings_seed import SETTINGS_KEY, legacy_resources, load_resources
 
-from ragbot._bundled import FILES
-from ragbot.config import SETTINGS_KEY, ConfigStore
+from ragbot.config import ConfigStore
 from ragbot.settings_storage import READ_SETTINGS, WRITE_SETTINGS
+
+FILES = load_resources()
 
 
 class MemoryKV:
     def __init__(self):
         self.values = {}
-        self.db = SQLiteBinding()
+        self.db = SQLiteBinding(settings=True)
 
     async def get(self, key):
         return self.values.get(key)
@@ -76,13 +78,15 @@ async def test_save_refreshes_existing_production_store_without_redeploy():
 async def test_legacy_chat_token_limit_is_ignored_and_removed_on_save():
     kv = MemoryKV()
     legacy = json.loads(FILES["discord-response.json"]) | {"maxTokens": 1000}
-    kv.values["discord-response.json"] = json.dumps(legacy)
+    resources = dict(FILES)
+    resources["discord-response.json"] = json.dumps(legacy)
+    await editor(kv).write(resources, "test-seed")
     store = ConfigStore(SimpleNamespace(AI_CONFIG=kv, DB=kv.db))
     chat, search = await store.models()
     assert chat.max_tokens is None
     assert search.max_tokens == 1200
     ui = editor(kv)
-    before = await ui.initialize()
+    before = await ui.read()
     assert "maxTokens" not in before["config"]
     body = {
         "page": "chat",
@@ -101,7 +105,7 @@ async def test_legacy_chat_token_limit_is_ignored_and_removed_on_save():
 async def test_conditional_database_writes_reject_a_concurrent_editor():
     kv = MemoryKV()
     first, second = editor(kv), editor(kv)
-    current = await first.initialize()
+    current = await first.read()
     a, b = dict(current["resources"]), dict(current["resources"])
     a["discord-response-system-prompt.md"] = "Editor A"
     b["discord-response-system-prompt.md"] = "Editor B"
@@ -115,21 +119,18 @@ async def test_conditional_database_writes_reject_a_concurrent_editor():
     assert (await first.read())["resources"] == winner["resources"]
 
 
-async def test_migration_preserves_legacy_settings_and_is_idempotent():
+async def test_operator_migration_preserves_legacy_prompt():
     kv = MemoryKV()
     resources = dict(FILES)
     resources["discord-response-system-prompt.md"] = "Preserved live prompt"
     kv.values[SETTINGS_KEY] = json.dumps(
         {"schemaVersion": 1, "resources": resources, "revision": "old-kv"}
     )
-    ui = editor(kv)
-    current = await ui.initialize()
-    assert current["source"] == "d1" and current["resources"] == resources
-    assert (await ui.initialize())["revision"] == current["revision"]
-    kv.values[SETTINGS_KEY] = "invalid legacy snapshot"
-    assert (await ConfigStore(SimpleNamespace(DB=kv.db, AI_CONFIG=kv)).models())[
-        0
-    ].prompt == "Preserved live prompt"
+    assert await legacy_resources(kv.get) == resources
+    kv.values = {"discord-response-system-prompt.md": "Individual legacy prompt"}
+    assert (await legacy_resources(kv.get))[
+        "discord-response-system-prompt.md"
+    ] == "Individual legacy prompt"
 
 
 async def test_primary_read_failure_stops_inference_instead_of_using_old_settings(app):
@@ -140,9 +141,48 @@ async def test_primary_read_failure_stops_inference_instead_of_using_old_setting
     assert not app.transport.calls
 
 
+@pytest.mark.parametrize("database", [None, "empty"])
+async def test_uninitialized_settings_never_use_kv_or_call_ai(app, database):
+    kv = SimpleNamespace(get=AsyncMock(side_effect=AssertionError("KV fallback is forbidden")))
+    app.env.AI_CONFIG = kv
+    app.env.DB = SQLiteBinding() if database == "empty" else None
+    with pytest.raises(ValueError, match="D1"):
+        await app.ai.ask("Hello", "user", [], SimpleNamespace())
+    kv.get.assert_not_awaited()
+    app.env.AI.run.assert_not_awaited()
+    assert not app.transport.calls
+
+
+async def test_editor_requires_initialized_d1_even_with_legacy_kv():
+    kv = MemoryKV()
+    kv.db = SQLiteBinding()
+    kv.values = dict(FILES)
+    with pytest.raises(SettingsError, match="not initialized"):
+        await editor(kv).read()
+    assert not kv.db.connection.execute("SELECT * FROM ai_runtime_settings").fetchall()
+
+
+@pytest.mark.parametrize("model", [None, "", 123])
+async def test_invalid_saved_model_has_no_packaged_default(model):
+    kv = MemoryKV()
+    resources = dict(FILES)
+    resources["discord-response.json"] = json.dumps({"model": model})
+    with pytest.raises(ValueError, match="missing settings model"):
+        await editor(kv).write(resources, "test-seed")
+
+
+async def test_saved_documents_do_not_merge_file_defaults():
+    kv = MemoryKV()
+    resources = dict(FILES)
+    resources["discord-response.json"] = json.dumps({"model": "example/chat"})
+    await editor(kv).write(resources, "test-seed")
+    store = ConfigStore(SimpleNamespace(DB=kv.db))
+    assert await store.document("discord-response.json") == {"model": "example/chat"}
+
+
 async def test_models_are_one_coherent_snapshot_from_one_query():
     kv = MemoryKV()
-    saved = await editor(kv).initialize()
+    saved = await editor(kv).read()
     calls = []
     prepare = kv.db.prepare
 
@@ -233,7 +273,7 @@ async def test_saved_image_parameters_reach_shared_handler(app):
         model="google/nano-banana-2", parameters={"resolution": "1K", "aspect_ratio": "1:1"}
     )
     resources["bicture-image.json"] = json.dumps(image)
-    await editor(kv).write(resources, None)
+    await editor(kv).write(resources, "test-seed")
     app.config = ConfigStore(SimpleNamespace(AI_CONFIG=kv, DB=kv.db))
     app.ai.media = AsyncMock(return_value={"image": "YWJj"})
     ctx = SimpleNamespace(

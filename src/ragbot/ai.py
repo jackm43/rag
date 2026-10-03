@@ -281,7 +281,6 @@ class Inference:
             lines = [
                 f"Current date: {datetime.now(UTC).date()}",
                 f"Requester display name: {username}",
-                "Discord slash command: /ask",
                 "",
             ]
             context = conversation if web_context is None else web_context
@@ -298,12 +297,8 @@ class Inference:
                     f"<{s['url']}>" for s in result.sources[:3]
                 )
             return result
-        system = (
-            chat.prompt
-            + "\n\nThis is a /ask thread. Answer using only this thread's conversation context and the current user message; do not use unrelated channel history. Keep the direct, helpful /ask style instead of normal channel banter. Do not include Discord mentions or raw IDs."
-        )
         return await self.chat(
-            chat, [{"role": "system", "content": system}, *conversation], attribution
+            chat, [{"role": "system", "content": chat.prompt}, *conversation], attribution
         )
 
     async def media(
@@ -312,7 +307,7 @@ class Inference:
         data: dict,
         attribution: Attribution,
         *,
-        settings_revision: str = "bundled",
+        settings_revision: str = "unspecified",
     ):
         source_id = f"aigreq:{uuid.uuid4()}"
         result = await self.binding(

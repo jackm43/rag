@@ -8,8 +8,38 @@ Run `pnpm run check`, `pnpm test`, and `pnpm run test:runtime` before calling
 runtime changes done. Run a deployment dry run when changing packaging or
 bindings. Node 22+, pnpm, and uv 0.12.3+ are required. Commands using secrets go
 through `op run --env-file=.env --`; `pnpm run dev:ui` wraps op itself and also
-loads `.env.dev`. On Windows that command uses Docker Desktop. Do not log
-secrets or resolve them into committed files.
+loads `.env.dev`. Development and deployment run natively on Windows; Docker
+is opt-in via `DEV_UI_DOCKER=1`. Keep uv interpreters, cache, and temporary Worker
+bundles on the project drive to avoid the Pyodide cross-drive path bug. Do not
+log secrets or resolve them into committed files.
+
+## Tooling and Windows
+
+- Run commands from the repository root. Install with `pnpm install` and
+  `uv sync --locked`; use the repository's locked tools through its package
+  scripts. No virtual environment activation is needed. Do not substitute
+  global Wrangler, `uvx`, or manual pip installs.
+- For this `D:` checkout, use `UV_PYTHON_INSTALL_DIR=D:\tools\uv\python` and
+  `UV_CACHE_DIR=D:\tools\uv\cache`. These are user-level Windows settings;
+  existing terminals and Codex must restart or load them into their process
+  environment. See README for the PowerShell setup and interpreter installation.
+- `.venv` holds host tools. Pywrangler prepares `.venv-workers` and
+  `python_modules` for Pyodide before calling Wrangler. Use
+  `uv run pywrangler sync --force` when rebuilding a stale Worker environment.
+  Move incompatible environments aside; preserve `.wrangler/state` and
+  `.wrangler/dev-state` local databases. Keep runtime-test bundles on `D:` too.
+- Start production-code development with
+  `op run --env-file=.env -- pnpm run dev`; start the debugging UI with
+  `pnpm run dev:ui`. Both support native Windows. Docker is an explicit UI
+  option, not the default deployment or development path.
+- Validate production packaging with
+  `op run --env-file=.env -- pnpm run deploy --dry-run`, then deploy with
+  `op run --env-file=.env -- pnpm run deploy` when requested. These use
+  Pywrangler; bare Wrangler does not install Python dependencies. Deploy only
+  the root production `wrangler.jsonc`, never a staged or dev UI bundle.
+- Use `pnpm exec wrangler` for direct D1 operations and `pnpm run types` for
+  binding types. Pass pnpm script arguments directly, without an extra `--`
+  after the script name; retain the separator required by `op run`.
 
 ## Architecture
 
@@ -70,10 +100,11 @@ Add commands using `@command(...)` in `src/ragbot/commands/` and import the
 module in its `__init__.py`. Register with
 `op run --env-file=.env -- pnpm run register:commands` only when requested.
 
-Add AI model/config/prompt files in `src/ragbot/ai_config/` and read via
-`ConfigStore` (D1-first; legacy KV/bundled fallback only before initialization).
-Live settings use a fresh primary D1 snapshot per AI request. Run `pnpm run build`
-after editing resources. `_bundled.py` is generated; do not edit it directly.
+AI model/config/prompt settings are read through `ConfigStore` from a fresh
+primary D1 snapshot per AI request. D1 must be initialized; there is no runtime
+KV or file fallback. `config/ai/` contains operator inputs for explicit D1
+initialization only. Do not bundle these files into the Worker. Initialization
+must preserve any existing D1 settings.
 
 Regenerate `src/js-stubs` with `pnpm run types` after binding/config changes.
 Do not edit generated platform stubs by hand.

@@ -23,6 +23,27 @@ class Default(ProductionDefault):
 
         self.app = Application(env, transport=discord_stub)
 
+    async def seed_settings(self):
+        from test_config import RESOURCES
+
+        from ragbot.settings_storage import WRITE_SETTINGS
+
+        if (
+            await self.env.DB.prepare("SELECT id FROM ai_runtime_settings WHERE id = 1").first()
+            is None
+        ):
+            await (
+                self.env.DB.prepare(WRITE_SETTINGS)
+                .bind(
+                    "test-seed",
+                    json.dumps(
+                        {"schemaVersion": 1, "resources": RESOURCES, "revision": "test-seed"}
+                    ),
+                    None,
+                )
+                .run()
+            )
+
     async def fetch(self, request):
         path = urlparse(request.url).path
         if path.startswith("/test/unconfigured/"):
@@ -36,11 +57,13 @@ class Default(ProductionDefault):
                 ),
             )
         if path == "/test/settings":
-            from ragbot._bundled import FILES
+            from test_config import RESOURCES as FILES
+
             from ragbot.config import ConfigStore
             from ragbot.settings_storage import WRITE_SETTINGS
 
             store = ConfigStore(self.env)
+            await self.seed_settings()
             before, _ = await store.models()
             resources = dict(FILES)
             resources["discord-response-system-prompt.md"] = "Runtime saved prompt"
@@ -55,7 +78,7 @@ class Default(ProductionDefault):
                         json.dumps(
                             {"schemaVersion": 1, "resources": resources, "revision": "runtime-1"}
                         ),
-                        None,
+                        "test-seed",
                     )
                     .run()
                 )
@@ -82,7 +105,14 @@ class Default(ProductionDefault):
                     await self.env.DB.prepare(WRITE_SETTINGS).bind("stale", "{}", "runtime-1").run()
                 )
                 assert stale["meta"]["changes"] == 0
-                return Response.json({"refreshed": True})
+                await self.env.DB.prepare("DELETE FROM ai_runtime_settings WHERE id = 1").run()
+                try:
+                    await store.models()
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("Missing D1 settings must stop inference")
+                return Response.json({"refreshed": True, "requiresD1": True})
             finally:
                 await self.env.DB.prepare("DELETE FROM ai_runtime_settings WHERE id = 1").run()
         if path == "/test/upload":
@@ -209,6 +239,7 @@ class Default(ProductionDefault):
 
         media, mime = await download_media(request.url.replace("/test/scenario", "/test/media"))
         assert media == b"image-bytes" and mime == "image/png"
+        await self.seed_settings()
         app = Application(self.env, transport=transport)
 
         ai_inputs = []

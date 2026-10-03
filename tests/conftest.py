@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from settings_seed import load_resources
 
 from ragbot.app import Application
 
@@ -33,11 +34,21 @@ class Statement:
 
 
 class SQLiteBinding:
-    def __init__(self):
+    def __init__(self, *, settings=False):
         self.connection = sqlite3.connect(":memory:")
         self.connection.row_factory = sqlite3.Row
         for migration in sorted(Path("migrations").glob("*.sql")):
             self.connection.executescript(migration.read_text())
+        if settings:
+            self.connection.execute(
+                "INSERT INTO ai_runtime_settings (id, revision, document) VALUES (1, ?, ?)",
+                (
+                    "test-seed",
+                    json.dumps(
+                        {"schemaVersion": 1, "revision": "test-seed", "resources": load_resources()}
+                    ),
+                ),
+            )
 
     def prepare(self, sql):
         return Statement(self, sql)
@@ -99,7 +110,7 @@ class Transport:
 @pytest.fixture
 def app(monkeypatch):
     env = SimpleNamespace(
-        DB=SQLiteBinding(),
+        DB=SQLiteBinding(settings=True),
         DISCORD_BOT_TOKEN="test-bot-token",
         DISCORD_APPLICATION_ID="123456789012345678",
         ALLOWED_GUILD_IDS="457689460096630794",

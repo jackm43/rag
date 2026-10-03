@@ -1,17 +1,21 @@
-"""A fresh primary D1 snapshot for each AI request, with legacy startup fallback."""
+"""A fresh primary D1 settings snapshot for each AI request."""
 
-import asyncio
 import hashlib
 import json
 import math
 from dataclasses import dataclass
 from typing import Any
 
-from ._bundled import FILES
 from .runtime import env_value, to_python
 from .settings_storage import READ_SETTINGS
 
-SETTINGS_KEY = "runtime-settings.json"
+RESOURCE_NAMES = (
+    "discord-response.json",
+    "discord-response-system-prompt.md",
+    "ask-web-search.json",
+    "ask-web-search-system-prompt.md",
+    "bicture-image.json",
+)
 
 
 def resource_revision(resources: dict) -> str:
@@ -22,38 +26,22 @@ def resource_revision(resources: dict) -> str:
     return hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
 
 
-async def legacy_snapshot(get) -> dict:
-    raw = await get(SETTINGS_KEY)
-    if raw is not None:
-        snapshot = parse_settings(raw)
-    else:
-        values = await asyncio.gather(*(get(key) for key in FILES))
-        resources = {}
-        for key, value in zip(FILES, values):
-            if value is not None and key.endswith(".json"):
-                value = json.dumps(json.loads(FILES[key]) | json.loads(value))
-            resources[key] = FILES[key] if value is None else value
-        snapshot = {"schemaVersion": 1, "resources": resources}
-        parse_settings(json.dumps(snapshot))
-    return {
-        **snapshot,
-        "revision": "legacy-" + resource_revision(snapshot["resources"]),
-        "source": "legacy",
-    }
-
-
 def parse_settings(raw: str) -> dict:
     data = json.loads(raw)
     if not isinstance(data, dict) or data.get("schemaVersion") != 1:
         raise ValueError("invalid settings version")
     resources = data.get("resources")
-    if not isinstance(resources, dict) or set(resources) != set(FILES):
+    if not isinstance(resources, dict) or set(resources) != set(RESOURCE_NAMES):
         raise ValueError("incomplete settings snapshot")
     if any(not isinstance(value, str) or len(value) > 100000 for value in resources.values()):
         raise ValueError("invalid settings resource")
     for key, value in resources.items():
         if key.endswith(".json") and not isinstance(json.loads(value), dict):
             raise ValueError("invalid settings document")
+    for key in ("discord-response.json", "ask-web-search.json"):
+        model = json.loads(resources[key]).get("model")
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("missing settings model")
     image = json.loads(resources["bicture-image.json"])
     profiles = image.get("profiles")
     if not isinstance(profiles, dict) or image.get("activeProfile") not in profiles:
@@ -82,7 +70,7 @@ class ModelConfig:
     max_turns: int = 4
     search_context_size: str = "medium"
     api_format: str = "chat-completions"
-    revision: str = "bundled"
+    revision: str = "unspecified"
     temperature_supported: bool = True
     reasoning_effort: str | None = None
 
@@ -102,27 +90,22 @@ class ConfigStore:
 
     async def snapshot(self) -> dict:
         if self._fixed is not None:
-            return self._fixed
+            return parse_settings(json.dumps(self._fixed))
         db = env_value(self.env, "DB")
-        if db is not None:
-            # Without a Sessions API replica session, D1 bindings query the primary.
-            # Never fall back to stale data after a failed primary read.
-            row = to_python(await db.prepare(READ_SETTINGS).first())
-            if row is not None:
-                snapshot = parse_settings(row["document"])
-                if snapshot.get("revision") != row["revision"]:
-                    raise ValueError("settings revision mismatch")
-                return {**snapshot, "source": "d1"}
-        kv = env_value(self.env, "AI_CONFIG")
-
-        async def get(key):
-            return await kv.get(key) if kv is not None else None
-
-        return await legacy_snapshot(get)
+        if db is None:
+            raise ValueError("D1 settings binding is required")
+        # Without a Sessions API replica session, D1 bindings query the primary.
+        row = to_python(await db.prepare(READ_SETTINGS).first())
+        if row is None:
+            raise ValueError("AI settings are not initialized in D1")
+        snapshot = parse_settings(row["document"])
+        if snapshot.get("revision") != row["revision"]:
+            raise ValueError("settings revision mismatch")
+        return {**snapshot, "source": "d1"}
 
     @staticmethod
     def document_from(snapshot: dict, key: str) -> dict:
-        return json.loads(FILES[key]) | json.loads(snapshot["resources"][key])
+        return json.loads(snapshot["resources"][key])
 
     async def text(self, key: str) -> str:
         return (await self.snapshot())["resources"][key]
@@ -137,15 +120,13 @@ class ConfigStore:
         chat_prompt = snapshot["resources"]["discord-response-system-prompt.md"]
         search_prompt = snapshot["resources"]["ask-web-search-system-prompt.md"]
 
-        def model(data, prompt, key, search=False):
-            fallback = json.loads(FILES[key])["model"]
-            name = data.get("model")
+        def model(data, prompt, search=False):
             gateway = data.get("gatewayId")
             size = data.get("searchContextSize")
             effort = data.get("reasoningEffort")
             return ModelConfig(
                 revision=snapshot["revision"],
-                model=name if isinstance(name, str) and name.strip() else fallback,
+                model=data["model"].strip(),
                 prompt=prompt.strip(),
                 # Chat uses the provider default, including for old saved snapshots.
                 max_tokens=int(number(data.get("maxOutputTokens"), 1200, minimum=1))
@@ -166,6 +147,6 @@ class ConfigStore:
             )
 
         return (
-            model(chat, chat_prompt, "discord-response.json"),
-            model(search, search_prompt, "ask-web-search.json", True),
+            model(chat, chat_prompt),
+            model(search, search_prompt, True),
         )

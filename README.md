@@ -20,8 +20,7 @@ replies run in-process; there are no internal queues or services.
 - Node **22+**, pnpm, and **uv 0.12.3+**. Python is installed by uv.
 - `op` (1Password CLI) for commands using secrets. `.env` and `.env.dev` contain
   `op://` references; do not replace them with plaintext secrets.
-- Docker Desktop on Windows for `pnpm run dev:ui` (Python Workers Pyodide cannot
-  create its venv on native Windows).
+- Docker Desktop is optional; set `DEV_UI_DOCKER=1` to run the debugging UI in Docker.
 
 ```sh
 pnpm install
@@ -30,6 +29,43 @@ pnpm run check
 pnpm test
 pnpm run test:runtime
 ```
+
+On Windows, `uv sync --locked` creates a native Windows `.venv` with uv-managed
+Python. Checks and tests run from PowerShell without activating it. Virtual
+environments cannot be shared with WSL or Linux; if an existing `.venv` came
+from Linux, move it aside before running `uv sync --locked` again.
+
+For a project on `D:`, keep uv's managed interpreters and cache on `D:` as well.
+Pyodide currently loses drive letters when resolving paths across drives. Set
+these user-level Windows settings once. The assignments also apply them to the
+current PowerShell session; restart existing terminals and Codex to inherit them:
+
+```powershell
+[Environment]::SetEnvironmentVariable('UV_PYTHON_INSTALL_DIR', 'D:\tools\uv\python', 'User')
+[Environment]::SetEnvironmentVariable('UV_CACHE_DIR', 'D:\tools\uv\cache', 'User')
+$env:UV_PYTHON_INSTALL_DIR = [Environment]::GetEnvironmentVariable('UV_PYTHON_INSTALL_DIR', 'User')
+$env:UV_CACHE_DIR = [Environment]::GetEnvironmentVariable('UV_CACHE_DIR', 'User')
+uv python install 3.14 cpython-3.14.2-emscripten-wasm32-musl
+uv sync --locked
+```
+
+If `.venv-workers` was created with interpreters on another drive, move it aside
+and run `uv run pywrangler sync --force` to recreate it. Python dependencies are
+prepared with uv/Pywrangler, and Wrangler performs the upload. Development,
+checks, runtime tests, and deployment run natively on Windows.
+
+Run commands from the repository root using the package scripts below. `uv sync
+--locked` installs host tools into `.venv`; Pywrangler prepares Worker dependencies
+in `.venv-workers` and `python_modules` before invoking the repository's Wrangler.
+Use `uv run pywrangler sync` to prepare those dependencies explicitly. Plain
+`wrangler deploy` does not install Python dependencies, so use `pnpm run deploy`
+for deployment. Use `pnpm exec wrangler` for D1 operations. Keep the versions in
+`uv.lock` and `pnpm-lock.yaml`; do not substitute global Wrangler or `uvx` tools.
+
+When repairing an environment from Linux or another drive, move only the affected
+`.venv` or `.venv-workers` aside, including a staged `.venv-workers` under
+`.wrangler/python-dev` or `.wrangler/python-local` if needed. Preserve
+`.wrangler/state` and `.wrangler/dev-state`, which contain local database data.
 
 The Python dependencies are locked in `uv.lock`, including a project-local uv
 for the Python Workers build tool. Node is used only for Cloudflare
@@ -59,13 +95,13 @@ src/ragbot/gateway.py    gateway lifecycle, heartbeats, deduplication
 src/ragbot/discord.py    Discord REST and capped media downloads
 src/ragbot/discord_http.py  native rate limits and bounded retries
 src/ragbot/ai.py         inference, attribution, shared /ask routing
-src/ragbot/ai_config/    editable JSON configs and Markdown prompts
+config/ai/              operator inputs for initial D1 settings
 src/ragbot/config.py     per-request D1 configuration snapshots
 src/ragbot/db.py         D1 access, bans, threads
 src/ragbot/security.py   external authentication
 src/js-stubs/            generated Workers API type hints
 migrations/             existing D1 schema migrations
-scripts/                registration, local launchers, build and checks
+scripts/                registration, local launchers, staging and checks
 tests/                 pytest and actual Workers runtime integration tests
 dev/                   local-only Python debugging UI and browser assets
 ```
@@ -73,18 +109,25 @@ dev/                   local-only Python debugging UI and browser assets
 ## Everyday commands
 
 ```sh
-pnpm run build                               # regenerate bundled AI config
-pnpm run check                               # Ruff, formatting, mypy, config freshness
+pnpm run check                               # Ruff, formatting, mypy
 pnpm test                                    # Python behavior tests with real SQLite schema
 pnpm run test:runtime                         # actual local Python Worker, no live services
 pnpm run d1:migrate:local
+pnpm run settings:init:local                  # initialize local D1 once
 op run --env-file=.env -- pnpm run dev
 pnpm run dev:ui                              # op run loads .env + .env.dev automatically
 op run --env-file=.env -- pnpm run register:commands
 op run --env-file=.env -- pnpm run d1:migrate:remote
+op run --env-file=.env -- pnpm run deploy --dry-run  # validate production packaging
 op run --env-file=.env -- pnpm run deploy
 pnpm run types                              # regenerate src/js-stubs
 ```
+
+Pass script arguments directly with this repository's pnpm version, for example
+`pnpm run deploy --dry-run` or `pnpm run dev:ui --port 8799`. Do not insert an
+extra `--` after the script name. The `--` in `op run --env-file=.env --` is
+required by 1Password. Deploy from the root production `wrangler.jsonc`; never
+deploy `wrangler.dev.jsonc` or a staged debugging bundle.
 
 Registration is guild-scoped and reads the same Python registry as dispatch.
 `schema.sql` remains a read-only mirror: change the schema through migrations.
@@ -92,10 +135,9 @@ Registration is guild-scoped and reads the same Python registry as dispatch.
 ## Local debugging UI
 
 `pnpm run dev:ui` serves the existing console on **http://localhost:8788**.
-On Windows it starts a Linux Docker container so Wrangler can build the Pyodide
-venv; 1Password still resolves secrets on the host and passes them in as
-environment variables. Linux and macOS run the Worker on the host. Set
-`DEV_UI_DOCKER=1` to force Docker, or `DEV_UI_DOCKER=0` to force the host path.
+It runs natively on Windows, Linux, and macOS; 1Password resolves secrets and
+passes them as environment variables. Set `DEV_UI_DOCKER=1` to opt into Docker.
+Docker uses separate Python and Worker build environments.
 The Python harness calls the real application handlers, stubs every Discord API
 request, and captures model requests, responses, replies, media, logs, and D1
 side effects. Model calls are real and tagged `ragbot_env: dev`. Per-run config
@@ -142,8 +184,8 @@ Other slash commands are under **Other commands**, and captured requests, replie
 logs, and database effects are under **Request details**. Drafts and transcripts
 persist in the browser; output remains available across page switches.
 
-Source changes rebuild the Worker automatically. UI and bundled configuration
-changes also reload the browser once any active request finishes, preserving drafts.
+Source changes rebuild the Worker automatically. UI changes also reload the
+browser once any active request finishes, preserving drafts.
 The UI has its own local database state at `.wrangler/dev-state`. Simulations use
 local data. Live settings and history are read from the D1 database configured in
 `wrangler.jsonc`; local settings and history use the sandbox database.
@@ -156,8 +198,10 @@ has been removed. The dev worker has no routes, `workers_dev: false`, and a
 
 ## Configuration and operations
 
-AI models, prompts, and generation settings live in `src/ragbot/ai_config`.
-`pnpm run build` generates `_bundled.py`; deployment runs this automatically.
+AI models, prompts, and generation settings are stored in D1. Production reads
+D1 only; no prompt files or generated configuration module are packaged with
+the Worker. `config/ai/` holds operator inputs for initial setup, not runtime
+fallbacks. Editing those files does not change an initialized database.
 The dev UI defaults to **Live bot** settings. Choose any available model on Chat
 or `/bicture`, then use **Review & save to live bot** to inspect the before/after
 values and **Save to live bot** to apply them. Chat settings are shared by mentions
@@ -192,13 +236,32 @@ op run --env-file=.env -- uv run python scripts/migrate_ai_settings.py
 op run --env-file=.env -- pnpm run deploy
 ```
 
-The migration script preserves all current KV values, verifies the D1 readback,
-and does nothing if settings are already present in D1. It leaves legacy KV
-untouched. The new runtime reads KV/bundled defaults only when the D1 table exists
-but has no settings row; a missing table is an error. The dev launcher applies
-local schema migrations, and the first local save initializes its settings row.
-Once D1 settings exist they take precedence over KV and future bundled changes.
-Future settings edits need no redeployment.
+The initialization script preserves current KV values on a live database that
+has not been initialized, using `config/ai/` only for missing initial values.
+Existing D1 settings are preserved, and legacy KV remains untouched. Runtime
+and editor reads require an initialized D1 row; a missing row, missing binding,
+or failed read stops AI inference. Future settings edits need no redeployment.
+
+For a new local database, apply migrations and initialize settings explicitly:
+
+```sh
+pnpm run d1:migrate:local
+pnpm run settings:init:local
+# The debugging UI uses a separate local state directory:
+pnpm exec wrangler d1 migrations apply ragbot --local --persist-to .wrangler/dev-state
+pnpm run settings:init:local --persist-to .wrangler/dev-state
+```
+
+The debugging UI launcher applies migrations and initializes an empty local
+sandbox before starting the Worker, including inside Docker. This setup step
+reads `config/ai/`; the running Worker still reads D1 only.
+
+Initialization is idempotent and never replaces existing D1 settings. Verify
+live settings without writes using:
+
+```sh
+op run --env-file=.env -- uv run python scripts/migrate_ai_settings.py --check
+```
 
 AI has no daily budget cap, per-minute request limit, or moderation-ban checks.
 `/raghammer` bans apply only to `/rag`. Historical spend and request data is retained.

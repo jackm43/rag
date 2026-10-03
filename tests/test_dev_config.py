@@ -5,17 +5,17 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from settings_seed import load_resources
 
-from ragbot._bundled import FILES
 from ragbot.ai import Attribution
 from ragbot.commands.media import bicture
-from ragbot.config import ConfigStore
-from ragbot.settings import DraftNamespace as ConfigNamespace
-from ragbot.settings import resolve_config
+from ragbot.settings import draft_store, resolve_config
+
+FILES = load_resources()
 
 
 async def test_dev_chat_prompts_and_models_are_isolated():
-    defaults = await resolve_config({})
+    defaults = await resolve_config({}, FILES)
     custom = await resolve_config(
         {
             "model": "example/chat",
@@ -24,7 +24,8 @@ async def test_dev_chat_prompts_and_models_are_isolated():
             "webSearchSystemPrompt": "Cite sources.",
             "temperature": 0,
             "historyLimit": 6,
-        }
+        },
+        FILES,
     )
     assert custom["responseModel"] == "example/chat"
     assert custom["systemPrompt"] == "Answer in haiku."
@@ -32,17 +33,14 @@ async def test_dev_chat_prompts_and_models_are_isolated():
     assert custom["askWebSearchSystemPrompt"] == "Cite sources."
     assert custom["temperature"] == 0
     assert custom["historyLimit"] == 6
-    assert await resolve_config({}) == defaults
+    assert await resolve_config({}, FILES) == defaults
 
 
 async def test_dev_image_profile_reaches_real_command(app):
     original = json.loads(FILES["bicture-image.json"])
-    app.config = ConfigStore(
-        SimpleNamespace(
-            AI_CONFIG=ConfigNamespace(
-                {"imageProfile": "quality", "imageAspectRatio": "1:1", "imageModel": "test/image"}
-            )
-        )
+    app.config = draft_store(
+        {"imageProfile": "quality", "imageAspectRatio": "1:1", "imageModel": "test/image"},
+        FILES,
     )
     app.ai.media = AsyncMock(return_value={"data": [{"b64_json": "YWJj"}]})
     ctx = SimpleNamespace(
@@ -58,12 +56,12 @@ async def test_dev_image_profile_reaches_real_command(app):
     assert request["aspect_ratio"] == "1:1"
     assert request["resolution"] == original["profiles"]["quality"]["resolution"]
     assert ctx.reply.call_args.kwargs["files"][0].data == b"abc"
-    assert (await resolve_config({}))["image"] == original
+    assert (await resolve_config({}, FILES))["image"] == original
 
 
 async def test_unknown_image_profile_is_rejected():
     with pytest.raises(ValueError, match="unknown image profile"):
-        await resolve_config({"imageProfile": "missing"})
+        await resolve_config({"imageProfile": "missing"}, FILES)
 
 
 async def test_reasoning_is_preserved_for_same_model_and_cleared_on_model_change():
@@ -107,5 +105,5 @@ async def test_grok_draft_simulation_uses_binding_and_leaves_saved_settings_unch
     assert exchange["model"] == "xai/grok-4.7"
     assert exchange["settingsRevision"].startswith("saved-revision+draft-")
     assert exchange["request"]["options"]["gateway"]["metadata"]["ragbot_env"] == "dev"
-    assert not await app.db.all("SELECT * FROM ai_runtime_settings")
+    assert (await app.config.snapshot())["revision"] == "test-seed"
     upstream.assert_not_awaited()

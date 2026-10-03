@@ -10,6 +10,7 @@ services:
       - ..:/app
       - ui-node-modules:/app/node_modules
       - ui-venv:/app/.venv
+      - ui-worker-venv:/app/.venv-workers
       - ui-wrangler:/app/.wrangler
       - ui-uv-cache:/root/.cache/uv
     environment:
@@ -27,5 +28,6 @@ services:
 volumes:
   ui-node-modules:
   ui-venv:
+  ui-worker-venv:
   ui-wrangler:
   ui-uv-cache:

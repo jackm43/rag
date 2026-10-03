@@ -7,7 +7,6 @@
   "scripts": {
     "dev": "uv run python scripts/worker.py dev",
     "deploy": "uv run pywrangler deploy",
-    "build": "uv run python scripts/bundle_config.py",
     "check": "uv run python scripts/check.py",
     "test": "uv run pytest",
     "test:runtime": "uv run python scripts/runtime_test.py",
@@ -15,7 +14,8 @@
     "register:commands": "uv run python scripts/register_commands.py",
     "d1:migrate:local": "wrangler d1 migrations apply ragbot --local",
     "d1:migrate:remote": "wrangler d1 migrations apply ragbot --remote",
-    "dev:ui": "op run --env-file=.env --env-file=.env.dev -- uv run python scripts/dev_ui.py"
+    "dev:ui": "op run --env-file=.env --env-file=.env.dev -- uv run python scripts/dev_ui.py",
+    "settings:init:local": "uv run python scripts/migrate_ai_settings.py --local"
   },
   "devDependencies": {
     "wrangler": "^4.141.0"

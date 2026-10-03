@@ -9,7 +9,6 @@ from harness import Simulation
 from settings_api import SettingsEditor, SettingsError
 from workers import Response, WorkerEntrypoint
 
-from ragbot._bundled import FILES
 from ragbot.ai import should_search
 from ragbot.commands import COMMANDS
 from ragbot.commands.registry import ADMIN_IDS
@@ -23,7 +22,7 @@ from ragbot.model_catalog import (
 from ragbot.runtime import env_value
 from ragbot.settings import resolve_config, validate_overrides
 
-REVISION = hashlib.sha256(json.dumps([ASSETS, FILES], sort_keys=True).encode()).hexdigest()
+REVISION = hashlib.sha256(json.dumps(ASSETS, sort_keys=True).encode()).hexdigest()
 
 
 class Default(WorkerEntrypoint):
@@ -43,6 +42,10 @@ class Default(WorkerEntrypoint):
         if request.method == "GET" and path == "/api/revision":
             return Response.json({"revision": REVISION})
         if request.method == "GET" and path == "/api/meta":
+            try:
+                current = await SettingsEditor(self.env, "live").read()
+            except SettingsError as error:
+                return Response.json({"error": error.message}, status=error.status)
             return Response.json(
                 {
                     "revision": REVISION,
@@ -55,7 +58,7 @@ class Default(WorkerEntrypoint):
                     "applicationId": self.env.DISCORD_APPLICATION_ID,
                     "guildId": self.env.ALLOWED_GUILD_IDS.split(",")[0].strip(),
                     "hasAigToken": bool(env_value(self.env, "CF_AIG_TOKEN")),
-                    "config": await resolve_config({}),
+                    "config": current["config"],
                     "commands": [
                         dict(c.data, adminOnly=c.admin_only, requiredRoleId=c.required_role_id)
                         for c in COMMANDS.values()
@@ -64,7 +67,8 @@ class Default(WorkerEntrypoint):
             )
         if request.method == "GET" and path == "/api/models":
             try:
-                return Response.json(await CreditCatalog(self.env).load(await resolve_config({})))
+                current = await SettingsEditor(self.env, "live").read()
+                return Response.json(await CreditCatalog(self.env).load(current["config"]))
             except Exception:
                 return Response.json(
                     {"error": "Cannot verify Cloudflare-credit models. Retry the model list."},

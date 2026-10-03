@@ -24,7 +24,9 @@ def request(base, path, *, method="GET", body=None, headers=None):
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="ragbot-runtime-") as directory:
+    temporary_root = ROOT / ".wrangler"
+    temporary_root.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="ragbot-runtime-", dir=temporary_root) as directory:
         destination = stage(Path(directory), runtime_test=True)
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
@@ -32,7 +34,7 @@ def main():
         env = dict(
             os.environ, CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV="false", WRANGLER_SEND_METRICS="false"
         )
-        with (destination / "runtime.log").open("w+") as logs:
+        with (destination / "runtime.log").open("w+", encoding="utf-8") as logs:
             subprocess.run(
                 command(
                     "pnpm",
@@ -185,7 +187,10 @@ def main():
                 assert result["spend"] == []
                 assert result["multipart"] is True
                 status, body = request(base, "/test/settings")
-                assert status == 200 and json.loads(body)["refreshed"] is True
+                assert status == 200 and json.loads(body) == {
+                    "refreshed": True,
+                    "requiresD1": True,
+                }
                 status, body = request(base, "/test/gateway")
                 if status != 200:
                     raise AssertionError(body.decode()[:5000])

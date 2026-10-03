@@ -42,8 +42,5 @@
   ],
   "ai": {
     "binding": "AI"
-  },
-  "build": {
-    "command": "uv run python scripts/bundle_config.py"
   }
 }
