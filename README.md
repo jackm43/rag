@@ -37,11 +37,14 @@ from Linux, move it aside before running `uv sync --locked` again.
 
 For a project on `D:`, keep uv's managed interpreters and cache on `D:` as well.
 Pyodide currently loses drive letters when resolving paths across drives. Set
-these user-level Windows settings once, then reopen your terminal:
+these user-level Windows settings once. The assignments also apply them to the
+current PowerShell session; restart existing terminals and Codex to inherit them:
 
 ```powershell
 [Environment]::SetEnvironmentVariable('UV_PYTHON_INSTALL_DIR', 'D:\tools\uv\python', 'User')
 [Environment]::SetEnvironmentVariable('UV_CACHE_DIR', 'D:\tools\uv\cache', 'User')
+$env:UV_PYTHON_INSTALL_DIR = [Environment]::GetEnvironmentVariable('UV_PYTHON_INSTALL_DIR', 'User')
+$env:UV_CACHE_DIR = [Environment]::GetEnvironmentVariable('UV_CACHE_DIR', 'User')
 uv python install 3.14 cpython-3.14.2-emscripten-wasm32-musl
 uv sync --locked
 ```
@@ -50,6 +53,19 @@ If `.venv-workers` was created with interpreters on another drive, move it aside
 and run `uv run pywrangler sync --force` to recreate it. Python dependencies are
 prepared with uv/Pywrangler, and Wrangler performs the upload. Development,
 checks, runtime tests, and deployment run natively on Windows.
+
+Run commands from the repository root using the package scripts below. `uv sync
+--locked` installs host tools into `.venv`; Pywrangler prepares Worker dependencies
+in `.venv-workers` and `python_modules` before invoking the repository's Wrangler.
+Use `uv run pywrangler sync` to prepare those dependencies explicitly. Plain
+`wrangler deploy` does not install Python dependencies, so use `pnpm run deploy`
+for deployment. Use `pnpm exec wrangler` for D1 operations. Keep the versions in
+`uv.lock` and `pnpm-lock.yaml`; do not substitute global Wrangler or `uvx` tools.
+
+When repairing an environment from Linux or another drive, move only the affected
+`.venv` or `.venv-workers` aside, including a staged `.venv-workers` under
+`.wrangler/python-dev` or `.wrangler/python-local` if needed. Preserve
+`.wrangler/state` and `.wrangler/dev-state`, which contain local database data.
 
 The Python dependencies are locked in `uv.lock`, including a project-local uv
 for the Python Workers build tool. Node is used only for Cloudflare
@@ -85,7 +101,7 @@ src/ragbot/db.py         D1 access, bans, threads
 src/ragbot/security.py   external authentication
 src/js-stubs/            generated Workers API type hints
 migrations/             existing D1 schema migrations
-scripts/                registration, local launchers, build and checks
+scripts/                registration, local launchers, staging and checks
 tests/                 pytest and actual Workers runtime integration tests
 dev/                   local-only Python debugging UI and browser assets
 ```
@@ -102,9 +118,16 @@ op run --env-file=.env -- pnpm run dev
 pnpm run dev:ui                              # op run loads .env + .env.dev automatically
 op run --env-file=.env -- pnpm run register:commands
 op run --env-file=.env -- pnpm run d1:migrate:remote
+op run --env-file=.env -- pnpm run deploy --dry-run  # validate production packaging
 op run --env-file=.env -- pnpm run deploy
 pnpm run types                              # regenerate src/js-stubs
 ```
+
+Pass script arguments directly with this repository's pnpm version, for example
+`pnpm run deploy --dry-run` or `pnpm run dev:ui --port 8799`. Do not insert an
+extra `--` after the script name. The `--` in `op run --env-file=.env --` is
+required by 1Password. Deploy from the root production `wrangler.jsonc`; never
+deploy `wrangler.dev.jsonc` or a staged debugging bundle.
 
 Registration is guild-scoped and reads the same Python registry as dispatch.
 `schema.sql` remains a read-only mirror: change the schema through migrations.

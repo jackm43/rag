@@ -13,6 +13,34 @@ is opt-in via `DEV_UI_DOCKER=1`. Keep uv interpreters, cache, and temporary Work
 bundles on the project drive to avoid the Pyodide cross-drive path bug. Do not
 log secrets or resolve them into committed files.
 
+## Tooling and Windows
+
+- Run commands from the repository root. Install with `pnpm install` and
+  `uv sync --locked`; use the repository's locked tools through its package
+  scripts. No virtual environment activation is needed. Do not substitute
+  global Wrangler, `uvx`, or manual pip installs.
+- For this `D:` checkout, use `UV_PYTHON_INSTALL_DIR=D:\tools\uv\python` and
+  `UV_CACHE_DIR=D:\tools\uv\cache`. These are user-level Windows settings;
+  existing terminals and Codex must restart or load them into their process
+  environment. See README for the PowerShell setup and interpreter installation.
+- `.venv` holds host tools. Pywrangler prepares `.venv-workers` and
+  `python_modules` for Pyodide before calling Wrangler. Use
+  `uv run pywrangler sync --force` when rebuilding a stale Worker environment.
+  Move incompatible environments aside; preserve `.wrangler/state` and
+  `.wrangler/dev-state` local databases. Keep runtime-test bundles on `D:` too.
+- Start production-code development with
+  `op run --env-file=.env -- pnpm run dev`; start the debugging UI with
+  `pnpm run dev:ui`. Both support native Windows. Docker is an explicit UI
+  option, not the default deployment or development path.
+- Validate production packaging with
+  `op run --env-file=.env -- pnpm run deploy --dry-run`, then deploy with
+  `op run --env-file=.env -- pnpm run deploy` when requested. These use
+  Pywrangler; bare Wrangler does not install Python dependencies. Deploy only
+  the root production `wrangler.jsonc`, never a staged or dev UI bundle.
+- Use `pnpm exec wrangler` for direct D1 operations and `pnpm run types` for
+  binding types. Pass pnpm script arguments directly, without an extra `--`
+  after the script name; retain the separator required by `op run`.
+
 ## Architecture
 
 - `src/entry.py`: HTTP signature/bearer authentication, routing, cron, and
