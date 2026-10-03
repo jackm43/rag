@@ -6,21 +6,20 @@ from urllib.parse import urlparse
 
 from dev_assets import ASSETS
 from harness import Simulation
-from settings_api import SettingsEditor, SettingsError
-from workers import Response, WorkerEntrypoint
-
-from ragbot.ai import should_search
-from ragbot.commands import COMMANDS
-from ragbot.commands.registry import ADMIN_IDS
-from ragbot.model_catalog import (
+from model_catalog import (
     CatalogUnavailable,
     CreditCatalog,
     ModelUnavailable,
     chat_overrides,
     image_parameters,
 )
+from settings import resolve_config, validate_overrides
+from settings_api import SettingsEditor, SettingsError
+from workers import Response, WorkerEntrypoint
+
+from ragbot.commands import COMMANDS
+from ragbot.commands.registry import ADMIN_IDS
 from ragbot.runtime import env_value
-from ragbot.settings import resolve_config, validate_overrides
 
 REVISION = hashlib.sha256(json.dumps(ASSETS, sort_keys=True).encode()).hexdigest()
 
@@ -57,7 +56,6 @@ class Default(WorkerEntrypoint):
                     },
                     "applicationId": self.env.DISCORD_APPLICATION_ID,
                     "guildId": self.env.ALLOWED_GUILD_IDS.split(",")[0].strip(),
-                    "hasAigToken": bool(env_value(self.env, "CF_AIG_TOKEN")),
                     "config": current["config"],
                     "commands": [
                         dict(c.data, adminOnly=c.admin_only, requiredRoleId=c.required_role_id)
@@ -125,27 +123,10 @@ class Default(WorkerEntrypoint):
                 model = next(m for m in available["image"] if m["id"] == profile["model"])
                 overrides["imageParameters"] = image_parameters(model, profile, overrides)
                 config = await resolve_config(overrides, resources)
-            elif path == "/api/mention" or body.get("command") == "ask":
-                prompt = (
-                    body.get("content", "")
-                    if path == "/api/mention"
-                    else next(
-                        (
-                            o.get("value", "")
-                            for o in body.get("options", [])
-                            if o.get("name") == "prompt"
-                        ),
-                        "",
-                    )
-                )
-                uses_ask = body.get("command") == "ask" or body.get("mode") == "ask_thread"
-                group = "search" if uses_ask and should_search(prompt) else "chat"
-                available = await catalog.validate(config, [group])
-                if group == "chat":
-                    selected = next(
-                        m for m in available["chat"] if m["id"] == config["responseModel"]
-                    )
-                    overrides.update(chat_overrides(selected, config, overrides))
+            elif path == "/api/mention":
+                available = await catalog.validate(config, ["chat"])
+                selected = next(m for m in available["chat"] if m["id"] == config["responseModel"])
+                overrides.update(chat_overrides(selected, config, overrides))
             body["overrides"] = overrides
             if path == "/api/config":
                 return Response.json(config)
@@ -163,12 +144,6 @@ class Default(WorkerEntrypoint):
                 body.get("guildId") or self.env.ALLOWED_GUILD_IDS.split(",")[0].strip()
             )
             body["botUserId"] = body.get("botUserId") or self.env.DISCORD_APPLICATION_ID
-            if body.get("mode") not in ("thread", "ask_thread"):
-                body["mode"] = "channel"
-            if path == "/api/mention" and not env_value(self.env, "CF_AIG_TOKEN"):
-                return Response.json(
-                    {"error": "CF_AIG_TOKEN is not set; restart via pnpm run dev:ui."}, status=503
-                )
             return Response.json(await Simulation(self.env, body).run(path.rsplit("/", 1)[-1]))
         except SettingsError as error:
             return Response.json({"error": error.message}, status=error.status)

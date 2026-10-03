@@ -101,47 +101,7 @@
                 <pre id="default-prompt"></pre>
               </details>
             </div>
-            <details id="search-panel">
-              <summary>Web search</summary>
-              <div id="search-settings" class="fields">
-                <label>
-                  Search model
-                  <select id="webSearchModel" aria-describedby="webSearchModel-current"></select>
-                  <small id="webSearchModel-current"></small>
-                </label>
-                <label>
-                  Search max tokens
-                  <input id="webSearchMaxTokens" type="number" min="1" max="32768" step="1" />
-                  <small id="webSearchMaxTokens-current"></small>
-                </label>
-                <label>
-                  Search context
-                  <select id="webSearchContextSize">
-                    <option value="">Use saved setting</option>
-                    <option>low</option>
-                    <option>medium</option>
-                    <option>high</option>
-                  </select>
-                  <small id="webSearchContextSize-current"></small>
-                </label>
-                <label class="wide">
-                  Search system prompt
-                  <textarea
-                    id="webSearchSystemPrompt"
-                    rows="4"
-                    placeholder="Use the saved search prompt"
-                  ></textarea>
-                  <small id="webSearchSystemPrompt-current"></small>
-                </label>
-                <button id="edit-search-prompt" type="button" class="secondary">
-                  Edit saved search prompt
-                </button>
-                <details class="wide">
-                  <summary>Saved search prompt</summary>
-                  <pre id="default-search-prompt"></pre>
-                </details>
-              </div>
-            </details>
+
             <div id="image-settings" class="fields" hidden>
               <label>
                 Image profile to use and edit
@@ -184,14 +144,6 @@
           <details class="conversation-options">
             <summary>Conversation options</summary>
             <div class="row">
-              <label>
-                Conversation mode
-                <select id="mode">
-                  <option value="channel">Channel mention</option>
-                  <option value="thread">Tracked thread</option>
-                  <option value="ask_thread">/ask thread</option>
-                </select>
-              </label>
               <button id="clear-transcript" class="secondary">Clear conversation</button>
             </div>
           </details>

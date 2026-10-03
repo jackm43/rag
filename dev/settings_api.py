@@ -6,10 +6,11 @@ import json
 import re
 from datetime import datetime, timezone
 
+from model_catalog import CreditCatalog, chat_overrides, image_parameters
+from settings import DraftNamespace, resolve_config, validate_overrides
+
 from ragbot.config import parse_settings
-from ragbot.model_catalog import CreditCatalog, chat_overrides, image_parameters
 from ragbot.runtime import env_value, fetch, to_python
-from ragbot.settings import DraftNamespace, resolve_config, validate_overrides
 from ragbot.settings_storage import READ_SETTINGS, WRITE_SETTINGS
 
 _lock = asyncio.Lock()
@@ -18,7 +19,7 @@ READ_HISTORY = """
 SELECT id, kind, prompt, response_text, model, status, requester_username, created_at
 FROM rag_ai_interactions
 WHERE ((? = 'bicture' AND kind = 'bicture')
-    OR (? = 'chat' AND kind IN ('ask', 'channel_reply', 'thread_reply')))
+    OR (? = 'chat' AND kind = 'channel_reply'))
   AND (? IS NULL OR id < ?)
   AND (? = '' OR instr(lower(prompt), lower(?)) > 0)
 ORDER BY id DESC LIMIT 26
@@ -133,7 +134,7 @@ class SettingsEditor:
         import uuid
 
         snapshot = {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "resources": resources,
             "updatedAt": datetime.now(timezone.utc).isoformat(),
             "revision": uuid.uuid4().hex,
@@ -157,14 +158,12 @@ class SettingsEditor:
         validate_overrides(overrides)
         config = await resolve_config(overrides, current["resources"])
         page = body.get("page")
-        if page not in ("chat", "ask", "bicture"):
+        if page not in ("chat", "bicture"):
             raise SettingsError("This command has no editable AI settings.")
         is_image = page == "bicture"
         if any(key.startswith("image") != is_image for key in overrides):
             raise SettingsError("Review settings for one page at a time.")
-        available = await self.catalog.validate(
-            config, ["image"] if is_image else ["chat", "search"]
-        )
+        available = await self.catalog.validate(config, ["image"] if is_image else ["chat"])
         if is_image:
             profile = config["image"]["profiles"][config["image"]["activeProfile"]]
             model = next(m for m in available["image"] if m["id"] == profile["model"])

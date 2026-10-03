@@ -15,8 +15,7 @@
   "vars": {
     "DISCORD_APPLICATION_ID": "1496842508251172895",
     "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
-    "ALLOWED_GUILD_IDS": "457689460096630794",
-    "CF_AIG_GATEWAY_ID": "platy"
+    "ALLOWED_GUILD_IDS": "457689460096630794"
   },
   "d1_databases": [
     {
@@ -24,12 +23,6 @@
       "database_name": "ragbot",
       "database_id": "5833b0bb-7806-483e-9015-32e209ce2fb0",
       "migrations_dir": "migrations"
-    }
-  ],
-  "kv_namespaces": [
-    {
-      "binding": "AI_CONFIG",
-      "id": "2a6dbd4428b64d6982bfe628445c163a"
     }
   ],
   "ai": {

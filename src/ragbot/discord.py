@@ -6,12 +6,9 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import quote, urlencode
-
-from discord_typings import MessageData
 
 from .discord_http import DiscordHTTP
-from .policy import finalize_ai_reply, truncate_discord
+from .policy import truncate_discord
 from .runtime import fetch, to_js
 
 API_BASE = "https://discord.com/api/v10"
@@ -164,34 +161,6 @@ class DiscordClient:
             method="POST",
             data=data,
         )
-
-    async def reply(self, channel_id: str, content: str):
-        return await self.post_message(channel_id, finalize_ai_reply(content))
-
-    async def create_thread(self, channel_id: str, name: str):
-        return await self.json_request(
-            f"/channels/{channel_id}/threads",
-            method="POST",
-            headers={"x-audit-log-reason": quote("Ragbot /ask conversation", safe="")},
-            data={"name": name, "type": 11, "auto_archive_duration": 1440},
-        )
-
-    async def channel(self, channel_id: str):
-        try:
-            return await self.json_request(f"/channels/{channel_id}", optional=True)
-        except Exception:
-            return None
-
-    async def messages(
-        self, channel_id: str, *, before: str | None = None, limit: int = 12
-    ) -> list[MessageData]:
-        query = {"limit": str(limit)}
-        if before:
-            query["before"] = before
-        result = await self.json_request(
-            f"/channels/{channel_id}/messages?{urlencode(query)}", optional=True
-        )
-        return [m for m in result if is_message(m)] if isinstance(result, list) else []
 
     async def message(self, channel_id: str, message_id: str):
         result = await self.json_request(

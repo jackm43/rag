@@ -58,28 +58,3 @@ class Database:
             user_id,
             now_iso(),
         )
-
-    async def find_thread(self, thread_id: str) -> dict | None:
-        try:
-            return await self.first(
-                "SELECT thread_id, parent_channel_id, source_message_id, requester_user_id, requester_username, initial_prompt, title FROM rag_ai_threads WHERE thread_id = ?",
-                thread_id,
-            )
-        except Exception:
-            log.warning("ai_thread_lookup_failed")
-            return None
-
-    async def record_thread(self, thread: dict) -> None:
-        fields = (
-            "thread_id",
-            "parent_channel_id",
-            "source_message_id",
-            "requester_user_id",
-            "requester_username",
-            "initial_prompt",
-            "title",
-        )
-        await self.run(
-            "INSERT INTO rag_ai_threads (thread_id, parent_channel_id, source_message_id, requester_user_id, requester_username, initial_prompt, title, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(thread_id) DO UPDATE SET parent_channel_id = excluded.parent_channel_id, source_message_id = excluded.source_message_id, requester_user_id = excluded.requester_user_id, requester_username = excluded.requester_username, initial_prompt = excluded.initial_prompt, title = excluded.title, updated_at = CURRENT_TIMESTAMP",
-            *(thread.get(field) for field in fields),
-        )

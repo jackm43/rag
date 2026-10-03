@@ -1,4 +1,4 @@
-"""Thread context and reply delivery, shared by slash commands and mentions."""
+"""Explicit reply context and delivery for mentions and replies."""
 
 import logging
 import re
@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from .ai import Attribution, Completion
-from .policy import finalize_ai_reply, sanitize_ai_text, truncate_discord
+from .policy import finalize_ai_reply, truncate_discord
 
 log = logging.getLogger("ragbot")
 
@@ -28,25 +28,11 @@ def display_name(message: dict) -> str:
     return "user"
 
 
-def thread_title(prompt: str) -> str:
-    title = re.sub(
-        r"\s+", " ", sanitize_ai_text(prompt).split("\n")[0].lstrip("\"'`").rstrip("\"'`.!?")
-    ).strip()
-    if not title:
-        return "Chat with Ragbot"
-    if len(title.encode("utf-16-le")) > 160:
-        title = truncate_discord(title, 80).strip()
-        if title.rfind(" ") >= 24:
-            title = title[: title.rfind(" ")].strip()
-    return title
-
-
 @dataclass
 class ChatJob:
     attribution: Attribution
     prompt: str
     bot_user_id: str
-    thread: dict | None = None
     reply_message_id: str | None = None
     reply_channel_id: str | None = None
     source_message: dict | None = None
@@ -75,13 +61,6 @@ def message_text(message: dict, bot_user_id: str) -> str:
 async def build_conversation(app, job: ChatJob, history_limit: int) -> list[dict]:
     a = job.attribution
     limit = max(1, min(history_limit, 12))
-    history: list[dict] = []
-    if job.thread and a.message_id:
-        try:
-            history = await app.discord.messages(a.channel_id, before=a.message_id, limit=limit)
-        except Exception:
-            log.warning("history_fetch_failed")
-    by_id = {m["id"]: m for m in history}
     chain = []
     seen = {a.message_id}
     reference_id = job.reply_message_id
@@ -92,9 +71,9 @@ async def build_conversation(app, job: ChatJob, history_limit: int) -> list[dict
         if not reference_id or reference_id in seen or channel_id != a.channel_id:
             break
         seen.add(reference_id)
-        referenced = by_id.get(reference_id)
-        if referenced is None and isinstance(embedded, dict) and embedded.get("id") == reference_id:
-            referenced = embedded
+        referenced = (
+            embedded if isinstance(embedded, dict) and embedded.get("id") == reference_id else None
+        )
         if referenced is None:
             try:
                 referenced = await app.discord.message(channel_id, reference_id)
@@ -113,9 +92,7 @@ async def build_conversation(app, job: ChatJob, history_limit: int) -> list[dict
         reference_id = reference.get("message_id") or (embedded or {}).get("id")
         channel_id = reference.get("channel_id") or a.channel_id
 
-    # Thread history is chronological; older explicitly quoted messages are retained too.
-    context = {m["id"]: m for m in [*reversed(history), *reversed(chain)]}
-    ordered = sorted(context.values(), key=lambda m: (len(m["id"]), m["id"]))
+    ordered = list(reversed(chain))
     names = {}
     for message in ordered:
         author_id = (message.get("author") or {}).get("id")
@@ -124,11 +101,6 @@ async def build_conversation(app, job: ChatJob, history_limit: int) -> list[dict
     if a.user_id:
         names[a.user_id] = a.username or "user"
     messages: list[dict] = []
-    if job.thread and job.thread.get("initial_prompt"):
-        name = names.get(
-            job.thread.get("requester_user_id"), job.thread.get("requester_username") or "user"
-        )
-        messages.append({"role": "user", "content": f"{name}: {job.thread['initial_prompt']}"})
     for message in ordered:
         content = message_text(message, job.bot_user_id)
         if not content:
@@ -143,11 +115,6 @@ async def build_conversation(app, job: ChatJob, history_limit: int) -> list[dict
                 {"role": "user", "content": f"{names.get(author_id, 'user')}: {content}"}
             )
     prompt = message_text(job.source_message, job.bot_user_id) if job.source_message else job.prompt
-    if job.thread and chain:
-        target = chain[0]
-        author_id = (target.get("author") or {}).get("id")
-        name = "ragbot" if author_id == job.bot_user_id else names.get(author_id, "user")
-        prompt = f"Replying to {name}: {truncate_discord(message_text(target, job.bot_user_id), 300)}\n\n{prompt}"
     messages.append({"role": "user", "content": f"{a.username or 'user'}: {prompt}"})
     return messages
 
@@ -202,17 +169,8 @@ async def deliver_reply(
 
 async def process_chat(app, job: ChatJob, started_at: float):
     async def complete():
-        models = await app.config.models()
-        chat, _ = models
+        chat = await app.config.chat()
         messages = await build_conversation(app, job, chat.history_limit)
-        if job.thread and not job.thread.get("source_message_id"):
-            return await app.ai.ask(
-                job.prompt,
-                job.attribution.username or "user",
-                messages,
-                job.attribution,
-                models=models,
-            )
         return await app.ai.chat(
             chat, [{"role": "system", "content": chat.prompt}, *messages], job.attribution
         )

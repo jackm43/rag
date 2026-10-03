@@ -37,7 +37,7 @@ class Default(ProductionDefault):
                 .bind(
                     "test-seed",
                     json.dumps(
-                        {"schemaVersion": 1, "resources": RESOURCES, "revision": "test-seed"}
+                        {"schemaVersion": 2, "resources": RESOURCES, "revision": "test-seed"}
                     ),
                     None,
                 )
@@ -64,7 +64,7 @@ class Default(ProductionDefault):
 
             store = ConfigStore(self.env)
             await self.seed_settings()
-            before, _ = await store.models()
+            before = await store.chat()
             resources = dict(FILES)
             resources["discord-response-system-prompt.md"] = "Runtime saved prompt"
             chat = json.loads(resources["discord-response.json"])
@@ -76,38 +76,38 @@ class Default(ProductionDefault):
                     .bind(
                         "runtime-1",
                         json.dumps(
-                            {"schemaVersion": 1, "resources": resources, "revision": "runtime-1"}
+                            {"schemaVersion": 2, "resources": resources, "revision": "runtime-1"}
                         ),
                         "test-seed",
                     )
                     .run()
                 )
-                after, search = await store.models()
+                after = await store.chat()
                 assert after.prompt == "Runtime saved prompt"
                 assert after.model == "openai/gpt-4.1-mini"
                 assert after.temperature == 0.2
                 assert before.prompt != after.prompt
-                assert after.revision == search.revision == "runtime-1"
+                assert after.revision == "runtime-1"
                 resources["discord-response-system-prompt.md"] = "Immediate second version"
                 await (
                     self.env.DB.prepare(WRITE_SETTINGS)
                     .bind(
                         "runtime-2",
                         json.dumps(
-                            {"schemaVersion": 1, "resources": resources, "revision": "runtime-2"}
+                            {"schemaVersion": 2, "resources": resources, "revision": "runtime-2"}
                         ),
                         "runtime-1",
                     )
                     .run()
                 )
-                assert (await store.models())[0].prompt == "Immediate second version"
+                assert (await store.chat()).prompt == "Immediate second version"
                 stale = (
                     await self.env.DB.prepare(WRITE_SETTINGS).bind("stale", "{}", "runtime-1").run()
                 )
                 assert stale["meta"]["changes"] == 0
                 await self.env.DB.prepare("DELETE FROM ai_runtime_settings WHERE id = 1").run()
                 try:
-                    await store.models()
+                    await store.chat()
                 except ValueError:
                     pass
                 else:
@@ -201,14 +201,6 @@ class Default(ProductionDefault):
         async def transport(url, **options):
             data = json.loads(options["body"]) if isinstance(options.get("body"), str) else None
             calls.append({"url": url, "method": options.get("method", "GET"), "data": data})
-            if "gateway.ai.cloudflare.com" in url:
-                from ragbot.runtime import fetch
-
-                return await fetch(
-                    request.url.replace("/test/scenario", "/test/upstream"), **options
-                )
-            if url.endswith("/threads"):
-                return Response.json({"id": "123456789012345690", "type": 11})
             return Response.json({"id": "123456789012345691", "type": 0})
 
         from js import ReadableStream, Uint8Array
@@ -269,20 +261,6 @@ class Default(ProductionDefault):
                 break
             await asyncio.sleep(0.05)
         assert len(await app.db.all("SELECT * FROM rag_events")) == 1
-        interaction = {
-            "id": "123456789012345680",
-            "type": 2,
-            "application_id": self.env.DISCORD_APPLICATION_ID,
-            "token": "test-webhook",
-            "guild_id": "457689460096630794",
-            "channel_id": "123456789012345681",
-            "member": {"user": {"id": "123456789012345679", "username": "tester"}},
-            "data": {
-                "name": "ask",
-                "options": [{"name": "prompt", "value": "explain trees"}],
-            },
-        }
-        await app.dispatch(interaction)
         await app.handle_message(
             {
                 "id": "123456789012345710",
@@ -313,7 +291,15 @@ class Default(ProductionDefault):
         assert posted["allowed_mentions"] == {"parse": [], "replied_user": False}
         from ragbot.discord import Attachment
 
-        interaction["data"] = {"name": "coinflip"}
+        interaction = {
+            "type": 2,
+            "application_id": self.env.DISCORD_APPLICATION_ID,
+            "token": "test-webhook",
+            "guild_id": "457689460096630794",
+            "channel_id": "123456789012345681",
+            "member": {"user": {"id": "123456789012345679", "username": "tester"}},
+            "data": {"name": "coinflip"},
+        }
         await app.dispatch(interaction)
         assert calls[-1]["data"]["content"] in ("heads", "tails")
 
@@ -331,9 +317,7 @@ class Default(ProductionDefault):
             {
                 "calls": calls,
                 "totals": await app.db.all("SELECT * FROM rag_totals"),
-                "threads": await app.db.all("SELECT * FROM rag_ai_threads"),
                 "interactions": await app.db.all("SELECT * FROM rag_ai_interactions"),
-                "spend": await app.db.all("SELECT * FROM rag_ai_spend_events"),
                 "multipart": True,
             }
         )

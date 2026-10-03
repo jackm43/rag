@@ -2,7 +2,7 @@
 
 A Discord bot running as one **Cloudflare Python Worker**, `ragbot-worker`, with
 one `DiscordGateway` Durable Object maintaining the Discord WebSocket.
-Commands: `/rag`, `/ragboard`, `/raghammer`, `/ragunban`, `/undorag`, `/ask`,
+Commands: `/rag`, `/ragboard`, `/raghammer`, `/ragunban`, `/undorag`,
 `/bicture`, `/coinflip`.
 
 `/undorag` and `/raghammer` require the Mods role (`457695154892177418`).
@@ -68,19 +68,14 @@ When repairing an environment from Linux or another drive, move only the affecte
 `.wrangler/state` and `.wrangler/dev-state`, which contain local database data.
 
 The Python dependencies are locked in `uv.lock`, including a project-local uv
-for the Python Workers build tool. Node is used only for Cloudflare
-Wrangler. Python Workers use Pyodide. discord.py imports and its aiohttp
-networking work here, but its unmodified gateway heartbeat requires unsupported threads;
-see the recorded compatibility results in the migration notes.
+for the Python Workers build tool. Node is used only for Cloudflare Wrangler.
 
 ## Discord library and Python design
 
-[`discord-typings`](https://github.com/Bluenix2/discord-typings/) replaces the
-former `discord-api-types` dependency. It supplies Discord wire types without
+[`discord-typings`](https://github.com/Bluenix2/discord-typings/) supplies Discord wire types without
 owning HTTP, WebSocket connections, or an event loop. A small async
 `DiscordClient` uses Workers Fetch with per-route/global rate-limit handling
-and bounded retries. The existing Durable Object owns the Discord gateway. See [migration notes](docs/python-workers-migration.md) for the
-library decision and validation.
+and bounded retries. The existing Durable Object owns the Discord gateway.
 
 Application services use dataclasses, async methods, a decorator-based command
 registry, native dictionaries, and explicit dependency injection. SDK bindings
@@ -89,15 +84,15 @@ WebSockets, multipart files, and capped stream reads.
 
 ```text
 src/entry.py             Worker and DiscordGateway entrypoints
-src/ragbot/commands/     registry and moderation/chat/media commands
+src/ragbot/commands/     registry and moderation/media commands
 src/ragbot/app.py        dispatch and mention handling
 src/ragbot/gateway.py    gateway lifecycle, heartbeats, deduplication
 src/ragbot/discord.py    Discord REST and capped media downloads
 src/ragbot/discord_http.py  native rate limits and bounded retries
-src/ragbot/ai.py         inference, attribution, shared /ask routing
+src/ragbot/ai.py         chat/image inference and attribution
 config/ai/              operator inputs for initial D1 settings
 src/ragbot/config.py     per-request D1 configuration snapshots
-src/ragbot/db.py         D1 access, bans, threads
+src/ragbot/db.py         D1 access and bans
 src/ragbot/security.py   external authentication
 src/js-stubs/            generated Workers API type hints
 migrations/             existing D1 schema migrations
@@ -161,18 +156,13 @@ Model choices come from the account's live Cloudflare catalog, without a chat or
 image model-name shortlist. Compatible Chat Completions and Responses models are
 supported, as are synchronous text-to-image models that accept a prompt and return
 an image. Models requiring extra inputs or asynchronous image jobs are excluded.
-The existing Cloudflare-credit routing checks still apply. Search settings retain
-the verified web-search model list. Refresh models updates the catalog.
+Cloudflare-credit routing checks apply. Refresh models updates the catalog.
 
 All chat models offered in the UI use the AI binding with Cloudflare catalog
-model IDs and account credits. Existing saved `grok/` and `google-ai-studio/`
-names remain supported. Chat Completions and Responses keep their respective
-request formats. This avoids the legacy chat compatibility endpoint, which can
-forward newer models without provider credentials even when gateway
-authentication succeeds.
+model IDs and account credits. Chat Completions and Responses keep their respective
+request formats.
 
-**Advanced settings** holds system prompts, generation controls, image profiles,
-and web search. **Prompt history** fetches and searches Live bot or Local sandbox
+**Advanced settings** holds system prompts, generation controls, and image profiles. **Prompt history** fetches and searches Live bot or Local sandbox
 D1 prompts and loads them into the editor. A chat replay starts a new local channel;
 it uses current settings without restoring historical context or attachments.
 Bicture records full prompts, model, requester, timing, and outcome in the existing
@@ -192,8 +182,7 @@ local data. Live settings and history are read from the D1 database configured i
 
 The launcher stages a separate Python bundle under `.wrangler/python-dev`,
 refreshes it when source files change, and supplies resolved secrets through the
-process environment. It requires the 1Password CLI; the former Node SDK resolver
-has been removed. The dev worker has no routes, `workers_dev: false`, and a
+process environment. It requires the 1Password CLI. The dev worker has no routes, `workers_dev: false`, and a
 `DEV_UI` guard. Production never imports or bundles the harness or UI.
 
 ## Configuration and operations
@@ -205,7 +194,7 @@ fallbacks. Editing those files does not change an initialized database.
 The dev UI defaults to **Live bot** settings. Choose any available model on Chat
 or `/bicture`, then use **Review & save to live bot** to inspect the before/after
 values and **Save to live bot** to apply them. Chat settings are shared by mentions
-and `/ask`; image settings update the chosen profile. Changes remain drafts until
+and replies; image settings update the chosen profile. Changes remain drafts until
 saved. The live bot reads saved settings immediately without a redeploy.
 
 The editor uses the existing Cloudflare API token; live settings need D1 read/edit
@@ -216,7 +205,7 @@ request and a UI header. Do not expose the dev server publicly.
 
 Each save atomically writes a complete configuration and revision to the single
 `ai_runtime_settings` row. Each AI request reads that row from the D1 primary,
-without a timer cache or replica session. Chat, search, and image generation use
+without a timer cache or replica session. Chat and image generation use
 one consistent snapshot per request, even in the long-lived gateway. A request
 that reads settings after a confirmed save sees the new revision; in-flight
 requests keep their original settings. A failed primary read stops inference
@@ -228,19 +217,18 @@ is rejected atomically, including across separate dev UI processes. An uncertain
 save is not automatically retried; reload first. To revert, edit and review the
 old values in the UI, then save again.
 
-To upgrade from KV settings, apply `0003_ai_runtime_settings.sql`, then run:
+Apply D1 migrations before deploying. `0004_chat_image_settings.sql` updates the
+saved settings document to version 2 while preserving prompts, generation settings,
+and image profiles. It converts model names to current catalog IDs. Existing
+database tables and migration history are retained.
 
 ```sh
 op run --env-file=.env -- pnpm run d1:migrate:remote
-op run --env-file=.env -- uv run python scripts/migrate_ai_settings.py
 op run --env-file=.env -- pnpm run deploy
 ```
 
-The initialization script preserves current KV values on a live database that
-has not been initialized, using `config/ai/` only for missing initial values.
-Existing D1 settings are preserved, and legacy KV remains untouched. Runtime
-and editor reads require an initialized D1 row; a missing row, missing binding,
-or failed read stops AI inference. Future settings edits need no redeployment.
+For a new database, the initialization script reads `config/ai/` and preserves an
+existing settings row. Runtime and editor reads require an initialized D1 row.
 
 For a new local database, apply migrations and initialize settings explicitly:
 
@@ -260,7 +248,7 @@ Initialization is idempotent and never replaces existing D1 settings. Verify
 live settings without writes using:
 
 ```sh
-op run --env-file=.env -- uv run python scripts/migrate_ai_settings.py --check
+op run --env-file=.env -- uv run python scripts/initialize_ai_settings.py --check
 ```
 
 AI has no daily budget cap, per-minute request limit, or moderation-ban checks.
@@ -273,10 +261,10 @@ Operator routes require `Authorization: Bearer $GATEWAY_CONTROL_TOKEN`:
 An operator stop persists across eviction and cron runs. Fatal Discord close
 codes disable rapid retries; cron or an explicit start can retry.
 
-The migration preserves the Worker name, domain, D1/KV identifiers, Durable
-Object class and singleton name, storage keys, and migration history. A deployment restarts the gateway connection; the next
+Deployments preserve the Worker name, domain, D1 identifier, Durable Object
+class and singleton name, storage keys, and migration history. A deployment restarts the gateway connection; the next
 cron or authenticated `/gateway/start` reconnects it unless explicitly stopped.
-After deployment, smoke-test `/rag`, `/ragboard`, `/ask`, mentions, and media.
+After deployment, smoke-test `/rag`, `/ragboard`, mentions, and media.
 
 ## Discord conversation context
 
@@ -287,8 +275,7 @@ and answer together. Existing older standalone bot messages cannot reconstruct
 an absent link retroactively.
 
 The configured `historyLimit` bounds reply ancestry (at most 12 messages).
-Tracked AI threads also include their recent history and label an explicit reply
-target. Channel conversations never fetch unrelated nearby messages. Deleted or
+Conversations never fetch unrelated nearby messages. Deleted or
 unavailable ancestors stop traversal; the current request can still be answered.
 Speaker names, named mentions, and line breaks are preserved. Attachment labels
 identify files but do not claim that their contents were sent to the model.
@@ -299,7 +286,7 @@ The native client learns Discord bucket headers and waits on route/global
 limits. Rejected requests (HTTP 429) retry using Discord's delay. GET, HEAD,
 PUT, DELETE, and PATCH also retry transient network/500/502/503/504 failures.
 POST requests are not replayed after ambiguous failures, avoiding duplicate
-messages or threads. Each call allows at most four attempts within 25 seconds;
+messages. Each call allows at most four attempts within 25 seconds;
 longer rate limits fail promptly while retaining the cooldown for later calls.
 Cooldowns are local to a client, so responses from Discord remain authoritative
 across Worker isolates. Logs never include request URLs, tokens or payloads.

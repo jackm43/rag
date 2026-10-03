@@ -4,8 +4,8 @@
   const storageKey = "ragbot-dev-console-simple";
   const identityFields = ["userId", "username", "globalName", "nick"];
   const idFields = ["botUserId", "guildId", "channelId"];
-  const overrideFields = ["model", "webSearchModel", "webSearchMaxTokens", "webSearchContextSize", "temperature", "historyLimit", "systemPrompt", "webSearchSystemPrompt", "imageProfile", "imageModel", "imageAspectRatio", "imageQuality", "imageResolution"];
-  const fields = [...identityFields, ...idFields, "modsRole", "mode", "mentionBot", "replyLast"];
+  const overrideFields = ["model", "temperature", "historyLimit", "systemPrompt", "imageProfile", "imageModel", "imageAspectRatio", "imageQuality", "imageResolution"];
+  const fields = [...identityFields, ...idFields, "modsRole", "mentionBot", "replyLast"];
   let saved;
   try { saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}"); } catch { saved = {}; }
   const state = saved && typeof saved === "object" ? saved : {};
@@ -14,7 +14,7 @@
   let page = "chat";
   const results = {};
   let meta;
-  let catalog = { chat: [], search: [], image: [] };
+  let catalog = { chat: [], image: [] };
   let busy = false;
   let baseline;
   let review;
@@ -25,7 +25,7 @@
     $("more-history").hidden = true;
     $("history-status").textContent = page === "bicture"
       ? "Bicture history begins when recording is deployed. Fetch history to see saved image prompts."
-      : "Fetch saved chat prompts, including /ask and thread replies.";
+      : "Fetch saved prompts from mentions and replies.";
   };
   const invalidateReview = () => { review = undefined; $("settings-review").hidden = true; };
   const snowflake = () => (((BigInt(Date.now()) - 1420070400000n) << 22n) | BigInt(Math.floor(Math.random() * 4096))).toString();
@@ -63,7 +63,7 @@
   const overrides = () => Object.fromEntries(overrideFields.flatMap((id) => {
     const isImage = id.startsWith("image");
     if ((page === "bicture") !== isImage) return [];
-    if (!["chat", "ask", "bicture"].includes(page)) return [];
+    if (!["chat", "bicture"].includes(page)) return [];
     if (id === "temperature" && !catalog.chat.find(m => m.id === (value("model") || meta?.config.responseModel))?.temperature) return [];
     const input = value(id);
     return input ? [[id, $(id).type === "number" ? Number(input) : input]] : [];
@@ -103,7 +103,6 @@
         }
       }
     }
-    for (const thread of result.threadsCreated ?? []) $("replies").append(node("p", `Created thread ${thread.name} (${thread.id})`));
     for (const exchange of result.ai.filter((item) => item.error)) $("replies").append(node("p", `Model failed: ${exchange.error}. Inspect AI responses below.`));
     if (!$("replies").childElementCount) $("replies").append(node("p", "No reply was sent. Inspect worker logs and database effects below."));
   };
@@ -168,7 +167,7 @@
       const entries = transcript();
       const lastBot = entries.findLast((entry) => entry.role === "bot");
       const result = await api("mention", {
-        ...input, content, botUserId: value("botUserId"), mode: value("mode"), mentionBot: $("mentionBot").checked,
+        ...input, content, botUserId: value("botUserId"), mentionBot: $("mentionBot").checked,
         transcript: entries, replyToId: $("replyLast").checked ? lastBot?.id : undefined,
       });
       entries.push({ id: result.message.id, role: "user", content: result.message.content, author: input.identity });
@@ -206,7 +205,7 @@
     if (!meta) return;
     const config = meta.config;
     const temperatureSpec = catalog.chat.find(m => m.id === (value("model") || config.responseModel))?.temperature;
-    $("temperature-control").hidden = !["chat", "ask"].includes(page);
+    $("temperature-control").hidden = !["chat"].includes(page);
     $("temperature").disabled = $("temperature-slider").disabled = busy || !temperatureSpec;
     $("temperature-current").hidden = false;
     if (temperatureSpec) {
@@ -222,12 +221,12 @@
       $("temperature-current").textContent = "Not supported by the selected model.";
     }
     $("temperature").placeholder = config.temperature;
-    for (const [id, key] of [["model", "responseModel"], ["webSearchModel", "askWebSearchModel"], ["historyLimit", "historyLimit"], ["webSearchMaxTokens", "askWebSearchMaxOutputTokens"], ["webSearchContextSize", "askWebSearchContextSize"]]) {
+    for (const [id, key] of [["model", "responseModel"], ["historyLimit", "historyLimit"]]) {
       if ($(id).tagName === "INPUT") $(id).placeholder = config[key];
       $(`${id}-current`).hidden = !value(id) || String(value(id)) === String(config[key]);
       $(`${id}-current`).textContent = `Saved: ${config[key]}${value(id) && String(value(id)) !== String(config[key]) ? " · Unsaved: " + value(id) : ""}`;
     }
-    for (const id of ["systemPrompt", "webSearchSystemPrompt"]) $(`${id}-current`).textContent = value(id) ? "Current: your custom prompt" : "Current: saved prompt (shown below)";
+    for (const id of ["systemPrompt"]) $(`${id}-current`).textContent = value(id) ? "Current: your custom prompt" : "Current: saved prompt (shown below)";
     const image = config.image;
     const profileName = value("imageProfile") || image.activeProfile;
     const profile = image.profiles[profileName];
@@ -258,9 +257,8 @@
     const canImage = Boolean(imageModel);
     $("review-settings").disabled = busy || !baseline || !Object.keys(overrides()).length;
     $("send").disabled = busy || !baseline || !canChat;
-    $("run-command").disabled = busy || !baseline || (page === "bicture" && !canImage) || (page === "ask" && !canChat);
+    $("run-command").disabled = busy || !baseline || (page === "bicture" && !canImage);
     $("default-prompt").textContent = config.systemPrompt;
-    $("default-search-prompt").textContent = config.askWebSearchSystemPrompt;
   };
   const showPage = () => {
     if (!meta || busy) return;
@@ -271,15 +269,13 @@
     const chat = page === "chat", image = page === "bicture";
     $("mention-panel").hidden = !chat;
     $("slash-panel").hidden = chat;
-    $("model-panel").hidden = !["chat", "ask", "bicture"].includes(page);
+    $("model-panel").hidden = !["chat", "bicture"].includes(page);
     $("chat-model-field").hidden = image;
     $("image-model-field").hidden = !image;
-    $("search-panel").hidden = image;
-    $("history-panel").hidden = !["chat", "ask", "bicture"].includes(page);
+    $("history-panel").hidden = !["chat", "bicture"].includes(page);
     $("replay-status").hidden = true;
     clearHistory();
     $("chat-settings").hidden = image;
-    $("search-settings").hidden = image;
     $("image-settings").hidden = !image;
     $("page-title").textContent = chat ? "Chat playground" : `/${page}`;
     $("page-description").textContent = chat || image ? "Test prompts locally. Save model changes to apply them to the bot." : meta.commands.find(c => c.name === page).description;
@@ -291,7 +287,7 @@
     }
     const draft = state.pages[page] ?? {};
     for (const id of overrideFields) {
-      if (["model", "webSearchModel", "imageModel"].includes(id) && draft[id] && ![...$(id).options].some(o => o.value === draft[id])) {
+      if (["model", "imageModel"].includes(id) && draft[id] && ![...$(id).options].some(o => o.value === draft[id])) {
         $(id).value = "";
         $("catalog-status").textContent = "A saved model is no longer eligible for Cloudflare credits. Choose an available model.";
       } else $(id).value = draft[id] ?? "";
@@ -332,7 +328,7 @@
   });
   $("content").addEventListener("input", save);
   $("reset-settings").addEventListener("click", () => { invalidateReview(); for (const id of overrideFields) $(id).value = ""; save(); updateSettings(); });
-  for (const [button, field, key] of [["edit-prompt", "systemPrompt", "systemPrompt"], ["edit-search-prompt", "webSearchSystemPrompt", "askWebSearchSystemPrompt"]]) {
+  for (const [button, field, key] of [["edit-prompt", "systemPrompt", "systemPrompt"]]) {
     $(button).addEventListener("click", () => { $(field).value = meta.config[key]; invalidateReview(); updateSettings(); save(); $(field).focus(); });
   }
   const resetIdentity = () => {
@@ -369,7 +365,7 @@
         const timestamp = new Date(entry.created_at.includes("T") ? entry.created_at : entry.created_at.replace(" ", "T") + "Z");
         const when = Number.isNaN(timestamp.getTime()) ? entry.created_at : timestamp.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
         const summary = node("summary", "");
-        const kind = { ask: "/ask", channel_reply: "Chat", thread_reply: "Thread", bicture: "/bicture" }[entry.kind] || entry.kind;
+        const kind = { channel_reply: "Chat", bicture: "/bicture" }[entry.kind] || entry.kind;
         summary.append(node("span", entry.prompt, "history-preview"), node("span", `${when} · ${entry.requester_username || "user"} · ${kind}${entry.status !== "ok" ? " · Failed" : ""}`, "history-meta"));
         card.append(summary, node("p", `Model: ${entry.model}`), node("pre", entry.prompt));
         if (entry.response_text) {
@@ -386,7 +382,6 @@
           if (page === "chat") {
             // Isolate a replay from an unrelated local conversation.
             $("channelId").value = snowflake();
-            $("mode").value = "channel";
             $("mentionBot").checked = true;
             $("replyLast").checked = false;
             renderTranscript();
@@ -430,14 +425,14 @@
       catalog = await api("models", { target: baseline?.target ?? "local", refresh });
       $("catalog-status").textContent = `${catalog.chat.length} compatible chat models · ${catalog.image.length} image models · checked ${new Date(catalog.checkedAt * 1000).toLocaleTimeString()}.`;
     } catch (error) {
-      catalog = { chat: [], search: [], image: [] };
+      catalog = { chat: [], image: [] };
       $("catalog-status").textContent = error.message;
     }
     const previousProfile = value("imageProfile");
     $("imageProfile").replaceChildren(new Option(`Default (${meta.config.image.activeProfile})`, ""), ...Object.entries(meta.config.image.profiles).filter(([, p]) => catalog.image.some(m => m.id === p.model)).map(([name]) => new Option(name, name)));
     $("imageProfile").options[0].disabled = !catalog.image.some(m => m.id === meta.config.image.profiles[meta.config.image.activeProfile].model);
     if ([...$("imageProfile").options].some(o => o.value === previousProfile)) $("imageProfile").value = previousProfile;
-    for (const [id, group, fallback] of [["model", "chat", meta.config.responseModel], ["webSearchModel", "search", meta.config.askWebSearchModel], ["imageModel", "image", meta.config.image.profiles[meta.config.image.activeProfile].model]]) {
+    for (const [id, group, fallback] of [["model", "chat", meta.config.responseModel], ["imageModel", "image", meta.config.image.profiles[meta.config.image.activeProfile].model]]) {
       const previous = value(id);
       const eligibleDefault = catalog[group].some(m => m.id === fallback);
       const defaultOption = new Option(eligibleDefault ? `${catalog[group].find(m => m.id === fallback)?.name || fallback} (saved)` : "Choose an available model", "");
@@ -489,7 +484,7 @@
     $("review-title").textContent = baseline.target === "live" ? "Review production changes" : "Review local sandbox changes";
     $("settings-changes").replaceChildren(...result.changes.map(change => {
       const item = node("section", "", "settings-change");
-      const labels = { "bicture-image.json": "Bicture", "discord-response.json": "Chat", "ask-web-search.json": "Search", "discord-response-system-prompt.md": "Chat system prompt", "ask-web-search-system-prompt.md": "Search system prompt" };
+      const labels = { "bicture-image.json": "Bicture", "discord-response.json": "Chat", "discord-response-system-prompt.md": "Chat system prompt" };
       item.append(node("h4", labels[change.resource] || change.resource));
       if (change.resource.endsWith(".json")) {
         const flatten = (object, prefix = "") => Object.entries(object).flatMap(([key, val]) => val && typeof val === "object" && !Array.isArray(val) ? flatten(val, `${prefix}${key}.`) : [[`${prefix}${key}`, JSON.stringify(val)]]);
@@ -545,15 +540,14 @@
     });
     const more = node("details", "", "nav-more"), menu = node("div", "");
     more.append(node("summary", "Other commands"), menu);
-    for (const link of links.filter(link => !["chat", "bicture", "ask"].includes(link.dataset.page))) menu.append(link);
-    $("pages").replaceChildren(...["chat", "bicture", "ask"].map(name => links.find(link => link.dataset.page === name)).filter(Boolean), more);
+    for (const link of links.filter(link => !["chat", "bicture"].includes(link.dataset.page))) menu.append(link);
+    $("pages").replaceChildren(...["chat", "bicture"].map(name => links.find(link => link.dataset.page === name)).filter(Boolean), more);
     menu.addEventListener("click", () => { more.open = false; });
 
-    // Preserve pre-existing chat overrides when upgrading the old console.
-    state.pages.chat ??= Object.fromEntries(overrideFields.map(id => [id, state[id] ?? ""]));
+    state.pages.chat ??= {};
     for (const id of overrideFields) $(id).value = state.pages.chat[id] ?? "";
     $("content").value = state.pages.chat.content ?? "";
-    $("connection").textContent = meta.hasAigToken ? "Connected · local testing" : "AI token missing";
+    $("connection").textContent = "Connected · local testing";
     showPage();
     renderTranscript();
     save();

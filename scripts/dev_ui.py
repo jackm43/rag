@@ -38,9 +38,9 @@ def run_docker():
 
 
 if __name__ == "__main__":
-    token = os.environ.get("CF_AIG_TOKEN", "")
+    token = os.environ.get("CLOUDFLARE_API_TOKEN", "")
     if not token or token.startswith("op://"):
-        raise SystemExit("Run pnpm run dev:ui so op run supplies CF_AIG_TOKEN.")
+        raise SystemExit("Run pnpm run dev:ui so op run supplies CLOUDFLARE_API_TOKEN.")
     extra = list(sys.argv[1:])
     if os.environ.get("DEV_UI_IN_CONTAINER") == "1":
         # A fresh Docker volume is already a directory; pywrangler otherwise

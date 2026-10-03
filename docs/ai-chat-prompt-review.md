@@ -56,8 +56,7 @@ point and be easy to talk to. Keep lowercase, dry humour, natural swearing, and
 short replies. Explicitly support correction, topic changes, graceful endings,
 and useful answers. Add a few examples of the desired approach.
 
-The application-added instructions about thread scope, the `/rag` command,
-aliases, and the direct `/ask` style remain separate. No context-fetching change
+The application-added instructions about the `/rag` command remain separate. No context-fetching change
 is included. A system prompt cannot recover messages the model never receives.
 
 ## Evaluation

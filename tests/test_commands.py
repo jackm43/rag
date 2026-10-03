@@ -67,19 +67,6 @@ async def test_invalid_ban_duration(app, interaction, timeframe):
     assert not await app.db.all("SELECT * FROM rag_command_bans")
 
 
-async def test_ask_creates_thread_and_final_reply(app, interaction):
-    await app.dispatch(interaction("ask", options=[{"name": "prompt", "value": "explain trees"}]))
-    assert len(await app.db.all("SELECT * FROM rag_ai_threads")) == 1
-    assert not await app.db.all("SELECT * FROM rag_ai_spend_events")
-    analytics = await app.db.all("SELECT * FROM rag_ai_interactions")
-    assert analytics[0]["status"] == "ok"
-    assert analytics[0]["response_text"] == "hello <https://example.com>"
-    assert app.transport.writes()[-1]["content"] == analytics[0]["response_text"]
-    for url, options in app.transport.calls:
-        if "/webhooks/" in url:
-            assert "authorization" not in options["headers"]
-
-
 @pytest.mark.parametrize("name", ["undorag", "raghammer"])
 @pytest.mark.parametrize("roles", [None, [], ["123456789012345678"], MODS_ROLE_ID])
 @pytest.mark.parametrize("user", ["123456789012345679", *sorted(ADMIN_IDS)])
@@ -103,7 +90,7 @@ async def test_mod_commands_deny_missing_member(app, interaction, name):
     assert "Mods role is required" in app.transport.writes()[-1]["content"]
 
 
-@pytest.mark.parametrize("name", ["ragspend", "ragspendboard", "ragjam"])
+@pytest.mark.parametrize("name", ["ask"])
 async def test_removed_commands_are_unknown(app, interaction, name):
     from ragbot.commands import COMMANDS
 
@@ -111,37 +98,3 @@ async def test_removed_commands_are_unknown(app, interaction, name):
     await app.dispatch(interaction(name))
     assert app.transport.writes()[-1]["content"] == "Unknown command."
     assert not await app.db.all("SELECT * FROM rag_ai_requests")
-
-
-async def test_historical_spend_does_not_limit_ai(app, interaction):
-    await app.db.run(
-        "INSERT INTO rag_ai_spend_events (source_id, kind, requester_user_id, model, estimated_cost_micros, status) VALUES (?, ?, ?, ?, ?, ?)",
-        "historical",
-        "ask",
-        TARGET,
-        "model",
-        100_000_000,
-        "aggregated",
-    )
-    await app.dispatch(interaction("ask", options=[{"name": "prompt", "value": "hello"}]))
-    assert app.transport.writes()[-1]["content"] == "hello <https://example.com>"
-    assert len(await app.db.all("SELECT * FROM rag_ai_spend_events")) == 1
-
-
-async def test_ai_ignores_rag_bans_and_request_history(app, interaction):
-    await app.dispatch(
-        interaction(
-            "raghammer",
-            roles=[MODS_ROLE_ID],
-            options=[USER_OPTION, {"name": "timeframe", "value": "1h"}],
-        )
-    )
-    for _ in range(10):
-        await app.db.run(
-            "INSERT INTO rag_ai_requests (requester_user_id, kind) VALUES (?, ?)", TARGET, "ask"
-        )
-    await app.dispatch(
-        interaction("ask", user=TARGET, options=[{"name": "prompt", "value": "hello"}])
-    )
-    assert app.transport.writes()[-1]["content"] == "hello <https://example.com>"
-    assert len(await app.db.all("SELECT * FROM rag_ai_requests")) == 10

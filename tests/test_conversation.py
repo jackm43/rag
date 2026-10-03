@@ -33,7 +33,6 @@ async def test_pingless_reply_preserves_question_answer_and_links_reply_without_
     answer = message(2, "yes, because it saves time", BOT, question)
     incoming = message(3, "what about the cost?", reply=answer, referenced_message=answer)
     app.discord.message = AsyncMock(return_value=question)
-    app.discord.messages = AsyncMock()
     await app.handle_message(incoming, BOT)
     _, payload, _ = app.env.AI.run.await_args.args
     assert payload["messages"][1:] == [
@@ -41,7 +40,6 @@ async def test_pingless_reply_preserves_question_answer_and_links_reply_without_
         {"role": "assistant", "content": "yes, because it saves time"},
         {"role": "user", "content": "tester: what about the cost?"},
     ]
-    app.discord.messages.assert_not_awaited()
     app.discord.message.assert_awaited_once_with(CHANNEL, question["id"])
     sent = app.transport.writes()[-1]
     assert sent["message_reference"] == {"message_id": incoming["id"], "fail_if_not_exists": False}
@@ -75,30 +73,6 @@ async def test_reply_chain_is_bounded_and_does_not_follow_cross_channel_referenc
     app.discord.message.reset_mock()
     job.reply_channel_id = "another-channel"
     assert len(await build_conversation(app, job, 12)) == 1
-    app.discord.message.assert_not_awaited()
-
-
-async def test_thread_reply_keeps_target_without_duplicates_and_normalizes_speaker(app):
-    first = message(1, "old question", member={"nick": "old name"})
-    answer = message(2, "old answer", BOT, first)
-    newer = message(3, "different topic", "123456789012345699")
-    current = message(4, "back to this", reply=answer)
-    app.discord.messages = AsyncMock(return_value=[newer, answer, first])
-    app.discord.message = AsyncMock()
-    job = ChatJob(
-        Attribution("thread_reply", USER, "current name", CHANNEL, current["id"]),
-        "back to this",
-        BOT,
-        {"source_message_id": first["id"]},
-        answer["id"],
-        CHANNEL,
-        current,
-    )
-    result = await build_conversation(app, job, 3)
-    assert len(result) == 4
-    assert result[0]["content"] == "current name: old question"
-    assert result[1] == {"role": "assistant", "content": "old answer"}
-    assert "Replying to ragbot: old answer" in result[-1]["content"]
     app.discord.message.assert_not_awaited()
 
 

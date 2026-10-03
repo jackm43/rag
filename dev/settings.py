@@ -1,56 +1,38 @@
 """Shared editable settings and per-request configuration snapshots."""
 
+import hashlib
 import json
 
-from .config import ConfigStore, resource_revision
+from ragbot.config import ConfigStore
+
+
+def resource_revision(resources: dict) -> str:
+    normalized = {
+        key: json.loads(value) if key.endswith(".json") else value
+        for key, value in resources.items()
+    }
+    return hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
 
 
 class DraftNamespace:
     def __init__(self, overrides, resources):
         self.values = dict(resources)
-        for key, fields in [
-            (
-                "discord-response.json",
-                {
-                    **{k: k for k in ("model", "temperature", "historyLimit")},
-                    "apiFormat": "chatApiFormat",
-                    "temperatureSupported": "chatTemperatureSupported",
-                },
-            ),
-            (
-                "ask-web-search.json",
-                {
-                    "model": "webSearchModel",
-                    "maxOutputTokens": "webSearchMaxTokens",
-                    "searchContextSize": "webSearchContextSize",
-                },
-            ),
-        ]:
-            try:
-                document = json.loads(self.values[key])
-                if not isinstance(document, dict):
-                    document = {}
-            except ValueError, TypeError:
-                document = {}
-            if key == "discord-response.json":
-                document.pop("maxTokens", None)
-                if overrides.get("model") and overrides["model"] != document.get("model"):
-                    # Reasoning support is model-specific; do not carry it to another model.
-                    document.pop("reasoningEffort", None)
-            for field, source in fields.items():
-                value = overrides.get(source)
-                if value is not None and value != "":
-                    document[field] = value
-            if key == "ask-web-search.json" and overrides.get("webSearchModel"):
-                document["apiFormat"] = "responses"
-            self.values[key] = json.dumps(document)
-
-        for field, key in (
-            ("systemPrompt", "discord-response-system-prompt.md"),
-            ("webSearchSystemPrompt", "ask-web-search-system-prompt.md"),
-        ):
-            if isinstance(overrides.get(field), str) and overrides[field].strip():
-                self.values[key] = overrides[field]
+        document = json.loads(self.values["discord-response.json"])
+        if overrides.get("model") and overrides["model"] != document.get("model"):
+            # Reasoning support is model-specific; do not carry it to another model.
+            document.pop("reasoningEffort", None)
+        for field, source in {
+            **{k: k for k in ("model", "temperature", "historyLimit")},
+            "apiFormat": "chatApiFormat",
+            "temperatureSupported": "chatTemperatureSupported",
+        }.items():
+            value = overrides.get(source)
+            if value is not None and value != "":
+                document[field] = value
+        self.values["discord-response.json"] = json.dumps(document)
+        prompt = overrides.get("systemPrompt")
+        if isinstance(prompt, str) and prompt.strip():
+            self.values["discord-response-system-prompt.md"] = prompt
         image = json.loads(self.values["bicture-image.json"])
         profile_name = overrides.get("imageProfile") or image["activeProfile"]
         if profile_name not in image["profiles"]:
@@ -83,7 +65,7 @@ def draft_store(overrides, resources, revision=None):
     return ConfigStore(
         None,
         snapshot={
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "resources": values,
             "revision": used_revision,
             "source": "draft",
@@ -93,7 +75,7 @@ def draft_store(overrides, resources, revision=None):
 
 async def resolve_config(overrides, resources):
     store = draft_store(overrides, resources)
-    chat, search = await store.models()
+    chat = await store.chat()
     image = await store.document("bicture-image.json")
     return {
         "image": image,
@@ -104,14 +86,6 @@ async def resolve_config(overrides, resources):
         "temperature": chat.temperature,
         "historyLimit": chat.history_limit,
         "gatewayId": chat.gateway_id,
-        "askWebSearchModel": search.model,
-        "askWebSearchApiFormat": search.api_format,
-        "askWebSearchSystemPrompt": search.prompt,
-        "askWebSearchMaxOutputTokens": search.max_tokens,
-        "askWebSearchTemperature": search.temperature,
-        "askWebSearchMaxTurns": search.max_turns,
-        "askWebSearchContextSize": search.search_context_size,
-        "askWebSearchGatewayId": search.gateway_id,
     }
 
 
@@ -122,27 +96,21 @@ def validate_overrides(overrides):
     strings = {
         "model",
         "chatApiFormat",
-        "webSearchModel",
         "systemPrompt",
-        "webSearchSystemPrompt",
         "imageProfile",
         "imageModel",
         "imageAspectRatio",
         "imageQuality",
         "imageResolution",
-        "webSearchContextSize",
     }
     numeric = {
         "temperature": (0, 2),
         "historyLimit": (1, 100),
-        "webSearchMaxTokens": (1, 32768),
     }
     if set(overrides) - strings - numeric.keys():
         raise ValueError("unknown setting")
     if overrides.get("chatApiFormat") not in (None, "chat-completions", "responses"):
         raise ValueError("invalid chat API format")
-    if overrides.get("webSearchContextSize") not in (None, "", "low", "medium", "high"):
-        raise ValueError("invalid search context size")
     for key, value in overrides.items():
         if key in strings:
             if not isinstance(value, str) or len(value) > 100000:

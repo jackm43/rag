@@ -1,8 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
-
-from ragbot.model_catalog import (
+from model_catalog import (
     CatalogUnavailable,
     CreditCatalog,
     ModelUnavailable,
@@ -106,7 +105,7 @@ async def test_catalog_fails_closed_when_cloudflare_rejects_access():
 
 
 async def test_catalog_limits_choices_to_compatible_credit_routes(monkeypatch):
-    import ragbot.model_catalog as module
+    import model_catalog as module
 
     module._cache.clear()
     records = [
@@ -184,14 +183,12 @@ async def test_catalog_limits_choices_to_compatible_credit_routes(monkeypatch):
     monkeypatch.setattr(instance, "get", get)
     config = {
         "gatewayId": "test",
-        "askWebSearchGatewayId": "test",
-        "askWebSearchApiFormat": "responses",
         "image": {"activeProfile": "standard", "profiles": {"standard": {"gatewayId": "test"}}},
     }
     models = await instance.load(config)
     assert {m["id"] for m in models["chat"]} == {
         "openai/gpt-4.1-mini",
-        "google-ai-studio/gemini-2.5-flash",
+        "google/gemini-2.5-flash",
         "openai/gpt-5.5-pro",
         "new-provider/new-chat",
     }
@@ -202,7 +199,7 @@ async def test_catalog_limits_choices_to_compatible_credit_routes(monkeypatch):
     )
     assert models["image"][0]["parameters"] == {"resolution": {"enum": ["1K", "2K"]}}
     assert next(m for m in models["chat"] if m["id"] == "openai/gpt-5.5-pro")["temperature"] is None
-    assert next(m for m in models["chat"] if m["id"] == "google-ai-studio/gemini-2.5-flash")[
+    assert next(m for m in models["chat"] if m["id"] == "google/gemini-2.5-flash")[
         "temperature"
     ] == {"minimum": 0, "maximum": 1}
     module._cache.clear()
@@ -210,7 +207,7 @@ async def test_catalog_limits_choices_to_compatible_credit_routes(monkeypatch):
 
 @pytest.mark.parametrize("value", [0, 0.4, 1])
 def test_temperature_schema_range_accepts_supported_values(value):
-    from ragbot.model_catalog import chat_overrides
+    from model_catalog import chat_overrides
 
     model = {"apiFormat": "chat-completions", "temperature": {"minimum": 0, "maximum": 1}}
     assert chat_overrides(model, {"temperature": 0.7}, {"temperature": value}) == {
@@ -220,7 +217,7 @@ def test_temperature_schema_range_accepts_supported_values(value):
 
 
 def test_temperature_rejects_unsupported_and_out_of_range_values():
-    from ragbot.model_catalog import chat_overrides
+    from model_catalog import chat_overrides
 
     model = {"apiFormat": "responses", "temperature": None}
     assert chat_overrides(model, {"temperature": 0.7}, {})["chatTemperatureSupported"] is False
@@ -232,7 +229,7 @@ def test_temperature_rejects_unsupported_and_out_of_range_values():
 
 
 def test_temperature_uses_matching_catalog_request_variant():
-    from ragbot.model_catalog import temperature_range
+    from model_catalog import temperature_range
 
     schema = {
         "oneOf": [
