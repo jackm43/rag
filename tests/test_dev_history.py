@@ -44,7 +44,7 @@ async def test_history_filters_searches_and_pages_without_duplicates():
     assert second["next"] is None
     assert [row["id"] for row in first["entries"] + second["entries"]] == list(range(30, 0, -1))
     chat = await editor.history({"page": "chat"})
-    assert {row["kind"] for row in chat["entries"]} == {"ask", "channel_reply", "thread_reply"}
+    assert {row["kind"] for row in chat["entries"]} == {"channel_reply"}
     assert not (await editor.history({"page": "chat", "search": "' OR 1=1 --"}))["entries"]
     assert not (await editor.history({"page": "bicture", "search": "%"}))["entries"]
     assert db.connection.execute("SELECT count(*) FROM rag_ai_interactions").fetchone()[0] == 34

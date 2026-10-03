@@ -45,7 +45,7 @@ class SQLiteBinding:
                 (
                     "test-seed",
                     json.dumps(
-                        {"schemaVersion": 1, "revision": "test-seed", "resources": load_resources()}
+                        {"schemaVersion": 2, "revision": "test-seed", "resources": load_resources()}
                     ),
                 ),
             )
@@ -81,22 +81,6 @@ class Transport:
             result = self.handler(url, options)
             if result is not None:
                 return result
-        if "gateway.ai.cloudflare.com" in url:
-            return FakeResponse(
-                {
-                    "model": "test-model",
-                    "choices": [
-                        {
-                            "message": {
-                                "content": "Assistant: hello <@123456789012345678> https://example.com"
-                            }
-                        }
-                    ],
-                    "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
-                }
-            )
-        if "/threads" in url:
-            return FakeResponse({"id": "123456789012345690", "type": 11})
         return FakeResponse({"id": "123456789012345691", "type": 0})
 
     def writes(self):
@@ -115,8 +99,6 @@ def app(monkeypatch):
         DISCORD_APPLICATION_ID="123456789012345678",
         ALLOWED_GUILD_IDS="457689460096630794",
         CF_ACCOUNT_ID="test-account",
-        CF_AIG_TOKEN="test-ai-token",
-        CF_AIG_GATEWAY_ID="test-gateway",
         CLOUDFLARE_API_TOKEN="test-cf-token",
         AI=SimpleNamespace(
             run=AsyncMock(

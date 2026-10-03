@@ -11,7 +11,6 @@ SECRETS = [
     "DISCORD_PUBLIC_KEY",
     "DISCORD_BOT_TOKEN",
     "GATEWAY_CONTROL_TOKEN",
-    "CF_AIG_TOKEN",
     "CLOUDFLARE_API_TOKEN",
 ]
 
@@ -40,7 +39,7 @@ def serve(*, dev_ui=False, extra=()):
         config = json.loads(config_path.read_text())
         if not dev_ui:
             config["secrets"] = {"required": SECRETS}
-            # Use the same local D1/KV state as root wrangler migration commands.
+            # Use the same local D1 state as root wrangler migration commands.
             config["triggers"] = {"crons": ["*/15 * * * *"]}
         config_path.write_text(json.dumps(config, indent=2) + "\n")
 
@@ -80,7 +79,7 @@ def serve(*, dev_ui=False, extra=()):
         subprocess.run(
             [
                 sys.executable,
-                str(ROOT / "scripts/migrate_ai_settings.py"),
+                str(ROOT / "scripts/initialize_ai_settings.py"),
                 "--local",
                 "--persist-to",
                 str(state),

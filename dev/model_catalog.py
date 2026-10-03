@@ -12,10 +12,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import quote
 
-from .runtime import env_value, fetch
+from ragbot.runtime import env_value, fetch
 
-# Cloudflare documents Responses web search for these models.
-SEARCH_IDS = {"openai/gpt-4.1", "openai/gpt-4.1-mini", "openai/gpt-4o", "openai/gpt-4o-mini"}
 ALIASES = {"xai": {"xai", "grok"}, "google": {"google", "google-ai-studio", "google-vertex-ai"}}
 _cache: dict = {}
 
@@ -85,7 +83,6 @@ class CreditCatalog:
     async def load(self, config, *, refresh=False):
         gateways = {
             "chat": config["gatewayId"],
-            "search": config["askWebSearchGatewayId"],
             "image": config["image"]["profiles"][config["image"]["activeProfile"]].get("gatewayId"),
         }
         key = (env_value(self.env, "CF_ACCOUNT_ID"), *gateways.values())
@@ -99,7 +96,6 @@ class CreditCatalog:
         result: dict = {
             "chat": [],
             "image": [],
-            "search": [],
             "source": "Cloudflare account catalog",
             "checkedAt": int(time.time()),
         }
@@ -125,12 +121,6 @@ class CreditCatalog:
                 if "chat-completions" not in (model.get("request_formats") or [])
                 else "chat-completions"
             )
-            if group == "chat" and api_format == "chat-completions":
-                # Keep UI values compatible with saved settings and browser drafts.
-                # Inference resolves these aliases to catalog IDs at the AI binding.
-                route = model_id.replace("xai/", "grok/", 1).replace(
-                    "google/", "google-ai-studio/", 1
-                )
             result[group].append(
                 {
                     "id": route,
@@ -187,13 +177,6 @@ class CreditCatalog:
         result["image"] = [
             m for m in await asyncio.gather(*(image_details(m) for m in result["image"])) if m
         ]
-        result["search"] = [
-            {"id": m["model_id"], "name": m["name"], "provider": m["provider_id"]}
-            for m in models
-            if m.get("model_id") in SEARCH_IDS
-            and "responses" in (m.get("request_formats") or [])
-            and credit_route(m, billing["search"])
-        ]
         result["note"] = (
             "Models are discovered from the live account catalog; only compatible Cloudflare-credit routes are listed. BYOK routes and separately billed Workers AI models are excluded."
         )
@@ -205,12 +188,10 @@ class CreditCatalog:
         profile = config["image"]["profiles"][config["image"]["activeProfile"]]
         selected = {
             "chat": config["responseModel"],
-            "search": config["askWebSearchModel"],
             "image": profile["model"],
         }
         gateways = {
             "chat": config["gatewayId"],
-            "search": config["askWebSearchGatewayId"],
             "image": profile.get("gatewayId"),
         }
         for group in groups:

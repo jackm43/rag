@@ -5,11 +5,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from settings import draft_store, resolve_config
 from settings_seed import load_resources
 
 from ragbot.ai import Attribution
 from ragbot.commands.media import bicture
-from ragbot.settings import draft_store, resolve_config
 
 FILES = load_resources()
 
@@ -20,8 +20,6 @@ async def test_dev_chat_prompts_and_models_are_isolated():
         {
             "model": "example/chat",
             "systemPrompt": "Answer in haiku.",
-            "webSearchModel": "example/search",
-            "webSearchSystemPrompt": "Cite sources.",
             "temperature": 0,
             "historyLimit": 6,
         },
@@ -29,8 +27,6 @@ async def test_dev_chat_prompts_and_models_are_isolated():
     )
     assert custom["responseModel"] == "example/chat"
     assert custom["systemPrompt"] == "Answer in haiku."
-    assert custom["askWebSearchModel"] == "example/search"
-    assert custom["askWebSearchSystemPrompt"] == "Cite sources."
     assert custom["temperature"] == 0
     assert custom["historyLimit"] == 6
     assert await resolve_config({}, FILES) == defaults
@@ -67,11 +63,11 @@ async def test_unknown_image_profile_is_rejected():
 async def test_reasoning_is_preserved_for_same_model_and_cleared_on_model_change():
     resources = dict(FILES)
     document = json.loads(resources["discord-response.json"])
-    document.update(model="grok/grok-4.6", reasoningEffort="low")
+    document.update(model="xai/grok-4.6", reasoningEffort="low")
     resources["discord-response.json"] = json.dumps(document)
     assert (await resolve_config({}, resources))["chatReasoningEffort"] == "low"
     assert (await resolve_config({"temperature": 0.5}, resources))["chatReasoningEffort"] == "low"
-    assert (await resolve_config({"model": "grok/grok-4.6"}, resources))[
+    assert (await resolve_config({"model": "xai/grok-4.6"}, resources))[
         "chatReasoningEffort"
     ] == "low"
     changed = await resolve_config({"model": "openai/gpt-4.1-mini"}, resources)
@@ -92,7 +88,7 @@ async def test_grok_draft_simulation_uses_binding_and_leaves_saved_settings_unch
             "content": "hello",
             "baseResources": FILES,
             "settingsRevision": "saved-revision",
-            "overrides": {"model": "grok/grok-4.7", "temperature": 0.9},
+            "overrides": {"model": "xai/grok-4.7", "temperature": 0.9},
         },
         upstream=upstream,
     )

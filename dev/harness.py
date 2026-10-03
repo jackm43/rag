@@ -7,13 +7,14 @@ import logging
 import secrets
 import time
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
+
+from settings import draft_store
 
 from ragbot.app import Application
 from ragbot.commands.registry import MODS_ROLE_ID
 from ragbot.db import Database
 from ragbot.runtime import fetch, to_python
-from ragbot.settings import draft_store
 
 captured_logs = contextvars.ContextVar("captured_logs", default=None)
 
@@ -125,7 +126,7 @@ class Simulation:
     def __init__(self, env, inputs, upstream=fetch):
         self.env, self.inputs, self.upstream = env, inputs, upstream
         self.calls, self.ai, self.logs = [], [], []
-        self.edits, self.followups, self.messages, self.threads = [], [], [], []
+        self.edits, self.followups, self.messages = [], [], []
         self.history = []
         self.run_env = SimpleNamespace(
             **{
@@ -136,7 +137,6 @@ class Simulation:
                     "DISCORD_BOT_TOKEN",
                     "ALLOWED_GUILD_IDS",
                     "CF_ACCOUNT_ID",
-                    "CF_AIG_TOKEN",
                 )
             }
         )
@@ -198,12 +198,6 @@ class Simulation:
         started = time.monotonic()
         parsed = urlparse(url)
         method = options.get("method", "GET")
-        if parsed.hostname == "gateway.ai.cloudflare.com":
-            headers = dict(options.get("headers", {}))
-            headers["cf-aig-metadata"] = json.dumps(
-                dev_metadata(json.loads(headers.get("cf-aig-metadata", "{}")))
-            )
-            options["headers"] = headers
         safe_url = url
         if parsed.hostname == "discord.com" and "/webhooks/" in parsed.path:
             parts = parsed.path.split("/")
@@ -234,23 +228,6 @@ class Simulation:
         else:
             # Only the Discord API is stubbed; model/media calls use the injected upstream.
             response = await self.upstream(url, **options)
-            if parsed.hostname == "gateway.ai.cloudflare.com":
-                payload = await response.json()
-                call["response"] = {"status": response.status, "body": payload}
-                self.ai.append(
-                    {
-                        "transport": "gateway-http",
-                        "settingsRevision": json.loads(
-                            options.get("headers", {}).get("cf-aig-metadata", "{}")
-                        ).get("ragbot_settings_revision"),
-                        "model": (body or {}).get("model", "unknown"),
-                        "request": {k: call[k] for k in ("method", "url", "headers", "body")},
-                        "response": call["response"],
-                        "durationMs": round((time.monotonic() - started) * 1000),
-                        **({"error": f"HTTP {response.status}"} if not response.ok else {}),
-                    }
-                )
-                response = Response(payload, response.status)
         call["durationMs"] = round((time.monotonic() - started) * 1000)
         return response
 
@@ -259,35 +236,10 @@ class Simulation:
         channel_id = self.inputs["channelId"]
         if parts[0] == "channels":
             channel_id = parts[1]
-            if method == "POST" and parts[-1] == "threads":
-                data = json.loads(options["body"])
-                thread = {"id": snowflake(), "name": data["name"], "parentId": channel_id}
-                self.threads.append(thread)
-                return Response(
-                    {
-                        "id": thread["id"],
-                        "name": thread["name"],
-                        "parent_id": channel_id,
-                        "type": 11,
-                    }
-                )
             if method == "POST" and parts[-1] == "messages":
                 message = await self.capture_write(options, channel_id)
                 self.messages.append(message)
                 return Response({"id": message["id"]})
-            if method == "GET" and len(parts) == 2:
-                return Response(
-                    {
-                        "id": channel_id,
-                        "type": 11 if self.inputs.get("mode") in ("thread", "ask_thread") else 0,
-                        "parent_id": self.inputs["guildId"],
-                    }
-                )
-            if method == "GET" and len(parts) == 3 and parts[-1] == "messages":
-                query = parse_qs(url.query)
-                before = query.get("before", [None])[0]
-                history = [m for m in self.history if not before or int(m["id"]) < int(before)]
-                return Response(list(reversed(history))[: int(query.get("limit", [12])[0])])
             if method == "GET" and len(parts) == 4:
                 return Response(next((m for m in self.history if m["id"] == parts[-1]), None), 200)
         if parts[0] == "webhooks" and method in ("PATCH", "POST"):
@@ -314,41 +266,7 @@ class Simulation:
             identity = self.inputs["identity"]
             if mode == "mention":
                 transcript = self.inputs.get("transcript", [])
-                is_thread = self.inputs.get("mode", "channel") != "channel"
-                first = transcript[0] if transcript else None
-                if is_thread:
-                    initial = (
-                        first["content"]
-                        if first and first["role"] == "user"
-                        else self.inputs["content"]
-                    )
-                    await db.record_thread(
-                        {
-                            "thread_id": self.inputs["channelId"],
-                            "parent_channel_id": self.inputs["guildId"],
-                            "source_message_id": (first["id"] if first else snowflake())
-                            if self.inputs["mode"] == "thread"
-                            else None,
-                            "requester_user_id": (
-                                first.get("author", identity) if first else identity
-                            )["userId"],
-                            "requester_username": display_name(
-                                first.get("author", identity) if first else identity
-                            ),
-                            "initial_prompt": initial,
-                            "title": initial[:80],
-                        }
-                    )
-                else:
-                    await db.run(
-                        "DELETE FROM rag_ai_threads WHERE thread_id = ?", self.inputs["channelId"]
-                    )
-                history = (
-                    transcript[1:]
-                    if is_thread and first and first["role"] == "user"
-                    else transcript
-                )
-                self.history = [self.transcript_message(entry) for entry in history]
+                self.history = [self.transcript_message(entry) for entry in transcript]
                 mention = self.inputs.get("mentionBot", True)
                 payload = {
                     "id": snowflake(),
@@ -422,7 +340,6 @@ class Simulation:
                     "edits": self.edits,
                     "followUps": self.followups,
                     "channelMessages": self.messages,
-                    "threadsCreated": self.threads,
                 }
                 analytics = await db.first(
                     "SELECT * FROM rag_ai_interactions ORDER BY id DESC LIMIT 1"

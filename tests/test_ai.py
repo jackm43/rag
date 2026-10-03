@@ -4,43 +4,15 @@ from unittest.mock import AsyncMock
 import pytest
 
 
-async def test_mention_and_ask_thread_use_shared_router(app):
-    message = {
-        "id": "123456789012345680",
-        "channel_id": "123456789012345681",
-        "guild_id": "457689460096630794",
-        "author": {"id": "123456789012345679", "username": "tester"},
-        "content": "hello",
-    }
-    await app.handle_message(message, app.env.DISCORD_APPLICATION_ID)
-    assert not app.transport.calls
-    message["content"] = f"<@{app.env.DISCORD_APPLICATION_ID}> hello"
-    await app.handle_message(message, app.env.DISCORD_APPLICATION_ID)
-    assert (await app.db.all("SELECT * FROM rag_ai_interactions"))[0]["kind"] == "channel_reply"
-    await app.db.record_thread(
-        {
-            "thread_id": message["channel_id"],
-            "initial_prompt": "hello",
-            "title": "hello",
-            "requester_username": "tester",
-        }
-    )
-    app.env.AI.run.return_value = {"output_text": "Clear skies", "output": []}
-    message["content"] = "weather today"
-    await app.handle_message(message, app.env.DISCORD_APPLICATION_ID)
-    chat_model, chat_request, _ = app.env.AI.run.await_args_list[0].args
-    assert chat_model == "xai/grok-4.3"
-    assert "messages" in chat_request and "web_search_options" not in chat_request
-    model, request, options = app.env.AI.run.call_args.args
-    assert model == "openai/gpt-4.1-mini"
-    assert request["tools"] == [{"type": "web_search_preview", "search_context_size": "medium"}]
-    assert "weather today" in request["input"]
-    assert options["gateway"]["id"] == "platy"
-    assert any(
-        "Clear skies" in str(options.get("body", ""))
-        for url, options in app.transport.calls
-        if "discord.com" in url
-    )
+async def test_time_sensitive_mentions_use_chat_without_tools(app):
+    from test_conversation import BOT, message
+
+    await app.handle_message(message(1, f"<@{BOT}> what is the weather today?"), BOT)
+    app.env.AI.run.assert_awaited_once()
+    model, request, _ = app.env.AI.run.call_args.args
+    assert model == "xai/grok-4.3"
+    assert set(request) == {"messages", "temperature"}
+    assert "weather today" in request["messages"][-1]["content"]
 
 
 @pytest.mark.parametrize("supported", [True, False])
@@ -61,7 +33,6 @@ async def test_responses_chat_preserves_conversation_and_extracts_reply(app, sup
     config = ModelConfig(
         "openai/example-responses",
         "system",
-        1000,
         0.7,
         "test",
         api_format="responses",
@@ -82,7 +53,7 @@ async def test_reasoning_chat_omits_token_limit_and_temperature(app):
     from ragbot.ai import Attribution
     from ragbot.config import ModelConfig
 
-    config = ModelConfig("openai/gpt-5", "system", 2000, 0.7, "test")
+    config = ModelConfig("openai/gpt-5", "system", 0.7, "test")
     await app.ai.chat(config, [{"role": "user", "content": "hello"}], Attribution("channel_reply"))
     model, body, options = app.env.AI.run.call_args.args
     assert model == "openai/gpt-5" and options["gateway"]["id"] == "test"
@@ -92,15 +63,12 @@ async def test_reasoning_chat_omits_token_limit_and_temperature(app):
 @pytest.mark.parametrize(
     ("model", "catalog_model"),
     [
-        ("grok/grok-4.3", "xai/grok-4.3"),
-        ("grok/grok-4.7", "xai/grok-4.7"),
+        ("xai/grok-4.3", "xai/grok-4.3"),
         ("xai/grok-4.7", "xai/grok-4.7"),
-        ("google-ai-studio/gemini-2.5-flash", "google/gemini-2.5-flash"),
         ("google/gemini-2.5-flash", "google/gemini-2.5-flash"),
         ("openai/gpt-4.1-mini", "openai/gpt-4.1-mini"),
         ("anthropic/claude-sonnet-4-5", "anthropic/claude-sonnet-4-5"),
         ("new-provider/new-model", "new-provider/new-model"),
-        ("workers-ai/@cf/example/model", "@cf/example/model"),
     ],
 )
 async def test_chat_uses_catalog_billing_route_and_preserves_settings(app, model, catalog_model):
@@ -115,7 +83,7 @@ async def test_chat_uses_catalog_billing_route_and_preserves_settings(app, model
             }
         )
     )
-    config = ModelConfig(model, "system", 1000, 0.9, "platy", revision="saved-revision")
+    config = ModelConfig(model, "system", 0.9, "platy", revision="saved-revision")
     messages = [{"role": "system", "content": "system"}, {"role": "user", "content": "hello"}]
     result = await app.ai.chat(config, messages, Attribution("channel_reply", user_id="test-user"))
 
@@ -130,14 +98,14 @@ async def test_chat_uses_catalog_billing_route_and_preserves_settings(app, model
     assert not app.transport.calls
 
 
-async def test_grok_binding_failure_is_not_retried_via_legacy_gateway(app):
+async def test_binding_failure_is_not_retried(app):
     from ragbot.ai import Attribution
     from ragbot.config import ModelConfig
 
     app.env.AI = SimpleNamespace(run=AsyncMock(side_effect=RuntimeError("provider failure")))
     with pytest.raises(RuntimeError):
         await app.ai.chat(
-            ModelConfig("grok/grok-4.7", "system", 1000, 0.9, "platy"),
+            ModelConfig("xai/grok-4.7", "system", 0.9, "platy"),
             [{"role": "user", "content": "hello"}],
             Attribution("channel_reply"),
         )
@@ -152,9 +120,8 @@ async def test_low_reasoning_reaches_ai_without_reintroducing_token_limit(app, a
 
     await app.ai.chat(
         ModelConfig(
-            "grok/grok-4.6",
+            "xai/grok-4.6",
             "system",
-            None,
             0.9,
             "platy",
             api_format=api_format,

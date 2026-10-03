@@ -284,8 +284,6 @@ type WorkflowInstanceEventType = Any
 
 type IteratorResult[T, TReturn=Any] = IteratorYieldResult_iface[T] | IteratorReturnResult_iface[TReturn]
 
-type KVNamespaceListResult[Metadata, Key=str] = KVNamespaceListResult__Union0[Metadata] | KVNamespaceListResult__Union1[Metadata]
-
 type ContainerDirectorySnapshotRestoreParams = ContainerDirectorySnapshotRestoreParams__Union0 | ContainerDirectorySnapshotRestoreParams__Union1
 
 type BuiltinIteratorReturn = Any
@@ -3273,13 +3271,16 @@ class WorkflowInstance(WorkflowInstance_iface, _JsObject): # type:ignore[misc, u
     pass
 
 class __BaseEnv_Env_iface(Protocol): # type:ignore[misc, unused-ignore]
-    AI_CONFIG: KVNamespace_iface = ... # type:ignore[assignment,unused-ignore]
     DB: D1Database = ... # type:ignore[assignment,unused-ignore]
     AI: Ai[AiModels_iface] = ... # type:ignore[assignment,unused-ignore]
-    DISCORD_APPLICATION_ID: Literal["1496842508251172895"] = ... # type:ignore[assignment,unused-ignore]
     CF_ACCOUNT_ID: Literal["314e7e015b5f4429c4e2da1e6ec93271"] = ... # type:ignore[assignment,unused-ignore]
     ALLOWED_GUILD_IDS: Literal["457689460096630794"] = ... # type:ignore[assignment,unused-ignore]
-    CF_AIG_GATEWAY_ID: Literal["platy"] = ... # type:ignore[assignment,unused-ignore]
+    DISCORD_APPLICATION_ID: str = ... # type:ignore[assignment,unused-ignore]
+    DISCORD_PUBLIC_KEY: str = ... # type:ignore[assignment,unused-ignore]
+    DISCORD_BOT_TOKEN: str = ... # type:ignore[assignment,unused-ignore]
+    CF_AIG_TOKEN: str = ... # type:ignore[assignment,unused-ignore]
+    GATEWAY_CONTROL_TOKEN: str = ... # type:ignore[assignment,unused-ignore]
+    CLOUDFLARE_API_TOKEN: str = ... # type:ignore[assignment,unused-ignore]
     DISCORD_GATEWAY: DurableObjectNamespace[None] = ... # type:ignore[assignment,unused-ignore]
 
 class CacheContext_iface(Protocol): # type:ignore[misc, unused-ignore]
@@ -5505,138 +5506,6 @@ class WorkflowInstanceRestartOptions_iface(Protocol): # type:ignore[misc, unused
 class WorkflowInstanceSubscription_iface(Disposable_iface, Protocol): # type:ignore[misc, unused-ignore]
     def next(self, /) -> Future[IteratorResult[WorkflowInstanceEvent, None]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
 
-class KVNamespace_iface(Protocol): # type:ignore[misc, unused-ignore]
-    @overload
-    def get(self, key: str, options: KVNamespace_iface__get__Sig0__options__Partial__KVNamespaceGetOptions_iface[None] | None = None, /) -> Future[str | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get(self, key: str, type: Literal["text"], /) -> Future[str | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get[ExpectedValue=Any](self, key: str, type: Literal["json"], /) -> Future[ExpectedValue | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get(self, key: str, type: Literal["arrayBuffer"], /) -> Future[ArrayBuffer | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get(self, key: str, type: Literal["stream"], /) -> Future[ReadableStream[Any] | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get(self, key: str, options: KVNamespaceGetOptions_iface[Literal["text"]] | None = None, /) -> Future[str | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get(self, key: str, /, *, type: Literal["text"], cacheTtl: int | float | None = None) -> Future[str | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get[ExpectedValue=Any](self, key: str, options: KVNamespaceGetOptions_iface[Literal["json"]] | None = None, /) -> Future[ExpectedValue | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get[ExpectedValue=Any](self, key: str, /, *, type: Literal["json"], cacheTtl: int | float | None = None) -> Future[ExpectedValue | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get(self, key: str, options: KVNamespaceGetOptions_iface[Literal["arrayBuffer"]] | None = None, /) -> Future[ArrayBuffer | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get(self, key: str, /, *, type: Literal["arrayBuffer"], cacheTtl: int | float | None = None) -> Future[ArrayBuffer | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get(self, key: str, options: KVNamespaceGetOptions_iface[Literal["stream"]] | None = None, /) -> Future[ReadableStream[Any] | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get(self, key: str, /, *, type: Literal["stream"], cacheTtl: int | float | None = None) -> Future[ReadableStream[Any] | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get(self, key: ArrayLike_iface[str], type: Literal["text"], /) -> Future[Map[str, str | None]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get[ExpectedValue=Any](self, key: ArrayLike_iface[str], type: Literal["json"], /) -> Future[Map[str, ExpectedValue | None]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get(self, key: ArrayLike_iface[str], options: KVNamespace_iface__get__Sig11__options__Partial__KVNamespaceGetOptions_iface[None] | None = None, /) -> Future[Map[str, str | None]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get(self, key: ArrayLike_iface[str], options: KVNamespaceGetOptions_iface[Literal["text"]] | None = None, /) -> Future[Map[str, str | None]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get(self, key: ArrayLike_iface[str], /, *, type: Literal["text"], cacheTtl: int | float | None = None) -> Future[Map[str, str | None]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get[ExpectedValue=Any](self, key: ArrayLike_iface[str], options: KVNamespaceGetOptions_iface[Literal["json"]] | None = None, /) -> Future[Map[str, ExpectedValue | None]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def get[ExpectedValue=Any](self, key: ArrayLike_iface[str], /, *, type: Literal["json"], cacheTtl: int | float | None = None) -> Future[Map[str, ExpectedValue | None]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def list[Metadata=Any](self, options: KVNamespaceListOptions_iface | None = None, /) -> Future[KVNamespaceListResult[Metadata, str]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def list[Metadata=Any](self, /, *, limit: int | float | None = None, prefix: (str | None) | None = None, cursor: (str | None) | None = None) -> Future[KVNamespaceListResult[Metadata, str]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def put(self, key: str, value: str | ArrayBuffer | ArrayBufferView_iface[ArrayBufferLike] | ReadableStream[Any], options: KVNamespacePutOptions_iface | None = None, /) -> Future[None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def put(self, key: str, value: str | ArrayBuffer | ArrayBufferView_iface[ArrayBufferLike] | ReadableStream[Any], /, *, expiration: int | float | None = None, expirationTtl: int | float | None = None, metadata: (Any | None) | None = None) -> Future[None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[Metadata=Any](self, key: str, options: KVNamespace_iface__getWithMetadata__Sig0__options__Partial__KVNamespaceGetOptions_iface[None] | None = None, /) -> Future[KVNamespaceGetWithMetadataResult_iface[str, Metadata]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[Metadata=Any](self, key: str, type: Literal["text"], /) -> Future[KVNamespaceGetWithMetadataResult_iface[str, Metadata]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[ExpectedValue=Any, Metadata=Any](self, key: str, type: Literal["json"], /) -> Future[KVNamespaceGetWithMetadataResult_iface[ExpectedValue, Metadata]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[Metadata=Any](self, key: str, type: Literal["arrayBuffer"], /) -> Future[KVNamespaceGetWithMetadataResult_iface[ArrayBuffer, Metadata]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[Metadata=Any](self, key: str, type: Literal["stream"], /) -> Future[KVNamespaceGetWithMetadataResult_iface[ReadableStream[Any], Metadata]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[Metadata=Any](self, key: str, options: KVNamespaceGetOptions_iface[Literal["text"]], /) -> Future[KVNamespaceGetWithMetadataResult_iface[str, Metadata]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[Metadata=Any](self, key: str, /, *, type: Literal["text"], cacheTtl: int | float | None = None) -> Future[KVNamespaceGetWithMetadataResult_iface[str, Metadata]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[ExpectedValue=Any, Metadata=Any](self, key: str, options: KVNamespaceGetOptions_iface[Literal["json"]], /) -> Future[KVNamespaceGetWithMetadataResult_iface[ExpectedValue, Metadata]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[ExpectedValue=Any, Metadata=Any](self, key: str, /, *, type: Literal["json"], cacheTtl: int | float | None = None) -> Future[KVNamespaceGetWithMetadataResult_iface[ExpectedValue, Metadata]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[Metadata=Any](self, key: str, options: KVNamespaceGetOptions_iface[Literal["arrayBuffer"]], /) -> Future[KVNamespaceGetWithMetadataResult_iface[ArrayBuffer, Metadata]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[Metadata=Any](self, key: str, /, *, type: Literal["arrayBuffer"], cacheTtl: int | float | None = None) -> Future[KVNamespaceGetWithMetadataResult_iface[ArrayBuffer, Metadata]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[Metadata=Any](self, key: str, options: KVNamespaceGetOptions_iface[Literal["stream"]], /) -> Future[KVNamespaceGetWithMetadataResult_iface[ReadableStream[Any], Metadata]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[Metadata=Any](self, key: str, /, *, type: Literal["stream"], cacheTtl: int | float | None = None) -> Future[KVNamespaceGetWithMetadataResult_iface[ReadableStream[Any], Metadata]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[Metadata=Any](self, key: ArrayLike_iface[str], type: Literal["text"], /) -> Future[Map[str, KVNamespaceGetWithMetadataResult_iface[str, Metadata]]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[ExpectedValue=Any, Metadata=Any](self, key: ArrayLike_iface[str], type: Literal["json"], /) -> Future[Map[str, KVNamespaceGetWithMetadataResult_iface[ExpectedValue, Metadata]]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[Metadata=Any](self, key: ArrayLike_iface[str], options: KVNamespace_iface__getWithMetadata__Sig11__options__Partial__KVNamespaceGetOptions_iface[None] | None = None, /) -> Future[Map[str, KVNamespaceGetWithMetadataResult_iface[str, Metadata]]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[Metadata=Any](self, key: ArrayLike_iface[str], options: KVNamespaceGetOptions_iface[Literal["text"]] | None = None, /) -> Future[Map[str, KVNamespaceGetWithMetadataResult_iface[str, Metadata]]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[Metadata=Any](self, key: ArrayLike_iface[str], /, *, type: Literal["text"], cacheTtl: int | float | None = None) -> Future[Map[str, KVNamespaceGetWithMetadataResult_iface[str, Metadata]]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[ExpectedValue=Any, Metadata=Any](self, key: ArrayLike_iface[str], options: KVNamespaceGetOptions_iface[Literal["json"]] | None = None, /) -> Future[Map[str, KVNamespaceGetWithMetadataResult_iface[ExpectedValue, Metadata]]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def getWithMetadata[ExpectedValue=Any, Metadata=Any](self, key: ArrayLike_iface[str], /, *, type: Literal["json"], cacheTtl: int | float | None = None) -> Future[Map[str, KVNamespaceGetWithMetadataResult_iface[ExpectedValue, Metadata]]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    def delete(self, key: str, /) -> Future[None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__(self, key: str, options: KVNamespace_iface____getitem____Sig0__options__Partial__KVNamespaceGetOptions_iface[None] | None = None, /) -> Future[str | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__(self, key: str, type: Literal["text"], /) -> Future[str | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__[ExpectedValue=Any](self, key: str, type: Literal["json"], /) -> Future[ExpectedValue | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__(self, key: str, type: Literal["arrayBuffer"], /) -> Future[ArrayBuffer | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__(self, key: str, type: Literal["stream"], /) -> Future[ReadableStream[Any] | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__(self, key: str, options: KVNamespaceGetOptions_iface[Literal["text"]] | None = None, /) -> Future[str | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__(self, key: str, /, *, type: Literal["text"], cacheTtl: int | float | None = None) -> Future[str | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__[ExpectedValue=Any](self, key: str, options: KVNamespaceGetOptions_iface[Literal["json"]] | None = None, /) -> Future[ExpectedValue | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__[ExpectedValue=Any](self, key: str, /, *, type: Literal["json"], cacheTtl: int | float | None = None) -> Future[ExpectedValue | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__(self, key: str, options: KVNamespaceGetOptions_iface[Literal["arrayBuffer"]] | None = None, /) -> Future[ArrayBuffer | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__(self, key: str, /, *, type: Literal["arrayBuffer"], cacheTtl: int | float | None = None) -> Future[ArrayBuffer | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__(self, key: str, options: KVNamespaceGetOptions_iface[Literal["stream"]] | None = None, /) -> Future[ReadableStream[Any] | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__(self, key: str, /, *, type: Literal["stream"], cacheTtl: int | float | None = None) -> Future[ReadableStream[Any] | None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__(self, key: ArrayLike_iface[str], type: Literal["text"], /) -> Future[Map[str, str | None]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__[ExpectedValue=Any](self, key: ArrayLike_iface[str], type: Literal["json"], /) -> Future[Map[str, ExpectedValue | None]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__(self, key: ArrayLike_iface[str], options: KVNamespace_iface____getitem____Sig11__options__Partial__KVNamespaceGetOptions_iface[None] | None = None, /) -> Future[Map[str, str | None]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__(self, key: ArrayLike_iface[str], options: KVNamespaceGetOptions_iface[Literal["text"]] | None = None, /) -> Future[Map[str, str | None]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__(self, key: ArrayLike_iface[str], /, *, type: Literal["text"], cacheTtl: int | float | None = None) -> Future[Map[str, str | None]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__[ExpectedValue=Any](self, key: ArrayLike_iface[str], options: KVNamespaceGetOptions_iface[Literal["json"]] | None = None, /) -> Future[Map[str, ExpectedValue | None]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    @overload
-    def __getitem__[ExpectedValue=Any](self, key: ArrayLike_iface[str], /, *, type: Literal["json"], cacheTtl: int | float | None = None) -> Future[Map[str, ExpectedValue | None]]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-    def __delitem__(self, key: str, /) -> Future[None]: ... # type:ignore[misc,overload-overlap,override,unused-ignore]
-
 class CachePurgeOptions_iface(Protocol): # type:ignore[misc, unused-ignore]
     tags: JsArray[str] | None = ... # type:ignore[assignment,unused-ignore]
     pathPrefixes: JsArray[str] | None = ... # type:ignore[assignment,unused-ignore]
@@ -6566,25 +6435,6 @@ class EmailAddress_iface(Protocol): # type:ignore[misc, unused-ignore]
 class Disposable_iface(Protocol): # type:ignore[misc, unused-ignore]
     pass
 
-class KVNamespaceGetOptions_iface[Type](Protocol): # type:ignore[misc, unused-ignore]
-    type: Type = ... # type:ignore[assignment,unused-ignore]
-    cacheTtl: int | float | None = ... # type:ignore[assignment,unused-ignore]
-
-class KVNamespaceListOptions_iface(Protocol): # type:ignore[misc, unused-ignore]
-    limit: int | float | None = ... # type:ignore[assignment,unused-ignore]
-    prefix: (str | None) | None = ... # type:ignore[assignment,unused-ignore]
-    cursor: (str | None) | None = ... # type:ignore[assignment,unused-ignore]
-
-class KVNamespacePutOptions_iface(Protocol): # type:ignore[misc, unused-ignore]
-    expiration: int | float | None = ... # type:ignore[assignment,unused-ignore]
-    expirationTtl: int | float | None = ... # type:ignore[assignment,unused-ignore]
-    metadata: (Any | None) | None = ... # type:ignore[assignment,unused-ignore]
-
-class KVNamespaceGetWithMetadataResult_iface[Value, Metadata](Protocol): # type:ignore[misc, unused-ignore]
-    value: Value | None = ... # type:ignore[assignment,unused-ignore]
-    metadata: Metadata | None = ... # type:ignore[assignment,unused-ignore]
-    cacheStatus: str | None = ... # type:ignore[assignment,unused-ignore]
-
 class CachePurgeError_iface(Protocol): # type:ignore[misc, unused-ignore]
     code: int | float = ... # type:ignore[assignment,unused-ignore]
     message: str = ... # type:ignore[assignment,unused-ignore]
@@ -7029,11 +6879,6 @@ class IteratorYieldResult_iface[TYield](Protocol): # type:ignore[misc, unused-ig
 class IteratorReturnResult_iface[TReturn](Protocol): # type:ignore[misc, unused-ignore]
     done: Literal[True] = ... # type:ignore[assignment,unused-ignore]
     value: TReturn = ... # type:ignore[assignment,unused-ignore]
-
-class KVNamespaceListKey_iface[Metadata](Protocol): # type:ignore[misc, unused-ignore]
-    name: str = ... # type:ignore[assignment,unused-ignore]
-    expiration: int | float | None = ... # type:ignore[assignment,unused-ignore]
-    metadata: Metadata | None = ... # type:ignore[assignment,unused-ignore]
 
 class ContainerDirectorySnapshot_iface(Protocol): # type:ignore[misc, unused-ignore]
     id: str = ... # type:ignore[assignment,unused-ignore]
@@ -9121,30 +8966,6 @@ class WorkflowInstanceSubscribeOptions(Protocol): # type:ignore[misc, unused-ign
     cursor: int | float | None = ... # type:ignore[assignment,unused-ignore]
     filter: JsArray[WorkflowInstanceEventType] | None = ... # type:ignore[assignment,unused-ignore]
 
-class KVNamespace_iface____getitem____Sig0__options__Partial__KVNamespaceGetOptions_iface[Type](Protocol): # type:ignore[misc, unused-ignore]
-    type: Type | None = ... # type:ignore[assignment,unused-ignore]
-    cacheTtl: int | float | None = ... # type:ignore[assignment,unused-ignore]
-
-class KVNamespace_iface____getitem____Sig11__options__Partial__KVNamespaceGetOptions_iface[Type](Protocol): # type:ignore[misc, unused-ignore]
-    type: Type | None = ... # type:ignore[assignment,unused-ignore]
-    cacheTtl: int | float | None = ... # type:ignore[assignment,unused-ignore]
-
-class KVNamespace_iface__get__Sig0__options__Partial__KVNamespaceGetOptions_iface[Type](Protocol): # type:ignore[misc, unused-ignore]
-    type: Type | None = ... # type:ignore[assignment,unused-ignore]
-    cacheTtl: int | float | None = ... # type:ignore[assignment,unused-ignore]
-
-class KVNamespace_iface__get__Sig11__options__Partial__KVNamespaceGetOptions_iface[Type](Protocol): # type:ignore[misc, unused-ignore]
-    type: Type | None = ... # type:ignore[assignment,unused-ignore]
-    cacheTtl: int | float | None = ... # type:ignore[assignment,unused-ignore]
-
-class KVNamespace_iface__getWithMetadata__Sig0__options__Partial__KVNamespaceGetOptions_iface[Type](Protocol): # type:ignore[misc, unused-ignore]
-    type: Type | None = ... # type:ignore[assignment,unused-ignore]
-    cacheTtl: int | float | None = ... # type:ignore[assignment,unused-ignore]
-
-class KVNamespace_iface__getWithMetadata__Sig11__options__Partial__KVNamespaceGetOptions_iface[Type](Protocol): # type:ignore[misc, unused-ignore]
-    type: Type | None = ... # type:ignore[assignment,unused-ignore]
-    cacheTtl: int | float | None = ... # type:ignore[assignment,unused-ignore]
-
 class CloudflareAccessIdentity_iface__idp(Protocol): # type:ignore[misc, unused-ignore]
     id: str = ... # type:ignore[assignment,unused-ignore]
     type: str = ... # type:ignore[assignment,unused-ignore]
@@ -10309,17 +10130,6 @@ class WorkflowInstanceEvent__Intersection1__Union28(Protocol): # type:ignore[mis
 
 class WorkflowInstanceEvent(WorkflowInstanceEvent__Intersection0, Protocol): # type:ignore[misc, unused-ignore]
     pass
-
-class KVNamespaceListResult__Union0[Metadata](Protocol): # type:ignore[misc, unused-ignore]
-    list_complete: Literal[False] = ... # type:ignore[assignment,unused-ignore]
-    keys: JsArray[KVNamespaceListKey_iface[Metadata]] = ... # type:ignore[assignment,unused-ignore]
-    cursor: str = ... # type:ignore[assignment,unused-ignore]
-    cacheStatus: str | None = ... # type:ignore[assignment,unused-ignore]
-
-class KVNamespaceListResult__Union1[Metadata](Protocol): # type:ignore[misc, unused-ignore]
-    list_complete: Literal[True] = ... # type:ignore[assignment,unused-ignore]
-    keys: JsArray[KVNamespaceListKey_iface[Metadata]] = ... # type:ignore[assignment,unused-ignore]
-    cacheStatus: str | None = ... # type:ignore[assignment,unused-ignore]
 
 class ContainerDirectorySnapshotRestoreParams__Union0(Protocol): # type:ignore[misc, unused-ignore]
     snapshot: ContainerDirectorySnapshot_iface = ... # type:ignore[assignment,unused-ignore]

@@ -92,7 +92,13 @@ def stage(destination: Path, *, dev: bool = False, runtime_test: bool = False):
     for db in config.get("d1_databases", []):
         db["migrations_dir"] = str(ROOT / "migrations")
     if dev:
-        for name in ("entry.py", "harness.py", "settings_api.py"):
+        for name in (
+            "entry.py",
+            "harness.py",
+            "settings_api.py",
+            "settings.py",
+            "model_catalog.py",
+        ):
             shutil.copy(ROOT / "dev" / name, source / name)
         production = pyjson5.loads((ROOT / "wrangler.jsonc").read_text())
         target = {
@@ -141,7 +147,6 @@ def stage(destination: Path, *, dev: bool = False, runtime_test: bool = False):
             "GATEWAY_CONTROL_TOKEN": "test-control",
             "ALLOWED_GUILD_IDS": "457689460096630794",
             "CF_ACCOUNT_ID": "test-account",
-            "CF_AIG_TOKEN": "test-ai",
         }
     (destination / "wrangler.jsonc").write_text(json.dumps(config, indent=2) + "\n")
     return destination

@@ -63,7 +63,7 @@ async def bicture(ctx: CommandContext):
         snapshot = await ctx.app.config.snapshot()
         config = ctx.app.config.document_from(snapshot, "bicture-image.json")
         profiles = config["profiles"]
-        profile = profiles.get(config["activeProfile"]) or profiles["standard"]
+        profile = profiles[config["activeProfile"]]
         model = profile["model"]
         parameters = profile.get("parameters")
         if parameters is None:

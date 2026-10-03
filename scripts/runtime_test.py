@@ -181,10 +181,8 @@ def main():
                     raise AssertionError(body.decode()[:5000])
                 result = json.loads(body)
                 assert result["totals"][0]["rag_count"] == 1
-                assert len(result["threads"]) == 1
                 assert result["interactions"][0]["status"] == "ok"
                 assert result["interactions"][0]["response_text"] == "hello <https://example.com>"
-                assert result["spend"] == []
                 assert result["multipart"] is True
                 status, body = request(base, "/test/settings")
                 assert status == 200 and json.loads(body) == {
@@ -210,7 +208,7 @@ def main():
                 assert "borrowed proxy was automatically destroyed" not in runtime_logs
                 assert "gateway_ensure_connected_failed" not in runtime_logs
                 print(
-                    "Python Workers runtime: signatures, bare denials, Durable Object controls, cron, D1, /rag, /ask, multipart, immediate D1 settings refresh and gateway WebSocket passed."
+                    "Python Workers runtime: signatures, bare denials, Durable Object controls, cron, D1, /rag, mentions and replies, multipart, immediate D1 settings refresh and gateway WebSocket passed."
                 )
             except Exception:
                 logs.flush()

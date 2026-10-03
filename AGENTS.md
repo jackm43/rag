@@ -53,8 +53,8 @@ log secrets or resolve them into committed files.
 - `src/ragbot/discord.py`: Workers-native REST client, attachments, media caps.
 - `src/ragbot/discord_http.py`: bounded native retries and Discord rate limits.
 - `src/ragbot/ai.py`, `config.py`, `conversation.py`: inference,
-  config, shared chat/search routing, reply analytics.
-- `src/ragbot/db.py`: parameterized D1 access, bans, guilds, threads.
+  config, chat routing, reply analytics.
+- `src/ragbot/db.py`: parameterized D1 access, bans, and guilds.
 - `src/ragbot/security.py`, `policy.py`: external auth and Discord output policy.
 - `dev/`: local-only UI and simulations. It imports production services, but
   nothing in `src/` may import `dev/`. Its staged bundle has no routes,

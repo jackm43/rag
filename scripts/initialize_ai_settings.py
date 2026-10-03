@@ -1,4 +1,4 @@
-"""Initialize D1 once from operator files (local) or preserved legacy KV (live).
+"""Initialize an empty D1 settings row from operator files.
 
 Existing D1 settings are always preserved. Use --check to verify without writes.
 Live commands require op run --env-file=.env --.
@@ -15,14 +15,13 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import quote
 
 import pyjson5
 from stage_worker import ROOT, command
 
 sys.path[:0] = [str(ROOT / "src"), str(ROOT / "dev")]
 from settings_api import SettingsEditor, SettingsError  # noqa: E402
-from settings_seed import legacy_resources, load_resources  # noqa: E402
+from settings_seed import load_resources  # noqa: E402
 
 from ragbot.settings_storage import READ_SETTINGS, WRITE_SETTINGS  # noqa: E402
 
@@ -32,7 +31,7 @@ async def transport(url, **options):
         url,
         data=options.get("body", "").encode() if "body" in options else None,
         method=options.get("method", "GET"),
-        headers={**options.get("headers", {}), "User-Agent": "ragbot-settings-migration/1.0"},
+        headers={**options.get("headers", {}), "User-Agent": "ragbot-settings-init/1.0"},
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
@@ -131,27 +130,7 @@ async def main():
         verified = await editor.read()
         already_initialized = True
     else:
-        if args.local:
-            resources = load_resources()
-        else:
-            namespace = next(
-                b["id"] for b in config["kv_namespaces"] if b["binding"] == "AI_CONFIG"
-            )
-
-            async def get(key):
-                response = await transport(
-                    f"https://api.cloudflare.com/client/v4/accounts/{target['account']}/storage/kv/namespaces/{namespace}/values/{quote(key, safe='')}",
-                    headers={"Authorization": f"Bearer {editor.env.CLOUDFLARE_API_TOKEN}"},
-                )
-                if response.status == 404:
-                    return None
-                if not response.ok:
-                    raise SettingsError(
-                        "Cannot read legacy KV settings; initialization stopped.", 503
-                    )
-                return await response.text()
-
-            resources = await legacy_resources(get)
+        resources = load_resources()
         saved = await editor.write(resources, None)
         verified = await editor.read()
         assert resources == verified["resources"] and saved["revision"] == verified["revision"]
