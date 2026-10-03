@@ -19,14 +19,13 @@ from workers import Response, WorkerEntrypoint
 
 from ragbot.commands import COMMANDS
 from ragbot.commands.registry import ADMIN_IDS
-from ragbot.runtime import env_value
 
 REVISION = hashlib.sha256(json.dumps(ASSETS, sort_keys=True).encode()).hexdigest()
 
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
-        if env_value(self.env, "DEV_UI") != "1":
+        if getattr(self.env, "DEV_UI", None) != "1":
             return Response(status=404)
         url = urlparse(request.url)
         if url.hostname not in ("localhost", "127.0.0.1", "::1"):

@@ -10,7 +10,7 @@ from .commands.registry import ADMIN_IDS
 from .config import ConfigStore
 from .conversation import ChatJob, display_name, message_text, process_chat, strip_mentions
 from .db import Database, guild_allowed
-from .discord import DiscordClient, Transport, is_message
+from .discord import DiscordClient, Transport
 from .env import Env
 from .policy import truncate_discord
 from .runtime import fetch
@@ -29,17 +29,13 @@ class Application:
         self.ai = Inference(env)
 
     async def dispatch(self, interaction: dict):
-        if not interaction.get("application_id") or not interaction.get("token"):
-            log.error("dispatch_missing_interaction_credentials")
-            return
+        """Dispatch a verified application command; Discord owns the wire schema."""
         ctx = CommandContext(interaction, self)
         try:
-            if interaction.get("type") != 2:
-                return
             if not guild_allowed(self.env, interaction.get("guild_id")):
                 await ctx.reply("This bot only works in its home server.")
                 return
-            name = interaction.get("data", {}).get("name")
+            name = interaction["data"]["name"]
             command = COMMANDS.get(name)
             if not command:
                 await ctx.reply("Unknown command.")
@@ -69,7 +65,8 @@ class Application:
                 log.warning("command_failure_notice_failed")
 
     async def handle_message(self, message: dict, bot_user_id: str | None):
-        if not is_message(message) or (message.get("author") or {}).get("bot") or not bot_user_id:
+        """Handle a Discord MESSAGE_CREATE event or a local simulation of one."""
+        if message["author"].get("bot") or not bot_user_id:
             return
         guild_id = message.get("guild_id")
         if not guild_allowed(self.env, guild_id) or not strip_mentions(message.get("content", "")):
@@ -95,17 +92,8 @@ class Application:
                 and (referenced.get("author") or {}).get("id") == bot_user_id
             )
 
-            def snowflakes(values):
-                return list(
-                    dict.fromkeys(
-                        v for v in values if isinstance(v, str) and re.fullmatch(r"[0-9]{17,20}", v)
-                    )
-                )[:100]
-
-            users = set(
-                snowflakes(m.get("id") for m in message.get("mentions", []) if isinstance(m, dict))
-            )
-            role_ids = snowflakes(message.get("mention_roles", []))
+            users = {user["id"] for user in message.get("mentions", [])}
+            role_ids = message.get("mention_roles", [])
             bot_roles = (
                 await self.discord.bot_roles(guild_id, bot_user_id) if role_ids and guild_id else []
             )

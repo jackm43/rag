@@ -1,5 +1,6 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Any
 
 from ..ai import Attribution
@@ -67,13 +68,12 @@ class CommandContext:
     def db(self):
         return self.app.db
 
-    @property
+    @cached_property
     def invoker(self) -> dict:
-        return (
-            (self.interaction.get("member") or {}).get("user") or self.interaction.get("user") or {}
-        )
+        member = self.interaction.get("member")
+        return member["user"] if member else self.interaction["user"]
 
-    @property
+    @cached_property
     def display_name(self) -> str:
         member = self.interaction.get("member") or {}
         return (
@@ -83,16 +83,10 @@ class CommandContext:
             or "user"
         ).strip() or "user"
 
-    def require_invoker(self) -> dict:
-        if not self.invoker:
-            raise ValueError("missing_invoker")
-        return self.invoker
-
     def option(self, name: str) -> str:
-        for option in self.interaction.get("data", {}).get("options", []):
-            if option.get("name") == name:
-                value = option.get("value")
-                return value.strip() if isinstance(value, str) else ""
+        for option in self.interaction["data"].get("options", []):
+            if option["name"] == name:
+                return option["value"].strip()
         return ""
 
     async def target_username(self, target_id: str) -> str | None:

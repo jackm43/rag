@@ -62,65 +62,6 @@ async def read_media(body) -> bytes:
         reader.releaseLock()
 
 
-def is_message(value: Any, depth: int = 1) -> bool:
-    def optional_string(record, key, nullable=False):
-        return (
-            key not in record or isinstance(record[key], str) or (nullable and record[key] is None)
-        )
-
-    def user(record):
-        return (
-            isinstance(record, dict)
-            and all(isinstance(record.get(k), str) for k in ("id", "username"))
-            and optional_string(record, "global_name", True)
-            and ("bot" not in record or isinstance(record["bot"], bool))
-        )
-
-    if not isinstance(value, dict) or not all(
-        isinstance(value.get(k), str) for k in ("id", "channel_id")
-    ):
-        return False
-    if not all(optional_string(value, key) for key in ("guild_id", "content")):
-        return False
-    if "author" in value and not user(value["author"]):
-        return False
-    if "member" in value:
-        member = value["member"]
-        if (
-            not isinstance(member, dict)
-            or not optional_string(member, "nick", True)
-            or ("user" in member and not user(member["user"]))
-        ):
-            return False
-    for key in ("mentions", "attachments", "mention_roles"):
-        if key in value and not isinstance(value[key], list):
-            return False
-    if any(not isinstance(role, str) for role in value.get("mention_roles", [])):
-        return False
-    for mention in value.get("mentions", []):
-        if (
-            not isinstance(mention, dict)
-            or not isinstance(mention.get("id"), str)
-            or not optional_string(mention, "username")
-        ):
-            return False
-    for attachment in value.get("attachments", []):
-        if (
-            not isinstance(attachment, dict)
-            or not all(isinstance(attachment.get(k), str) for k in ("id", "filename"))
-            or not all(optional_string(attachment, k) for k in ("content_type", "url"))
-        ):
-            return False
-    if "message_reference" in value:
-        reference = value["message_reference"]
-        if not isinstance(reference, dict) or not all(
-            optional_string(reference, k) for k in ("message_id", "channel_id")
-        ):
-            return False
-    reference = value.get("referenced_message")
-    return reference is None or (depth > 0 and is_message(reference, depth - 1))
-
-
 @dataclass
 class DiscordClient:
     token: str
@@ -163,15 +104,14 @@ class DiscordClient:
         )
 
     async def message(self, channel_id: str, message_id: str):
-        result = await self.json_request(
+        return await self.json_request(
             f"/channels/{channel_id}/messages/{message_id}", optional=True
         )
-        return result if is_message(result) else None
 
     async def username(self, user_id: str) -> str | None:
         try:
             user = await self.json_request(f"/users/{user_id}", optional=True)
-            return user.get("username") if isinstance(user, dict) else None
+            return user["username"] if user else None
         except Exception:
             return None
 
@@ -186,7 +126,7 @@ class DiscordClient:
             )
             if member is None:
                 return roles
-            roles = [role for role in member.get("roles", []) if isinstance(role, str)]
+            roles = member["roles"]
             self._role_cache[key] = (roles, time.monotonic() + 300)
         except Exception:
             pass

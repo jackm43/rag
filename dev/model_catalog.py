@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import quote
 
-from ragbot.runtime import env_value, fetch
+from ragbot.runtime import fetch
 
 ALIASES = {"xai": {"xai", "grok"}, "google": {"google", "google-ai-studio", "google-vertex-ai"}}
 _cache: dict = {}
@@ -32,8 +32,8 @@ class CreditCatalog:
     transport: Callable = fetch
 
     async def get(self, path):
-        account = env_value(self.env, "CF_ACCOUNT_ID")
-        token = env_value(self.env, "CLOUDFLARE_API_TOKEN")
+        account = getattr(self.env, "CF_ACCOUNT_ID", None)
+        token = getattr(self.env, "CLOUDFLARE_API_TOKEN", None)
         if not token or not isinstance(account, str) or not re.fullmatch(r"[a-f0-9]{32}", account):
             raise CatalogUnavailable()
         response = await self.transport(
@@ -85,7 +85,7 @@ class CreditCatalog:
             "chat": config["gatewayId"],
             "image": config["image"]["profiles"][config["image"]["activeProfile"]].get("gatewayId"),
         }
-        key = (env_value(self.env, "CF_ACCOUNT_ID"), *gateways.values())
+        key = (getattr(self.env, "CF_ACCOUNT_ID", None), *gateways.values())
         cached = _cache.get(key)
         if not refresh and cached and time.monotonic() - cached[0] < 300:
             return cached[1]

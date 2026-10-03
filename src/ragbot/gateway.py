@@ -3,14 +3,12 @@
 import asyncio
 import json
 import logging
-import math
 import time
 from collections import OrderedDict
 from typing import Any
 from urllib.parse import urlparse
 
-from .discord import is_message
-from .runtime import to_python, wait_until
+from .runtime import wait_until
 
 log = logging.getLogger("ragbot")
 GATEWAY_NAME = "discord-gateway-v2"
@@ -151,7 +149,7 @@ class Gateway:
         await self.initialize()
         if not self.canonical():
             return
-        markers = to_python(await self.ctx.storage.list({"prefix": "processed:"}))
+        markers = await self.ctx.storage.list({"prefix": "processed:"})
         cutoff = time.time() * 1000 - 86400000
         stale = [key for key, at in markers.items() if at <= cutoff]
         if stale:
@@ -188,22 +186,16 @@ class Gateway:
             return
         try:
             payload = json.loads(str(text))
-            if not isinstance(payload, dict) or not isinstance(payload.get("op"), int):
-                return
             sequence = payload.get("s")
             if sequence is not None:
-                if not isinstance(sequence, int):
-                    return
                 self.sequence = sequence
         except TypeError, ValueError:
             log.warning("gateway_payload_parse_failed")
             return
         op, data = payload["op"], payload.get("d")
         if op == 10:
-            interval = data.get("heartbeat_interval") if isinstance(data, dict) else None
-            if isinstance(interval, (int, float)) and math.isfinite(interval) and interval > 0:
-                self.start_heartbeat(interval / 1000)
-                self.identify_or_resume()
+            self.start_heartbeat(data["heartbeat_interval"] / 1000)
+            self.identify_or_resume()
         elif op == 11:
             self.heartbeat_acknowledged = True
         elif op == 1:
@@ -215,17 +207,11 @@ class Gateway:
         elif op == 7:
             self.reconnect()
         elif op == 0:
-            if (
-                payload.get("t") == "READY"
-                and isinstance(data, dict)
-                and isinstance(data.get("session_id"), str)
-            ):
+            if payload["t"] == "READY":
                 self.session_id = data["session_id"]
-                self.resume_url = data.get("resume_gateway_url") or self.resume_url
-                self.bot_user_id = (data.get("user") or {}).get("id") or self.bot_user_id
-            elif (
-                payload.get("t") == "MESSAGE_CREATE" and isinstance(data, dict) and is_message(data)
-            ):
+                self.resume_url = data["resume_gateway_url"]
+                self.bot_user_id = data["user"]["id"]
+            elif payload["t"] == "MESSAGE_CREATE":
                 # Claim before scheduling/awaiting; duplicate events cannot race.
                 if data["id"] in self.processed:
                     return

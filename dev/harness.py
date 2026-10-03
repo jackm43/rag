@@ -14,7 +14,7 @@ from settings import draft_store
 from ragbot.app import Application
 from ragbot.commands.registry import MODS_ROLE_ID
 from ragbot.db import Database
-from ragbot.runtime import fetch, to_python
+from ragbot.runtime import fetch
 
 captured_logs = contextvars.ContextVar("captured_logs", default=None)
 
@@ -87,7 +87,6 @@ class BindingTap:
 
     async def run(self, model, inputs, options=None):
         started = time.monotonic()
-        inputs, options = to_python(inputs), to_python(options)
         if options and options.get("gateway"):
             options["gateway"]["metadata"] = dev_metadata(options["gateway"].get("metadata", {}))
         exchange = {
@@ -106,7 +105,7 @@ class BindingTap:
             args = [model, inputs]
             if options:
                 args.append(options)
-            result = to_python(await self.binding.run(*args))
+            result = await self.binding.run(*args)
             exchange["response"] = (
                 {"stream": True}
                 if hasattr(result, "getReader")

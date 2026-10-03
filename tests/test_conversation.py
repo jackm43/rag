@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock
 
 import pytest
+from conftest import FakeResponse
 
 from ragbot.ai import Attribution
 from ragbot.conversation import ChatJob, build_conversation
@@ -96,3 +97,23 @@ async def test_unavailable_reply_still_answers_explicit_mention(app):
     app.discord.message = AsyncMock(side_effect=RuntimeError("unavailable"))
     await app.handle_message(incoming, BOT)
     app.env.AI.run.assert_awaited_once()
+
+
+async def test_rest_reply_with_nested_references_preserves_entire_chain(app):
+    question = message(1, "original question")
+    answer = message(2, "first answer", BOT, question, referenced_message=question)
+    followup = message(3, "follow-up question", reply=answer, referenced_message=answer)
+    incoming = message(4, f"<@{BOT}> explain further", reply=followup)
+    app.transport.handler = lambda url, options: (
+        FakeResponse(followup) if url.endswith(f"/messages/{followup['id']}") else None
+    )
+
+    await app.handle_message(incoming, BOT)
+
+    _, payload, _ = app.env.AI.run.await_args.args
+    assert payload["messages"][1:] == [
+        {"role": "user", "content": "tester: original question"},
+        {"role": "assistant", "content": "first answer"},
+        {"role": "user", "content": "tester: follow-up question"},
+        {"role": "user", "content": "tester: explain further"},
+    ]

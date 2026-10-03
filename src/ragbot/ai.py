@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import ModelConfig
-from .runtime import to_python
 
 
 @dataclass(frozen=True)
@@ -51,10 +50,6 @@ def extract_text(payload: Any) -> str:
     return message.get("content", "") if isinstance(message.get("content"), str) else ""
 
 
-def records(value: Any) -> list[dict]:
-    return [entry for entry in value if isinstance(entry, dict)] if isinstance(value, list) else []
-
-
 def completion(payload: Any, model: str) -> Completion:
     data = payload if isinstance(payload, dict) else {}
     usage = data.get("usage")
@@ -77,13 +72,13 @@ def completion(payload: Any, model: str) -> Completion:
     if data.get("output") or data.get("output_text"):
         parts = [
             part
-            for output in records(data.get("output"))
-            for part in records(output.get("content"))
+            for output in data.get("output", [])
+            if output.get("type") == "message"
+            for part in output.get("content", [])
+            if part.get("type") == "output_text"
         ]
         result.content = (
-            data.get("output_text")
-            or "\n\n".join(p["text"] for p in parts if isinstance(p.get("text"), str))
-            or result.content
+            data.get("output_text") or "\n\n".join(p["text"] for p in parts) or result.content
         )
     return result
 
@@ -96,7 +91,7 @@ class Inference:
         args = [model, data]
         if gateway_id:
             args.append({"gateway": {"id": gateway_id, "metadata": metadata}})
-        return to_python(await self.env.AI.run(*args))
+        return await self.env.AI.run(*args)
 
     async def chat(
         self, config: ModelConfig, messages: list[dict], attribution: Attribution

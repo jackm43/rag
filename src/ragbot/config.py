@@ -5,7 +5,6 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-from .runtime import env_value, to_python
 from .settings_storage import READ_SETTINGS
 
 RESOURCE_NAMES = (
@@ -77,11 +76,11 @@ class ConfigStore:
     async def snapshot(self) -> dict:
         if self._fixed is not None:
             return parse_settings(json.dumps(self._fixed))
-        db = env_value(self.env, "DB")
+        db = self.env.DB
         if db is None:
             raise ValueError("D1 settings binding is required")
         # Without a Sessions API replica session, D1 bindings query the primary.
-        row = to_python(await db.prepare(READ_SETTINGS).first())
+        row = await db.prepare(READ_SETTINGS).first()
         if row is None:
             raise ValueError("AI settings are not initialized in D1")
         snapshot = parse_settings(row["document"])

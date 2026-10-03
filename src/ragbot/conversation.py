@@ -23,7 +23,7 @@ def display_name(message: dict) -> str:
         author.get("global_name"),
         author.get("username"),
     ):
-        if isinstance(value, str) and value.strip():
+        if value and value.strip():
             return value.strip()
     return "user"
 
@@ -39,11 +39,7 @@ class ChatJob:
 
 
 def message_text(message: dict, bot_user_id: str) -> str:
-    names = {
-        user["id"]: display_name({"author": user})
-        for user in message.get("mentions", [])
-        if isinstance(user, dict) and user.get("id")
-    }
+    names = {user["id"]: display_name({"author": user}) for user in message.get("mentions", [])}
 
     def mention(match):
         marker, identifier = match.groups()
@@ -71,9 +67,7 @@ async def build_conversation(app, job: ChatJob, history_limit: int) -> list[dict
         if not reference_id or reference_id in seen or channel_id != a.channel_id:
             break
         seen.add(reference_id)
-        referenced = (
-            embedded if isinstance(embedded, dict) and embedded.get("id") == reference_id else None
-        )
+        referenced = embedded if embedded and embedded["id"] == reference_id else None
         if referenced is None:
             try:
                 referenced = await app.discord.message(channel_id, reference_id)
