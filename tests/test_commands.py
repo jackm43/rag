@@ -6,6 +6,26 @@ TARGET = "123456789012345682"
 USER_OPTION = {"name": "user", "type": 6, "value": TARGET}
 
 
+async def test_coinflip_draws_a_fresh_random_bit_for_each_reply(app, interaction, monkeypatch):
+    from unittest.mock import Mock
+
+    from ragbot.commands import COMMANDS
+
+    draw = Mock(side_effect=[0, 1, 1, 0])
+    monkeypatch.setattr("ragbot.commands.coinflip.secrets.randbits", draw)
+    assert COMMANDS["coinflip"].data == {
+        "name": "coinflip",
+        "description": "Flip a fair coin: heads or tails",
+    }
+    for expected in ("heads", "tails", "tails", "heads"):
+        await app.dispatch(interaction("coinflip"))
+        reply = app.transport.writes()[-1]
+        assert reply["content"] == expected
+        assert reply["allowed_mentions"] == {"parse": []}
+    assert draw.call_count == 4
+    assert all(call.args == (1,) for call in draw.call_args_list)
+
+
 async def test_rag_and_undo_transaction(app, interaction):
     await app.dispatch(interaction("rag", options=[USER_OPTION]))
     assert app.transport.writes()[-1]["content"].endswith("Total: 1")
