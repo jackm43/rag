@@ -1,21 +1,15 @@
 // Admin settings: drafts, reviewed saves to the sandbox or live D1, and the Cloudflare-credit model catalog.
 import { rejectsSampling } from "../../src/lib/ai.ts";
+import { mapLimited } from "../../src/lib/async.ts";
 import { isObject } from "../../src/lib/json.ts";
+import { query as d1Query } from "../../src/lib/d1.ts";
+import { promptHistory } from "../../src/data.ts";
 import { parseSettings, SETTINGS_SQL, SettingsError, type Settings } from "../../src/settings.ts";
 import type { AdminEnv } from "./index.ts";
 
 export type Page = "chat" | "bicture";
 
-const SAVE_SQL = `INSERT INTO ai_runtime_settings (id, revision, document) VALUES (1, ?, ?)
-ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, document = excluded.document
-WHERE ai_runtime_settings.revision = ?`;
-
-const HISTORY_SQL = `SELECT id, kind, prompt, response_text, model, status, requester_username, created_at
-FROM rag_ai_interactions
-WHERE ((? = 'bicture' AND kind = 'bicture') OR (? = 'chat' AND kind = 'channel_reply'))
-  AND (? IS NULL OR id < ?)
-  AND (? = '' OR instr(lower(prompt), lower(?)) > 0)
-ORDER BY id DESC LIMIT 26`;
+const SAVE_SQL = "UPDATE ai_runtime_settings SET revision = ?, document = ? WHERE id = 1 AND revision = ?";
 
 export class HttpError extends Error {
   status: number;
@@ -91,8 +85,6 @@ function changes(before: Settings, after: Settings) {
     .map((setting) => ({ setting, before: saved.get(setting) ?? null, after: draft.get(setting) ?? null }));
 }
 
-let saving: Promise<unknown> = Promise.resolve();
-
 export class SettingsEditor {
   env: AdminEnv;
   target: "sandbox" | "live";
@@ -106,7 +98,7 @@ export class SettingsEditor {
   // DB is the sandbox database simulations write to; LIVE_DB is the live bot's database.
   async query(sql: string, params: unknown[] = []) {
     try {
-      return await (this.target === "live" ? this.env.LIVE_DB : this.env.DB).prepare(sql).bind(...params).all<any>();
+      return await d1Query<any>(this.target === "live" ? this.env.LIVE_DB : this.env.DB, sql === SAVE_SQL ? "settings.save" : "settings.load", sql, ...params);
     } catch {
       throw new HttpError("D1 could not read or save settings. Check D1 access and migrations; reload before retrying.", 503);
     }
@@ -121,7 +113,8 @@ export class SettingsEditor {
     ) {
       throw new HttpError("Invalid prompt history filter.");
     }
-    const { results } = await this.query(HISTORY_SQL, [page, page, before, before, search, search]);
+    const { results } = await promptHistory(this.target === "live" ? this.env.LIVE_DB : this.env.DB, page === "chat" ? "channel_reply" : "bicture", before, search)
+      .catch(() => { throw new HttpError("D1 could not read prompt history. Check D1 access and migrations.", 503); });
     return { entries: results.slice(0, 25), next: results.length > 25 ? results[24].id : null };
   }
 
@@ -145,22 +138,18 @@ export class SettingsEditor {
     return { changes, reviewId: await sha256([this.target, current.revision, editable(draft)]) };
   }
 
-  // One save at a time here; the conditional write also rejects saves made elsewhere since loading.
-  save(body: any) {
-    const result = saving.then(async () => {
-      const { current, draft, changes } = await this.prepare(body);
-      if (body.reviewId !== (await sha256([this.target, current.revision, editable(draft)]))) {
-        throw new HttpError("Review these exact settings before saving.", 409);
-      }
-      if (!changes.length) throw new HttpError("There are no changes to save.");
-      const revision = crypto.randomUUID().replaceAll("-", "");
-      const settings = parseSettings({ ...draft, revision, updatedAt: new Date().toISOString() });
-      const { meta } = await this.query(SAVE_SQL, [revision, JSON.stringify(settings), current.revision]);
-      if (meta?.changes !== 1) throw new HttpError("Settings changed during your save. Reload and review again.", 409);
-      return { target: this.target, revision, settings };
-    });
-    saving = result.catch(() => {});
-    return result;
+  // The revision check in D1 rejects concurrent edits across all Worker instances.
+  async save(body: any) {
+    const { current, draft, changes } = await this.prepare(body);
+    if (body.reviewId !== (await sha256([this.target, current.revision, editable(draft)]))) {
+      throw new HttpError("Review these exact settings before saving.", 409);
+    }
+    if (!changes.length) throw new HttpError("There are no changes to save.");
+    const revision = crypto.randomUUID().replaceAll("-", "");
+    const settings = parseSettings({ ...draft, revision, updatedAt: new Date().toISOString() });
+    const { meta } = await this.query(SAVE_SQL, [revision, JSON.stringify(settings), current.revision]);
+    if (meta?.changes !== 1) throw new HttpError("Settings changed during your save. Reload and review again.", 409);
+    return { target: this.target, revision, settings };
   }
 
   private async prepare(body: any) {
@@ -239,10 +228,11 @@ export async function loadCatalog(env: AdminEnv, settings: Settings, refresh = f
   const key = gateways.join("|");
   const cached = catalogCache.get(key);
   if (!refresh && cached && Date.now() - cached.at < 300_000) return cached.value;
+  const chatBilling = billing(env, gateways[0]);
   const [models, chatRoute, imageRoute] = await Promise.all([
     pages(env, "ai/catalog/models"),
-    billing(env, gateways[0]),
-    billing(env, gateways[1]),
+    chatBilling,
+    gateways[1] === gateways[0] ? chatBilling : billing(env, gateways[1]),
   ]);
   const chat = [];
   const image = [];
@@ -319,18 +309,4 @@ async function imageSupport(env: AdminEnv, model: any) {
       .map((field) => [field, { enum: properties[field].enum, default: properties[field].default, type: properties[field].type }]),
   );
   return { ...model, parameters };
-}
-
-// Bound concurrent schema lookups as the catalog grows.
-async function mapLimited<T, R>(items: T[], map: (item: T) => Promise<R>, limit = 6): Promise<R[]> {
-  const results: R[] = [];
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const index = next++;
-      results[index] = await map(items[index]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
 }
