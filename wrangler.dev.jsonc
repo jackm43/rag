@@ -1,11 +1,17 @@
+// Local-only dev UI (`pnpm run dev:ui`). Never deploy: no routes, no workers.dev, DEV_UI guard.
 {
   "name": "ragbot-dev-ui",
-  "main": "dev/entry.py",
+  "main": "dev/index.ts",
   "compatibility_date": "2026-09-26",
   "compatibility_flags": [
-    "python_workers"
+    "nodejs_als"
   ],
   "workers_dev": false,
+  "assets": {
+    "directory": "dev/ui",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
   "secrets": {
     "required": [
       "CLOUDFLARE_API_TOKEN"
@@ -18,8 +24,11 @@
   "vars": {
     "DEV_UI": "1",
     "DISCORD_APPLICATION_ID": "1496842508251172895",
-    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
     "ALLOWED_GUILD_IDS": "457689460096630794",
+    // The live bot's account and D1 database, for reading and saving its settings.
+    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
+    "D1_DATABASE_ID": "5833b0bb-7806-483e-9015-32e209ce2fb0",
+    // Simulations stub every Discord request, so no Discord credentials are needed.
     "DISCORD_BOT_TOKEN": "dev-unused",
     "DISCORD_PUBLIC_KEY": "dev-unused",
     "GATEWAY_CONTROL_TOKEN": "dev-unused"

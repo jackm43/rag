@@ -24,7 +24,7 @@
     $("history-entries").replaceChildren();
     $("more-history").hidden = true;
     $("history-status").textContent = page === "bicture"
-      ? "Bicture history begins when recording is deployed. Fetch history to see saved image prompts."
+      ? "Fetch saved image prompts from /bicture."
       : "Fetch saved prompts from mentions and replies.";
   };
   const invalidateReview = () => { review = undefined; $("settings-review").hidden = true; };
@@ -404,7 +404,7 @@
       $("history-status").textContent = $("history-entries").childElementCount
         ? `${$("history-entries").childElementCount} saved prompts · newest first · times shown in your timezone.`
         : value("history-search") ? "No saved prompts match your search. Try another phrase."
-        : page === "bicture" ? "No saved image prompts yet. Recording begins after the updated bot is deployed."
+        : page === "bicture" ? "No saved image prompts in this source yet."
         : "No saved chat prompts in this source yet.";
       status("Prompt history loaded.");
     } catch (error) {
