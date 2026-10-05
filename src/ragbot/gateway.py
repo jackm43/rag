@@ -3,31 +3,76 @@
 import asyncio
 import json
 import logging
+import random
 import time
 from collections import OrderedDict
 from typing import Any
 from urllib.parse import urlparse
 
+from .discord_http import seconds
 from .runtime import wait_until
 
 log = logging.getLogger("ragbot")
 GATEWAY_NAME = "discord-gateway-v2"
+DEFAULT_GATEWAY_URL = "wss://gateway.discord.gg"
 FATAL_CLOSE_CODES = frozenset({4004, 4010, 4011, 4012, 4013, 4014})
-NON_RESUMABLE_CLOSE_CODES = frozenset({4007, 4009})
+NON_RESUMABLE_CLOSE_CODES = frozenset({4003, 4007, 4009})
+MAX_RECONNECT_DELAY = 300
+WATCHDOG_MS = 60_000
+SWEEP_INTERVAL_MS = 3_600_000
+MARKER_TTL_MS = 86_400_000
+STORAGE_DELETE_LIMIT = 128
 
 
 def gateway_stub(env):
     return env.DISCORD_GATEWAY.get(env.DISCORD_GATEWAY.idFromName(GATEWAY_NAME))
 
 
-class Socket:
-    """Own callback proxies for exactly one Workers WebSocket."""
+def gateway_url(url):
+    """IDENTIFY and RESUME carry the bot token; only connect to Discord gateway hosts."""
+    parsed = urlparse(url)
+    if parsed.scheme == "wss" and (parsed.hostname or "").endswith(".discord.gg"):
+        return url.rstrip("/")
+    return DEFAULT_GATEWAY_URL
 
-    def __init__(self, url, on_message, on_close, on_error):
-        from js import WebSocket
+
+def now_ms():
+    return round(time.time() * 1000)
+
+
+class HandshakeRejected(RuntimeError):
+    """The gateway answered the WebSocket upgrade with an HTTP response instead of 101."""
+
+    def __init__(self, status, retry_after=None):
+        super().__init__(f"gateway handshake rejected ({status})")
+        self.status, self.retry_after = status, retry_after
+
+    @property
+    def retryable(self):
+        return self.status in (408, 429) or self.status >= 500
+
+
+async def open_socket(url, on_message, on_close, on_error):
+    """Upgrade with fetch so a refused handshake reports its HTTP status."""
+    from workers import fetch
+
+    async with asyncio.timeout(15):
+        response = await fetch(
+            url.replace("wss://", "https://", 1), headers={"Upgrade": "websocket"}
+        )
+    raw = response.js_object.webSocket
+    if not raw:
+        raise HandshakeRejected(response.status, seconds(response.headers.get("retry-after")))
+    return Socket(raw, on_message, on_close, on_error)
+
+
+class Socket:
+    """Own callback proxies for exactly one accepted Workers WebSocket."""
+
+    def __init__(self, raw, on_message, on_close, on_error):
         from pyodide.ffi import create_proxy
 
-        self.raw = WebSocket.new(url)
+        self.raw = raw
         self.listeners = {
             "message": create_proxy(lambda event: on_message(event.data)),
             "close": create_proxy(lambda event: on_close(event.code)),
@@ -35,6 +80,8 @@ class Socket:
         }
         for name, callback in self.listeners.items():
             self.raw.addEventListener(name, callback)
+        # An upgraded socket delivers events only after accept(); listeners are attached first.
+        self.raw.accept()
 
     @property
     def ready_state(self):
@@ -56,18 +103,23 @@ class Socket:
 
 
 class Gateway:
-    def __init__(self, ctx, env, app, *, socket_factory=Socket):
+    def __init__(self, ctx, env, app, *, socket_factory=open_socket):
         self.ctx, self.env, self.app = ctx, env, app
         self.socket_factory = socket_factory
         self.socket: Any = None
         self.heartbeat_timer = None
         self.reconnect_timer = None
         self.sequence = self.session_id = self.resume_url = self.bot_user_id = None
+        self.saved_sequence = None
         self.heartbeat_acknowledged = True
+        self.attempts = 0
+        self.identify_after = 0.0
+        self.swept_at = 0
         self.processed: OrderedDict[str, None] = OrderedDict()
         self.tasks: set[asyncio.Task] = set()
         self.initialized = False
         self.lock = asyncio.Lock()
+        self.connecting = asyncio.Lock()
         self.enabled = False
 
     def background(self, coroutine):
@@ -93,10 +145,18 @@ class Gateway:
                 await self.ctx.storage.deleteAlarm()
                 await self.ctx.storage.deleteAll()
                 log.warning("gateway_stale_instance_decommissioned")
-            elif await self.ctx.storage.get("gatewayEnabled") is True:
-                self.enabled = True
-                await self.watchdog()
-                self.connect()
+            else:
+                # A restarted object resumes the stored session; Discord replays missed events.
+                session = await self.ctx.storage.get("gatewaySession")
+                if session:
+                    self.session_id = session["sessionId"]
+                    self.resume_url = session["resumeUrl"]
+                    self.sequence = self.saved_sequence = session["sequence"]
+                    self.bot_user_id = session["botUserId"]
+                if await self.ctx.storage.get("gatewayEnabled") is True:
+                    self.enabled = True
+                    await self.watchdog()
+                    await self.connect()
             self.initialized = True
 
     async def health(self):
@@ -113,7 +173,9 @@ class Gateway:
             return {"ok": False}
         await self.ctx.storage.delete("gatewayStopped")
         await self.enable()
-        self.connect()
+        # An operator start retries now; Discord's identify budget is still checked.
+        self.attempts, self.identify_after = 0, 0.0
+        await self.connect()
         return {"ok": True}
 
     async def ensure_connected(self):
@@ -123,7 +185,8 @@ class Gateway:
         if await self.ctx.storage.get("gatewayStopped") is True:
             return {"ok": False, "stopped": True}
         await self.enable()
-        self.connect()
+        if not self.reconnect_timer:
+            await self.connect()
         return {"ok": True}
 
     async def enable(self):
@@ -143,40 +206,98 @@ class Gateway:
         return {"ok": True}
 
     async def watchdog(self):
-        await self.ctx.storage.setAlarm(round(time.time() * 1000) + 300000)
+        await self.ctx.storage.setAlarm(now_ms() + WATCHDOG_MS)
 
     async def alarm(self):
-        await self.initialize()
-        if not self.canonical():
-            return
-        markers = await self.ctx.storage.list({"prefix": "processed:"})
-        cutoff = time.time() * 1000 - 86400000
-        stale = [key for key, at in markers.items() if at <= cutoff]
-        if stale:
-            await self.ctx.storage.delete(stale)
-        if await self.ctx.storage.get("gatewayEnabled") is True:
-            self.enabled = True
-            self.connect()
+        try:
+            await self.initialize()
+            if not self.canonical():
+                return
+            if await self.ctx.storage.get("gatewayEnabled") is True:
+                self.enabled = True
+                # A pending reconnect keeps its backoff; restarts have no timer and connect now.
+                if not self.reconnect_timer:
+                    await self.connect()
+                await self.watchdog()
+            await self.sweep_markers()
+        except Exception:
+            # The runtime drops an alarm after repeated failures; keep the watchdog alive.
+            log.error("gateway_alarm_failed")
             await self.watchdog()
 
-    def connect(self):
-        if not self.enabled or (self.socket and self.socket.ready_state in (0, 1)):
+    async def sweep_markers(self):
+        now = now_ms()
+        if now - self.swept_at < SWEEP_INTERVAL_MS:
             return
-        self.clear_reconnect()
-        self.close_socket(4000, "reconnect")
-        # Discord sends regional resume endpoints. Do not send the bot token to arbitrary hosts.
-        base = "wss://gateway.discord.gg"
-        if self.resume_url:
-            resume = urlparse(self.resume_url)
-            if resume.scheme == "wss" and (resume.hostname or "").endswith(".discord.gg"):
-                base = self.resume_url
-        socket: Any = self.socket_factory(
-            base.rstrip("/") + "/?v=10&encoding=json",
-            lambda text: self.on_message(socket, text),
-            lambda code: self.on_close(socket, code),
-            lambda: self.on_error(socket),
-        )
-        self.socket = socket
+        self.swept_at = now
+        markers = await self.ctx.storage.list({"prefix": "processed:"})
+        stale = [key for key, at in markers.items() if at <= now - MARKER_TTL_MS]
+        for start in range(0, len(stale), STORAGE_DELETE_LIMIT):
+            await self.ctx.storage.delete(stale[start : start + STORAGE_DELETE_LIMIT])
+
+    async def connect(self):
+        async with self.connecting:
+            if not self.enabled or (self.socket and self.socket.ready_state in (0, 1)):
+                return
+            self.clear_reconnect()
+            self.close_socket(4000, "reconnect")
+            resuming = bool(self.session_id and self.resume_url)
+            if resuming:
+                url = gateway_url(self.resume_url)
+            else:
+                url = await self.identify_url()
+                if url is None:
+                    return
+            try:
+                socket: Any = await self.socket_factory(
+                    url + "/?v=10&encoding=json",
+                    lambda text: self.on_message(socket, text),
+                    lambda code: self.on_close(socket, code),
+                    lambda: self.on_error(socket),
+                )
+            except HandshakeRejected as rejected:
+                log.warning("gateway_handshake_rejected status=%s", rejected.status)
+                if rejected.retryable:
+                    self.schedule_reconnect(max(rejected.retry_after or 0, self.backoff()))
+                elif resuming:
+                    # A resume host that refuses the upgrade cannot resume this session.
+                    self.reset_session()
+                    self.schedule_reconnect()
+                else:
+                    self.disable()
+                    await self.disable_after_fatal()
+                return
+            except Exception:
+                log.warning("gateway_connect_failed")
+                self.schedule_reconnect()
+                return
+            if not self.enabled:
+                # Stopped while the upgrade was in flight.
+                socket.close(1000, "stop")
+                return
+            self.socket = socket
+
+    async def identify_url(self):
+        """Return Discord's gateway URL while its daily IDENTIFY budget allows a new session."""
+        wait = self.identify_after - time.time()
+        if wait > 0:
+            self.schedule_reconnect(wait)
+            return None
+        try:
+            info = await self.app.discord.gateway_bot()
+        except Exception:
+            log.warning("gateway_session_limit_unavailable")
+            self.schedule_reconnect()
+            return None
+        limit = info["session_start_limit"]
+        if limit["remaining"] < 1:
+            # Exceeding the limit makes Discord reset the bot token.
+            wait = max(limit["reset_after"] / 1000, self.backoff())
+            self.identify_after = time.time() + wait
+            log.error("gateway_identify_budget_exhausted reset_after_s=%d", wait)
+            self.schedule_reconnect(wait)
+            return None
+        return gateway_url(info["url"])
 
     def on_message(self, socket, text):
         if socket is not self.socket:
@@ -196,18 +317,26 @@ class Gateway:
                 self.identify_or_resume()
             case (11, _):  # Heartbeat acknowledged
                 self.heartbeat_acknowledged = True
+                if self.session_id and self.sequence != self.saved_sequence:
+                    self.background(self.save_session())
             case (1, _):  # Heartbeat requested
                 self.send_heartbeat()
-            case (9, _):  # Invalid session
+            case (9, _):  # Invalid session; Discord asks for a random 1-5 s wait.
                 if not data:
                     self.reset_session()
-                self.reconnect()
+                self.reconnect(max(random.uniform(1, 5), self.backoff()))
             case (7, _):  # Reconnect requested
                 self.reconnect()
             case (0, "READY"):
                 self.session_id = data["session_id"]
                 self.resume_url = data["resume_gateway_url"]
                 self.bot_user_id = data["user"]["id"]
+                self.attempts = 0
+                self.background(self.save_session())
+                log.info("gateway_ready")
+            case (0, "RESUMED"):
+                self.attempts = 0
+                log.info("gateway_resumed")
             case (0, "MESSAGE_CREATE"):
                 # Claim before scheduling/awaiting; duplicate events cannot race.
                 if data["id"] in self.processed:
@@ -221,7 +350,7 @@ class Gateway:
         key = f"processed:{message['id']}"
         if await self.ctx.storage.get(key) is not None:
             return
-        await self.ctx.storage.put(key, round(time.time() * 1000))
+        await self.ctx.storage.put(key, now_ms())
         await self.app.handle_message(message, self.bot_user_id)
 
     def on_close(self, socket, code):
@@ -233,14 +362,19 @@ class Gateway:
         asyncio.get_running_loop().call_soon(socket.dispose)
         if code in FATAL_CLOSE_CODES:
             log.error("gateway_fatal_close code=%s", code)
-            self.enabled = False
-            self.clear_reconnect()
-            self.reset_session()
+            self.disable()
             self.background(self.disable_after_fatal())
             return
+        log.warning("gateway_closed code=%s", code)
         if code in NON_RESUMABLE_CLOSE_CODES:
             self.reset_session()
         self.schedule_reconnect()
+
+    def disable(self):
+        """Stop rapid retries after a fatal Discord response; cron or an explicit start retries."""
+        self.enabled = False
+        self.clear_reconnect()
+        self.reset_session()
 
     async def disable_after_fatal(self):
         await self.ctx.storage.delete("gatewayEnabled")
@@ -281,16 +415,18 @@ class Gateway:
     def start_heartbeat(self, interval):
         self.clear_heartbeat()
         self.heartbeat_acknowledged = True
-        self.send_heartbeat()
 
         def tick():
             if not self.heartbeat_acknowledged:
+                log.warning("gateway_heartbeat_missed")
                 self.reconnect()
                 return
             self.send_heartbeat()
             self.heartbeat_timer = asyncio.get_running_loop().call_later(interval, tick)
 
-        self.heartbeat_timer = asyncio.get_running_loop().call_later(interval, tick)
+        # Discord asks for the first heartbeat after a random fraction of the interval.
+        first = interval * random.random()
+        self.heartbeat_timer = asyncio.get_running_loop().call_later(first, tick)
 
     def send_heartbeat(self):
         self.heartbeat_acknowledged = False
@@ -317,20 +453,45 @@ class Gateway:
             self.reconnect_timer.cancel()
             self.reconnect_timer = None
 
+    async def save_session(self):
+        """Persist resumable state. A stale sequence only replays events already deduplicated."""
+        if not self.session_id:
+            await self.ctx.storage.delete("gatewaySession")
+            return
+        self.saved_sequence = self.sequence
+        await self.ctx.storage.put(
+            "gatewaySession",
+            {
+                "sessionId": self.session_id,
+                "resumeUrl": self.resume_url,
+                "sequence": self.sequence,
+                "botUserId": self.bot_user_id,
+            },
+        )
+
     def reset_session(self):
         self.sequence = self.session_id = self.resume_url = None
+        self.background(self.save_session())
 
-    def reconnect(self):
+    def backoff(self):
+        """Exponential reconnect delay with jitter; READY or RESUMED resets it."""
+        self.attempts += 1
+        return min(2 ** min(self.attempts - 1, 9), MAX_RECONNECT_DELAY) + random.random()
+
+    def reconnect(self, delay=None):
         self.close_socket(4000, "reconnect")
-        self.schedule_reconnect()
+        self.schedule_reconnect(delay)
 
-    def schedule_reconnect(self):
+    def schedule_reconnect(self, delay=None):
         if not self.enabled or self.reconnect_timer:
             return
+        if delay is None:
+            delay = self.backoff()
+        log.warning("gateway_reconnect_scheduled attempt=%s delay_s=%.1f", self.attempts, delay)
 
         def retry():
             self.reconnect_timer = None
             self.close_socket(4000, "reconnect")
-            self.connect()
+            self.background(self.connect())
 
-        self.reconnect_timer = asyncio.get_running_loop().call_later(5, retry)
+        self.reconnect_timer = asyncio.get_running_loop().call_later(delay, retry)

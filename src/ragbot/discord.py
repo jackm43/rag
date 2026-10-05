@@ -105,6 +105,10 @@ class DiscordClient:
             data=data,
         )
 
+    async def gateway_bot(self) -> dict:
+        """Gateway URL and the daily IDENTIFY budget (`session_start_limit`)."""
+        return await self.json_request("/gateway/bot")
+
     async def message(self, channel_id: str, message_id: str):
         return await self.json_request(
             f"/channels/{channel_id}/messages/{message_id}", optional=True

@@ -97,11 +97,18 @@ settings, and actual failure handling at the operations they protect.
 - Preserve AI reply text and formatting. Disable mention pings with
   `allowed_mentions`, suppress URL previews with Discord message flags, and
   retain the reply length limit and empty-response fallback.
-- Gateway close codes 4004 and 4010–4014 disable rapid retries. Cron or explicit
-  start can retry them. An operator stop persists across eviction and cron.
+- Gateway close codes 4004 and 4010–4014, and refused WebSocket handshakes other
+  than 408, 429 and 5xx, disable rapid retries. Cron or explicit start can retry
+  them. An operator stop persists across eviction and cron.
 - Keep `DiscordGateway`, singleton `discord-gateway-v2`, storage keys and
   migration history compatible with existing Durable Objects. Retire stale
   singleton instances rather than allowing duplicate gateway sessions.
+- Check Discord's session start limit (`GET /gateway/bot`) before every
+  IDENTIFY. Exceeding it resets the bot token. Reconnects back off
+  exponentially; cron and the watchdog never bypass a pending reconnect.
+- `gatewaySession` holds resumable state. Clear it when Discord invalidates the
+  session or an operator stops the gateway. Never store credentials in Durable
+  Object storage.
 
 ## Adding features
 
@@ -120,8 +127,9 @@ Do not edit generated platform stubs by hand.
 
 ## Testing
 
-`pnpm test` focuses on primary command, moderation, conversation, and media
-workflows using the actual SQLite migrations and injected HTTP transports.
+`pnpm test` focuses on primary command, moderation, conversation, media, and
+gateway lifecycle workflows. It uses the actual SQLite migrations and injected
+HTTP transports and sockets.
 Keep public HTTP authentication and routing checks in the runtime suite.
 `pnpm run test:runtime` runs an isolated local Python Worker with D1 and a
 Discord-like WebSocket peer, so FFI bugs are exercised in workerd too. Test
