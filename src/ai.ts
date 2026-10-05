@@ -107,10 +107,15 @@ export type ToolCall = { name: string; args: Record<string, any> };
 export const PICTURE_TOOL: Tool = {
   name: "create_picture",
   description:
-    "Generate an image and post it with your reply. Use it only when someone asks you to make, draw, show or picture something.",
+    "Generate an image and post it with your reply. Call it only when the latest message explicitly asks you to make, draw, show or picture something. Never call it for greetings, chat or questions. If you are unsure, do not call it.",
   parameters: {
     type: "object",
-    properties: { prompt: { type: "string", description: "A detailed description of the image to generate." } },
+    properties: {
+      prompt: {
+        type: "string",
+        description: "Only a visual description of the image to generate, with no reasoning or notes.",
+      },
+    },
     required: ["prompt"],
   },
 };
