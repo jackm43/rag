@@ -5,6 +5,7 @@
   const identityFields = ["userId", "username", "globalName", "nick"];
   const idFields = ["botUserId", "guildId", "channelId"];
   const overrideFields = ["model", "temperature", "historyLimit", "systemPrompt", "imageProfile", "imageModel", "imageAspectRatio", "imageQuality", "imageResolution"];
+  const imageParameterFields = [["imageAspectRatio", "aspect_ratio"], ["imageQuality", "quality"], ["imageResolution", "resolution"]];
   const fields = [...identityFields, ...idFields, "modsRole", "mentionBot", "replyLast"];
   let saved;
   try { saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}"); } catch { saved = {}; }
@@ -64,10 +65,28 @@
     const isImage = id.startsWith("image");
     if ((page === "bicture") !== isImage) return [];
     if (!["chat", "bicture"].includes(page)) return [];
-    if (id === "temperature" && !catalog.chat.find(m => m.id === (value("model") || meta?.config.responseModel))?.temperature) return [];
+    if (id === "temperature" && !catalog.chat.find(m => m.id === (value("model") || meta?.settings.chat.model))?.temperature) return [];
     const input = value(id);
     return input ? [[id, $(id).type === "number" ? Number(input) : input]] : [];
   }));
+  // The whole draft: saved settings with this page's form changes applied.
+  const draftSettings = () => {
+    const draft = structuredClone({ chat: meta.settings.chat, image: meta.settings.image });
+    const changed = overrides();
+    if (page === "chat") {
+      if (changed.model) draft.chat.model = changed.model;
+      if (changed.temperature !== undefined) draft.chat.temperature = changed.temperature;
+      if (changed.historyLimit !== undefined) draft.chat.historyLimit = changed.historyLimit;
+      if (changed.systemPrompt) draft.chat.prompt = changed.systemPrompt;
+    } else if (page === "bicture") {
+      draft.image.activeProfile = changed.imageProfile || draft.image.activeProfile;
+      const profile = draft.image.profiles[draft.image.activeProfile];
+      if (changed.imageModel) profile.model = changed.imageModel;
+      for (const [id, field] of imageParameterFields) if (changed[id]) profile.parameters[field] = changed[id];
+    }
+    return draft;
+  };
+  const editsSettings = () => baseline && ["chat", "bicture"].includes(page);
   const renderTranscript = () => {
     const entries = transcript();
     $("transcript").replaceChildren(...entries.map((entry) => {
@@ -135,7 +154,7 @@
     const user = identity();
     if (!/^\d{17,20}$/.test(user.userId) || !user.username) throw new Error("Set a valid user ID and username first.");
     if (!/^\d{17,20}$/.test(value("channelId"))) throw new Error("Set a valid channel ID first.");
-    return { target: baseline?.target ?? "local", baseRevision: baseline?.revision, identity: user, modsRole: $("modsRole").checked, guildId: value("guildId"), channelId: value("channelId"), overrides: overrides() };
+    return { target: baseline?.target ?? "local", baseRevision: baseline?.revision, identity: user, modsRole: $("modsRole").checked, guildId: value("guildId"), channelId: value("channelId"), page, settings: editsSettings() ? draftSettings() : undefined };
   };
   const renderCommand = () => {
     const command = meta.commands.find((item) => item.name === $("command").value);
@@ -203,8 +222,8 @@
   });
   const updateSettings = () => {
     if (!meta) return;
-    const config = meta.config;
-    const temperatureSpec = catalog.chat.find(m => m.id === (value("model") || config.responseModel))?.temperature;
+    const { chat: config, image } = meta.settings;
+    const temperatureSpec = catalog.chat.find(m => m.id === (value("model") || config.model))?.temperature;
     $("temperature-control").hidden = !["chat"].includes(page);
     $("temperature").disabled = $("temperature-slider").disabled = busy || !temperatureSpec;
     $("temperature-current").hidden = false;
@@ -221,13 +240,12 @@
       $("temperature-current").textContent = "Not supported by the selected model.";
     }
     $("temperature").placeholder = config.temperature;
-    for (const [id, key] of [["model", "responseModel"], ["historyLimit", "historyLimit"]]) {
+    for (const [id, key] of [["model", "model"], ["historyLimit", "historyLimit"]]) {
       if ($(id).tagName === "INPUT") $(id).placeholder = config[key];
       $(`${id}-current`).hidden = !value(id) || String(value(id)) === String(config[key]);
       $(`${id}-current`).textContent = `Saved: ${config[key]}${value(id) && String(value(id)) !== String(config[key]) ? " · Unsaved: " + value(id) : ""}`;
     }
     for (const id of ["systemPrompt"]) $(`${id}-current`).textContent = value(id) ? "Current: your custom prompt" : "Current: saved prompt (shown below)";
-    const image = config.image;
     const profileName = value("imageProfile") || image.activeProfile;
     const profile = image.profiles[profileName];
     $("imageProfile-current").textContent = `Current: ${profileName} · Default: ${image.activeProfile}`;
@@ -243,22 +261,23 @@
 
     $("review-settings").textContent = baseline?.target === "live" ? "Review & save to live bot" : "Review & save locally";
 
-    for (const [id, field, key] of [["imageAspectRatio", "aspect_ratio", "aspectRatio"], ["imageQuality", "quality", "quality"], ["imageResolution", "resolution", "resolution"]]) {
+    for (const [id, field] of imageParameterFields) {
       const spec = imageModel?.parameters?.[field];
       $(id).closest("label").hidden = !spec;
       const previous = value(id);
-      const fallback = spec ? ((!spec.enum || spec.enum.includes(profile[key])) ? profile[key] : spec.default) : undefined;
+      const saved = profile.parameters[field];
+      const fallback = spec ? ((!spec.enum || spec.enum.includes(saved)) ? saved : spec.default) : undefined;
       $(id).replaceChildren(new Option(spec ? `Default (${fallback || "model default"})` : "Not supported by this model", ""), ...(spec?.enum ?? []).map(option => new Option(option, option)));
       if (spec?.enum?.includes(previous)) $(id).value = previous;
       $(id).disabled = busy || !spec;
       $(`${id}-current`).textContent = spec ? `Current: ${value(id) || fallback || "model default"} · Available: ${(spec.enum ?? []).join(", ") || "model default"}` : "This parameter is not sent to this model.";
     }
-    const canChat = catalog.chat.some(m => m.id === (value("model") || config.responseModel));
+    const canChat = catalog.chat.some(m => m.id === (value("model") || config.model));
     const canImage = Boolean(imageModel);
     $("review-settings").disabled = busy || !baseline || !Object.keys(overrides()).length;
     $("send").disabled = busy || !baseline || !canChat;
     $("run-command").disabled = busy || !baseline || (page === "bicture" && !canImage);
-    $("default-prompt").textContent = config.systemPrompt;
+    $("default-prompt").textContent = config.prompt;
   };
   const showPage = () => {
     if (!meta || busy) return;
@@ -328,9 +347,7 @@
   });
   $("content").addEventListener("input", save);
   $("reset-settings").addEventListener("click", () => { invalidateReview(); for (const id of overrideFields) $(id).value = ""; save(); updateSettings(); });
-  for (const [button, field, key] of [["edit-prompt", "systemPrompt", "systemPrompt"]]) {
-    $(button).addEventListener("click", () => { $(field).value = meta.config[key]; invalidateReview(); updateSettings(); save(); $(field).focus(); });
-  }
+  $("edit-prompt").addEventListener("click", () => { $("systemPrompt").value = meta.settings.chat.prompt; invalidateReview(); updateSettings(); save(); $("systemPrompt").focus(); });
   const resetIdentity = () => {
     for (const [id, setting] of Object.entries(meta.defaults)) $(id).value = setting;
     $("nick").value = "";
@@ -344,7 +361,7 @@
   $("new-channel").addEventListener("click", () => { $("channelId").value = snowflake(); save(); renderTranscript(); });
   $("clear-transcript").addEventListener("click", () => { state.transcripts[value("channelId")] = []; save(); renderTranscript(); });
   $("show-config").addEventListener("click", () => run(async () => {
-    json("config", await api("config", { target: baseline?.target ?? "local", baseRevision: baseline?.revision, overrides: overrides(), page }));
+    json("config", await api("config", { target: baseline?.target ?? "local", baseRevision: baseline?.revision, page, settings: editsSettings() ? draftSettings() : undefined }));
     $("config-panel").hidden = false;
     $("config-panel").open = true;
     $("debug-panel").open = true;
@@ -429,10 +446,11 @@
       $("catalog-status").textContent = error.message;
     }
     const previousProfile = value("imageProfile");
-    $("imageProfile").replaceChildren(new Option(`Default (${meta.config.image.activeProfile})`, ""), ...Object.entries(meta.config.image.profiles).filter(([, p]) => catalog.image.some(m => m.id === p.model)).map(([name]) => new Option(name, name)));
-    $("imageProfile").options[0].disabled = !catalog.image.some(m => m.id === meta.config.image.profiles[meta.config.image.activeProfile].model);
+    const { chat, image } = meta.settings;
+    $("imageProfile").replaceChildren(new Option(`Default (${image.activeProfile})`, ""), ...Object.entries(image.profiles).filter(([, p]) => catalog.image.some(m => m.id === p.model)).map(([name]) => new Option(name, name)));
+    $("imageProfile").options[0].disabled = !catalog.image.some(m => m.id === image.profiles[image.activeProfile].model);
     if ([...$("imageProfile").options].some(o => o.value === previousProfile)) $("imageProfile").value = previousProfile;
-    for (const [id, group, fallback] of [["model", "chat", meta.config.responseModel], ["imageModel", "image", meta.config.image.profiles[meta.config.image.activeProfile].model]]) {
+    for (const [id, group, fallback] of [["model", "chat", chat.model], ["imageModel", "image", image.profiles[image.activeProfile].model]]) {
       const previous = value(id);
       const eligibleDefault = catalog[group].some(m => m.id === fallback);
       const defaultOption = new Option(eligibleDefault ? `${catalog[group].find(m => m.id === fallback)?.name || fallback} (saved)` : "Choose an available model", "");
@@ -461,7 +479,7 @@
     $("settings-status").textContent = "Loading saved settings…";
     try {
       baseline = await api("settings/load", { target: value("settings-target") });
-      meta.config = baseline.config;
+      meta.settings = baseline.settings;
       $("settings-status").textContent = `${baseline.target === "live" ? "Live bot" : "Local sandbox"} · changes are drafts until saved.`;
       await loadModels();
       updateSettings();
@@ -478,29 +496,30 @@
   $("review-settings").addEventListener("click", () => run(async () => {
     invalidateReview();
     if (!baseline) throw new Error("Load settings before reviewing changes.");
-    const draft = { target: baseline.target, baseRevision: baseline.revision, overrides: overrides(), page };
+    const draft = { target: baseline.target, baseRevision: baseline.revision, settings: draftSettings(), page };
     const result = await api("settings/review", draft);
     review = { ...draft, reviewId: result.reviewId };
     $("review-title").textContent = baseline.target === "live" ? "Review production changes" : "Review local sandbox changes";
-    $("settings-changes").replaceChildren(...result.changes.map(change => {
-      const item = node("section", "", "settings-change");
-      const labels = { "bicture-image.json": "Bicture", "discord-response.json": "Chat", "discord-response-system-prompt.md": "Chat system prompt" };
-      item.append(node("h4", labels[change.resource] || change.resource));
-      if (change.resource.endsWith(".json")) {
-        const flatten = (object, prefix = "") => Object.entries(object).flatMap(([key, val]) => val && typeof val === "object" && !Array.isArray(val) ? flatten(val, `${prefix}${key}.`) : [[`${prefix}${key}`, JSON.stringify(val)]]);
-        const before = Object.fromEntries(flatten(JSON.parse(change.before))), after = Object.fromEntries(flatten(JSON.parse(change.after)));
-        const table = node("table", "");
-        const head = node("tr", "");
-        head.append(node("th", "Setting"), node("th", "Saved"), node("th", "After save")); table.append(head);
-        for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-          if (before[key] === after[key]) continue;
-          const row = node("tr", "");
-          row.append(node("th", key.replace(/^profiles\./, "").replaceAll(".", " / ")), node("td", before[key] ?? "—"), node("td", after[key] ?? "—")); table.append(row);
-        }
-        item.append(table);
-      } else item.append(node("strong", "Saved"), node("pre", change.before), node("strong", "After save"), node("pre", change.after));
-      return item;
-    }));
+    const labels = { "chat.prompt": "Chat system prompt" };
+    const shown = (setting) => setting.replace(/^image\.profiles\./, "image / ").replaceAll(".", " / ");
+    const text = (value) => value === null ? "—" : typeof value === "string" ? value : JSON.stringify(value);
+    const table = node("table", "");
+    const head = node("tr", "");
+    head.append(node("th", "Setting"), node("th", "Saved"), node("th", "After save"));
+    table.append(head);
+    const prompts = [];
+    for (const change of result.changes) {
+      if (change.setting === "chat.prompt") {
+        const item = node("section", "", "settings-change");
+        item.append(node("h4", labels[change.setting]), node("strong", "Saved"), node("pre", text(change.before)), node("strong", "After save"), node("pre", text(change.after)));
+        prompts.push(item);
+        continue;
+      }
+      const row = node("tr", "");
+      row.append(node("th", shown(change.setting)), node("td", text(change.before)), node("td", text(change.after)));
+      table.append(row);
+    }
+    $("settings-changes").replaceChildren(...(table.rows.length > 1 ? [table] : []), ...prompts);
     $("save-settings").textContent = baseline.target === "live" ? "Save to live bot" : "Save to local sandbox";
     $("save-settings").hidden = !result.changes.length;
     if (!result.changes.length) $("settings-changes").append(node("p", "No changes to save."));
@@ -511,7 +530,7 @@
   $("save-settings").addEventListener("click", () => run(async () => {
     if (!review) throw new Error("Review changes before saving.");
     baseline = await api("settings/save", review);
-    meta.config = baseline.config;
+    meta.settings = baseline.settings;
     invalidateReview();
     for (const id of overrideFields) $(id).value = "";
     save();

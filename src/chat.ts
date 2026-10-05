@@ -1,21 +1,11 @@
 // Mentions of Ragbot and replies to it: explicit reply context in, one AI reply out.
-import {
-  chat,
-  chatConfig,
-  generateImage,
-  loadSettings,
-  PICTURE_TOOL,
-  pictureCaption,
-  recordPicture,
-  type Attribution,
-  type Settings,
-  type ToolCall,
-} from "./ai.ts";
-import { botRoles, displayName, getMessage, guildAllowed, postMessage } from "./discord.ts";
+import { chat, generateImage, PICTURE_TOOL, pictureCaption, recordPicture, type Attribution } from "./ai.ts";
+import { botRoles, getMessage, guildAllowed, postMessage } from "./discord.ts";
 import type { Env } from "./index.ts";
+import type { ToolCall } from "./lib/ai.ts";
+import { displayName, MENTION } from "./lib/discord/messages.ts";
 import { truncate } from "./lib/discord/rest.ts";
-
-const MENTION = /<@([!&]?)([^>\s]+)>/g;
+import { loadSettings, type Settings } from "./settings.ts";
 
 type Job = {
   attribution: Attribution;
@@ -106,7 +96,7 @@ async function conversation(env: Env, job: Job, historyLimit: number) {
   let referenceId = job.replyId;
   let channelId = job.replyChannel;
   let embedded = job.source.referenced_message;
-  for (let i = 0; i < Math.max(1, Math.min(historyLimit, 12)); i++) {
+  for (let i = 0; i < historyLimit; i++) {
     if (!referenceId || seen.has(referenceId) || channelId !== attribution.channelId) break;
     seen.add(referenceId);
     let referenced = embedded?.id === referenceId ? embedded : null;
@@ -175,10 +165,9 @@ async function answer(env: Env, job: Job, startedAt: number) {
   try {
     const aiStart = Date.now();
     const settings = await loadSettings(env.DB);
-    const config = chatConfig(settings);
-    const messages = await conversation(env, job, config.historyLimit);
-    const system = { role: "system", content: config.prompt };
-    const result = await chat(env, config, [system, ...messages], attribution, [PICTURE_TOOL]);
+    const messages = await conversation(env, job, settings.chat.historyLimit);
+    const system = { role: "system", content: settings.chat.prompt.trim() };
+    const result = await chat(env, settings, [system, ...messages], attribution, [PICTURE_TOOL]);
     ({ model, usage } = result);
     const picture = await createPicture(env, settings, result.toolCalls, attribution);
     aiDuration = Date.now() - aiStart;

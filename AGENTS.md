@@ -28,11 +28,15 @@ webhook hops.
   verification and the gateway control bearer check.
 - `src/gateway.ts`: the `DiscordGateway` Durable Object and the `gateway(env)` stub.
 - `src/commands.ts`: the `commands` registry, used for both dispatch and registration.
-- `src/chat.ts`: mentions and replies. `src/ai.ts`: D1 settings and model calls.
+- `src/chat.ts`: mentions and replies. `src/ai.ts`: model calls.
+- `src/settings.ts`: the typed AI settings document, its D1 read and `parseSettings`, which the
+  dev UI also uses to validate drafts.
 - `src/discord.ts`: Ragbot's Discord calls and replies.
-- `src/lib/discord/`: Discord plumbing with no Ragbot logic. `gateway.ts` is the gateway
-  protocol (`GatewayConnection`; the Durable Object owns storage and dispatch), `rest.ts` the
-  rate-limited fetch, `interactions.ts` the signature check. Nothing in it imports Ragbot code.
+- `src/lib/`: plumbing with no Ragbot logic; nothing in it imports Ragbot code. In `discord/`,
+  `gateway.ts` is the gateway protocol (`GatewayConnection`; the Durable Object owns storage and
+  dispatch), `rest.ts` the rate-limited fetch, `messages.ts` message bodies, interaction
+  webhooks and mentions, `interactions.ts` the signature check. `ai.ts` holds model request
+  and response shapes, `media.ts` capped media reads.
 - `dev/`: local-only UI. It may import `src/`; nothing in `src/` imports `dev/`.
 
 To add a command, add an entry to `commands` in `src/commands.ts`. Register commands with
