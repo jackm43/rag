@@ -1,6 +1,7 @@
 // AI settings from D1, model calls through the AI binding, and provider response parsing.
 import type { Attachment } from "./discord.ts";
 import type { Env } from "./index.ts";
+import { truncate } from "./lib/discord/rest.ts";
 
 export const SETTINGS_SQL = "SELECT revision, document FROM ai_runtime_settings WHERE id = 1";
 const RESOURCES = ["bicture-image.json", "discord-response-system-prompt.md", "discord-response.json"];
@@ -99,9 +100,33 @@ export function runModel(
   return env.AI.run(model, inputs, { gateway: { id: gatewayId, metadata } });
 }
 
-export async function chat(env: Env, config: ReturnType<typeof chatConfig>, messages: object[], attribution: Attribution) {
+export type Tool = { name: string; description: string; parameters: object };
+export type ToolCall = { name: string; args: Record<string, any> };
+
+/** Lets a chat model post a generated picture instead of only text. */
+export const PICTURE_TOOL: Tool = {
+  name: "create_picture",
+  description:
+    "Generate an image and post it with your reply. Use it only when someone asks you to make, draw, show or picture something.",
+  parameters: {
+    type: "object",
+    properties: { prompt: { type: "string", description: "A detailed description of the image to generate." } },
+    required: ["prompt"],
+  },
+};
+
+export async function chat(
+  env: Env,
+  config: ReturnType<typeof chatConfig>,
+  messages: object[],
+  attribution: Attribution,
+  tools: Tool[] = [],
+) {
   const responses = config.apiFormat === "responses";
   const body: Record<string, unknown> = responses ? { input: messages } : { messages };
+  if (tools.length) {
+    body.tools = tools.map((tool) => (responses ? { type: "function", ...tool } : { type: "function", function: tool }));
+  }
   if (config.reasoningEffort && responses) body.reasoning = { effort: config.reasoningEffort };
   if (config.reasoningEffort && !responses) body.reasoning_effort = config.reasoningEffort;
   // Reasoning models reject sampling controls.
@@ -113,6 +138,7 @@ export async function chat(env: Env, config: ReturnType<typeof chatConfig>, mess
   const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null);
   return {
     content: text(payload),
+    toolCalls: toolCalls(payload),
     model: typeof payload?.model === "string" && payload.model ? payload.model : config.model,
     usage: {
       prompt: count(usage.prompt_tokens ?? usage.input_tokens),
@@ -137,6 +163,59 @@ function text(payload: any): string {
   if (typeof payload?.response === "string") return payload.response;
   const content = payload?.choices?.[0]?.message?.content;
   return typeof content === "string" ? content : "";
+}
+
+// Chat Completions, Responses, and Workers AI tool call shapes; arguments arrive as JSON text.
+function toolCalls(payload: any): ToolCall[] {
+  const calls: any[] = [
+    ...(payload?.choices?.[0]?.message?.tool_calls ?? []).map((call: any) => call.function),
+    ...(Array.isArray(payload?.output) ? payload.output.filter((output: any) => output.type === "function_call") : []),
+    ...(Array.isArray(payload?.tool_calls) ? payload.tool_calls : []),
+  ];
+  return calls.flatMap((call) => {
+    try {
+      const args = typeof call?.arguments === "string" ? JSON.parse(call.arguments) : call?.arguments;
+      return typeof call?.name === "string" && isObject(args) ? [{ name: call.name, args }] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/** Generate an image with the active profile in the saved image settings. */
+export async function generateImage(env: Env, settings: Settings, prompt: string, attribution: Attribution) {
+  const image = JSON.parse(settings.resources["bicture-image.json"]);
+  const profile = image.profiles[image.activeProfile];
+  const parameters = profile.parameters ?? {
+    response_format: profile.responseFormat,
+    aspect_ratio: profile.aspectRatio,
+    quality: profile.quality,
+    resolution: profile.resolution,
+  };
+  const result = await runModel(env, profile.model, { ...parameters, prompt }, profile.gatewayId, attribution, settings.revision);
+  return { model: profile.model as string, file: await imageFile(result) };
+}
+
+export const pictureCaption = (prompt: string) => (prompt.length <= 300 ? prompt : `${truncate(prompt, 299)}...`);
+
+/** Record a generated picture, from /bicture or the chat tool, for analytics and prompt history. */
+export async function recordPicture(
+  env: Env,
+  source: Attribution,
+  prompt: string,
+  model: string,
+  startedAt: number,
+  error: string | null,
+) {
+  try {
+    await env.DB.prepare(
+      "INSERT INTO rag_ai_interactions (kind, channel_id, message_id, requester_user_id, requester_username, prompt, model, total_duration_ms, status, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+      .bind("bicture", source.channelId, source.messageId, source.userId, source.username, prompt, model, Date.now() - startedAt, error ? "error" : "ok", error)
+      .run();
+  } catch {
+    console.warn("interaction_record_failed");
+  }
 }
 
 /** Turn an image model result (bytes, stream, base64, data URI or HTTPS URL) into a capped file. */

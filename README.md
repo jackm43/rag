@@ -3,7 +3,8 @@
 A Discord bot running as one TypeScript **Cloudflare Worker**, `ragbot-worker`, with one
 `DiscordGateway` Durable Object that holds the Discord gateway WebSocket.
 Commands: `/rag`, `/ragboard`, `/raghammer`, `/ragunban`, `/undorag`, `/bicture`, `/coinflip`.
-Mentions of the bot and replies to it get an AI answer.
+Mentions of the bot and replies to it get an AI answer; when someone asks for a picture, the chat
+model calls its `create_picture` tool and the reply carries an image made like `/bicture`'s.
 
 `/undorag` and `/raghammer` require the Mods role (`457695154892177418`). `/ragunban` is limited
 to the administrator user IDs in `src/commands.ts`. `/coinflip` uses a fresh cryptographically

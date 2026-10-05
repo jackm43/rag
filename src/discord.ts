@@ -39,18 +39,25 @@ export async function botRoles(env: Env, guildId: string, botUserId: string): Pr
   return cached?.roles ?? [];
 }
 
+// A JSON body, or multipart with `payload_json` when files are attached.
+function messageBody(payload: object, files: Attachment[]): RequestInit {
+  if (!files.length) return { headers: { "content-type": "application/json" }, body: JSON.stringify(payload) };
+  const form = new FormData();
+  const attachments = files.map((file, id) => ({ id: String(id), filename: file.name }));
+  form.append("payload_json", JSON.stringify({ ...payload, attachments }));
+  files.forEach((file, i) => form.append(`files[${i}]`, new Blob([file.data], { type: file.type }), file.name));
+  return { body: form };
+}
+
 /** Reply in a channel without pinging anyone or unfurling links; the text is sent as given. */
-export function postMessage(env: Env, channelId: string, content: string, replyTo: string) {
-  return botRequest(env.DISCORD_BOT_TOKEN, `/channels/${channelId}/messages`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      content,
-      allowed_mentions: { parse: [], replied_user: false },
-      flags: MessageFlags.SUPPRESS_EMBEDS,
-      message_reference: { message_id: replyTo, fail_if_not_exists: false },
-    }),
-  });
+export function postMessage(env: Env, channelId: string, content: string, replyTo: string, files: Attachment[] = []) {
+  const payload = {
+    content,
+    allowed_mentions: { parse: [], replied_user: false },
+    flags: MessageFlags.SUPPRESS_EMBEDS,
+    message_reference: { message_id: replyTo, fail_if_not_exists: false },
+  };
+  return botRequest(env.DISCORD_BOT_TOKEN, `/channels/${channelId}/messages`, { method: "POST", ...messageBody(payload, files) });
 }
 
 /**
@@ -63,17 +70,9 @@ export async function reply(
   { users, files = [], followup = false }: { users?: string[]; files?: Attachment[]; followup?: boolean } = {},
 ) {
   const payload = { content: truncate(content, 2000), allowed_mentions: { parse: [], users } };
-  let init: RequestInit = { headers: { "content-type": "application/json" }, body: JSON.stringify(payload) };
-  if (files.length) {
-    const form = new FormData();
-    const attachments = files.map((file, id) => ({ id: String(id), filename: file.name }));
-    form.append("payload_json", JSON.stringify({ ...payload, attachments }));
-    files.forEach((file, i) => form.append(`files[${i}]`, new Blob([file.data], { type: file.type }), file.name));
-    init = { body: form };
-  }
   const url = `${API}/webhooks/${interaction.application_id}/${interaction.token}`;
   const response = await discordFetch(followup ? url : `${url}/messages/@original`, {
-    ...init,
+    ...messageBody(payload, files),
     method: followup ? "POST" : "PATCH",
   });
   if (!response.ok) {
