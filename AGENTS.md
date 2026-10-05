@@ -29,7 +29,10 @@ webhook hops.
 - `src/gateway.ts`: the `DiscordGateway` Durable Object and the `gateway(env)` stub.
 - `src/commands.ts`: the `commands` registry, used for both dispatch and registration.
 - `src/chat.ts`: mentions and replies. `src/ai.ts`: D1 settings and model calls.
-- `src/discord.ts`: Discord REST, rate limits and replies.
+- `src/discord.ts`: Ragbot's Discord calls and replies.
+- `src/lib/discord/`: Discord plumbing with no Ragbot logic. `gateway.ts` is the gateway
+  protocol (`GatewayConnection`; the Durable Object owns storage and dispatch), `rest.ts` the
+  rate-limited fetch, `interactions.ts` the signature check. Nothing in it imports Ragbot code.
 - `dev/`: local-only UI. It may import `src/`; nothing in `src/` imports `dev/`.
 
 To add a command, add an entry to `commands` in `src/commands.ts`. Register commands with

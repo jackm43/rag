@@ -1,7 +1,8 @@
 // Mentions of Ragbot and replies to it: explicit reply context in, one AI reply out.
 import { chat, chatConfig, loadSettings, type Attribution } from "./ai.ts";
-import { botRoles, displayName, getMessage, guildAllowed, postMessage, truncate } from "./discord.ts";
+import { botRoles, displayName, getMessage, guildAllowed, postMessage } from "./discord.ts";
 import type { Env } from "./index.ts";
+import { truncate } from "./lib/discord/rest.ts";
 
 const MENTION = /<@([!&]?)([^>\s]+)>/g;
 

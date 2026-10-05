@@ -17,7 +17,9 @@ src/gateway.ts    DiscordGateway Durable Object: connect, heartbeat, resume, ded
 src/commands.ts   slash command definitions and dispatch
 src/chat.ts       mentions and replies: reply-chain context, AI answer, analytics
 src/ai.ts         D1 AI settings, model calls, provider response and image parsing
-src/discord.ts    Discord REST: rate limits, retries, replies
+src/discord.ts    Ragbot's Discord calls: lookups, pingless replies, interaction responses
+src/lib/discord/  Discord plumbing with no Ragbot logic: gateway protocol, REST
+                  rate limits and retries, interaction signature checks
 dev/              local-only dev UI (never deployed)
 scripts/          command registration and AI settings initialization
 config/ai/        operator inputs for initializing AI settings in D1
