@@ -5,7 +5,6 @@ import {
   generateImage,
   loadSettings,
   PICTURE_TOOL,
-  pictureCaption,
   recordPicture,
   type Attribution,
   type Settings,
@@ -155,7 +154,7 @@ async function createPicture(env: Env, settings: Settings, calls: ToolCall[], at
     const image = await generateImage(env, settings, prompt, source);
     model = image.model;
     await recordPicture(env, source, prompt, model, startedAt, null);
-    return { caption: pictureCaption(prompt), files: [image.file] };
+    return { caption: "", files: [image.file] };
   } catch (caught) {
     const error = caught instanceof Error ? caught.name : "Error";
     console.error(`picture_tool_failed error_type=${error}`);
@@ -186,7 +185,8 @@ async function answer(env: Env, job: Job, startedAt: number) {
     // A failed picture says so instead of the model's text, which may promise an image.
     if (picture && !picture.files.length) responseText = picture.caption;
     else if (result.content.trim()) responseText = truncate(result.content, 1900);
-    else responseText = picture?.caption ?? "I could not generate a response.";
+    // The picture prompt is the model's working text, so a picture with no reply text posts alone.
+    else responseText = picture ? "" : "I could not generate a response.";
     const response = await postMessage(env, attribution.channelId, responseText, attribution.messageId, picture?.files);
     if (!response.ok) throw new Error(`discord_channel_post_failed_${response.status}`);
   } catch (caught) {
