@@ -97,8 +97,9 @@ settings, and actual failure handling at the operations they protect.
 - Preserve AI reply text and formatting. Disable mention pings with
   `allowed_mentions`, suppress URL previews with Discord message flags, and
   retain the reply length limit and empty-response fallback.
-- Gateway close codes 4004 and 4010–4014 disable rapid retries. Cron or explicit
-  start can retry them. An operator stop persists across eviction and cron.
+- Gateway close codes 4004 and 4010–4014, and refused WebSocket handshakes other
+  than 408, 429 and 5xx, disable rapid retries. Cron or explicit start can retry
+  them. An operator stop persists across eviction and cron.
 - Keep `DiscordGateway`, singleton `discord-gateway-v2`, storage keys and
   migration history compatible with existing Durable Objects. Retire stale
   singleton instances rather than allowing duplicate gateway sessions.

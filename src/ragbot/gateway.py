@@ -9,6 +9,7 @@ from collections import OrderedDict
 from typing import Any
 from urllib.parse import urlparse
 
+from .discord_http import seconds
 from .runtime import wait_until
 
 log = logging.getLogger("ragbot")
@@ -39,14 +40,39 @@ def now_ms():
     return round(time.time() * 1000)
 
 
-class Socket:
-    """Own callback proxies for exactly one Workers WebSocket."""
+class HandshakeRejected(RuntimeError):
+    """The gateway answered the WebSocket upgrade with an HTTP response instead of 101."""
 
-    def __init__(self, url, on_message, on_close, on_error):
-        from js import WebSocket
+    def __init__(self, status, retry_after=None):
+        super().__init__(f"gateway handshake rejected ({status})")
+        self.status, self.retry_after = status, retry_after
+
+    @property
+    def retryable(self):
+        return self.status in (408, 429) or self.status >= 500
+
+
+async def open_socket(url, on_message, on_close, on_error):
+    """Upgrade with fetch so a refused handshake reports its HTTP status."""
+    from workers import fetch
+
+    async with asyncio.timeout(15):
+        response = await fetch(
+            url.replace("wss://", "https://", 1), headers={"Upgrade": "websocket"}
+        )
+    raw = response.js_object.webSocket
+    if not raw:
+        raise HandshakeRejected(response.status, seconds(response.headers.get("retry-after")))
+    return Socket(raw, on_message, on_close, on_error)
+
+
+class Socket:
+    """Own callback proxies for exactly one accepted Workers WebSocket."""
+
+    def __init__(self, raw, on_message, on_close, on_error):
         from pyodide.ffi import create_proxy
 
-        self.raw = WebSocket.new(url)
+        self.raw = raw
         self.listeners = {
             "message": create_proxy(lambda event: on_message(event.data)),
             "close": create_proxy(lambda event: on_close(event.code)),
@@ -54,6 +80,8 @@ class Socket:
         }
         for name, callback in self.listeners.items():
             self.raw.addEventListener(name, callback)
+        # An upgraded socket delivers events only after accept(); listeners are attached first.
+        self.raw.accept()
 
     @property
     def ready_state(self):
@@ -75,7 +103,7 @@ class Socket:
 
 
 class Gateway:
-    def __init__(self, ctx, env, app, *, socket_factory=Socket):
+    def __init__(self, ctx, env, app, *, socket_factory=open_socket):
         self.ctx, self.env, self.app = ctx, env, app
         self.socket_factory = socket_factory
         self.socket: Any = None
@@ -213,18 +241,40 @@ class Gateway:
                 return
             self.clear_reconnect()
             self.close_socket(4000, "reconnect")
-            if self.session_id and self.resume_url:
+            resuming = bool(self.session_id and self.resume_url)
+            if resuming:
                 url = gateway_url(self.resume_url)
             else:
                 url = await self.identify_url()
-                if url is None or not self.enabled:
+                if url is None:
                     return
-            socket: Any = self.socket_factory(
-                url + "/?v=10&encoding=json",
-                lambda text: self.on_message(socket, text),
-                lambda code: self.on_close(socket, code),
-                lambda: self.on_error(socket),
-            )
+            try:
+                socket: Any = await self.socket_factory(
+                    url + "/?v=10&encoding=json",
+                    lambda text: self.on_message(socket, text),
+                    lambda code: self.on_close(socket, code),
+                    lambda: self.on_error(socket),
+                )
+            except HandshakeRejected as rejected:
+                log.warning("gateway_handshake_rejected status=%s", rejected.status)
+                if rejected.retryable:
+                    self.schedule_reconnect(max(rejected.retry_after or 0, self.backoff()))
+                elif resuming:
+                    # A resume host that refuses the upgrade cannot resume this session.
+                    self.reset_session()
+                    self.schedule_reconnect()
+                else:
+                    self.disable()
+                    await self.disable_after_fatal()
+                return
+            except Exception:
+                log.warning("gateway_connect_failed")
+                self.schedule_reconnect()
+                return
+            if not self.enabled:
+                # Stopped while the upgrade was in flight.
+                socket.close(1000, "stop")
+                return
             self.socket = socket
 
     async def identify_url(self):
@@ -312,15 +362,19 @@ class Gateway:
         asyncio.get_running_loop().call_soon(socket.dispose)
         if code in FATAL_CLOSE_CODES:
             log.error("gateway_fatal_close code=%s", code)
-            self.enabled = False
-            self.clear_reconnect()
-            self.reset_session()
+            self.disable()
             self.background(self.disable_after_fatal())
             return
         log.warning("gateway_closed code=%s", code)
         if code in NON_RESUMABLE_CLOSE_CODES:
             self.reset_session()
         self.schedule_reconnect()
+
+    def disable(self):
+        """Stop rapid retries after a fatal Discord response; cron or an explicit start retries."""
+        self.enabled = False
+        self.clear_reconnect()
+        self.reset_session()
 
     async def disable_after_fatal(self):
         await self.ctx.storage.delete("gatewayEnabled")

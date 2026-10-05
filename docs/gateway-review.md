@@ -31,7 +31,7 @@ application exceeds its daily `session_start_limit` of IDENTIFY calls.
 | Missed heartbeat ACK | Reconnects after 2× the interval. | Reconnects if no ACK arrived before the next beat. | **Keep ours.** It is Discord's documented zombie-connection rule. |
 | Alarm failures | Catches errors and reschedules a fallback alarm, so the alarm is not lost after the runtime's retries. | An exception lost the watchdog until the next cron, up to 15 min later. | **Adopt.** Re-arm the watchdog on failure. |
 | Recovery after restart | Heartbeat alarms, about every 41 s, notice the lost socket. | 5 min watchdog alarm, plus a 15 min cron. | **Adapt.** Use a 60 s watchdog so a restart reconnects before a typical session expires. Keep heartbeats on in-process timers. |
-| Socket open | `fetch()` with `Upgrade: websocket`, which shows the HTTP status. | `new WebSocket(url)`. | **Defer** to phase 2. Handshake failures already surface as close or error events, which now back off. |
+| Socket open | `fetch()` with `Upgrade: websocket`, which shows the HTTP status. | `new WebSocket(url)`; every failed handshake looked like close 1006. | **Adopt.** Use a fetch upgrade. A 408, 429 or 5xx backs off and respects `Retry-After`. A refused resume host starts a new session. Other refusals stop rapid retries, like fatal close codes. |
 | Status | Returns status, session id, connected time, sequence and attempts. | Returns connected, resumable and stopped. | **Defer** to phase 2. Add diagnostics without exposing secrets. |
 | Event delivery | Sends an HTTP POST with a shared secret to a webhook. | In-process `Application.handle_message`. | **Do not adopt.** AGENTS.md forbids internal hops. |
 | Credentials | Bot token stored in DO storage through `connect()`. | Token read from Worker secrets. | **Do not adopt.** Secrets stay out of durable storage. |
@@ -77,6 +77,9 @@ application exceeds its daily `session_start_limit` of IDENTIFY calls.
 - [x] Behaviour tests with an injected socket and storage. The runtime probe
   stubs `/gateway/bot`, so no test contacts Discord. It also checks that
   `gatewaySession` survives the real Durable Object storage round trip.
+- [x] Open the socket with a `fetch()` upgrade and classify refused
+  handshakes by status. The runtime probe connects through the upgrade and
+  checks that a refused one reports its status and `Retry-After`.
 - [ ] Run `pnpm run test:runtime` and the deployment dry run. These did not run
   in the authoring sandbox because its network policy blocks
   `index.pyodide.org`. CI runs both on pull requests.
@@ -86,8 +89,6 @@ application exceeds its daily `session_start_limit` of IDENTIFY calls.
 - Add `reconnectAttempts`, `enabled` (false after a fatal close) and the last
   close code to `/gateway/health`. Keep session ids and tokens out of the
   response.
-- Open the socket with a `fetch()` upgrade, so the gateway can tell a retryable
-  handshake failure (429 or 5xx) from a permanent one.
 - Write `processed:` markers only for messages that can produce a reply. This
   cuts a storage write per guild message, but needs the relevance check moved
   ahead of `Application.handle_message`.

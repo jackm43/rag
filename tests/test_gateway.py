@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ragbot.gateway import GATEWAY_NAME, Gateway, now_ms
+from ragbot.gateway import GATEWAY_NAME, Gateway, HandshakeRejected, now_ms
 
 RESUME_URL = "wss://us-east1-b.gateway.discord.gg/"
 
@@ -99,10 +99,13 @@ def delay(timer):
 async def gateways():
     created = []
 
-    def make(storage=None, *, remaining=1000):
+    def make(storage=None, *, remaining=1000, failures=()):
         sockets: list[FakeSocket] = []
+        pending = list(failures)
 
-        def factory(*args):
+        async def factory(*args):
+            if pending:
+                raise pending.pop(0)
             sockets.append(FakeSocket(*args))
             return sockets[-1]
 
@@ -265,3 +268,57 @@ async def test_failed_alarm_rearms_watchdog(gateways):
     gateway, _ = gateways(storage)
     await gateway.alarm()
     assert storage.alarm is not None
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (HandshakeRejected(503), 1),
+        (HandshakeRejected(429, 30.0), 30),
+        (OSError("connection refused"), 1),
+    ],
+)
+async def test_transient_handshake_failure_backs_off(gateways, monkeypatch, failure, expected):
+    monkeypatch.setattr("ragbot.gateway.random.random", lambda: 0)
+    gateway, sockets = gateways(failures=[failure])
+    await gateway.start()
+    assert sockets == [] and gateway.enabled
+    assert round(delay(gateway.reconnect_timer)) == expected
+
+
+async def test_refused_handshake_waits_for_cron(gateways):
+    storage = Storage(gatewayEnabled=True)
+    gateway, sockets = gateways(storage, failures=[HandshakeRejected(404)])
+    await gateway.alarm()
+    await settle(gateway)
+    assert sockets == [] and not gateway.enabled and gateway.reconnect_timer is None
+    assert "gatewayEnabled" not in storage.data and storage.alarm is None
+    assert await gateway.ensure_connected() == {"ok": True}
+    assert len(sockets) == 1
+
+
+async def test_refused_resume_host_starts_new_session(gateways):
+    session = {"sessionId": "s1", "resumeUrl": RESUME_URL, "sequence": 7, "botUserId": "bot"}
+    storage = Storage(gatewayEnabled=True, gatewaySession=session)
+    gateway, sockets = gateways(storage, failures=[HandshakeRejected(404)])
+    await gateway.alarm()
+    await settle(gateway)
+    assert gateway.enabled and gateway.session_id is None
+    assert "gatewaySession" not in storage.data
+    gateway.clear_reconnect()
+    await gateway.connect()
+    assert sockets[0].url == "wss://gateway.discord.gg/?v=10&encoding=json"
+
+
+async def test_stop_during_upgrade_closes_the_new_socket(gateways):
+    gateway, sockets = gateways()
+    opened = []
+
+    async def factory(*args):
+        await gateway.stop()
+        opened.append(FakeSocket(*args))
+        return opened[-1]
+
+    gateway.socket_factory = factory
+    await gateway.start()
+    assert gateway.socket is None and opened[0].closed == 1000

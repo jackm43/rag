@@ -10,7 +10,7 @@ from production import DiscordGateway as ProductionGateway
 from workers import Response
 
 from ragbot.app import Application
-from ragbot.gateway import Socket, gateway_stub
+from ragbot.gateway import HandshakeRejected, gateway_stub, open_socket
 
 
 class Default(ProductionDefault):
@@ -154,9 +154,11 @@ class Default(ProductionDefault):
         if path == "/test/gateway":
             return Response.json(
                 await gateway_stub(self.env).probe(
-                    request.url.replace("/test/gateway", "/test/socket").replace("http://", "ws://")
+                    request.url.replace("/test/gateway", "/test/socket")
                 )
             )
+        if path == "/test/reject":
+            return Response("", status=429, headers={"retry-after": "7"})
         if path == "/test/socket":
             from js import Object, WebSocketPair
             from pyodide.ffi import create_proxy
@@ -357,7 +359,7 @@ class DiscordGateway(ProductionGateway):
 
         self.gateway.app.handle_message = handle
         self.gateway.app.discord.transport = discord_stub
-        self.gateway.socket_factory = lambda ignored, *callbacks: Socket(url, *callbacks)
+        self.gateway.socket_factory = lambda ignored, *callbacks: open_socket(url, *callbacks)
         await self.gateway.start()
         for _ in range(100):
             if processed:
@@ -374,4 +376,13 @@ class DiscordGateway(ProductionGateway):
         await self.gateway.stop()
         result["stopped"] = await self.gateway.ensure_connected()
         await self.gateway.alarm()
+
+        def ignore(*args):
+            pass
+
+        # A refused upgrade returns a plain response; read its status across the FFI.
+        try:
+            await open_socket(url.replace("/test/socket", "/test/reject"), ignore, ignore, ignore)
+        except HandshakeRejected as rejected:
+            result["rejected"] = [rejected.status, rejected.retry_after]
         return result
