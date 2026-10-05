@@ -1,7 +1,19 @@
 // Mentions of Ragbot and replies to it: explicit reply context in, one AI reply out.
-import { chat, chatConfig, loadSettings, type Attribution } from "./ai.ts";
-import { botRoles, displayName, getMessage, guildAllowed, postMessage, truncate } from "./discord.ts";
+import {
+  chat,
+  chatConfig,
+  generateImage,
+  loadSettings,
+  PICTURE_TOOL,
+  pictureCaption,
+  recordPicture,
+  type Attribution,
+  type Settings,
+  type ToolCall,
+} from "./ai.ts";
+import { botRoles, displayName, getMessage, guildAllowed, postMessage } from "./discord.ts";
 import type { Env } from "./index.ts";
+import { truncate } from "./lib/discord/rest.ts";
 
 const MENTION = /<@([!&]?)([^>\s]+)>/g;
 
@@ -131,6 +143,27 @@ async function conversation(env: Env, job: Job, historyLimit: number) {
   return messages;
 }
 
+/** Run the model's first create_picture call, if any. A failed picture becomes the reply text. */
+async function createPicture(env: Env, settings: Settings, calls: ToolCall[], attribution: Attribution) {
+  const call = calls.find((candidate) => candidate.name === PICTURE_TOOL.name);
+  const prompt = typeof call?.args.prompt === "string" ? truncate(call.args.prompt.trim(), 2000) : "";
+  if (!prompt) return null;
+  const source = { ...attribution, kind: "bicture" };
+  const startedAt = Date.now();
+  let model = "unknown";
+  try {
+    const image = await generateImage(env, settings, prompt, source);
+    model = image.model;
+    await recordPicture(env, source, prompt, model, startedAt, null);
+    return { caption: pictureCaption(prompt), files: [image.file] };
+  } catch (caught) {
+    const error = caught instanceof Error ? caught.name : "Error";
+    console.error(`picture_tool_failed error_type=${error}`);
+    await recordPicture(env, source, prompt, model, startedAt, error);
+    return { caption: "Could not generate that image. Try a different prompt.", files: [] };
+  }
+}
+
 async function answer(env: Env, job: Job, startedAt: number) {
   const { attribution } = job;
   let model = "unknown";
@@ -141,14 +174,20 @@ async function answer(env: Env, job: Job, startedAt: number) {
   let usage: Record<string, number | null> = {};
   try {
     const aiStart = Date.now();
-    const config = chatConfig(await loadSettings(env.DB));
+    const settings = await loadSettings(env.DB);
+    const config = chatConfig(settings);
     const messages = await conversation(env, job, config.historyLimit);
-    const result = await chat(env, config, [{ role: "system", content: config.prompt }, ...messages], attribution);
-    aiDuration = Date.now() - aiStart;
+    const system = { role: "system", content: config.prompt };
+    const result = await chat(env, config, [system, ...messages], attribution, [PICTURE_TOOL]);
     ({ model, usage } = result);
+    const picture = await createPicture(env, settings, result.toolCalls, attribution);
+    aiDuration = Date.now() - aiStart;
     // Keep the model's text and formatting; only enforce the length limit and an empty fallback.
-    responseText = result.content.trim() ? truncate(result.content, 1900) : "I could not generate a response.";
-    const response = await postMessage(env, attribution.channelId, responseText, attribution.messageId);
+    // A failed picture says so instead of the model's text, which may promise an image.
+    if (picture && !picture.files.length) responseText = picture.caption;
+    else if (result.content.trim()) responseText = truncate(result.content, 1900);
+    else responseText = picture?.caption ?? "I could not generate a response.";
+    const response = await postMessage(env, attribution.channelId, responseText, attribution.messageId, picture?.files);
     if (!response.ok) throw new Error(`discord_channel_post_failed_${response.status}`);
   } catch (caught) {
     status = "error";

@@ -2,6 +2,8 @@
   "name": "ragbot-worker",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-26",
+  // Pending waitUntil work keeps the Durable Object alive (default from 2026-10-01).
+  "compatibility_flags": ["durable_object_io_tasks_prevent_eviction"],
   "workers_dev": false,
   "routes": [
     {

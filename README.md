@@ -3,7 +3,8 @@
 A Discord bot running as one TypeScript **Cloudflare Worker**, `ragbot-worker`, with one
 `DiscordGateway` Durable Object that holds the Discord gateway WebSocket.
 Commands: `/rag`, `/ragboard`, `/raghammer`, `/ragunban`, `/undorag`, `/bicture`, `/coinflip`.
-Mentions of the bot and replies to it get an AI answer.
+Mentions of the bot and replies to it get an AI answer; when someone asks for a picture, the chat
+model calls its `create_picture` tool and the reply carries an image made like `/bicture`'s.
 
 `/undorag` and `/raghammer` require the Mods role (`457695154892177418`). `/ragunban` is limited
 to the administrator user IDs in `src/commands.ts`. `/coinflip` uses a fresh cryptographically
@@ -17,7 +18,9 @@ src/gateway.ts    DiscordGateway Durable Object: connect, heartbeat, resume, ded
 src/commands.ts   slash command definitions and dispatch
 src/chat.ts       mentions and replies: reply-chain context, AI answer, analytics
 src/ai.ts         D1 AI settings, model calls, provider response and image parsing
-src/discord.ts    Discord REST: rate limits, retries, replies
+src/discord.ts    Ragbot's Discord calls: lookups, pingless replies, interaction responses
+src/lib/discord/  Discord plumbing with no Ragbot logic: gateway protocol, REST
+                  rate limits and retries, interaction signature checks
 dev/              local-only dev UI (never deployed)
 scripts/          command registration and AI settings initialization
 config/ai/        operator inputs for initializing AI settings in D1
@@ -131,8 +134,9 @@ writes require a same-origin JSON request with the UI header. Do not expose it p
 ## Discord behavior
 
 - Interaction requests are verified (Ed25519 over timestamp plus raw body, five-minute window)
-  before parsing. Commands are acknowledged immediately and answered by editing the deferred
-  reply. `/rag` bans and writes fail closed on D1 errors.
+  before parsing. `/coinflip` is answered in the interaction response. Other commands are
+  deferred, run in the `DiscordGateway` object (so `/bicture` can outlive the request's 30-second
+  `waitUntil` window) and answered by editing the deferred reply. `/rag` bans and writes fail closed on D1 errors.
 - Operator routes require `Authorization: Bearer $GATEWAY_CONTROL_TOKEN`:
   `POST /gateway/start`, `POST /gateway/stop`, `GET /gateway/health`. Denials have empty bodies.
 - AI replies keep the model's text and formatting, are capped at 1,900 characters, fall back to
