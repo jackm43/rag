@@ -7,6 +7,10 @@ import { displayName, MENTION } from "./lib/discord/messages.ts";
 import { truncate } from "./lib/discord/rest.ts";
 import { loadSettings, type Settings } from "./settings.ts";
 
+// The model alone picks pictures too eagerly (a greeting, a pun), so only offer the tool when the
+// message itself asks for an image.
+const PICTURE_REQUEST = /\b(?:draw|drawing|sketch|paint|picture|pic|pics|image|images|photo|photos|illustrat\w*|render|bicture)\b/i;
+
 type Job = {
   attribution: Attribution;
   prompt: string;
@@ -180,7 +184,8 @@ async function answer(env: Env, job: Job, startedAt: number) {
     const settings = await loadSettings(env.DB);
     const messages = await conversation(env, job, settings.chat.historyLimit);
     const system = { role: "system", content: settings.chat.prompt.trim() };
-    const result = await chat(env, settings, [system, ...messages], attribution, [PICTURE_TOOL]);
+    const tools = PICTURE_REQUEST.test(job.prompt) ? [PICTURE_TOOL] : [];
+    const result = await chat(env, settings, [system, ...messages], attribution, tools);
     ({ model, usage } = result);
     const picture = await createPicture(env, settings, result.toolCalls, attribution);
     aiDuration = Date.now() - aiStart;
