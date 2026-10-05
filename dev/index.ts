@@ -1,15 +1,16 @@
 // Local-only dev UI: serves dev/ui and runs the real bot handlers against stubbed Discord.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { SETTINGS_SQL } from "../src/ai.ts";
 import { handleMessage } from "../src/chat.ts";
 import { ADMIN_IDS, commands, dispatch, MODS_ROLE_ID } from "../src/commands.ts";
 import type { Env } from "../src/index.ts";
-import { catalogOverrides, draftOverrides, draftRow, HttpError, isObject, loadCatalog, resolveConfig, SettingsEditor, sha256 } from "./settings.ts";
+import { isObject } from "../src/lib/json.ts";
+import { SETTINGS_SQL } from "../src/settings.ts";
+import { draftRow, HttpError, loadCatalog, resolveDraft, SettingsEditor, sha256 } from "./settings.ts";
 
 export interface DevEnv extends Env {
   DEV_UI: string;
+  LIVE_DB: D1Database;
   CF_ACCOUNT_ID: string;
-  D1_DATABASE_ID: string;
   CLOUDFLARE_API_TOKEN: string;
   ASSETS: Fetcher;
 }
@@ -72,15 +73,14 @@ async function api(request: Request, env: DevEnv, url: URL): Promise<unknown> {
     case "settings/save":
       return editor.save(body);
   }
-  const baseline = await editor.read();
-  if (body.baseRevision && body.baseRevision !== baseline.revision) {
+  const { settings: current } = await editor.read();
+  if (body.baseRevision && body.baseRevision !== current.revision) {
     throw new HttpError("Settings changed since you loaded them. Reload before testing.", 409);
   }
-  if (path === "models") return loadCatalog(env, baseline.config, Boolean(body.refresh));
-  const overrides = draftOverrides(body.overrides);
-  const image = body.command === "bicture" || body.page === "bicture";
-  if (image || path === "mention") Object.assign(overrides, await catalogOverrides(env, overrides, baseline.resources, image));
-  if (path === "config") return resolveConfig(overrides, baseline.resources);
+  if (path === "models") return loadCatalog(env, current, Boolean(body.refresh));
+  const page = body.command === "bicture" ? "bicture" : path === "mention" ? "chat" : body.page;
+  const draft = await resolveDraft(env, current, body.settings, page);
+  if (path === "config") return draft;
   if (path !== "mention" && path !== "interaction") throw new HttpError("Not found.", 404);
   const filled = (value: unknown) => typeof value === "string" && value.trim() !== "";
   const required = [body.identity?.userId, body.identity?.username, body.channelId, path === "mention" ? body.content : body.command];
@@ -89,18 +89,18 @@ async function api(request: Request, env: DevEnv, url: URL): Promise<unknown> {
     ...body,
     guildId: body.guildId || env.ALLOWED_GUILD_IDS.split(",")[0].trim(),
     botUserId: body.botUserId || env.DISCORD_APPLICATION_ID,
-    settings: await draftRow(overrides, baseline.resources, baseline.revision),
+    settings: await draftRow(draft, current),
   });
 }
 
 async function meta(env: DevEnv, url: URL) {
-  const live = await new SettingsEditor(env, "live").read();
+  const { settings } = await new SettingsEditor(env, "live").read();
   return {
     revision: await assetRevision(env, url),
     defaults: { userId: [...ADMIN_IDS].sort()[0], username: "dev_user", globalName: "Dev User", channelId: "123456789012345678" },
     applicationId: env.DISCORD_APPLICATION_ID,
     guildId: env.ALLOWED_GUILD_IDS.split(",")[0].trim(),
-    config: live.config,
+    settings,
     commands: Object.entries(commands).map(([name, command]) => ({
       name,
       description: command.description,

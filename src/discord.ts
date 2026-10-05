@@ -1,8 +1,7 @@
 // Ragbot's Discord calls: lookups, pingless replies and interaction responses.
 import type { Env } from "./index.ts";
-import { API, botRequest, discordFetch, MessageFlags, truncate } from "./lib/discord/rest.ts";
-
-export type Attachment = { name: string; type: string; data: Uint8Array };
+import { interactionMessage, messageBody, type Attachment } from "./lib/discord/messages.ts";
+import { botRequest, MessageFlags, truncate } from "./lib/discord/rest.ts";
 
 // Deleted or unknown resources resolve to null.
 async function find(env: Env, path: string): Promise<any> {
@@ -39,16 +38,6 @@ export async function botRoles(env: Env, guildId: string, botUserId: string): Pr
   return cached?.roles ?? [];
 }
 
-// A JSON body, or multipart with `payload_json` when files are attached.
-function messageBody(payload: object, files: Attachment[]): RequestInit {
-  if (!files.length) return { headers: { "content-type": "application/json" }, body: JSON.stringify(payload) };
-  const form = new FormData();
-  const attachments = files.map((file, id) => ({ id: String(id), filename: file.name }));
-  form.append("payload_json", JSON.stringify({ ...payload, attachments }));
-  files.forEach((file, i) => form.append(`files[${i}]`, new Blob([file.data], { type: file.type }), file.name));
-  return { body: form };
-}
-
 /** Reply in a channel without pinging anyone or unfurling links; the text is sent as given. */
 export function postMessage(env: Env, channelId: string, content: string, replyTo: string, files: Attachment[] = []) {
   const payload = {
@@ -64,21 +53,14 @@ export function postMessage(env: Env, channelId: string, content: string, replyT
 export const sendTyping = (env: Env, channelId: string) =>
   botRequest(env.DISCORD_BOT_TOKEN, `/channels/${channelId}/typing`, { method: "POST" });
 
-/**
- * Edit the deferred interaction reply, or post a follow-up. The interaction token in the URL
- * authenticates this route, so the bot credential is never sent here.
- */
+/** Edit the deferred interaction reply, or post a follow-up, pinging only `users`. */
 export async function reply(
   interaction: any,
   content: string,
   { users, files = [], followup = false }: { users?: string[]; files?: Attachment[]; followup?: boolean } = {},
 ) {
   const payload = { content: truncate(content, 2000), allowed_mentions: { parse: [], users } };
-  const url = `${API}/webhooks/${interaction.application_id}/${interaction.token}`;
-  const response = await discordFetch(followup ? url : `${url}/messages/@original`, {
-    ...messageBody(payload, files),
-    method: followup ? "POST" : "PATCH",
-  });
+  const response = await interactionMessage(interaction, payload, { files, followup });
   if (!response.ok) {
     const error: any = await response.json().catch(() => null);
     console.warn(`interaction_write_rejected status=${response.status} code=${error?.code ?? null}`);
@@ -88,6 +70,3 @@ export async function reply(
 
 export const guildAllowed = (env: Env, guildId: string | undefined) =>
   env.ALLOWED_GUILD_IDS.split(",").some((id) => id.trim() === guildId);
-
-export const displayName = (user: any, nick?: string | null): string =>
-  [nick, user.global_name, user.username].find((name) => name?.trim())?.trim() ?? "user";

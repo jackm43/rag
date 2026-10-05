@@ -1,0 +1,25 @@
+{
+  "chat": {
+    "model": "xai/grok-4.3",
+    "apiFormat": "chat-completions",
+    "temperature": 0.9,
+    "temperatureSupported": true,
+    "historyLimit": 3,
+    "gatewayId": "platy"
+  },
+  "image": {
+    "activeProfile": "standard",
+    "profiles": {
+      "standard": {
+        "model": "xai/grok-imagine-image",
+        "gatewayId": "platy",
+        "parameters": { "response_format": "b64_json", "aspect_ratio": "auto", "quality": "low", "resolution": "1k" }
+      },
+      "quality": {
+        "model": "xai/grok-imagine-image-quality",
+        "gatewayId": "platy",
+        "parameters": { "response_format": "b64_json", "aspect_ratio": "auto", "quality": "low", "resolution": "1k" }
+      }
+    }
+  }
+}

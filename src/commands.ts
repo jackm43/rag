@@ -1,7 +1,9 @@
 // Slash commands: `definitions` is what Discord registers and `dispatch` runs them.
-import { generateImage, loadSettings, pictureCaption, recordPicture, type Attribution } from "./ai.ts";
-import { displayName, guildAllowed, reply, username, type Attachment } from "./discord.ts";
+import { generateImage, pictureCaption, recordPicture, type Attribution } from "./ai.ts";
+import { guildAllowed, reply, username } from "./discord.ts";
 import type { Env } from "./index.ts";
+import { displayName, type Attachment } from "./lib/discord/messages.ts";
+import { loadSettings } from "./settings.ts";
 
 export const MODS_ROLE_ID = "457695154892177418";
 export const ADMIN_IDS = new Set(["107426926909517824", "116163000339136518", "102637456385392640", "114128631474683907"]);

@@ -1,10 +1,10 @@
 // Dev UI settings: drafts, reviewed saves to local or live D1, and the Cloudflare-credit model catalog.
-import { chatConfig, parseSettings, SETTINGS_SQL, type Settings } from "../src/ai.ts";
+import { rejectsSampling } from "../src/lib/ai.ts";
+import { isObject } from "../src/lib/json.ts";
+import { parseSettings, SETTINGS_SQL, SettingsError, type Settings } from "../src/settings.ts";
 import type { DevEnv } from "./index.ts";
 
-type Overrides = Record<string, any>;
-type Resources = Record<string, string>;
-type Config = ReturnType<typeof resolveConfig>;
+export type Page = "chat" | "bicture";
 
 const SAVE_SQL = `INSERT INTO ai_runtime_settings (id, revision, document) VALUES (1, ?, ?)
 ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, document = excluded.document
@@ -25,11 +25,7 @@ export class HttpError extends Error {
   }
 }
 
-const invalidInput = () => new HttpError("Invalid simulation input.");
 const catalogUnavailable = () => new HttpError("Cannot verify Cloudflare-credit access. Retry the model list.", 503);
-
-export const isObject = (value: unknown): value is Record<string, any> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const canonical = (value: any): string =>
   Array.isArray(value)
@@ -43,76 +39,56 @@ export async function sha256(value: unknown) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-// JSON resources compare by value, so formatting never counts as a change.
-const normalize = (resources: Resources) =>
-  Object.fromEntries(Object.entries(resources).map(([key, value]) => [key, key.endsWith(".json") ? JSON.parse(value) : value]));
+const activeProfile = (settings: Settings) => settings.image.profiles[settings.image.activeProfile];
+const editable = (settings: Settings) => ({ chat: settings.chat, image: settings.image });
 
-const activeProfile = (config: Config) => config.image.profiles[config.image.activeProfile];
-
-/** Client overrides, minus the fields the server derives from the model catalog. */
-export function draftOverrides(raw: unknown): Overrides {
-  const overrides = { ...(isObject(raw) ? raw : {}) };
-  for (const key of ["imageParameters", "chatApiFormat", "chatTemperatureSupported"]) delete overrides[key];
-  for (const [key, value] of Object.entries(overrides)) {
-    const valid =
-      key === "temperature"
-        ? typeof value === "number" && value >= 0 && value <= 2
-        : key === "historyLimit"
-          ? Number.isInteger(value) && value >= 1 && value <= 12
-          : ["model", "systemPrompt", "imageProfile", "imageModel", "imageAspectRatio", "imageQuality", "imageResolution"].includes(key) &&
-            typeof value === "string" &&
-            value.length <= 100_000;
-    if (!valid) throw invalidInput();
+/**
+ * The settings a page's draft resolves to. The UI sends the whole `{ chat, image }` draft; the
+ * fields that depend on the model (chat API format and temperature support, image parameters)
+ * are taken from the live catalog for that page.
+ */
+export async function resolveDraft(env: DevEnv, current: Settings, raw: unknown, page: unknown): Promise<Settings> {
+  if (raw === undefined) return current;
+  if (!isObject(raw) || (page !== "chat" && page !== "bicture")) throw new HttpError("Invalid settings draft.");
+  let draft: Settings;
+  try {
+    draft = parseSettings({ ...current, chat: raw.chat, image: raw.image });
+  } catch (error) {
+    if (error instanceof SettingsError) throw new HttpError(error.message);
+    throw error;
   }
-  return overrides;
-}
-
-/** Apply overrides to a copy of the saved resources. */
-export function applyDraft(overrides: Overrides, resources: Resources): Resources {
-  const chat = JSON.parse(resources["discord-response.json"]);
   // Reasoning support is model-specific; do not carry it to another model.
-  if (overrides.model && overrides.model !== chat.model) delete chat.reasoningEffort;
-  const chatFields = { model: "model", temperature: "temperature", historyLimit: "historyLimit", apiFormat: "chatApiFormat", temperatureSupported: "chatTemperatureSupported" };
-  for (const [field, source] of Object.entries(chatFields)) {
-    if (overrides[source] != null && overrides[source] !== "") chat[field] = overrides[source];
+  if (draft.chat.model !== current.chat.model) delete draft.chat.reasoningEffort;
+  if (page === "bicture") {
+    const profile = activeProfile(draft);
+    profile.parameters = imageParameters(await checkModel(env, draft, "image"), profile.parameters);
+    return draft;
   }
-  const image = JSON.parse(resources["bicture-image.json"]);
-  image.activeProfile = overrides.imageProfile || image.activeProfile;
-  if (!Object.hasOwn(image.profiles, image.activeProfile)) throw invalidInput();
-  const profile = image.profiles[image.activeProfile];
-  const imageFields = { model: "imageModel", aspectRatio: "imageAspectRatio", quality: "imageQuality", resolution: "imageResolution" };
-  for (const [field, source] of Object.entries(imageFields)) if (overrides[source]) profile[field] = overrides[source];
-  if (overrides.imageParameters) profile.parameters = overrides.imageParameters;
-  const prompt = overrides.systemPrompt;
-  return {
-    "bicture-image.json": JSON.stringify(image),
-    "discord-response-system-prompt.md": typeof prompt === "string" && prompt.trim() ? prompt : resources["discord-response-system-prompt.md"],
-    "discord-response.json": JSON.stringify(chat),
-  };
-}
-
-/** The settings a draft resolves to, in the shape the UI shows. */
-export function resolveConfig(overrides: Overrides, resources: Resources) {
-  const values = applyDraft(overrides, resources);
-  const chat = chatConfig(parseSettings(JSON.stringify({ schemaVersion: 2, revision: "draft", resources: values })));
-  return {
-    image: JSON.parse(values["bicture-image.json"]),
-    responseModel: chat.model,
-    chatApiFormat: chat.apiFormat,
-    chatReasoningEffort: chat.reasoningEffort ?? null,
-    systemPrompt: chat.prompt,
-    temperature: chat.temperature,
-    historyLimit: chat.historyLimit,
-    gatewayId: chat.gatewayId ?? null,
-  };
+  const model = await checkModel(env, draft, "chat");
+  const range = model.temperature;
+  if (range && !(draft.chat.temperature >= range.minimum && draft.chat.temperature <= range.maximum)) {
+    throw new HttpError(`Choose a temperature from ${range.minimum} to ${range.maximum} for this model.`);
+  }
+  draft.chat.apiFormat = model.apiFormat;
+  draft.chat.temperatureSupported = Boolean(range);
+  return draft;
 }
 
 /** A draft as the settings row a simulation reads; unsaved changes get a `+draft-` revision. */
-export async function draftRow(overrides: Overrides, resources: Resources, revision: string) {
-  const values = applyDraft(overrides, resources);
-  const checksum = await sha256(normalize(values));
-  const used = checksum === (await sha256(normalize(resources))) ? revision : `${revision}+draft-${checksum.slice(0, 12)}`;
-  return { revision: used, document: JSON.stringify({ schemaVersion: 2, revision: used, resources: values }) };
+export async function draftRow(draft: Settings, current: Settings) {
+  const checksum = await sha256(editable(draft));
+  const revision = checksum === (await sha256(editable(current))) ? current.revision : `${current.revision}+draft-${checksum.slice(0, 12)}`;
+  return { revision, document: JSON.stringify({ ...draft, revision }) };
+}
+
+// Every leaf setting that differs, by dotted path.
+function changes(before: Settings, after: Settings) {
+  const flatten = (value: unknown, path: string): [string, unknown][] =>
+    isObject(value) ? Object.entries(value).flatMap(([key, child]) => flatten(child, path ? `${path}.${key}` : key)) : [[path, value]];
+  const [saved, draft] = [new Map(flatten(editable(before), "")), new Map(flatten(editable(after), ""))];
+  return [...new Set([...saved.keys(), ...draft.keys()])]
+    .filter((setting) => canonical(saved.get(setting)) !== canonical(draft.get(setting)))
+    .map((setting) => ({ setting, before: saved.get(setting) ?? null, after: draft.get(setting) ?? null }));
 }
 
 let saving: Promise<unknown> = Promise.resolve();
@@ -127,23 +103,13 @@ export class SettingsEditor {
     this.target = target;
   }
 
-  // The local sandbox is the dev database; the live bot's D1 database is reached through the API.
-  async query(sql: string, params: unknown[] = []): Promise<{ results: any[]; meta: any }> {
-    if (this.target === "local") return this.env.DB.prepare(sql).bind(...params).all<any>();
-    const { CF_ACCOUNT_ID: account, D1_DATABASE_ID: database } = this.env;
-    const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/d1/database/${database}/query`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`, "content-type": "application/json" },
-      body: JSON.stringify({ sql, params }),
-    });
-    if (!response.ok) {
-      throw new HttpError("Cloudflare could not read or save settings. Check D1 permissions and migrations; reload before retrying.", 503);
+  // The local sandbox is the dev database; LIVE_DB is a remote binding to the live bot's database.
+  async query(sql: string, params: unknown[] = []) {
+    try {
+      return await (this.target === "live" ? this.env.LIVE_DB : this.env.DB).prepare(sql).bind(...params).all<any>();
+    } catch {
+      throw new HttpError("D1 could not read or save settings. Check D1 access and migrations; reload before retrying.", 503);
     }
-    const payload: any = await response.json();
-    if (!payload.success || payload.result?.length !== 1 || !payload.result[0].success) {
-      throw new HttpError("D1 did not confirm the operation. Check migrations and reload settings.", 503);
-    }
-    return payload.result[0];
   }
 
   async history({ page, before = null, search = "" }: any) {
@@ -164,105 +130,57 @@ export class SettingsEditor {
     if (!row) {
       throw new HttpError("AI settings are not initialized in D1. Run the settings initialization command for this destination.", 503);
     }
-    const settings = parseSettings(row.document);
+    let settings: Settings;
+    try {
+      settings = parseSettings(JSON.parse(row.document));
+    } catch {
+      throw new HttpError("Saved settings are invalid. Apply the D1 migrations for this destination.", 409);
+    }
     if (settings.revision !== row.revision) throw new HttpError("Saved settings revision is invalid.", 409);
-    return this.describe(settings);
+    return { target: this.target, revision: settings.revision, settings };
   }
 
   async preview(body: any) {
-    const { current, resources, changes } = await this.prepare(body);
-    return { changes, reviewId: await sha256([this.target, current.revision, resources]) };
+    const { current, draft, changes } = await this.prepare(body);
+    return { changes, reviewId: await sha256([this.target, current.revision, editable(draft)]) };
   }
 
   // One save at a time here; the conditional write also rejects saves made elsewhere since loading.
   save(body: any) {
     const result = saving.then(async () => {
-      const { current, resources, changes } = await this.prepare(body);
-      if (body.reviewId !== (await sha256([this.target, current.revision, resources]))) {
+      const { current, draft, changes } = await this.prepare(body);
+      if (body.reviewId !== (await sha256([this.target, current.revision, editable(draft)]))) {
         throw new HttpError("Review these exact settings before saving.", 409);
       }
       if (!changes.length) throw new HttpError("There are no changes to save.");
-      const settings: Settings = { schemaVersion: 2, revision: crypto.randomUUID().replaceAll("-", ""), updatedAt: new Date().toISOString(), resources };
-      const document = JSON.stringify(settings);
-      parseSettings(document);
-      const { meta } = await this.query(SAVE_SQL, [settings.revision, document, current.revision]);
+      const revision = crypto.randomUUID().replaceAll("-", "");
+      const settings = parseSettings({ ...draft, revision, updatedAt: new Date().toISOString() });
+      const { meta } = await this.query(SAVE_SQL, [revision, JSON.stringify(settings), current.revision]);
       if (meta?.changes !== 1) throw new HttpError("Settings changed during your save. Reload and review again.", 409);
-      return this.describe(settings);
+      return { target: this.target, revision, settings };
     });
     saving = result.catch(() => {});
     return result;
   }
 
-  private describe(settings: Settings) {
-    return { target: this.target, revision: settings.revision, resources: settings.resources, config: resolveConfig({}, settings.resources) };
-  }
-
   private async prepare(body: any) {
-    const current = await this.read();
+    const { settings: current } = await this.read();
     if (body.baseRevision !== current.revision) {
       throw new HttpError("Settings changed since you loaded them. Reload and review again.", 409);
     }
     if (body.page !== "chat" && body.page !== "bicture") throw new HttpError("This command has no editable AI settings.");
-    const image = body.page === "bicture";
-    const overrides = draftOverrides(body.overrides);
-    if (Object.keys(overrides).some((key) => key.startsWith("image") !== image)) {
-      throw new HttpError("Review settings for one page at a time.");
-    }
-    if (image || "model" in overrides || "temperature" in overrides) {
-      Object.assign(overrides, await catalogOverrides(this.env, overrides, current.resources, image));
-    } else {
-      await checkModel(this.env, resolveConfig(overrides, current.resources), "chat");
-    }
-    const resources = applyDraft(overrides, current.resources);
-    const [before, after] = [normalize(current.resources), normalize(resources)];
-    const changes = Object.keys(resources)
-      .filter((key) => canonical(before[key]) !== canonical(after[key]))
-      .map((resource) => ({ resource, before: current.resources[resource], after: resources[resource] }));
-    return { current, resources, changes };
+    const draft = await resolveDraft(this.env, current, body.settings, body.page);
+    const other = body.page === "chat" ? "image" : "chat";
+    if (canonical(draft[other]) !== canonical(current[other])) throw new HttpError("Review settings for one page at a time.");
+    return { current, draft, changes: changes(current, draft) };
   }
-}
-
-/** Settings derived from the selected model: image parameters, or chat format and temperature support. */
-export async function catalogOverrides(env: DevEnv, overrides: Overrides, resources: Resources, image: boolean) {
-  const config = resolveConfig(overrides, resources);
-  if (image) {
-    const model = await checkModel(env, config, "image");
-    return { imageParameters: imageParameters(model, activeProfile(config), overrides) };
-  }
-  const model = await checkModel(env, config, "chat");
-  const range = model.temperature;
-  if (range) {
-    const temperature = overrides.temperature ?? config.temperature;
-    if (!(temperature >= range.minimum && temperature <= range.maximum)) {
-      throw new HttpError(`Choose a temperature from ${range.minimum} to ${range.maximum} for this model.`);
-    }
-  } else if ("temperature" in overrides) {
-    throw new HttpError("Temperature is not supported by this model.");
-  }
-  return { chatApiFormat: model.apiFormat, chatTemperatureSupported: Boolean(range) };
 }
 
 // Send only parameters the model's schema accepts, with values it allows.
-function imageParameters(model: any, profile: any, overrides: Overrides) {
+function imageParameters(model: any, saved: Record<string, string>) {
   const parameters: Record<string, string> = {};
-  const fields = [
-    ["aspect_ratio", "imageAspectRatio", "aspectRatio"],
-    ["quality", "imageQuality", "quality"],
-    ["resolution", "imageResolution", "resolution"],
-    ["response_format", "", "responseFormat"],
-  ];
-  for (const [field, source, key] of fields) {
-    const spec = model.parameters[field];
-    const explicit = source && overrides[source];
-    if (!spec) {
-      if (explicit) throw new HttpError("The selected image model does not support that setting.");
-      continue;
-    }
-    let value = explicit || profile[key];
-    if (spec.enum && !spec.enum.includes(value)) {
-      if (explicit) throw new HttpError("Select an available value for this image model.");
-      value = spec.default;
-    }
+  for (const [field, spec] of Object.entries<any>(model.parameters)) {
+    const value = !spec.enum || spec.enum.includes(saved[field]) ? saved[field] : spec.default;
     if (value) parameters[field] = value;
   }
   return parameters;
@@ -313,8 +231,8 @@ function creditRoute(provider: string, providers: string[], route: { unified: bo
 }
 
 /** Chat and image models from the live account catalog that can run on Cloudflare credits. */
-export async function loadCatalog(env: DevEnv, config: Config, refresh = false) {
-  const gateways = [config.gatewayId, activeProfile(config).gatewayId];
+export async function loadCatalog(env: DevEnv, settings: Settings, refresh = false) {
+  const gateways = [settings.chat.gatewayId, activeProfile(settings).gatewayId];
   const key = gateways.join("|");
   const cached = catalogCache.get(key);
   if (!refresh && cached && Date.now() - cached.at < 300_000) return cached.value;
@@ -349,14 +267,14 @@ export async function loadCatalog(env: DevEnv, config: Config, refresh = false) 
 }
 
 /** Confirm the selected model is in the credit catalog and still routes to Cloudflare credits. */
-async function checkModel(env: DevEnv, config: Config, group: "chat" | "image") {
-  const catalog = await loadCatalog(env, config);
-  const profile = activeProfile(config);
-  const selected = group === "chat" ? config.responseModel : profile.model;
+async function checkModel(env: DevEnv, settings: Settings, group: "chat" | "image") {
+  const catalog = await loadCatalog(env, settings);
+  const profile = activeProfile(settings);
+  const selected = group === "chat" ? settings.chat.model : profile.model;
   const model = catalog[group].find((entry) => entry.id === selected);
   if (!model) throw new HttpError("Select a model from the Cloudflare-credit list.");
   // Routing is rechecked even when the catalog is cached.
-  const route = await billing(env, group === "chat" ? config.gatewayId : profile.gatewayId);
+  const route = await billing(env, group === "chat" ? settings.chat.gatewayId : profile.gatewayId);
   if (!creditRoute(model.provider, model.providers, route)) {
     throw new HttpError("This model cannot use Cloudflare credits with the current gateway settings.");
   }
@@ -367,7 +285,7 @@ const modelPath = (id: string) => id.split("/").map(encodeURIComponent).join("/"
 
 // OpenAI reasoning models take no temperature; others accept what their schema says.
 async function temperatureSupport(env: DevEnv, model: any) {
-  if (/^openai\/(?:gpt-[5-9]|o[1-9])/.test(model.id)) return null;
+  if (rejectsSampling(model.id)) return null;
   const { result } = await cloudflare(env, `ai/catalog/models/${modelPath(model.id)}`);
   return temperatureRange(result.schema?.input ?? {}, model.apiFormat);
 }

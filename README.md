@@ -17,10 +17,14 @@ src/index.ts      Worker entrypoint: Env, fetch (interactions + gateway controls
 src/gateway.ts    DiscordGateway Durable Object: connect, heartbeat, resume, dedupe
 src/commands.ts   slash command definitions and dispatch
 src/chat.ts       mentions and replies: reply-chain context, AI answer, analytics
-src/ai.ts         D1 AI settings, model calls, provider response and image parsing
+src/settings.ts   the typed AI settings document: D1 read and validation
+src/ai.ts         Ragbot's model calls: chat with the picture tool, /bicture images
 src/discord.ts    Ragbot's Discord calls: lookups, pingless replies, interaction responses
-src/lib/discord/  Discord plumbing with no Ragbot logic: gateway protocol, REST
-                  rate limits and retries, interaction signature checks
+src/lib/          plumbing with no Ragbot logic:
+  discord/        gateway protocol, REST rate limits and retries, message bodies and
+                  interaction webhooks, interaction signature checks
+  ai.ts           Chat Completions, Responses and Workers AI request and response shapes
+  media.ts        capped media reads and credential-free downloads
 dev/              local-only dev UI (never deployed)
 scripts/          command registration and AI settings initialization
 config/ai/        operator inputs for initializing AI settings in D1
@@ -95,12 +99,15 @@ After deploying, smoke-test `/rag`, `/ragboard`, a mention and `/bicture`.
 
 ## AI settings
 
-Models, prompts and generation settings live in one revisioned D1 row, `ai_runtime_settings`.
-Every AI request reads it from the D1 primary, so a saved change applies to the next request
-without a redeploy. A failed read stops the request instead of using stale settings.
+Models, prompts and generation settings live in one revisioned D1 row, `ai_runtime_settings`,
+as one JSON document with a `chat` object (model, prompt, temperature, history limit, gateway)
+and an `image` object (the active profile and each profile's model, gateway and parameters).
+`parseSettings` in `src/settings.ts` checks every field, for the bot and the dev UI alike.
+Every AI request reads the row from the D1 primary, so a saved change applies to the next
+request without a redeploy. A failed read stops the request instead of using stale settings.
 
 `config/ai/` only seeds a new database: `pnpm run settings:init --local` (or `--remote`) writes
-the row from those files and never overwrites an existing one. To check the live row:
+the row from `settings.json` and `chat-system-prompt.md` and never overwrites an existing one. To check the live row:
 
 ```sh
 op run --env-file=.env -- pnpm exec wrangler d1 execute ragbot --remote --command "SELECT revision FROM ai_runtime_settings"
@@ -120,10 +127,12 @@ seeds its settings, and serves the UI on **http://localhost:8788**. It needs onl
 - **Chat** and **/bicture** run the real handlers with real model calls (tagged
   `ragbot_env: dev`) while every Discord request is stubbed and captured. Other commands are
   under **Other commands**.
-- **Settings** start on **Live bot**. Pick models from the live Cloudflare catalog (only models
-  billable to Cloudflare credits are offered), adjust temperature, history and prompts, then
-  **Review & save**. Saves are conditional on the loaded revision, so concurrent edits are
-  rejected. **Local sandbox** saves only to the dev database.
+- **Settings** start on **Live bot**, read and saved through the `LIVE_DB` remote D1 binding
+  to the production database (so the token needs D1 edit access). Pick models from the live
+  Cloudflare catalog (only models billable to Cloudflare credits are offered), adjust
+  temperature, history and prompts, then **Review & save**. Saves are conditional on the
+  loaded revision, so concurrent edits are rejected. **Local sandbox** saves only to the dev
+  database.
 - **Prompt history** searches saved chat and `/bicture` prompts and loads one for replay.
 - **Request details** show the payload, model requests and responses, Discord calls, logs and
   the database row each run wrote.

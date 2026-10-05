@@ -1,6 +1,0 @@
-{
-  "model": "xai/grok-4.3",
-  "temperature": 0.9,
-  "historyLimit": 3,
-  "gatewayId": "platy"
-}
