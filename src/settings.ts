@@ -1,5 +1,6 @@
 // AI settings: one revisioned D1 row holding a typed document, checked on every read and save.
 import { isObject } from "./lib/json.ts";
+import { query } from "./lib/d1.ts";
 
 export const SETTINGS_SQL = "SELECT revision, document FROM ai_runtime_settings WHERE id = 1";
 export const IMAGE_PARAMETERS = ["response_format", "aspect_ratio", "quality", "resolution"];
@@ -83,7 +84,7 @@ export function parseSettings(data: any): Settings {
 
 /** Each AI request reads the primary D1 row, so a saved change applies to the next request. */
 export async function loadSettings(db: D1Database) {
-  const row = await db.prepare(SETTINGS_SQL).first<{ revision: string; document: string }>();
+  const [row] = (await query<{ revision: string; document: string }>(db, "settings.load", SETTINGS_SQL)).results;
   if (!row) throw new Error("AI settings are not initialized in D1");
   const settings = parseSettings(JSON.parse(row.document));
   if (settings.revision !== row.revision) throw new Error("settings revision mismatch");

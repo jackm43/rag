@@ -4,6 +4,7 @@ import { isObject } from "./json.ts";
 export type ApiFormat = "chat-completions" | "responses";
 export type Tool = { name: string; description: string; parameters: object };
 export type ToolCall = { name: string; args: Record<string, any> };
+export type Usage = { prompt: number | null; completion: number | null; total: number | null };
 
 /** OpenAI reasoning models reject sampling controls such as temperature. */
 export const rejectsSampling = (model: string) => /^openai\/(?:gpt-[5-9]|o[1-9])/.test(model);
@@ -24,18 +25,20 @@ export function chatRequest(
   return body;
 }
 
-export function chatResponse(payload: any, requestedModel: string) {
+export function tokenUsage(payload: any): Usage {
   const usage = isObject(payload?.usage) ? payload.usage : {};
   const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null);
+  const prompt = count(usage.prompt_tokens ?? usage.input_tokens);
+  const completion = count(usage.completion_tokens ?? usage.output_tokens);
+  return { prompt, completion, total: count(usage.total_tokens) ?? (prompt !== null && completion !== null ? prompt + completion : null) };
+}
+
+export function chatResponse(payload: any, requestedModel: string) {
   return {
     content: text(payload),
     toolCalls: toolCalls(payload),
     model: typeof payload?.model === "string" && payload.model ? payload.model : requestedModel,
-    usage: {
-      prompt: count(usage.prompt_tokens ?? usage.input_tokens),
-      completion: count(usage.completion_tokens ?? usage.output_tokens),
-      total: count(usage.total_tokens),
-    },
+    usage: tokenUsage(payload),
   };
 }
 

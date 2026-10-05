@@ -3,6 +3,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { handleMessage } from "../../src/chat.ts";
 import { ADMIN_IDS, commands, dispatch, MODS_ROLE_ID } from "../../src/commands.ts";
+import { interactionsForMessage } from "../../src/data.ts";
 import type { Env } from "../../src/index.ts";
 import { isObject } from "../../src/lib/json.ts";
 import { SETTINGS_SQL } from "../../src/settings.ts";
@@ -230,10 +231,8 @@ async function mention(env: AdminEnv, run: Simulation, input: any) {
     message.referenced_message = asMessage(replied);
   }
   await handleMessage(env, message, input.botUserId);
-  const record = await env.DB.prepare("SELECT * FROM rag_ai_interactions WHERE message_id = ? ORDER BY id DESC LIMIT 1")
-    .bind(message.id)
-    .first();
-  return { message, replies: run.messages, db: { interaction: record } };
+  const records = await interactionsForMessage(env.DB, message.id);
+  return { message, replies: run.messages, db: { interaction: records.find((record: any) => record.kind === "channel_reply") ?? null, interactions: records } };
 }
 
 async function interaction(env: AdminEnv, run: Simulation, input: any) {
@@ -255,8 +254,8 @@ async function interaction(env: AdminEnv, run: Simulation, input: any) {
     data: { id: snowflake(), type: 1, name: input.command, options, resolved: { users } },
   };
   await dispatch(env, payload);
-  const record = await env.DB.prepare("SELECT * FROM rag_ai_interactions ORDER BY id DESC LIMIT 1").first();
-  return { interaction: payload, edits: run.edits, followUps: run.followUps, channelMessages: run.messages, db: { interaction: record } };
+  const records = await interactionsForMessage(env.DB, payload.id);
+  return { interaction: payload, edits: run.edits, followUps: run.followUps, channelMessages: run.messages, db: { interaction: records[0] ?? null, interactions: records } };
 }
 
 // Record each model exchange, tagged `ragbot_env: admin` within AI Gateway's five metadata entries.
@@ -292,7 +291,9 @@ function tapModels(ai: Ai, exchanges: any[]) {
 
 // Simulations read the draft settings; every other query goes to the sandbox database.
 function withSettings(db: D1Database, settings: { revision: string; document: string }) {
-  const prepare = (sql: string) => (sql === SETTINGS_SQL ? { first: async () => settings } : db.prepare(sql));
+  const prepare = (sql: string) => (sql === SETTINGS_SQL ? {
+    all: async () => ({ results: [settings], success: true, meta: { duration: 0, rows_read: 0, rows_written: 0 } }),
+  } : db.prepare(sql));
   return { prepare, batch: (statements: D1PreparedStatement[]) => db.batch(statements) } as unknown as D1Database;
 }
 

@@ -19,12 +19,15 @@ src/commands.ts   slash command definitions and dispatch
 src/chat.ts       mentions and replies: reply-chain context, AI answer, analytics
 src/settings.ts   the typed AI settings document: D1 read and validation
 src/ai.ts         Ragbot's model calls: chat with the picture tool, /bicture images
+src/data.ts       Ragbot's D1 queries, atomic rag updates and AI interaction records
 src/discord.ts    Ragbot's Discord calls: lookups, pingless replies, interaction responses
 src/lib/          plumbing with no Ragbot logic:
   discord/        gateway protocol, REST rate limits and retries, message bodies and
                   interaction webhooks, interaction signature checks
   ai.ts           Chat Completions, Responses and Workers AI request and response shapes
   media.ts        capped media reads and credential-free downloads
+  d1.ts           query/batch execution and safe D1 measurements
+  async.ts        ordered, bounded concurrent I/O
 admin/            ragbot-admin: Access-protected admin app (Vite + React, API Worker)
 scripts/          command registration and AI settings initialization
 config/ai/        operator inputs for initializing AI settings in D1
@@ -121,6 +124,46 @@ Change settings in the admin app. Chat requests use the provider's default outpu
 AI Gateway logs carry five metadata entries: request kind, Discord user, channel and message
 IDs, and the settings revision.
 
+## Data tracking and D1
+
+`src/data.ts` owns command and interaction SQL. `src/lib/d1.ts` executes queries and batches
+without bot logic, logging a structured `d1_query` event with the operation, status, total elapsed
+time, SQL time, statements, and rows read, written and returned. It never logs SQL, bound values,
+prompts or third-party error messages. Compare `duration_ms` with `sql_duration_ms` to distinguish
+database work from transport overhead; compare `rows_read` with `rows_returned` to find scans.
+
+Rag events and totals change in one transaction. `/undorag` selects and deletes the latest event
+inside that transaction, and decrements only when a deletion happened. Settings saves use D1's
+revision check across all Worker instances rather than serializing unrelated saves in memory.
+Settings still get a fresh primary read on every AI request.
+
+Chat, `/bicture`, and chat-tool pictures share one interaction recorder. New records include the
+settings revision, trigger kind (`bicture` for a command, `channel_reply` for a chat tool), requested
+or provider-reported model, usage when available, model-call duration, and total duration through
+Discord delivery. Model-call duration excludes settings, context fetches, media downloads and
+Discord uploads. Failed model calls retain their model and duration. Missing usage stays null;
+when input and output usage are available, their sum supplies a missing total. A chat and its
+picture save together after delivery, so an upload rejection cannot leave a successful picture
+record. Analytics writes remain best-effort and failures emit `interaction_record_failed`.
+
+Migration `0006_data_tracking.sql` adds the tracking columns and indexes for history by `(kind, id)`,
+simulation records by message ID, and the leaderboard's ordering. Apply migrations to **both**
+`ragbot` and `ragbot-admin-sandbox` before deploying either Worker. Existing rows keep null for
+the new fields. Very old databases missing the token columns mentioned in `0001_initial.sql`
+still need their shape checked with `PRAGMA table_info(rag_ai_interactions)` before adding those
+missing columns; this migration does not guess their shape.
+
+Local D1 measurements with synthetic data (100,000 AI interactions, 20,000 leaderboard users)
+reported 76,001 → 26 rows read for a history page and 40,000 → 10 for the leaderboard, with
+identical results. These are scan measurements, not production latency estimates. History's
+optional filters are added only when present, so the `(kind, id)` index can seek directly to a page.
+Substring prompt search still scans matching-kind candidates; it needs real usage measurements
+before choosing a different search design.
+
+Remaining opportunities: inspect live D1 timings and scan ratios before introducing caching or
+replicas; audit old `rag_totals` against `rag_events` for pre-existing drift; and check whether the
+retired spend, request and thread tables contain data worth retaining before any schema cleanup.
+
 ## Admin app
 
 `ragbot-admin` is a separate Worker on **https://ragbot-admin.jsmunro.me**, built with Vite, React
@@ -149,7 +192,7 @@ credentials are never configured: every Discord request is stubbed and captured.
   draft when there is one. Every other command has its own tab.
 - **Prompt history** searches saved chat and `/bicture` prompts and loads one for replay.
 - **Request details** show the payload, model requests and responses, Discord calls, logs and
-  the sandbox rows each run wrote.
+  the sandbox interaction rows for that run's message ID, including any chat-tool picture.
 
 Local development (`op run --env-file=.env -- pnpm run admin:dev`) serves the app with Vite on
 http://localhost:5173 and runs the Worker in workerd with remote D1 bindings. Only

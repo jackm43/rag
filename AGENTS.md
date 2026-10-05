@@ -31,6 +31,7 @@ The only other Worker is `ragbot-admin` in `admin/`, an Access-protected admin a
 - `src/gateway.ts`: the `DiscordGateway` Durable Object and the `gateway(env)` stub.
 - `src/commands.ts`: the `commands` registry, used for both dispatch and registration.
 - `src/chat.ts`: mentions and replies. `src/ai.ts`: model calls.
+- `src/data.ts`: Ragbot's D1 queries and shared AI interaction records; rag mutations are atomic.
 - `src/settings.ts`: the typed AI settings document, its D1 read and `parseSettings`, which the
   admin app also uses to validate drafts.
 - `src/discord.ts`: Ragbot's Discord calls and replies.
@@ -38,7 +39,8 @@ The only other Worker is `ragbot-admin` in `admin/`, an Access-protected admin a
   `gateway.ts` is the gateway protocol (`GatewayConnection`; the Durable Object owns storage and
   dispatch), `rest.ts` the rate-limited fetch, `messages.ts` message bodies, interaction
   webhooks and mentions, `interactions.ts` the signature check. `ai.ts` holds model request
-  and response shapes, `media.ts` capped media reads.
+  and response shapes, `media.ts` capped media reads, `d1.ts` measured query/batch execution,
+  and `async.ts` ordered, bounded concurrent I/O.
 - `admin/`: the `ragbot-admin` Worker. `worker/` is its API (Access JWT check, settings, and
   simulations that run `src/` handlers against stubbed Discord); `app/` is the React UI. It may
   import `src/`; nothing in `src/` imports `admin/`.
