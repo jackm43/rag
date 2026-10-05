@@ -5,13 +5,12 @@ import {
   generateImage,
   loadSettings,
   PICTURE_TOOL,
-  pictureCaption,
   recordPicture,
   type Attribution,
   type Settings,
   type ToolCall,
 } from "./ai.ts";
-import { botRoles, displayName, getMessage, guildAllowed, postMessage } from "./discord.ts";
+import { botRoles, displayName, getMessage, guildAllowed, postMessage, sendTyping } from "./discord.ts";
 import type { Env } from "./index.ts";
 import { truncate } from "./lib/discord/rest.ts";
 
@@ -155,13 +154,25 @@ async function createPicture(env: Env, settings: Settings, calls: ToolCall[], at
     const image = await generateImage(env, settings, prompt, source);
     model = image.model;
     await recordPicture(env, source, prompt, model, startedAt, null);
-    return { caption: pictureCaption(prompt), files: [image.file] };
+    return { caption: "", files: [image.file] };
   } catch (caught) {
     const error = caught instanceof Error ? caught.name : "Error";
     console.error(`picture_tool_failed error_type=${error}`);
     await recordPicture(env, source, prompt, model, startedAt, error);
     return { caption: "Could not generate that image. Try a different prompt.", files: [] };
   }
+}
+
+/** Keep the typing indicator up until the returned stop function is called. */
+function keepTyping(env: Env, channelId: string) {
+  const send = () =>
+    sendTyping(env, channelId).then(
+      (response) => response.body?.cancel(),
+      () => console.warn("typing_indicator_failed"),
+    );
+  send();
+  const timer = setInterval(send, 8000);
+  return () => clearInterval(timer);
 }
 
 async function answer(env: Env, job: Job, startedAt: number) {
@@ -172,6 +183,7 @@ async function answer(env: Env, job: Job, startedAt: number) {
   let responseText: string | null = null;
   let aiDuration: number | null = null;
   let usage: Record<string, number | null> = {};
+  const stopTyping = keepTyping(env, attribution.channelId);
   try {
     const aiStart = Date.now();
     const settings = await loadSettings(env.DB);
@@ -186,10 +198,13 @@ async function answer(env: Env, job: Job, startedAt: number) {
     // A failed picture says so instead of the model's text, which may promise an image.
     if (picture && !picture.files.length) responseText = picture.caption;
     else if (result.content.trim()) responseText = truncate(result.content, 1900);
-    else responseText = picture?.caption ?? "I could not generate a response.";
+    // The picture prompt is the model's working text, so a picture with no reply text posts alone.
+    else responseText = picture ? "" : "I could not generate a response.";
+    stopTyping();
     const response = await postMessage(env, attribution.channelId, responseText, attribution.messageId, picture?.files);
     if (!response.ok) throw new Error(`discord_channel_post_failed_${response.status}`);
   } catch (caught) {
+    stopTyping();
     status = "error";
     // Third-party errors can contain credential-bearing URLs or payloads; record only the type.
     error = caught instanceof Error ? caught.name : "Error";

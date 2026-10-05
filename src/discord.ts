@@ -60,6 +60,10 @@ export function postMessage(env: Env, channelId: string, content: string, replyT
   return botRequest(env.DISCORD_BOT_TOKEN, `/channels/${channelId}/messages`, { method: "POST", ...messageBody(payload, files) });
 }
 
+/** Show "Ragbot is typing…" in a channel; Discord clears it after ~10 s or on the next message. */
+export const sendTyping = (env: Env, channelId: string) =>
+  botRequest(env.DISCORD_BOT_TOKEN, `/channels/${channelId}/typing`, { method: "POST" });
+
 /**
  * Edit the deferred interaction reply, or post a follow-up. The interaction token in the URL
  * authenticates this route, so the bot credential is never sent here.
