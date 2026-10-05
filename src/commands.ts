@@ -13,8 +13,7 @@ type Command = {
   options?: object[];
   admin?: boolean; // limited to ADMIN_IDS
   role?: string; // guild role required to run it
-  run(ctx: Context): Promise<unknown>;
-};
+} & ({ run(ctx: Context): Promise<unknown> } | { instant(): string }); // instant: answered without deferring
 
 const user = (description: string) => ({ type: 6, name: "user", description, required: true });
 const text = (name: string, description: string, max_length: number, min_length = 1) => ({
@@ -177,10 +176,8 @@ export const commands: Record<string, Command> = {
 
   coinflip: {
     description: "Flip a fair coin: heads or tails",
-    async run({ reply }) {
-      // A fresh cryptographically secure bit gives each side exactly the same probability.
-      return reply(crypto.getRandomValues(new Uint8Array(1))[0] & 1 ? "tails" : "heads");
-    },
+    // A fresh cryptographically secure bit gives each side exactly the same probability.
+    instant: () => (crypto.getRandomValues(new Uint8Array(1))[0] & 1 ? "tails" : "heads"),
   },
 };
 
@@ -207,18 +204,27 @@ function context(env: Env, interaction: any) {
   };
 }
 
+const find = (name: string) => (Object.hasOwn(commands, name) ? commands[name] : undefined);
+
+/** The immediate answer to an unrestricted instant command, or null when it must be deferred. */
+export function instantReply(env: Env, interaction: any) {
+  const command = find(interaction.data.name);
+  if (!command || !("instant" in command) || command.admin || command.role) return null;
+  return guildAllowed(env, interaction.guild_id) ? command.instant() : null;
+}
+
 /** Run a verified command behind its deferred reply. Never rejects. */
 export async function dispatch(env: Env, interaction: any) {
   const ctx = context(env, interaction);
   const name: string = interaction.data.name;
-  const command = Object.hasOwn(commands, name) ? commands[name] : undefined;
+  const command = find(name);
   try {
     if (!guildAllowed(env, interaction.guild_id)) await ctx.reply("This bot only works in its home server.");
     else if (!command) await ctx.reply("Unknown command.");
     else if (command.admin && !ADMIN_IDS.has(ctx.invoker.id)) await ctx.reply(`You are not allowed to use /${name}.`);
     else if (command.role && !interaction.member?.roles.includes(command.role)) {
       await ctx.reply(`You are not allowed to use /${name}. The Mods role is required.`);
-    } else await command.run(ctx);
+    } else await ("instant" in command ? ctx.reply(command.instant()) : command.run(ctx));
   } catch {
     console.error("command_execute_failed");
     await ctx.reply("Command failed. Try again.").catch(() => console.warn("command_failure_notice_failed"));

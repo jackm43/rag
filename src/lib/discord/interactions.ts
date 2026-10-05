@@ -2,7 +2,11 @@
 
 // Names follow Oceanic's Constants (MIT, OceanicJS/Oceanic).
 export const InteractionTypes = { PING: 1, APPLICATION_COMMAND: 2 } as const;
-export const InteractionResponseTypes = { PONG: 1, DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE: 5 } as const;
+export const InteractionResponseTypes = {
+  PONG: 1,
+  CHANNEL_MESSAGE_WITH_SOURCE: 4,
+  DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE: 5,
+} as const;
 
 /**
  * Read a signed interaction request. Returns 401 for a bad or stale signature (checked before

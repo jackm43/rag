@@ -1,6 +1,7 @@
 // One Durable Object holds Ragbot's Discord gateway session and answers its messages in-process.
 import { DurableObject } from "cloudflare:workers";
 import { handleMessage } from "./chat.ts";
+import { dispatch } from "./commands.ts";
 import { GatewayConnection, Intents, type Session } from "./lib/discord/gateway.ts";
 import type { Env } from "./index.ts";
 
@@ -96,6 +97,14 @@ export class DiscordGateway extends DurableObject<Env> {
       console.error("gateway_alarm_failed");
       await this.watchdog();
     }
+  }
+
+  /**
+   * Run a deferred slash command here: pending work keeps a Durable Object alive for up to
+   * 15 minutes, while the interaction request's waitUntil ends 30 s after its response.
+   */
+  async runCommand(interaction: any) {
+    this.ctx.waitUntil(dispatch(this.env, interaction));
   }
 
   private async enable() {

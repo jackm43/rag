@@ -1,5 +1,5 @@
 // Worker entrypoint: Discord interactions, operator gateway controls, and the cron watchdog.
-import { dispatch } from "./commands.ts";
+import { dispatch, instantReply } from "./commands.ts";
 import { DiscordGateway, gateway } from "./gateway.ts";
 import { InteractionResponseTypes, InteractionTypes, readInteraction } from "./lib/discord/interactions.ts";
 
@@ -53,9 +53,24 @@ async function interactions(request: Request, env: Env, ctx: ExecutionContext) {
   switch (interaction.type) {
     case InteractionTypes.PING:
       return Response.json({ type: InteractionResponseTypes.PONG });
-    case InteractionTypes.APPLICATION_COMMAND: // Defer now, then edit the reply when the command finishes.
-      ctx.waitUntil(dispatch(env, interaction));
+    case InteractionTypes.APPLICATION_COMMAND: {
+      const content = instantReply(env, interaction);
+      if (content !== null) {
+        const data = { content, allowed_mentions: { parse: [] } };
+        return Response.json({ type: InteractionResponseTypes.CHANNEL_MESSAGE_WITH_SOURCE, data });
+      }
+      // Defer now and run the command in the Durable Object, which can outlive this request's
+      // 30 s waitUntil window; if the handoff fails, run it here instead.
+      ctx.waitUntil(
+        gateway(env)
+          .runCommand(interaction)
+          .catch(() => {
+            console.error("command_handoff_failed");
+            return dispatch(env, interaction);
+          }),
+      );
       return Response.json({ type: InteractionResponseTypes.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
+    }
     default:
       return new Response(null, { status: 400 });
   }
