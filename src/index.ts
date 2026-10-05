@@ -1,7 +1,12 @@
 // Worker entrypoint: Discord interactions, operator gateway controls, and the cron watchdog.
-import { dispatch, instantReply } from "./commands.ts";
+import { dispatch, isSlow } from "./commands.ts";
+import { reply } from "./discord.ts";
 import { DiscordGateway, gateway } from "./gateway.ts";
 import { InteractionResponseTypes, InteractionTypes, readInteraction } from "./lib/discord/interactions.ts";
+import { truncate } from "./lib/discord/rest.ts";
+
+// Discord drops an interaction without a response within 3 s; leave room for the trip back.
+const INLINE_MS = 2000;
 
 export { DiscordGateway };
 
@@ -53,12 +58,8 @@ async function interactions(request: Request, env: Env, ctx: ExecutionContext) {
   switch (interaction.type) {
     case InteractionTypes.PING:
       return Response.json({ type: InteractionResponseTypes.PONG });
-    case InteractionTypes.APPLICATION_COMMAND: {
-      const content = instantReply(env, interaction);
-      if (content !== null) {
-        const data = { content, allowed_mentions: { parse: [] } };
-        return Response.json({ type: InteractionResponseTypes.CHANNEL_MESSAGE_WITH_SOURCE, data });
-      }
+    case InteractionTypes.APPLICATION_COMMAND:
+      if (!isSlow(interaction)) return answer(env, interaction, ctx);
       // Defer now and run the command in the Durable Object, which can outlive this request's
       // 30 s waitUntil window; if the handoff fails, run it here instead.
       ctx.waitUntil(
@@ -70,10 +71,34 @@ async function interactions(request: Request, env: Env, ctx: ExecutionContext) {
           }),
       );
       return Response.json({ type: InteractionResponseTypes.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
-    }
     default:
       return new Response(null, { status: 400 });
   }
+}
+
+/**
+ * Run a command here and send its first reply as the interaction response, which skips the
+ * "thinking" state and a webhook edit. A command still running near Discord's 3 s deadline
+ * defers instead, and its reply then edits the deferred response.
+ */
+function answer(env: Env, interaction: any, ctx: ExecutionContext) {
+  return new Promise<Response>((resolve) => {
+    let open = true;
+    const respond = (body: object) => {
+      open = false;
+      clearTimeout(timer);
+      resolve(Response.json(body));
+    };
+    const deferred = { type: InteractionResponseTypes.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE };
+    const timer = setTimeout(() => respond(deferred), INLINE_MS);
+    const run = dispatch(env, interaction, async (content, options = {}) => {
+      if (!open || options.files?.length) return reply(interaction, content, options);
+      const data = { content: truncate(content, 2000), allowed_mentions: { parse: [], users: options.users } };
+      respond({ type: InteractionResponseTypes.CHANNEL_MESSAGE_WITH_SOURCE, data });
+      return true;
+    });
+    ctx.waitUntil(run.finally(() => open && respond(deferred)));
+  });
 }
 
 // Operator routes take `Authorization: Bearer <GATEWAY_CONTROL_TOKEN>` and fail closed:

@@ -143,9 +143,10 @@ writes require a same-origin JSON request with the UI header. Do not expose it p
 ## Discord behavior
 
 - Interaction requests are verified (Ed25519 over timestamp plus raw body, five-minute window)
-  before parsing. `/coinflip` is answered in the interaction response. Other commands are
-  deferred, run in the `DiscordGateway` object (so `/bicture` can outlive the request's 30-second
-  `waitUntil` window) and answered by editing the deferred reply. `/rag` bans and writes fail closed on D1 errors.
+  before parsing. Commands run inside the interaction request and answer in its response; one
+  still running after 2 seconds defers and edits the deferred reply instead. `/bicture` always
+  defers and runs in the `DiscordGateway` object, so it can outlive the request's 30-second
+  `waitUntil` window. `/rag` bans and writes fail closed on D1 errors.
 - Operator routes require `Authorization: Bearer $GATEWAY_CONTROL_TOKEN`:
   `POST /gateway/start`, `POST /gateway/stop`, `GET /gateway/health`. Denials have empty bodies.
 - AI replies keep the model's text and formatting, are capped at 1,900 characters, fall back to

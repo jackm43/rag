@@ -14,7 +14,9 @@ type Command = {
   options?: object[];
   admin?: boolean; // limited to ADMIN_IDS
   role?: string; // guild role required to run it
-} & ({ run(ctx: Context): Promise<unknown> } | { instant(): string }); // instant: answered without deferring
+  slow?: boolean; // runs in the Durable Object instead of inside the interaction request
+  run(ctx: Context): Promise<unknown>;
+};
 
 const user = (description: string) => ({ type: 6, name: "user", description, required: true });
 const text = (name: string, description: string, max_length: number, min_length = 1) => ({
@@ -37,21 +39,22 @@ export const commands: Record<string, Command> = {
     options: [user("User to mark as ragging")],
     async run({ env, invoker, option, reply, targetName }) {
       const target = option("user");
-      const ban = await env.DB.prepare(
-        "SELECT expires_at FROM rag_command_bans WHERE banned_user_id = ? AND expires_at > ? ORDER BY expires_at DESC LIMIT 1",
-      )
-        .bind(invoker.id, new Date().toISOString())
-        .first<{ expires_at: string }>();
-      if (ban) return reply(`You cannot use /rag until ${relativeTime(ban.expires_at)}.`);
       const name = await targetName(target);
-      const [, totals] = await env.DB.batch<{ rag_count: number }>([
+      const now = new Date().toISOString();
+      // One transaction: the writes only apply when the invoker has no active ban.
+      const unbanned = "NOT EXISTS (SELECT 1 FROM rag_command_bans WHERE banned_user_id = ? AND expires_at > ?)";
+      const [ban, , totals] = await env.DB.batch<any>([
         env.DB.prepare(
-          "INSERT INTO rag_events (ragged_user_id, ragged_username, reported_by_user_id, reported_by_username) VALUES (?, ?, ?, ?)",
-        ).bind(target, name, invoker.id, invoker.username),
+          "SELECT expires_at FROM rag_command_bans WHERE banned_user_id = ? AND expires_at > ? ORDER BY expires_at DESC LIMIT 1",
+        ).bind(invoker.id, now),
         env.DB.prepare(
-          "INSERT INTO rag_totals (ragged_user_id, ragged_username, rag_count, updated_at) VALUES (?, ?, 1, CURRENT_TIMESTAMP) ON CONFLICT(ragged_user_id) DO UPDATE SET rag_count = rag_count + 1, ragged_username = excluded.ragged_username, updated_at = CURRENT_TIMESTAMP RETURNING rag_count",
-        ).bind(target, name),
+          `INSERT INTO rag_events (ragged_user_id, ragged_username, reported_by_user_id, reported_by_username) SELECT ?, ?, ?, ? WHERE ${unbanned}`,
+        ).bind(target, name, invoker.id, invoker.username, invoker.id, now),
+        env.DB.prepare(
+          `INSERT INTO rag_totals (ragged_user_id, ragged_username, rag_count, updated_at) SELECT ?, ?, 1, CURRENT_TIMESTAMP WHERE ${unbanned} ON CONFLICT(ragged_user_id) DO UPDATE SET rag_count = rag_count + 1, ragged_username = excluded.ragged_username, updated_at = CURRENT_TIMESTAMP RETURNING rag_count`,
+        ).bind(target, name, invoker.id, now),
       ]);
+      if (ban.results.length) return reply(`You cannot use /rag until ${relativeTime(ban.results[0].expires_at)}.`);
       return reply(`<@${target}> just ragged. Total: ${totals.results[0].rag_count}`, { users: [target] });
     },
   },
@@ -130,6 +133,7 @@ export const commands: Record<string, Command> = {
   bicture: {
     description: "Generate an image with Cloudflare AI",
     options: [text("prompt", "Image prompt", 2000)],
+    slow: true,
     async run({ env, option, reply, attribution }) {
       const prompt = option("prompt");
       const source = attribution("bicture");
@@ -155,21 +159,25 @@ export const commands: Record<string, Command> = {
 
   coinflip: {
     description: "Flip a fair coin: heads or tails",
-    // A fresh cryptographically secure bit gives each side exactly the same probability.
-    instant: () => (crypto.getRandomValues(new Uint8Array(1))[0] & 1 ? "tails" : "heads"),
+    async run({ reply }) {
+      // A fresh cryptographically secure bit gives each side exactly the same probability.
+      return reply(crypto.getRandomValues(new Uint8Array(1))[0] & 1 ? "tails" : "heads");
+    },
   },
 };
 
 export const definitions = Object.entries(commands).map(([name, { description, options }]) => ({ name, description, options }));
 
-function context(env: Env, interaction: any) {
+type Send = (content: string, options?: { users?: string[]; files?: Attachment[] }) => Promise<boolean>;
+
+function context(env: Env, interaction: any, send: Send) {
   const invoker = interaction.member?.user ?? interaction.user;
   return {
     env,
     invoker,
     option: (name: string): string =>
       String(interaction.data.options?.find((option: any) => option.name === name)?.value ?? "").trim(),
-    reply: (content: string, options?: { users?: string[]; files?: Attachment[] }) => reply(interaction, content, options),
+    reply: send,
     attribution: (kind: string): Attribution => ({
       kind,
       userId: invoker.id,
@@ -185,16 +193,19 @@ function context(env: Env, interaction: any) {
 
 const find = (name: string) => (Object.hasOwn(commands, name) ? commands[name] : undefined);
 
-/** The immediate answer to an unrestricted instant command, or null when it must be deferred. */
-export function instantReply(env: Env, interaction: any) {
-  const command = find(interaction.data.name);
-  if (!command || !("instant" in command) || command.admin || command.role) return null;
-  return guildAllowed(env, interaction.guild_id) ? command.instant() : null;
-}
+/** Slow commands run in the Durable Object; the rest run inside the interaction request. */
+export const isSlow = (interaction: any) => find(interaction.data.name)?.slow === true;
 
-/** Run a verified command behind its deferred reply. Never rejects. */
-export async function dispatch(env: Env, interaction: any) {
-  const ctx = context(env, interaction);
+/**
+ * Run a verified command. Replies edit the deferred response unless `send` says otherwise.
+ * Never rejects.
+ */
+export async function dispatch(
+  env: Env,
+  interaction: any,
+  send: Send = (content, options) => reply(interaction, content, options),
+) {
+  const ctx = context(env, interaction, send);
   const name: string = interaction.data.name;
   const command = find(name);
   try {
@@ -203,7 +214,7 @@ export async function dispatch(env: Env, interaction: any) {
     else if (command.admin && !ADMIN_IDS.has(ctx.invoker.id)) await ctx.reply(`You are not allowed to use /${name}.`);
     else if (command.role && !interaction.member?.roles.includes(command.role)) {
       await ctx.reply(`You are not allowed to use /${name}. The Mods role is required.`);
-    } else await ("instant" in command ? ctx.reply(command.instant()) : command.run(ctx));
+    } else await command.run(ctx);
   } catch {
     console.error("command_execute_failed");
     await ctx.reply("Command failed. Try again.").catch(() => console.warn("command_failure_notice_failed"));
