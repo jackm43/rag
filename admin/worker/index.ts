@@ -1,18 +1,20 @@
-// Local-only dev UI: serves dev/ui and runs the real bot handlers against stubbed Discord.
+// Admin API: settings for the live bot and a sandbox, prompt history, and simulations that run
+// the real bot handlers against stubbed Discord. Cloudflare Access fronts every request.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { handleMessage } from "../src/chat.ts";
-import { ADMIN_IDS, commands, dispatch, MODS_ROLE_ID } from "../src/commands.ts";
-import type { Env } from "../src/index.ts";
-import { isObject } from "../src/lib/json.ts";
-import { SETTINGS_SQL } from "../src/settings.ts";
-import { draftRow, HttpError, loadCatalog, resolveDraft, SettingsEditor, sha256 } from "./settings.ts";
+import { handleMessage } from "../../src/chat.ts";
+import { ADMIN_IDS, commands, dispatch, MODS_ROLE_ID } from "../../src/commands.ts";
+import type { Env } from "../../src/index.ts";
+import { isObject } from "../../src/lib/json.ts";
+import { SETTINGS_SQL } from "../../src/settings.ts";
+import { accessUser } from "./access.ts";
+import { draftRow, HttpError, loadCatalog, resolveDraft, SettingsEditor } from "./settings.ts";
 
-export interface DevEnv extends Env {
-  DEV_UI: string;
+export interface AdminEnv extends Env {
+  ACCESS_TEAM_DOMAIN: string;
+  ACCESS_AUD: string;
   LIVE_DB: D1Database;
   CF_ACCOUNT_ID: string;
   CLOUDFLARE_API_TOKEN: string;
-  ASSETS: Fetcher;
 }
 
 type Simulation = {
@@ -29,26 +31,23 @@ type Simulation = {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (env.DEV_UI !== "1") return new Response(null, { status: 404 });
-    if (!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) return new Response(null, { status: 403 });
-    if (!url.pathname.startsWith("/api/")) {
-      return request.method === "GET" ? env.ASSETS.fetch(request) : new Response(null, { status: 404 });
-    }
+    if (!url.pathname.startsWith("/api/")) return new Response(null, { status: 404 });
+    const user = await accessUser(request, env);
+    if (!user) return new Response(null, { status: 403 });
     try {
-      return Response.json(await api(request, env, url), { headers: { "cache-control": "no-store" } });
+      return Response.json(await api(request, env, url, user), { headers: { "cache-control": "no-store" } });
     } catch (error) {
       if (error instanceof HttpError) return Response.json({ error: error.message }, { status: error.status });
-      console.error(error);
-      return Response.json({ error: "Request failed. Check the local worker logs." }, { status: 500 });
+      console.error(`admin_api_failed type=${error instanceof Error ? error.name : "unknown"}`);
+      return Response.json({ error: "Request failed. Check the ragbot-admin Worker logs." }, { status: 500 });
     }
   },
-} satisfies ExportedHandler<DevEnv>;
+} satisfies ExportedHandler<AdminEnv>;
 
-async function api(request: Request, env: DevEnv, url: URL): Promise<unknown> {
+async function api(request: Request, env: AdminEnv, url: URL, user: string): Promise<unknown> {
   const path = url.pathname.slice("/api/".length);
   if (request.method === "GET") {
-    if (path === "revision") return { revision: await assetRevision(env, url) };
-    if (path === "meta") return meta(env, url);
+    if (path === "meta") return meta(env, user);
     throw new HttpError("Not found.", 404);
   }
   // Only same-origin JSON requests from the UI may save settings or call models.
@@ -62,7 +61,7 @@ async function api(request: Request, env: DevEnv, url: URL): Promise<unknown> {
   }
   const body: any = await request.json().catch(() => null);
   if (!isObject(body)) throw new HttpError("Invalid simulation input.");
-  const editor = new SettingsEditor(env, body.target ?? "local");
+  const editor = new SettingsEditor(env, body.target ?? "sandbox");
   switch (path) {
     case "history":
       return editor.history(body);
@@ -80,7 +79,6 @@ async function api(request: Request, env: DevEnv, url: URL): Promise<unknown> {
   if (path === "models") return loadCatalog(env, current, Boolean(body.refresh));
   const page = body.command === "bicture" ? "bicture" : path === "mention" ? "chat" : body.page;
   const draft = await resolveDraft(env, current, body.settings, page);
-  if (path === "config") return draft;
   if (path !== "mention" && path !== "interaction") throw new HttpError("Not found.", 404);
   const filled = (value: unknown) => typeof value === "string" && value.trim() !== "";
   const required = [body.identity?.userId, body.identity?.username, body.channelId, path === "mention" ? body.content : body.command];
@@ -93,28 +91,20 @@ async function api(request: Request, env: DevEnv, url: URL): Promise<unknown> {
   });
 }
 
-async function meta(env: DevEnv, url: URL) {
-  const { settings } = await new SettingsEditor(env, "live").read();
+function meta(env: AdminEnv, user: string) {
   return {
-    revision: await assetRevision(env, url),
-    defaults: { userId: [...ADMIN_IDS].sort()[0], username: "dev_user", globalName: "Dev User", channelId: "123456789012345678" },
+    user,
+    defaults: { userId: [...ADMIN_IDS].sort()[0], username: "admin_user", globalName: "Admin User", channelId: "123456789012345678" },
     applicationId: env.DISCORD_APPLICATION_ID,
     guildId: env.ALLOWED_GUILD_IDS.split(",")[0].trim(),
-    settings,
     commands: Object.entries(commands).map(([name, command]) => ({
       name,
       description: command.description,
-      options: command.options,
+      options: command.options ?? [],
       adminOnly: Boolean(command.admin),
       requiredRoleId: command.role ?? null,
     })),
   };
-}
-
-// The UI reloads itself when its files change.
-async function assetRevision(env: DevEnv, url: URL) {
-  const files = ["/", "/app.css", "/app.client.js"].map(async (path) => (await env.ASSETS.fetch(new URL(path, url))).text());
-  return sha256(await Promise.all(files));
 }
 
 // Each simulation records its own requests and logs, even when several run at once.
@@ -197,10 +187,10 @@ async function captureWrite(body: unknown, channelId: string) {
   return { id: snowflake(), channelId, content: data.content ?? "", allowedMentions: data.allowed_mentions, attachments };
 }
 
-async function simulate(env: DevEnv, mode: "mention" | "interaction", input: any) {
+async function simulate(env: AdminEnv, mode: "mention" | "interaction", input: any) {
   const run: Simulation = { input, ai: [], calls: [], logs: [], edits: [], followUps: [], messages: [], history: [] };
   // Model calls are real; the draft settings replace the saved row and Discord is stubbed.
-  const botEnv: DevEnv = { ...env, AI: tapModels(env.AI, run.ai), DB: withSettings(env.DB, input.settings) };
+  const botEnv: AdminEnv = { ...env, AI: tapModels(env.AI, run.ai), DB: withSettings(env.DB, input.settings) };
   const started = Date.now();
   return simulations.run(run, async () => {
     const output = mode === "mention" ? await mention(botEnv, run, input) : await interaction(botEnv, run, input);
@@ -208,7 +198,7 @@ async function simulate(env: DevEnv, mode: "mention" | "interaction", input: any
   });
 }
 
-async function mention(env: DevEnv, run: Simulation, input: any) {
+async function mention(env: AdminEnv, run: Simulation, input: any) {
   const transcript: any[] = input.transcript ?? [];
   const asMessage = (entry: any) => {
     const identity = entry.author ?? input.identity;
@@ -246,7 +236,7 @@ async function mention(env: DevEnv, run: Simulation, input: any) {
   return { message, replies: run.messages, db: { interaction: record } };
 }
 
-async function interaction(env: DevEnv, run: Simulation, input: any) {
+async function interaction(env: AdminEnv, run: Simulation, input: any) {
   const options: any[] = input.options ?? [];
   const users = Object.fromEntries(
     options
@@ -269,12 +259,12 @@ async function interaction(env: DevEnv, run: Simulation, input: any) {
   return { interaction: payload, edits: run.edits, followUps: run.followUps, channelMessages: run.messages, db: { interaction: record } };
 }
 
-// Record each model exchange, tagged `ragbot_env: dev` within AI Gateway's five metadata entries.
+// Record each model exchange, tagged `ragbot_env: admin` within AI Gateway's five metadata entries.
 function tapModels(ai: Ai, exchanges: any[]) {
   const run = async (model: string, inputs: any, options?: any) => {
     const metadata = options?.gateway?.metadata;
     if (metadata) {
-      const tagged = { ragbot_env: "dev", ...metadata };
+      const tagged = { ragbot_env: "admin", ...metadata };
       for (const key of ["discord_message_id", "discord_channel_id"]) if (Object.keys(tagged).length > 5) delete tagged[key];
       options.gateway.metadata = tagged;
     }
@@ -300,7 +290,7 @@ function tapModels(ai: Ai, exchanges: any[]) {
   return { run } as unknown as Ai;
 }
 
-// Simulations read the draft settings; every other query goes to the local database.
+// Simulations read the draft settings; every other query goes to the sandbox database.
 function withSettings(db: D1Database, settings: { revision: string; document: string }) {
   const prepare = (sql: string) => (sql === SETTINGS_SQL ? { first: async () => settings } : db.prepare(sql));
   return { prepare, batch: (statements: D1PreparedStatement[]) => db.batch(statements) } as unknown as D1Database;

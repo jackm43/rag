@@ -1,8 +1,8 @@
-// Dev UI settings: drafts, reviewed saves to local or live D1, and the Cloudflare-credit model catalog.
-import { rejectsSampling } from "../src/lib/ai.ts";
-import { isObject } from "../src/lib/json.ts";
-import { parseSettings, SETTINGS_SQL, SettingsError, type Settings } from "../src/settings.ts";
-import type { DevEnv } from "./index.ts";
+// Admin settings: drafts, reviewed saves to the sandbox or live D1, and the Cloudflare-credit model catalog.
+import { rejectsSampling } from "../../src/lib/ai.ts";
+import { isObject } from "../../src/lib/json.ts";
+import { parseSettings, SETTINGS_SQL, SettingsError, type Settings } from "../../src/settings.ts";
+import type { AdminEnv } from "./index.ts";
 
 export type Page = "chat" | "bicture";
 
@@ -34,7 +34,7 @@ const canonical = (value: any): string =>
       ? `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`
       : JSON.stringify(value);
 
-export async function sha256(value: unknown) {
+async function sha256(value: unknown) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical(value)));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -47,7 +47,7 @@ const editable = (settings: Settings) => ({ chat: settings.chat, image: settings
  * fields that depend on the model (chat API format and temperature support, image parameters)
  * are taken from the live catalog for that page.
  */
-export async function resolveDraft(env: DevEnv, current: Settings, raw: unknown, page: unknown): Promise<Settings> {
+export async function resolveDraft(env: AdminEnv, current: Settings, raw: unknown, page: unknown): Promise<Settings> {
   if (raw === undefined) return current;
   if (!isObject(raw) || (page !== "chat" && page !== "bicture")) throw new HttpError("Invalid settings draft.");
   let draft: Settings;
@@ -94,16 +94,16 @@ function changes(before: Settings, after: Settings) {
 let saving: Promise<unknown> = Promise.resolve();
 
 export class SettingsEditor {
-  env: DevEnv;
-  target: "local" | "live";
+  env: AdminEnv;
+  target: "sandbox" | "live";
 
-  constructor(env: DevEnv, target: unknown) {
-    if (target !== "local" && target !== "live") throw new HttpError("Choose local sandbox or live bot settings.");
+  constructor(env: AdminEnv, target: unknown) {
+    if (target !== "sandbox" && target !== "live") throw new HttpError("Choose sandbox or live bot settings.");
     this.env = env;
     this.target = target;
   }
 
-  // The local sandbox is the dev database; LIVE_DB is a remote binding to the live bot's database.
+  // DB is the sandbox database simulations write to; LIVE_DB is the live bot's database.
   async query(sql: string, params: unknown[] = []) {
     try {
       return await (this.target === "live" ? this.env.LIVE_DB : this.env.DB).prepare(sql).bind(...params).all<any>();
@@ -192,17 +192,20 @@ const PROVIDER_ROUTES = new Map([
 ]);
 const catalogCache = new Map<string, { at: number; value: { chat: any[]; image: any[]; checkedAt: number } }>();
 
-async function cloudflare(env: DevEnv, path: string): Promise<any> {
+async function cloudflare(env: AdminEnv, path: string): Promise<any> {
   const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/${path}`, {
     headers: { authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
     signal: AbortSignal.timeout(15_000),
   });
+  if (response.status === 401 || response.status === 403) {
+    throw new HttpError("The CLOUDFLARE_API_TOKEN secret cannot read the model catalog. It needs Workers AI Read and AI Gateway Read.", 503);
+  }
   const payload: any = response.ok ? await response.json() : null;
   if (!payload?.success) throw catalogUnavailable();
   return payload;
 }
 
-async function pages(env: DevEnv, path: string) {
+async function pages(env: AdminEnv, path: string) {
   const rows: any[] = [];
   for (let page = 1; page <= 20; page++) {
     const { result, result_info: info } = await cloudflare(env, `${path}?per_page=100&page=${page}`);
@@ -216,7 +219,7 @@ async function pages(env: DevEnv, path: string) {
 }
 
 // Whether a gateway bills models to Cloudflare credits, and which providers use stored keys instead.
-async function billing(env: DevEnv, gateway: unknown) {
+async function billing(env: AdminEnv, gateway: unknown) {
   if (typeof gateway !== "string" || !/^[\w-]{1,64}$/.test(gateway)) throw catalogUnavailable();
   const prefix = `ai-gateway/gateways/${gateway}`;
   const [settings, keys] = await Promise.all([cloudflare(env, prefix), pages(env, `${prefix}/provider_configs`)]);
@@ -231,7 +234,7 @@ function creditRoute(provider: string, providers: string[], route: { unified: bo
 }
 
 /** Chat and image models from the live account catalog that can run on Cloudflare credits. */
-export async function loadCatalog(env: DevEnv, settings: Settings, refresh = false) {
+export async function loadCatalog(env: AdminEnv, settings: Settings, refresh = false) {
   const gateways = [settings.chat.gatewayId, activeProfile(settings).gatewayId];
   const key = gateways.join("|");
   const cached = catalogCache.get(key);
@@ -267,7 +270,7 @@ export async function loadCatalog(env: DevEnv, settings: Settings, refresh = fal
 }
 
 /** Confirm the selected model is in the credit catalog and still routes to Cloudflare credits. */
-async function checkModel(env: DevEnv, settings: Settings, group: "chat" | "image") {
+async function checkModel(env: AdminEnv, settings: Settings, group: "chat" | "image") {
   const catalog = await loadCatalog(env, settings);
   const profile = activeProfile(settings);
   const selected = group === "chat" ? settings.chat.model : profile.model;
@@ -284,7 +287,7 @@ async function checkModel(env: DevEnv, settings: Settings, group: "chat" | "imag
 const modelPath = (id: string) => id.split("/").map(encodeURIComponent).join("/");
 
 // OpenAI reasoning models take no temperature; others accept what their schema says.
-async function temperatureSupport(env: DevEnv, model: any) {
+async function temperatureSupport(env: AdminEnv, model: any) {
   if (rejectsSampling(model.id)) return null;
   const { result } = await cloudflare(env, `ai/catalog/models/${modelPath(model.id)}`);
   return temperatureRange(result.schema?.input ?? {}, model.apiFormat);
@@ -304,7 +307,7 @@ function temperatureRange(schema: any, apiFormat: string): { minimum: number; ma
 }
 
 // Only synchronous models that need nothing but a prompt qualify; keep the values each accepts.
-async function imageSupport(env: DevEnv, model: any) {
+async function imageSupport(env: AdminEnv, model: any) {
   const { result } = await cloudflare(env, `ai/catalog/models/${modelPath(model.id)}`);
   const input = result.schema?.input ?? {};
   const required: string[] = input.required ?? [];

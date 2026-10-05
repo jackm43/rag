@@ -25,7 +25,7 @@ src/lib/          plumbing with no Ragbot logic:
                   interaction webhooks, interaction signature checks
   ai.ts           Chat Completions, Responses and Workers AI request and response shapes
   media.ts        capped media reads and credential-free downloads
-dev/              local-only dev UI (never deployed)
+admin/            ragbot-admin: Access-protected admin app (Vite + React, API Worker)
 scripts/          command registration and AI settings initialization
 config/ai/        operator inputs for initializing AI settings in D1
 migrations/       D1 schema
@@ -53,7 +53,7 @@ in the Durable Object itself; there are no queues, service bindings or webhook h
 
 ## Setup
 
-Requires Node 22.18+, pnpm, and the 1Password CLI (`op`). `.env` and `.env.dev` hold `op://`
+Requires Node 22.18+, pnpm, and the 1Password CLI (`op`). `.env` holds `op://`
 references, never plaintext secrets; `op run` resolves them for commands that need them.
 
 ```sh
@@ -63,23 +63,26 @@ pnpm run settings:init --local
 op run --env-file=.env -- pnpm run dev
 ```
 
-Wrangler bundles the TypeScript; there is no build, test, type-check or CI step. The AI binding
+Wrangler bundles the bot's TypeScript; there is no build, test, type-check or CI step. Only the
+admin app has a build, `vite build`, run by its deploy script. The AI binding
 always runs against Cloudflare, even in local development, so Wrangler needs Cloudflare access
 (the `CLOUDFLARE_API_TOKEN` from `.env`, or `wrangler login`).
 
 | Command | Purpose |
 | --- | --- |
 | `op run --env-file=.env -- pnpm run dev` | Run the bot locally |
-| `pnpm run dev:ui` | Local dev UI on http://localhost:8788 (runs `op` itself) |
-| `op run --env-file=.env -- pnpm run deploy` | Deploy (`--dry-run` validates packaging) |
+| `op run --env-file=.env -- pnpm run deploy` | Deploy the bot (`--dry-run` validates packaging) |
+| `op run --env-file=.env -- pnpm run admin:dev` | Run the admin app locally with Vite |
+| `op run --env-file=.env -- pnpm run admin:deploy` | Build and deploy `ragbot-admin` |
+| `op run --env-file=.env -- pnpm run admin:sandbox:init` | Migrate and seed the admin sandbox database |
 | `op run --env-file=.env -- pnpm run d1:migrate:remote` | Apply D1 migrations to production |
 | `pnpm run settings:init --local` | Create the local AI settings row if none exists |
 | `op run --env-file=.env -- pnpm run settings:init --remote` | Same, for a new production database |
 | `op run --env-file=.env -- pnpm run register:commands` | Register slash commands in the guild |
 
 Pass script arguments directly after the script name (`pnpm run deploy --dry-run`); the `--` in
-`op run --env-file=.env --` belongs to 1Password. Deploy only `wrangler.jsonc`, never
-`wrangler.dev.jsonc`.
+`op run --env-file=.env --` belongs to 1Password. `pnpm run deploy` deploys only the bot from
+the root `wrangler.jsonc`; the admin app deploys only through `pnpm run admin:deploy`.
 
 The Worker needs the secrets `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` and
 `GATEWAY_CONTROL_TOKEN` (declared in `wrangler.jsonc`, so a deploy fails if one is missing).
@@ -102,7 +105,7 @@ After deploying, smoke-test `/rag`, `/ragboard`, a mention and `/bicture`.
 Models, prompts and generation settings live in one revisioned D1 row, `ai_runtime_settings`,
 as one JSON document with a `chat` object (model, prompt, temperature, history limit, gateway)
 and an `image` object (the active profile and each profile's model, gateway and parameters).
-`parseSettings` in `src/settings.ts` checks every field, for the bot and the dev UI alike.
+`parseSettings` in `src/settings.ts` checks every field, for the bot and the admin app alike.
 Every AI request reads the row from the D1 primary, so a saved change applies to the next
 request without a redeploy. A failed read stops the request instead of using stale settings.
 
@@ -113,32 +116,47 @@ the row from `settings.json` and `chat-system-prompt.md` and never overwrites an
 op run --env-file=.env -- pnpm exec wrangler d1 execute ragbot --remote --command "SELECT revision FROM ai_runtime_settings"
 ```
 
-Change settings in the dev UI. Chat requests use the provider's default output length.
+Change settings in the admin app. Chat requests use the provider's default output length.
 `reasoningEffort` is sent when set in the chat settings; choosing another model clears it.
 AI Gateway logs carry five metadata entries: request kind, Discord user, channel and message
 IDs, and the settings revision.
 
-## Dev UI
+## Admin app
 
-`pnpm run dev:ui` applies migrations to a separate local database (`.wrangler/dev-state`),
-seeds its settings, and serves the UI on **http://localhost:8788**. It needs only
-`CLOUDFLARE_API_TOKEN` (resolved from `.env.dev`); Discord credentials are never loaded.
+`ragbot-admin` is a separate Worker on **https://ragbot-admin.jsmunro.me**, built with Vite, React
+and the Cloudflare Vite plugin (`admin/`). Cloudflare Access application **ragbot admin** guards
+the hostname with the reusable **GitHub jsmunro org** policy (sign-in with the
+`GitHub - jsmunro org` identity provider). The Worker also verifies the Access JWT
+(`Cf-Access-Jwt-Assertion`, audience in `admin/wrangler.jsonc`) on every `/api/*` request and
+returns an empty 403 without it. It has no `workers.dev` or preview URLs.
 
-- **Chat** and **/bicture** run the real handlers with real model calls (tagged
-  `ragbot_env: dev`) while every Discord request is stubbed and captured. Other commands are
-  under **Other commands**.
-- **Settings** start on **Live bot**, read and saved through the `LIVE_DB` remote D1 binding
-  to the production database (so the token needs D1 edit access). Pick models from the live
-  Cloudflare catalog (only models billable to Cloudflare credits are offered), adjust
-  temperature, history and prompts, then **Review & save**. Saves are conditional on the
-  loaded revision, so concurrent edits are rejected. **Local sandbox** saves only to the dev
-  database.
+It reaches Cloudflare through bindings rather than tokens:
+
+- `LIVE_DB` is the bot's `ragbot` database, for reading and saving its settings and reading
+  prompt history. Saves are reviewed first and conditional on the loaded revision, so
+  concurrent edits are rejected.
+- `DB` is `ragbot-admin-sandbox`. Simulated commands and mentions write there, so `/rag`,
+  bans and AI interaction records from testing never reach the bot. **Sandbox** settings live
+  there too.
+- `AI` runs the real model calls, tagged `ragbot_env: admin` in AI Gateway.
+
+The model catalog and the AI Gateway billing checks have no binding, so they use the
+`CLOUDFLARE_API_TOKEN` secret, a read-only token with **Workers AI Read** and
+**AI Gateway Read**. Only models billable to Cloudflare credits are offered. Discord
+credentials are never configured: every Discord request is stubbed and captured.
+
+- **Chat** and **/bicture** run the real handlers with the saved settings, or the unsaved
+  draft when there is one. Every other command has its own tab.
 - **Prompt history** searches saved chat and `/bicture` prompts and loads one for replay.
 - **Request details** show the payload, model requests and responses, Discord calls, logs and
-  the database row each run wrote.
+  the sandbox rows each run wrote.
 
-The dev Worker has no routes, `workers_dev: false`, a `DEV_UI` guard and a localhost check;
-writes require a same-origin JSON request with the UI header. Do not expose it publicly.
+Local development (`op run --env-file=.env -- pnpm run admin:dev`) serves the app with Vite on
+http://localhost:5173 and runs the Worker in workerd with remote D1 bindings. Only
+`CLOUDFLARE_API_TOKEN` is read from the environment. The Access check is skipped only for
+localhost in `vite dev`; production builds drop that branch.
+
+To change who can sign in, edit the Access application or its policy in Zero Trust.
 
 ## Discord behavior
 
