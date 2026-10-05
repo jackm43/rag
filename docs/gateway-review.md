@@ -80,9 +80,9 @@ application exceeds its daily `session_start_limit` of IDENTIFY calls.
 - [x] Open the socket with a `fetch()` upgrade and classify refused
   handshakes by status. The runtime probe connects through the upgrade and
   checks that a refused one reports its status and `Retry-After`.
-- [ ] Run `pnpm run test:runtime` and the deployment dry run. These did not run
-  in the authoring sandbox because its network policy blocks
-  `index.pyodide.org`. CI runs both on pull requests.
+- [x] `pnpm run test:runtime` and the deployment dry run pass in CI. The
+  authoring sandbox could not run them because its network policy blocks
+  `index.pyodide.org`.
 
 ### Phase 2 — operability (proposed)
 
