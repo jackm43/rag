@@ -277,8 +277,9 @@ An operator stop persists across eviction and cron runs. Fatal Discord close
 codes disable rapid retries; cron or an explicit start can retry.
 
 Deployments preserve the Worker name, domain, D1 identifier, Durable Object
-class and singleton name, storage keys, and migration history. A deployment restarts the gateway connection; the next
-cron or authenticated `/gateway/start` reconnects it unless explicitly stopped.
+class and singleton name, storage keys, and migration history. A deployment
+restarts the gateway connection. Unless the gateway was explicitly stopped, the
+watchdog alarm reconnects within a minute and resumes the stored session.
 After deployment, smoke-test `/rag`, `/ragboard`, mentions, and media.
 
 ## Discord conversation context
@@ -294,6 +295,24 @@ Conversations never fetch unrelated nearby messages. Deleted or
 unavailable ancestors stop traversal; the current request can still be answered.
 Speaker names, named mentions, and line breaks are preserved. Attachment labels
 identify files but do not claim that their contents were sent to the model.
+
+## Discord gateway reliability
+
+The Durable Object stores resumable state under `gatewaySession`: the session
+ID, resume URL, last saved sequence, and bot user ID. After a restart or
+deployment, it resumes that session, and Discord replays the events it missed.
+`processed:` markers drop duplicates, so the sequence is saved on heartbeat
+acknowledgements instead of on every event.
+
+Reconnects back off exponentially from 1 second to 5 minutes, with jitter. The
+delay resets after READY or RESUMED. Invalid sessions wait 1–5 seconds, and close
+codes 4003, 4007 and 4009 start a new session. Cron and the one-minute watchdog
+alarm leave a pending reconnect alone; `/gateway/start` retries immediately.
+Before every IDENTIFY, the gateway reads Discord's session start limit from
+`GET /gateway/bot`. When the limit is spent, it waits for the reset, because
+exceeding it makes Discord reset the bot token. Gateway URLs are accepted only
+for `wss` hosts under `discord.gg`. See `docs/gateway-review.md` for the design
+review.
 
 ## Discord request reliability
 

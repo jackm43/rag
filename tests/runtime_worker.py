@@ -340,7 +340,23 @@ class DiscordGateway(ProductionGateway):
         async def handle(message, bot_user_id):
             processed.append(message["id"])
 
+        async def discord_stub(request_url, **options):
+            # IDENTIFY first checks Discord's session start budget; never call live Discord.
+            assert request_url == "https://discord.com/api/v10/gateway/bot"
+            return Response.json(
+                {
+                    "url": "wss://gateway.discord.gg",
+                    "session_start_limit": {
+                        "total": 1000,
+                        "remaining": 999,
+                        "reset_after": 0,
+                        "max_concurrency": 1,
+                    },
+                }
+            )
+
         self.gateway.app.handle_message = handle
+        self.gateway.app.discord.transport = discord_stub
         self.gateway.socket_factory = lambda ignored, *callbacks: Socket(url, *callbacks)
         await self.gateway.start()
         for _ in range(100):
@@ -353,6 +369,7 @@ class DiscordGateway(ProductionGateway):
             "processed": processed,
             "sequence": self.gateway.sequence,
             "heartbeat": self.gateway.heartbeat_acknowledged,
+            "session": await self.gateway.ctx.storage.get("gatewaySession"),
         }
         await self.gateway.stop()
         result["stopped"] = await self.gateway.ensure_connected()

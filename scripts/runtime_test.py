@@ -216,6 +216,12 @@ def main():
                 assert gateway["processed"] == ["123456789012345699"], gateway
                 assert gateway["sequence"] == 2, gateway
                 assert gateway["heartbeat"] is True, gateway
+                assert gateway["session"] == {
+                    "sessionId": "test-session",
+                    "resumeUrl": "wss://gateway.discord.gg",
+                    "sequence": 2,
+                    "botUserId": "123456789012345678",
+                }, gateway
                 assert gateway["stopped"] == {"ok": False, "stopped": True}, gateway
                 logs.flush()
                 logs.seek(0)
@@ -223,7 +229,7 @@ def main():
                 assert "borrowed proxy was automatically destroyed" not in runtime_logs
                 assert "gateway_ensure_connected_failed" not in runtime_logs
                 print(
-                    "Python Workers runtime: signatures, bare denials, Durable Object controls, cron, D1, /rag, mentions and replies, multipart, immediate D1 settings refresh and gateway WebSocket passed."
+                    "Python Workers runtime: signatures, bare denials, Durable Object controls, cron, D1, /rag, mentions and replies, multipart, immediate D1 settings refresh, gateway WebSocket and persisted resume state passed."
                 )
             except Exception:
                 logs.flush()
