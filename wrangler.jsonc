@@ -1,10 +1,7 @@
 {
   "name": "ragbot-worker",
-  "main": "src/entry.py",
+  "main": "src/index.ts",
   "compatibility_date": "2026-09-26",
-  "compatibility_flags": [
-    "python_workers"
-  ],
   "workers_dev": false,
   "routes": [
     {
@@ -14,8 +11,14 @@
   ],
   "vars": {
     "DISCORD_APPLICATION_ID": "1496842508251172895",
-    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
     "ALLOWED_GUILD_IDS": "457689460096630794"
+  },
+  "secrets": {
+    "required": [
+      "DISCORD_PUBLIC_KEY",
+      "DISCORD_BOT_TOKEN",
+      "GATEWAY_CONTROL_TOKEN"
+    ]
   },
   "d1_databases": [
     {

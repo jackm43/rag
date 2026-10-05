@@ -1,140 +1,69 @@
 # Working in this repo
 
-Read [README.md](README.md) first. This project is one Cloudflare **Python
-Worker**, `ragbot-worker`, with a `DiscordGateway` Durable Object. There are no
-other deployed Workers, internal queues, or service-binding hops.
+Read [README.md](README.md) first. This is one TypeScript Cloudflare Worker, `ragbot-worker`,
+with a `DiscordGateway` Durable Object. There are no other Workers, queues, service bindings or
+webhook hops.
 
-Run `pnpm run check`, `pnpm test`, and `pnpm run test:runtime` before calling
-runtime changes done. Run a deployment dry run when changing packaging or
-bindings. Node 22+, pnpm, and uv 0.12.3+ are required. Commands using secrets go
-through `op run --env-file=.env --`; `pnpm run dev:ui` wraps op itself and also
-loads `.env.dev`. Development and deployment run natively on Windows; Docker
-is opt-in via `DEV_UI_DOCKER=1`. Keep uv interpreters, cache, and temporary Worker
-bundles on the project drive to avoid the Pyodide cross-drive path bug. Do not
-log secrets or resolve them into committed files.
+## Ground rules
 
-## Tooling and Windows
+- Keep it simple. There are no tests, type-check scripts or CI, on purpose; do not add them,
+  or new abstraction layers, unless asked. Delete code that nothing uses instead of keeping it
+  for compatibility.
+- Wrangler bundles the TypeScript directly. `tsconfig.json` and `@cloudflare/workers-types`
+  only serve editors. Prefer inferred types; Discord payloads can stay `any` and are trusted
+  after authentication, so read fields directly instead of adding shape checks.
+- Verify changes by running them: `op run --env-file=.env -- pnpm run dev`, `pnpm run dev:ui`,
+  and `op run --env-file=.env -- pnpm run deploy --dry-run` for packaging or binding changes.
+  Deploy with `op run --env-file=.env -- pnpm run deploy` only when asked, and only from the
+  root `wrangler.jsonc`, never `wrangler.dev.jsonc`.
+- Node 22.18+ and pnpm. Run commands from the repository root through the package scripts
+  (`pnpm exec wrangler` for anything else). Pass script arguments directly after the script
+  name; keep the `--` that `op run` needs. Development works natively on Windows.
+- Secrets come from 1Password through `op run`. Never log or commit them, or resolve them into
+  files.
 
-- Run commands from the repository root. Install with `pnpm install` and
-  `uv sync --locked`; use the repository's locked tools through its package
-  scripts. No virtual environment activation is needed. Do not substitute
-  global Wrangler, `uvx`, or manual pip installs.
-- For this `D:` checkout, use `UV_PYTHON_INSTALL_DIR=D:\tools\uv\python` and
-  `UV_CACHE_DIR=D:\tools\uv\cache`. These are user-level Windows settings;
-  existing terminals and Codex must restart or load them into their process
-  environment. See README for the PowerShell setup and interpreter installation.
-- `.venv` holds host tools. Pywrangler prepares `.venv-workers` and
-  `python_modules` for Pyodide before calling Wrangler. Use
-  `uv run pywrangler sync --force` when rebuilding a stale Worker environment.
-  Move incompatible environments aside; preserve `.wrangler/state` and
-  `.wrangler/dev-state` local databases. Keep runtime-test bundles on `D:` too.
-- Start production-code development with
-  `op run --env-file=.env -- pnpm run dev`; start the debugging UI with
-  `pnpm run dev:ui`. Both support native Windows. Docker is an explicit UI
-  option, not the default deployment or development path.
-- Validate production packaging with
-  `op run --env-file=.env -- pnpm run deploy --dry-run`, then deploy with
-  `op run --env-file=.env -- pnpm run deploy` when requested. These use
-  Pywrangler; bare Wrangler does not install Python dependencies. Deploy only
-  the root production `wrangler.jsonc`, never a staged or dev UI bundle.
-- Use `pnpm exec wrangler` for direct D1 operations and `pnpm run types` for
-  binding types. Pass pnpm script arguments directly, without an extra `--`
-  after the script name; retain the separator required by `op run`.
+## Layout
 
-## Architecture
+- `src/index.ts`: `Env`, the default export (`fetch`, `scheduled`), interaction signature
+  verification and the gateway control bearer check.
+- `src/gateway.ts`: the `DiscordGateway` Durable Object and the `gateway(env)` stub.
+- `src/commands.ts`: the `commands` registry, used for both dispatch and registration.
+- `src/chat.ts`: mentions and replies. `src/ai.ts`: D1 settings and model calls.
+- `src/discord.ts`: Discord REST, rate limits and replies.
+- `dev/`: local-only UI. It may import `src/`; nothing in `src/` imports `dev/`.
 
-- `src/entry.py`: HTTP signature/bearer authentication, routing, cron, and
-  Worker/Durable Object entrypoints.
-- `src/ragbot/env.py`: all application bindings, variables, and secrets.
-- `src/ragbot/app.py`: dependency composition, command dispatch and mentions.
-- `src/ragbot/commands/`: decorator registry and moderation/chat/media handlers.
-  The registry is the single source for dispatch and command registration.
-- `src/ragbot/gateway.py`: WebSocket lifecycle, heartbeat, reconnects, dedupe.
-- `src/ragbot/discord.py`: Workers-native REST client, attachments, media caps.
-- `src/ragbot/discord_http.py`: bounded native retries and Discord rate limits.
-- `src/ragbot/ai.py`, `config.py`, `conversation.py`: inference,
-  config, chat routing, reply analytics.
-- `src/ragbot/db.py`: parameterized D1 access, bans, and guilds.
-- `src/ragbot/security.py`, `policy.py`: external auth and Discord output policy.
-- `dev/`: local-only UI and simulations. It imports production services, but
-  nothing in `src/` may import `dev/`. Its staged bundle has no routes,
-  `workers_dev: false`, and a `DEV_UI` guard. Never deploy it.
-
-Use Python dataclasses and explicit dependency injection. `discord-typings`
-supplies wire types; do not replace the Durable Object with a socket-based bot
-framework. Use the Workers SDK with Python values for D1, KV, AI and RPC.
-Explicit `to_js` conversions belong only at raw JavaScript API boundaries.
-
-Favor straightforward control flow. Route interaction types, gateway opcodes,
-and provider formats with `match`. After authentication, trust Discord's wire
-schema: access required fields directly and resolve optional fields once. Do
-not repeat shape/type checks inside handlers or add speculative fallback chains.
-Keep guards for permissions, lifecycle state, rate limits, media caps, editable
-settings, and actual failure handling at the operations they protect.
+To add a command, add an entry to `commands` in `src/commands.ts`. Register commands with
+`op run --env-file=.env -- pnpm run register:commands` only when asked.
+`scripts/register-commands.mjs` imports `src/commands.ts` with Node's type stripping, so that
+module graph must stay free of `cloudflare:workers` imports and non-erasable TypeScript
+(enums, namespaces, parameter properties).
 
 ## Invariants
 
-- Verify Discord Ed25519 signatures on every POST `/interactions` **before**
-  parsing/dispatch. Signatures cover the timestamp plus exact raw body bytes.
-  Preserve the five-minute timestamp window.
-- `/gateway/start`, `/gateway/stop`, `/gateway/health` require the configured
-  bearer token. Authentication fails closed. Denials have bare status codes.
-- Logs must never contain request bodies, headers, tokens or secrets. Avoid
-  logging arbitrary exception messages from third-party libraries.
-- Use only the fixed Discord/AI/Cloudflare API hosts at credential injection
-  sites. Webhook URLs contain credentials and must be redacted in dev capture.
-- D1 `ragbot` is durable data. Change schema through `migrations/` only;
-  `schema.sql` is a read-only mirror. Keep existing resource IDs and migration
-  history unless explicitly changing infrastructure.
-- AI has no budget cap, request limit, spend tracking, or moderation-ban checks.
-  `/rag` bans and writes fail closed on D1 errors. Cron maintains the gateway.
-- `/undorag` and `/raghammer` require Mods role `457695154892177418`.
-  `/ragunban` retains its administrator user allowlist.
-- Respect Discord retry delays and global/route limits. Do not retry ambiguous
-  POST failures; they may have already created a message or thread.
-- Download media with the 25 MiB streaming cap; never replace it with unbounded
-  buffering. Discord bot credentials must never accompany provider media.
-- Preserve AI reply text and formatting. Disable mention pings with
-  `allowed_mentions`, suppress URL previews with Discord message flags, and
-  retain the reply length limit and empty-response fallback.
-- Gateway close codes 4004 and 4010–4014, and refused WebSocket handshakes other
-  than 408, 429 and 5xx, disable rapid retries. Cron or explicit start can retry
-  them. An operator stop persists across eviction and cron.
-- Keep `DiscordGateway`, singleton `discord-gateway-v2`, storage keys and
-  migration history compatible with existing Durable Objects. Retire stale
-  singleton instances rather than allowing duplicate gateway sessions.
-- Check Discord's session start limit (`GET /gateway/bot`) before every
-  IDENTIFY. Exceeding it resets the bot token. Reconnects back off
-  exponentially; cron and the watchdog never bypass a pending reconnect.
-- `gatewaySession` holds resumable state. Clear it when Discord invalidates the
-  session or an operator stops the gateway. Never store credentials in Durable
-  Object storage.
-
-## Adding features
-
-Add commands using `@command(...)` in `src/ragbot/commands/` and import the
-module in its `__init__.py`. Register with
-`op run --env-file=.env -- pnpm run register:commands` only when requested.
-
-AI model/config/prompt settings are read through `ConfigStore` from a fresh
-primary D1 snapshot per AI request. D1 must be initialized; there is no runtime
-KV or file fallback. `config/ai/` contains operator inputs for explicit D1
-initialization only. Do not bundle these files into the Worker. Initialization
-must preserve any existing D1 settings.
-
-Regenerate `src/js-stubs` with `pnpm run types` after binding/config changes.
-Do not edit generated platform stubs by hand.
-
-## Testing
-
-`pnpm test` focuses on primary command, moderation, conversation, media, and
-gateway lifecycle workflows. It uses the actual SQLite migrations and injected
-HTTP transports and sockets.
-Keep public HTTP authentication and routing checks in the runtime suite.
-`pnpm run test:runtime` runs an isolated local Python Worker with D1 and a
-Discord-like WebSocket peer, so FFI bugs are exercised in workerd too. Test
-workers and their credentials live only in temporary bundles. No test should
-contact live Discord, paid AI models, or production data.
-
-Former multi-worker Cloudflare resources are decommissioned out of band,
-never by this repository migration.
+- Verify the Discord Ed25519 signature (timestamp plus exact raw body, five-minute window)
+  before parsing or dispatching `POST /interactions`.
+- `/gateway/start`, `/gateway/stop` and `/gateway/health` require the bearer token and fail
+  closed; denials have empty bodies.
+- Logs never contain request bodies, headers, tokens or secrets. Log error types, not
+  third-party error messages.
+- Send credentials only to the fixed Discord, AI and Cloudflare API hosts. Interaction webhook
+  URLs contain tokens and are redacted in dev captures.
+- D1 `ragbot` is durable data. Change the schema only by adding a migration; keep existing
+  resource IDs and migration history.
+- AI settings come from a fresh D1 read per AI request; `config/ai/` only seeds new databases
+  and is never bundled. There is no AI budget, rate limit or moderation-ban check.
+- `/undorag` and `/raghammer` require the Mods role `457695154892177418`; `/ragunban` keeps its
+  administrator allowlist. `/rag` bans and writes fail closed on D1 errors.
+- Respect Discord retry delays and route/global limits; never retry an ambiguous POST.
+- Stream media with the 25 MiB cap and never send Discord credentials to media hosts.
+- Keep AI reply text and formatting; disable pings with `allowed_mentions`, suppress link
+  previews with message flags, and keep the length limit and empty-reply fallback.
+- Keep the class name `DiscordGateway`, the singleton `discord-gateway-v2`, the storage keys
+  (`gatewaySession`, `gatewayEnabled`, `gatewayStopped`, `processed:*`) and the Durable Object
+  migration history. Never store credentials in Durable Object storage.
+- Check the session start limit (`GET /gateway/bot`) before every IDENTIFY. Close codes 4004
+  and 4010–4014, and refused handshakes other than 408, 429 and 5xx, stop rapid retries until
+  cron or an explicit start. An operator stop persists. Cron and the watchdog never bypass a
+  pending reconnect. Clear `gatewaySession` when Discord invalidates the session or on stop.
+- Durable Object handler names (`fetch`, `alarm`, `connect`, `webSocket*`) are reserved; do
+  not reuse them for other methods.
