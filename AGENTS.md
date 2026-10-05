@@ -1,21 +1,23 @@
 # Working in this repo
 
-Read [README.md](README.md) first. This is one TypeScript Cloudflare Worker, `ragbot-worker`,
-with a `DiscordGateway` Durable Object. There are no other Workers, queues, service bindings or
-webhook hops.
+Read [README.md](README.md) first. The bot is one TypeScript Cloudflare Worker, `ragbot-worker`,
+with a `DiscordGateway` Durable Object. There are no queues, service bindings or webhook hops.
+The only other Worker is `ragbot-admin` in `admin/`, an Access-protected admin app.
 
 ## Ground rules
 
 - Keep it simple. There are no tests, type-check scripts or CI, on purpose; do not add them,
-  or new abstraction layers, unless asked. Delete code that nothing uses instead of keeping it
+  or new abstraction layers, unless asked. The admin app is the only part with a build
+  (Vite + React with the Cloudflare Vite plugin). Delete code that nothing uses instead of keeping it
   for compatibility.
 - Wrangler bundles the TypeScript directly. `tsconfig.json` and `@cloudflare/workers-types`
   only serve editors. Prefer inferred types; Discord payloads can stay `any` and are trusted
   after authentication, so read fields directly instead of adding shape checks.
-- Verify changes by running them: `op run --env-file=.env -- pnpm run dev`, `pnpm run dev:ui`,
-  and `op run --env-file=.env -- pnpm run deploy --dry-run` for packaging or binding changes.
-  Deploy with `op run --env-file=.env -- pnpm run deploy` only when asked, and only from the
-  root `wrangler.jsonc`, never `wrangler.dev.jsonc`.
+- Verify changes by running them: `op run --env-file=.env -- pnpm run dev`,
+  `op run --env-file=.env -- pnpm run admin:dev`, and
+  `op run --env-file=.env -- pnpm run deploy --dry-run` for packaging or binding changes.
+  Deploy the bot with `op run --env-file=.env -- pnpm run deploy` only when asked, and only
+  from the root `wrangler.jsonc`. Deploy the admin app only with `pnpm run admin:deploy`.
 - Node 22.18+ and pnpm. Run commands from the repository root through the package scripts
   (`pnpm exec wrangler` for anything else). Pass script arguments directly after the script
   name; keep the `--` that `op run` needs. Development works natively on Windows.
@@ -30,14 +32,16 @@ webhook hops.
 - `src/commands.ts`: the `commands` registry, used for both dispatch and registration.
 - `src/chat.ts`: mentions and replies. `src/ai.ts`: model calls.
 - `src/settings.ts`: the typed AI settings document, its D1 read and `parseSettings`, which the
-  dev UI also uses to validate drafts.
+  admin app also uses to validate drafts.
 - `src/discord.ts`: Ragbot's Discord calls and replies.
 - `src/lib/`: plumbing with no Ragbot logic; nothing in it imports Ragbot code. In `discord/`,
   `gateway.ts` is the gateway protocol (`GatewayConnection`; the Durable Object owns storage and
   dispatch), `rest.ts` the rate-limited fetch, `messages.ts` message bodies, interaction
   webhooks and mentions, `interactions.ts` the signature check. `ai.ts` holds model request
   and response shapes, `media.ts` capped media reads.
-- `dev/`: local-only UI. It may import `src/`; nothing in `src/` imports `dev/`.
+- `admin/`: the `ragbot-admin` Worker. `worker/` is its API (Access JWT check, settings, and
+  simulations that run `src/` handlers against stubbed Discord); `app/` is the React UI. It may
+  import `src/`; nothing in `src/` imports `admin/`.
 
 To add a command, add an entry to `commands` in `src/commands.ts`. Register commands with
 `op run --env-file=.env -- pnpm run register:commands` only when asked.
@@ -51,6 +55,10 @@ module graph must stay free of `cloudflare:workers` imports and non-erasable Typ
   before parsing or dispatching `POST /interactions`.
 - `/gateway/start`, `/gateway/stop` and `/gateway/health` require the bearer token and fail
   closed; denials have empty bodies.
+- `ragbot-admin` serves only `ragbot-admin.jsmunro.me` (no `workers.dev` or preview URLs),
+  behind the Access application `ragbot admin`. Its Worker verifies the Access JWT on every
+  `/api/*` request and fails closed. Simulations write only to `ragbot-admin-sandbox` and never
+  hold Discord credentials.
 - Logs never contain request bodies, headers, tokens or secrets. Log error types, not
   third-party error messages.
 - Send credentials only to the fixed Discord, AI and Cloudflare API hosts. Interaction webhook

@@ -1,0 +1,67 @@
+// ragbot admin: a Vite + React app with an API Worker, served only on its Access-protected
+// hostname. Build and deploy with `pnpm run admin:deploy`, never with the root `pnpm run deploy`.
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "ragbot-admin",
+  "account_id": "314e7e015b5f4429c4e2da1e6ec93271",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-09-26",
+  "compatibility_flags": ["nodejs_als"],
+  // The Access application covers ragbot-admin.jsmunro.me only, so no other hostname is served.
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "ragbot-admin.jsmunro.me",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "vars": {
+    // Access application "ragbot admin" (GitHub jsmunro org policy); the Worker checks its JWT.
+    "ACCESS_TEAM_DOMAIN": "https://jsmunro.cloudflareaccess.com",
+    "ACCESS_AUD": "ee5f87058d9db43aea94ad7d6a3b94e07abb3369b0507cc6461ed7d62842b3d8",
+    "DISCORD_APPLICATION_ID": "1496842508251172895",
+    "ALLOWED_GUILD_IDS": "457689460096630794",
+    // The live bot's account, for the model catalog and AI Gateway billing checks.
+    "CF_ACCOUNT_ID": "314e7e015b5f4429c4e2da1e6ec93271",
+    // Simulations stub every Discord request, so no Discord credentials are needed.
+    "DISCORD_BOT_TOKEN": "admin-unused",
+    "DISCORD_PUBLIC_KEY": "admin-unused",
+    "GATEWAY_CONTROL_TOKEN": "admin-unused"
+  },
+  // A read-only token (Workers AI Read, AI Gateway Read) for the model catalog and billing checks.
+  // Locally, `op run --env-file=.env` provides it; D1 and models use bindings, not this token.
+  "secrets": {
+    "required": ["CLOUDFLARE_API_TOKEN"]
+  },
+  "d1_databases": [
+    // Simulations write here: their /rag rows, bans and AI interaction records never reach the bot.
+    {
+      "binding": "DB",
+      "database_name": "ragbot-admin-sandbox",
+      "database_id": "e5b1a33d-4b6c-4bae-aee4-c9a3a37f921e",
+      "migrations_dir": "../migrations",
+      "remote": true
+    },
+    // The live bot's database, for reading and saving its settings and reading prompt history.
+    {
+      "binding": "LIVE_DB",
+      "database_name": "ragbot",
+      "database_id": "5833b0bb-7806-483e-9015-32e209ce2fb0",
+      "remote": true
+    }
+  ],
+  "ai": {
+    "binding": "AI"
+  },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  }
+}
