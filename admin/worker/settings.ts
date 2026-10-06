@@ -91,8 +91,6 @@ function changes(before: Settings, after: Settings) {
     .map((setting) => ({ setting, before: saved.get(setting) ?? null, after: draft.get(setting) ?? null }));
 }
 
-let saving: Promise<unknown> = Promise.resolve();
-
 export class SettingsEditor {
   env: AdminEnv;
   target: "sandbox" | "live";
@@ -145,22 +143,18 @@ export class SettingsEditor {
     return { changes, reviewId: await sha256([this.target, current.revision, editable(draft)]) };
   }
 
-  // One save at a time here; the conditional write also rejects saves made elsewhere since loading.
-  save(body: any) {
-    const result = saving.then(async () => {
-      const { current, draft, changes } = await this.prepare(body);
-      if (body.reviewId !== (await sha256([this.target, current.revision, editable(draft)]))) {
-        throw new HttpError("Review these exact settings before saving.", 409);
-      }
-      if (!changes.length) throw new HttpError("There are no changes to save.");
-      const revision = crypto.randomUUID().replaceAll("-", "");
-      const settings = parseSettings({ ...draft, revision, updatedAt: new Date().toISOString() });
-      const { meta } = await this.query(SAVE_SQL, [revision, JSON.stringify(settings), current.revision]);
-      if (meta?.changes !== 1) throw new HttpError("Settings changed during your save. Reload and review again.", 409);
-      return { target: this.target, revision, settings };
-    });
-    saving = result.catch(() => {});
-    return result;
+  // The conditional write rejects saves made anywhere since loading, across Worker instances.
+  async save(body: any) {
+    const { current, draft, changes } = await this.prepare(body);
+    if (body.reviewId !== (await sha256([this.target, current.revision, editable(draft)]))) {
+      throw new HttpError("Review these exact settings before saving.", 409);
+    }
+    if (!changes.length) throw new HttpError("There are no changes to save.");
+    const revision = crypto.randomUUID().replaceAll("-", "");
+    const settings = parseSettings({ ...draft, revision, updatedAt: new Date().toISOString() });
+    const { meta } = await this.query(SAVE_SQL, [revision, JSON.stringify(settings), current.revision]);
+    if (meta?.changes !== 1) throw new HttpError("Settings changed during your save. Reload and review again.", 409);
+    return { target: this.target, revision, settings };
   }
 
   private async prepare(body: any) {

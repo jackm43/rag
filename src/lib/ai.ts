@@ -27,14 +27,16 @@ export function chatRequest(
 export function chatResponse(payload: any, requestedModel: string) {
   const usage = isObject(payload?.usage) ? payload.usage : {};
   const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null);
+  const prompt = count(usage.prompt_tokens ?? usage.input_tokens);
+  const completion = count(usage.completion_tokens ?? usage.output_tokens);
   return {
     content: text(payload),
     toolCalls: toolCalls(payload),
     model: typeof payload?.model === "string" && payload.model ? payload.model : requestedModel,
     usage: {
-      prompt: count(usage.prompt_tokens ?? usage.input_tokens),
-      completion: count(usage.completion_tokens ?? usage.output_tokens),
-      total: count(usage.total_tokens),
+      prompt,
+      completion,
+      total: count(usage.total_tokens) ?? (prompt !== null && completion !== null ? prompt + completion : null),
     },
   };
 }

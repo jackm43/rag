@@ -121,6 +121,15 @@ Change settings in the admin app. Chat requests use the provider's default outpu
 AI Gateway logs carry five metadata entries: request kind, Discord user, channel and message
 IDs, and the settings revision.
 
+Each model call also writes a `rag_ai_interactions` row, which keeps what AI Gateway and Workers
+traces cannot: the Discord display name, how the request arrived (`triggered_by`: `mention`,
+`reply` to Ragbot, `command`, or the chat's picture `tool`), how many reply-chain messages went to
+the model (`context_messages`), the reply text, time to Discord delivery, and which step failed
+(`error_message` is `<step>:<error type>`, such as `model:TypeError` or `discord:403`). A tool
+picture shares its chat reply's `message_id` and only counts as delivered once Discord accepts that
+reply. Token counts and model time are copied from the response for per-user queries; AI Gateway
+remains the record for cost and provider latency, and traces for D1 timings.
+
 ## Admin app
 
 `ragbot-admin` is a separate Worker on **https://ragbot-admin.jsmunro.me**, built with Vite, React

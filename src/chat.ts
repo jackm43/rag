@@ -1,5 +1,5 @@
 // Mentions of Ragbot and replies to it: explicit reply context in, one AI reply out.
-import { chat, generateImage, PICTURE_TOOL, recordPicture, type Attribution } from "./ai.ts";
+import { chat, generateImage, PICTURE_TOOL, recordInteractions, type Attribution, type Interaction } from "./ai.ts";
 import { botRoles, getMessage, guildAllowed, postMessage, sendTyping } from "./discord.ts";
 import type { Env } from "./index.ts";
 import type { ToolCall } from "./lib/ai.ts";
@@ -13,6 +13,7 @@ const PICTURE_REQUEST = /\b(?:draw|drawing|sketch|paint|picture|pic|pics|image|i
 
 type Job = {
   attribution: Attribution;
+  trigger: "mention" | "reply";
   prompt: string;
   botUserId: string;
   replyId?: string;
@@ -70,6 +71,7 @@ async function resolve(env: Env, message: any, botUserId: string): Promise<Job |
       channelId,
       messageId: message.id,
     },
+    trigger: replyingToBot ? "reply" : "mention",
     prompt,
     botUserId,
     replyId,
@@ -142,19 +144,21 @@ async function createPicture(env: Env, settings: Settings, calls: ToolCall[], at
   const call = calls.find((candidate) => candidate.name === PICTURE_TOOL.name);
   const prompt = typeof call?.args.prompt === "string" ? truncate(call.args.prompt.trim(), 2000) : "";
   if (!prompt) return null;
-  const source = { ...attribution, kind: "bicture" };
-  const startedAt = Date.now();
-  let model = "unknown";
+  const record: Interaction = {
+    source: { ...attribution, kind: "bicture" },
+    trigger: "tool",
+    prompt,
+    startedAt: Date.now(),
+    model: settings.image.profiles[settings.image.activeProfile].model,
+  };
   try {
-    const image = await generateImage(env, settings, prompt, source);
-    model = image.model;
-    await recordPicture(env, source, prompt, model, startedAt, null);
-    return { caption: "", files: [image.file] };
+    const image = await generateImage(env, settings, prompt, record.source);
+    record.aiDurationMs = Date.now() - record.startedAt;
+    return { record, caption: "", files: [image.file] };
   } catch (caught) {
-    const error = caught instanceof Error ? caught.name : "Error";
-    console.error(`picture_tool_failed error_type=${error}`);
-    await recordPicture(env, source, prompt, model, startedAt, error);
-    return { caption: "Could not generate that image. Try a different prompt.", files: [] };
+    record.error = `model:${caught instanceof Error ? caught.name : "Error"}`;
+    console.error(`picture_tool_failed error=${record.error}`);
+    return { record, caption: "Could not generate that image. Try a different prompt.", files: [] };
   }
 }
 
@@ -172,62 +176,44 @@ function keepTyping(env: Env, channelId: string) {
 
 async function answer(env: Env, job: Job, startedAt: number) {
   const { attribution } = job;
-  let model = "unknown";
-  let status = "ok";
-  let error: string | null = null;
-  let responseText: string | null = null;
-  let aiDuration: number | null = null;
-  let usage: Record<string, number | null> = {};
+  const record: Interaction = { source: attribution, trigger: job.trigger, prompt: job.prompt, startedAt, model: "unknown" };
+  let picture: Awaited<ReturnType<typeof createPicture>> = null;
+  let step = "settings";
   const stopTyping = keepTyping(env, attribution.channelId);
   try {
-    const aiStart = Date.now();
     const settings = await loadSettings(env.DB);
+    record.model = settings.chat.model;
+    step = "context";
     const messages = await conversation(env, job, settings.chat.historyLimit);
+    record.contextMessages = messages.length - 1;
+    step = "model";
     const system = { role: "system", content: settings.chat.prompt.trim() };
     const tools = PICTURE_REQUEST.test(job.prompt) ? [PICTURE_TOOL] : [];
+    const aiStart = Date.now();
     const result = await chat(env, settings, [system, ...messages], attribution, tools);
-    ({ model, usage } = result);
-    const picture = await createPicture(env, settings, result.toolCalls, attribution);
-    aiDuration = Date.now() - aiStart;
+    record.aiDurationMs = Date.now() - aiStart;
+    record.model = result.model;
+    record.usage = result.usage;
+    picture = await createPicture(env, settings, result.toolCalls, attribution);
     // Keep the model's text and formatting; only enforce the length limit and an empty fallback.
     // A failed picture says so instead of the model's text, which may promise an image.
-    if (picture && !picture.files.length) responseText = picture.caption;
-    else if (result.content.trim()) responseText = truncate(result.content, 1900);
+    if (picture && !picture.files.length) record.responseText = picture.caption;
+    else if (result.content.trim()) record.responseText = truncate(result.content, 1900);
     // The picture prompt is the model's working text, so a picture with no reply text posts alone.
-    else responseText = picture ? "" : "I could not generate a response.";
+    else record.responseText = picture ? "" : "I could not generate a response.";
+    step = "discord";
     stopTyping();
-    const response = await postMessage(env, attribution.channelId, responseText, attribution.messageId, picture?.files);
-    if (!response.ok) throw new Error(`discord_channel_post_failed_${response.status}`);
+    const response = await postMessage(env, attribution.channelId, record.responseText, attribution.messageId, picture?.files);
+    if (!response.ok) record.error = `discord:${response.status}`;
   } catch (caught) {
-    stopTyping();
-    status = "error";
     // Third-party errors can contain credential-bearing URLs or payloads; record only the type.
-    error = caught instanceof Error ? caught.name : "Error";
-    console.error(`ai_job_failed error_type=${error}`);
+    record.error = `${step}:${caught instanceof Error ? caught.name : "Error"}`;
   }
-  try {
-    await env.DB.prepare(
-      "INSERT INTO rag_ai_interactions (kind, channel_id, message_id, requester_user_id, requester_username, prompt, response_text, model, ai_duration_ms, total_duration_ms, status, error_message, prompt_tokens, completion_tokens, total_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-      .bind(
-        attribution.kind,
-        attribution.channelId,
-        attribution.messageId,
-        attribution.userId,
-        attribution.username,
-        job.prompt,
-        responseText,
-        model,
-        aiDuration,
-        Date.now() - startedAt,
-        status,
-        error,
-        usage.prompt ?? null,
-        usage.completion ?? null,
-        usage.total ?? null,
-      )
-      .run();
-  } catch {
-    console.warn("interaction_record_failed");
+  stopTyping();
+  if (record.error) {
+    console.error(`ai_job_failed error=${record.error}`);
+    // A picture only counts once Discord has accepted the reply carrying it.
+    if (picture) picture.record.error ??= record.error;
   }
+  await recordInteractions(env, picture ? [record, picture.record] : [record]);
 }
