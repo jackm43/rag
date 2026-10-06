@@ -70,21 +70,53 @@ export async function generateImage(env: Env, settings: Settings, prompt: string
 
 export const pictureCaption = (prompt: string) => (prompt.length <= 300 ? prompt : `${truncate(prompt, 299)}...`);
 
-/** Record a generated picture, from /bicture or the chat tool, for analytics and prompt history. */
-export async function recordPicture(
-  env: Env,
-  source: Attribution,
-  prompt: string,
-  model: string,
-  startedAt: number,
-  error: string | null,
-) {
+/**
+ * One row per model call, for usage analytics and prompt history. AI Gateway already logs tokens,
+ * cost and model latency; these rows add who asked, how, with how much context, and whether Discord
+ * received the result.
+ */
+export type Interaction = {
+  source: Attribution;
+  trigger: "mention" | "reply" | "command" | "tool";
+  prompt: string;
+  startedAt: number;
+  model: string;
+  contextMessages?: number;
+  aiDurationMs?: number;
+  usage?: { prompt: number | null; completion: number | null; total: number | null };
+  responseText?: string;
+  error?: string; // `<step>:<error type>`, such as `model:TypeError` or `discord:403`
+};
+
+export async function recordInteractions(env: Env, interactions: Interaction[]) {
+  const finishedAt = Date.now();
+  const insert = env.DB.prepare(
+    "INSERT INTO rag_ai_interactions (kind, channel_id, message_id, requester_user_id, requester_username, prompt, response_text, model, ai_duration_ms, total_duration_ms, status, error_message, prompt_tokens, completion_tokens, total_tokens, triggered_by, context_messages) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  );
   try {
-    await env.DB.prepare(
-      "INSERT INTO rag_ai_interactions (kind, channel_id, message_id, requester_user_id, requester_username, prompt, model, total_duration_ms, status, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-      .bind("bicture", source.channelId, source.messageId, source.userId, source.username, prompt, model, Date.now() - startedAt, error ? "error" : "ok", error)
-      .run();
+    await env.DB.batch(
+      interactions.map(({ source, usage, ...record }) =>
+        insert.bind(
+          source.kind,
+          source.channelId,
+          source.messageId,
+          source.userId,
+          source.username,
+          record.prompt,
+          record.responseText ?? null,
+          record.model,
+          record.aiDurationMs ?? null,
+          finishedAt - record.startedAt,
+          record.error ? "error" : "ok",
+          record.error ?? null,
+          usage?.prompt ?? null,
+          usage?.completion ?? null,
+          usage?.total ?? null,
+          record.trigger,
+          record.contextMessages ?? null,
+        ),
+      ),
+    );
   } catch {
     console.warn("interaction_record_failed");
   }

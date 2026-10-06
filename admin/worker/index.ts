@@ -230,10 +230,7 @@ async function mention(env: AdminEnv, run: Simulation, input: any) {
     message.referenced_message = asMessage(replied);
   }
   await handleMessage(env, message, input.botUserId);
-  const record = await env.DB.prepare("SELECT * FROM rag_ai_interactions WHERE message_id = ? ORDER BY id DESC LIMIT 1")
-    .bind(message.id)
-    .first();
-  return { message, replies: run.messages, db: { interaction: record } };
+  return { message, replies: run.messages, db: { interactions: await interactions(env, message.id) } };
 }
 
 async function interaction(env: AdminEnv, run: Simulation, input: any) {
@@ -255,8 +252,12 @@ async function interaction(env: AdminEnv, run: Simulation, input: any) {
     data: { id: snowflake(), type: 1, name: input.command, options, resolved: { users } },
   };
   await dispatch(env, payload);
-  const record = await env.DB.prepare("SELECT * FROM rag_ai_interactions ORDER BY id DESC LIMIT 1").first();
-  return { interaction: payload, edits: run.edits, followUps: run.followUps, channelMessages: run.messages, db: { interaction: record } };
+  return { interaction: payload, edits: run.edits, followUps: run.followUps, channelMessages: run.messages, db: { interactions: await interactions(env, payload.id) } };
+}
+
+// The rows this run wrote: a chat reply and its tool picture share the triggering message ID.
+async function interactions(env: AdminEnv, messageId: string) {
+  return (await env.DB.prepare("SELECT * FROM rag_ai_interactions WHERE message_id = ? ORDER BY id").bind(messageId).all()).results;
 }
 
 // Record each model exchange, tagged `ragbot_env: admin` within AI Gateway's five metadata entries.

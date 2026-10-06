@@ -1,5 +1,5 @@
 // Slash commands: `definitions` is what Discord registers and `dispatch` runs them.
-import { generateImage, pictureCaption, recordPicture, type Attribution } from "./ai.ts";
+import { generateImage, pictureCaption, recordInteractions, type Attribution, type Interaction } from "./ai.ts";
 import { guildAllowed, reply, username } from "./discord.ts";
 import type { Env } from "./index.ts";
 import { displayName, type Attachment } from "./lib/discord/messages.ts";
@@ -80,16 +80,17 @@ export const commands: Record<string, Command> = {
     role: MODS_ROLE_ID,
     async run({ env, option, reply }) {
       const target = option("user");
-      const latest = await env.DB.prepare("SELECT id FROM rag_events WHERE ragged_user_id = ? ORDER BY id DESC LIMIT 1")
-        .bind(target)
-        .first<{ id: number }>();
-      if (!latest) return reply(`<@${target}> has no rags to undo.`, { users: [target] });
-      const [, totals] = await env.DB.batch<{ rag_count: number }>([
-        env.DB.prepare("DELETE FROM rag_events WHERE id = ?").bind(latest.id),
+      // One transaction: find and delete the latest event, and decrement only if one was deleted,
+      // so two mods undoing at once cannot both decrement for the same event.
+      const [deleted, totals] = await env.DB.batch<{ rag_count: number }>([
         env.DB.prepare(
-          "UPDATE rag_totals SET rag_count = max(rag_count - 1, 0), updated_at = CURRENT_TIMESTAMP WHERE ragged_user_id = ? RETURNING rag_count",
+          "DELETE FROM rag_events WHERE id = (SELECT id FROM rag_events WHERE ragged_user_id = ? ORDER BY id DESC LIMIT 1) RETURNING id",
+        ).bind(target),
+        env.DB.prepare(
+          "UPDATE rag_totals SET rag_count = max(rag_count - 1, 0), updated_at = CURRENT_TIMESTAMP WHERE ragged_user_id = ? AND changes() > 0 RETURNING rag_count",
         ).bind(target),
       ]);
+      if (!deleted.results.length) return reply(`<@${target}> has no rags to undo.`, { users: [target] });
       const count = totals.results[0]?.rag_count ?? 0;
       return reply(`Undid the last rag for <@${target}>. Total: ${count}`, { users: [target] });
     },
@@ -136,23 +137,25 @@ export const commands: Record<string, Command> = {
     slow: true,
     async run({ env, option, reply, attribution }) {
       const prompt = option("prompt");
-      const source = attribution("bicture");
-      const startedAt = Date.now();
-      let model = "unknown";
-      let error: string | null = null;
+      const record: Interaction = { source: attribution("bicture"), trigger: "command", prompt, startedAt: Date.now(), model: "unknown" };
+      let step = "settings";
       try {
-        const image = await generateImage(env, await loadSettings(env.DB), prompt, source);
-        model = image.model;
+        const settings = await loadSettings(env.DB);
+        record.model = settings.image.profiles[settings.image.activeProfile].model;
+        step = "model";
+        const aiStart = Date.now();
+        const image = await generateImage(env, settings, prompt, record.source);
+        record.aiDurationMs = Date.now() - aiStart;
         if (!(await reply(pictureCaption(prompt), { files: [image.file] }))) {
-          error = "DiscordUploadRejected";
+          record.error = "discord:rejected";
           await reply("The image was generated, but Discord rejected the upload. Please try again.");
         }
       } catch (caught) {
-        error = caught instanceof Error ? caught.name : "Error";
-        console.error(`bicture_command_failed error_type=${error}`);
+        record.error = `${step}:${caught instanceof Error ? caught.name : "Error"}`;
+        console.error(`bicture_command_failed error=${record.error}`);
         await reply("Could not generate that image. Try a different prompt.");
       } finally {
-        await recordPicture(env, source, prompt, model, startedAt, error);
+        await recordInteractions(env, [record]);
       }
     },
   },
